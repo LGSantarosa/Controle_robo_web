@@ -1,0 +1,52 @@
+<!doctype html>
+<!-- Página da interface do controle: status, botões direcionais e log de eventos -->
+<html lang="pt-br">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>Controle do Robô</title>
+    <!-- CSS básico da interface -->
+    <link rel="stylesheet" href="/static/css/styles.css?v=2" />
+  </head>
+  <body>
+    <main>
+      <h1>Controle do Robô</h1>
+      <p class="hint">Conecte-se a este endereço a partir de outro computador na mesma rede. Pressione WASD ou setas para enviar comandos. Barra de espaço = stop.</p>
+
+      <!-- Status de conexão e teclas pressionadas -->
+      <section class="status">
+        <div>Socket: <span id="conn">conectando...</span></div>
+        <div>Pressionadas: <span id="pressed">(nenhuma)</span></div>
+      </section>
+
+      <!-- Botões direcionais (suporte a toque e mouse) com diagonais -->
+      <section class="controls">
+        <div class="grid">
+          <button data-combo="ArrowUp,ArrowLeft" class="pad diag">↖</button>
+          <button data-code="ArrowUp" class="pad">▲</button>
+          <button data-combo="ArrowUp,ArrowRight" class="pad diag">↗</button>
+
+          <button data-code="ArrowLeft" class="pad">◀</button>
+          <button data-code="Space" class="pad">⏹</button>
+          <button data-code="ArrowRight" class="pad">▶</button>
+
+          <button data-combo="ArrowDown,ArrowLeft" class="pad diag">↙</button>
+          <button data-code="ArrowDown" class="pad">▼</button>
+          <button data-combo="ArrowDown,ArrowRight" class="pad diag">↘</button>
+        </div>
+      </section>
+
+      <!-- Log visual de eventos e última entrega confirmada (ACK) -->
+      <section class="eventlog">
+        <h2>Eventos</h2>
+        <div style="margin-bottom:8px">Entrega: <span id="delivery">aguardando...</span></div>
+        <ul id="log"></ul>
+      </section>
+    </main>
+
+    <!-- Bibliotecas cliente Socket.IO e script do cliente -->
+    <script src="https://cdn.socket.io/3.1.3/socket.io.min.js"></script>
+    <script src="/static/js/client.js?v=3"></script>
+  </body>
+</html>
