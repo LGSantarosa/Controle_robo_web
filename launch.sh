@@ -18,17 +18,22 @@ DRIVER_PID=""
 SERVER_PID=""
 TAIL_PID=""
 
-# Encerra tudo ao sair (Ctrl+C ou erro)
 cleanup() {
+    # Remove o trap para não re-entrar
+    trap '' EXIT INT TERM
     echo ""
     echo "Encerrando..."
     [ -n "$TAIL_PID" ]   && kill "$TAIL_PID"   2>/dev/null
     [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
     [ -n "$DRIVER_PID" ] && kill "$DRIVER_PID" 2>/dev/null
-    wait 2>/dev/null
+    # Força encerramento após 2s caso algum processo não responda
+    sleep 2
+    [ -n "$SERVER_PID" ] && kill -9 "$SERVER_PID" 2>/dev/null
+    [ -n "$DRIVER_PID" ] && kill -9 "$DRIVER_PID" 2>/dev/null
     echo "Pronto."
+    exit 0
 }
-trap cleanup EXIT INT TERM
+trap cleanup INT TERM
 
 # --- Driver do hoverboard (background, log em arquivo) ---
 LOG_DIR="$SCRIPT_DIR/controle_web/logs"
@@ -64,5 +69,4 @@ SERVER_PID=$!
 tail -f "$DRIVER_LOG" &
 TAIL_PID=$!
 
-# Aguarda qualquer processo terminar
 wait "$SERVER_PID" "$DRIVER_PID"
