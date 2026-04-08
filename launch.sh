@@ -14,13 +14,18 @@ fi
 
 source "$ROS2_SETUP"
 
+DRIVER_PID=""
+SERVER_PID=""
+TAIL_PID=""
+
 # Encerra tudo ao sair (Ctrl+C ou erro)
 cleanup() {
     echo ""
     echo "Encerrando..."
-    kill "$DRIVER_PID" 2>/dev/null
-    kill "$SERVER_PID" 2>/dev/null
-    wait "$DRIVER_PID" "$SERVER_PID" 2>/dev/null
+    [ -n "$TAIL_PID" ]   && kill "$TAIL_PID"   2>/dev/null
+    [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
+    [ -n "$DRIVER_PID" ] && kill "$DRIVER_PID" 2>/dev/null
+    wait 2>/dev/null
     echo "Pronto."
 }
 trap cleanup EXIT INT TERM
@@ -35,7 +40,6 @@ ros2 run ros2-hoverboard-driver main > "$DRIVER_LOG" 2>&1 &
 DRIVER_PID=$!
 echo "      PID: $DRIVER_PID  |  Log: $DRIVER_LOG"
 
-# Aguarda o driver subir antes de iniciar o servidor
 sleep 2
 
 if ! kill -0 "$DRIVER_PID" 2>/dev/null; then
@@ -44,7 +48,7 @@ if ! kill -0 "$DRIVER_PID" 2>/dev/null; then
     exit 1
 fi
 
-# --- Servidor web (foreground, saída no terminal) ---
+# --- Servidor web (background) ---
 echo "[2/2] Iniciando servidor web em http://0.0.0.0:5000"
 echo ""
 
@@ -56,11 +60,9 @@ fi
 python3 app.py &
 SERVER_PID=$!
 
-# Exibe log do driver em paralelo no terminal
-echo "--- Log do driver (tail) ---"
+# Exibe logs do driver em tempo real no terminal
 tail -f "$DRIVER_LOG" &
 TAIL_PID=$!
 
-# Espera o servidor terminar (Ctrl+C cai no trap acima)
-wait "$SERVER_PID"
-kill "$TAIL_PID" 2>/dev/null
+# Aguarda qualquer processo terminar
+wait "$SERVER_PID" "$DRIVER_PID"
