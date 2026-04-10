@@ -105,6 +105,49 @@
         </div>
       </section>
 
+      <!-- Painel de obstáculos (LiDAR) -->
+      <section class="obstacle-panel" id="obstacle-panel">
+        <h2>LiDAR — Obstáculos</h2>
+        <div class="obstacle-status" id="obstacle-status">
+          <span class="lidar-badge" id="lidar-badge">sem sinal</span>
+          <span class="obstacle-closest" id="obstacle-closest"></span>
+        </div>
+        <!-- Mapa de setores -->
+        <div class="obstacle-map">
+          <div class="obs-sector-row">
+            <div class="obs-sector" id="obs-frente_esq">
+              <div class="obs-label">↖ F-ESQ</div>
+              <div class="obs-dist" id="dist-frente_esq">—</div>
+            </div>
+            <div class="obs-sector obs-center" id="obs-frente">
+              <div class="obs-label">▲ FRENTE</div>
+              <div class="obs-dist" id="dist-frente">—</div>
+            </div>
+            <div class="obs-sector" id="obs-frente_dir">
+              <div class="obs-label">↗ F-DIR</div>
+              <div class="obs-dist" id="dist-frente_dir">—</div>
+            </div>
+          </div>
+          <div class="obs-sector-row obs-middle-row">
+            <div class="obs-sector" id="obs-esquerda">
+              <div class="obs-label">◀ ESQ</div>
+              <div class="obs-dist" id="dist-esquerda">—</div>
+            </div>
+            <div class="obs-robot">🤖</div>
+            <div class="obs-sector" id="obs-direita">
+              <div class="obs-label">DIR ▶</div>
+              <div class="obs-dist" id="dist-direita">—</div>
+            </div>
+          </div>
+          <div class="obs-sector-row">
+            <div class="obs-sector obs-center" id="obs-tras">
+              <div class="obs-label">▼ TRÁS</div>
+              <div class="obs-dist" id="dist-tras">—</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Log visual de eventos e última entrega confirmada (ACK) -->
       <section class="eventlog">
         <h2>Eventos</h2>

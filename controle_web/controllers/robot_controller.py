@@ -105,26 +105,28 @@ class EchoController(RobotController):
 
 class ROS2Controller(RobotController):
     """
-    Controlador real que publica velocidades de rodas via ROS2.
+    Controlador real que publica cmd_vel via ROS2 para integração com Nav2.
 
-    Tópico: /wheel_vel_setpoints
-    Mensagem: wheel_msgs/msg/WheelSpeeds { left_wheel: float, right_wheel: float }
+    Tópico de saída: /cmd_vel (geometry_msgs/Twist)
+    O Nav2 Collision Monitor intercepta /cmd_vel, filtra obstáculos e
+    publica /cmd_vel_filtered. O nó cmd_vel_to_wheels converte para
+    /wheel_vel_setpoints que o driver do hoverboard consome.
 
-    Velocidades (m/s) configuráveis nas constantes abaixo.
-    A fórmula de acionamento diferencial é:
-        left_wheel  = velocidade_linear - componente_giro
-        right_wheel = velocidade_linear + componente_giro
+    Velocidades em unidades SI:
+        BASE_LINEAR_SPEED  = velocidade linear base (m/s)
+        BASE_ANGULAR_SPEED = velocidade angular base (rad/s)
 
-    Pré-requisito: ROS2 instalado e workspace com ros2-hoverboard-driver compilado.
+    Pré-requisito: ROS2 instalado e workspace com robot_nav compilado.
     Execute antes de iniciar o servidor:
         source ~/ros2_ws/install/setup.bash
     """
 
-    # Velocidades base (unidade raw int16 do firmware do hoverboard, faixa útil: 0–1000).
+    # Velocidades base em unidades SI.
     # Multiplicador de velocidade escala esses valores (0.5x–4.0x).
-    # Normal (1.0x) = 100/65. Ajuste fino (○ 0.75x) ≈ 75/49. Boost (□ 2.0x) = 200/130.
-    BASE_LINEAR_SPEED: float = 100.0
-    BASE_ANGULAR_SPEED: float = 65.0
+    # Normal (1.0x) = 0.3 m/s / 0.5 rad/s.
+    # Boost (□ 2.0x) = 0.6 m/s / 1.0 rad/s.
+    BASE_LINEAR_SPEED: float = 0.3   # m/s
+    BASE_ANGULAR_SPEED: float = 0.5  # rad/s
 
     # Limites do multiplicador de velocidade
     SPEED_MULT_MIN: float = 0.8
@@ -155,17 +157,17 @@ class ROS2Controller(RobotController):
 
         self._node: Node = rclpy.create_node('web_robot_controller')
 
-        # Importa a mensagem gerada pelo pacote wheel_msgs
-        from wheel_msgs.msg import WheelSpeeds
-        self._WheelSpeeds = WheelSpeeds
+        # Publica geometry_msgs/Twist para integração com Nav2
+        from geometry_msgs.msg import Twist
+        self._Twist = Twist
 
         self._publisher = self._node.create_publisher(
-            WheelSpeeds,
-            '/wheel_vel_setpoints',
+            Twist,
+            '/cmd_vel',
             qos_profile=10,
         )
 
-        print("[ROS2Controller] Nó inicializado. Publicando em /wheel_vel_setpoints")
+        print("[ROS2Controller] Nó inicializado. Publicando em /cmd_vel (Nav2)")
 
     def shutdown(self) -> None:
         """Encerra o nó ROS2 corretamente."""
@@ -177,12 +179,12 @@ class ROS2Controller(RobotController):
         except Exception as e:
             print(f"[ROS2Controller] Erro ao encerrar: {e}")
 
-    def _publish(self, left: float, right: float) -> None:
-        msg = self._WheelSpeeds()
-        msg.left_wheel = float(left)
-        msg.right_wheel = float(right)
+    def _publish(self, linear: float, angular: float) -> None:
+        msg = self._Twist()
+        msg.linear.x = float(linear)
+        msg.angular.z = float(angular)
         self._publisher.publish(msg)
-        print(f"[ROS2Controller] Publicado → L={left:+.2f}  R={right:+.2f} m/s")
+        print(f"[ROS2Controller] cmd_vel → linear={linear:+.3f} m/s  angular={angular:+.3f} rad/s")
 
     @property
     def _linear_speed(self) -> float:
@@ -202,35 +204,33 @@ class ROS2Controller(RobotController):
         if not self._emergency_stop:
             if self.pressed:
                 # Modo teclado — recalcula com teclas pressionadas
-                left, right = self._compute_wheel_speeds()
-                self._publish(left, right)
+                linear, angular = self._compute_cmd_vel()
+                self._publish(linear, angular)
             elif abs(self._last_gamepad_linear) > 0.01 or abs(self._last_gamepad_angular) > 0.01:
                 # Modo gamepad — recalcula com último eixo
-                left = self._last_gamepad_linear * self._linear_speed - self._last_gamepad_angular * self._angular_speed
-                right = self._last_gamepad_linear * self._linear_speed + self._last_gamepad_angular * self._angular_speed
-                self._publish(left, right)
+                linear = self._last_gamepad_linear * self._linear_speed
+                angular = -self._last_gamepad_angular * self._angular_speed
+                self._publish(linear, angular)
 
         return self._speed_multiplier
 
-    def _compute_wheel_speeds(self) -> tuple:
+    def _compute_cmd_vel(self) -> tuple:
         """
-        Calcula velocidades das rodas com base nas teclas pressionadas.
+        Calcula linear (m/s) e angular (rad/s) com base nas teclas pressionadas.
         Suporta movimento composto (ex.: frente + direita ao mesmo tempo).
+        Retorna (linear, angular) para publicar em /cmd_vel.
         """
         fwd = any(k in self.pressed for k in ('KeyW', 'ArrowUp'))
         bwd = any(k in self.pressed for k in ('KeyS', 'ArrowDown'))
         lft = any(k in self.pressed for k in ('KeyA', 'ArrowLeft'))
         rgt = any(k in self.pressed for k in ('KeyD', 'ArrowRight'))
 
-        # Componente linear: +1 frente, -1 ré, 0 sem movimento linear
-        linear = (1.0 if fwd else 0.0) - (1.0 if bwd else 0.0)
-        # Componente angular: +1 direita, -1 esquerda
-        angular = (1.0 if rgt else 0.0) - (1.0 if lft else 0.0)
+        # +1 frente, -1 ré
+        lin = (1.0 if fwd else 0.0) - (1.0 if bwd else 0.0)
+        # +1 esquerda, -1 direita (convenção ROS: anti-horário positivo)
+        ang = (1.0 if lft else 0.0) - (1.0 if rgt else 0.0)
 
-        left  = linear * self._linear_speed - angular * self._angular_speed
-        right = linear * self._linear_speed + angular * self._angular_speed
-
-        return left, right
+        return lin * self._linear_speed, ang * self._angular_speed
 
     def handle_key_event(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         etype  = event.get('type')
@@ -239,7 +239,7 @@ class ROS2Controller(RobotController):
 
         # Trava de emergência ativa — ignora tudo e mantém parado
         if self._emergency_stop:
-            self._publish(0, 0)
+            self._publish(0.0, 0.0)
             return {'command': 'stop', 'action': 'stop', 'code': code}
 
         cmd = self._KEY_MAP.get(code)
@@ -257,8 +257,8 @@ class ROS2Controller(RobotController):
             self.pressed.discard(code)
 
         # Calcula e publica velocidades resultantes
-        left, right = self._compute_wheel_speeds()
-        self._publish(left, right)
+        linear, angular = self._compute_cmd_vel()
+        self._publish(linear, angular)
 
         action = 'start' if etype == 'down' else 'stop'
         return {'command': cmd, 'action': action, 'code': code}
@@ -274,10 +274,10 @@ class ROS2Controller(RobotController):
                 self._emergency_stop = is_pressed
                 if is_pressed:
                     self.pressed.clear()
-                    self._publish(0, 0)
+                    self._publish(0.0, 0.0)
                     print("[ROS2Controller] TRAVA DE EMERGÊNCIA ATIVADA (X)")
                 else:
-                    self._publish(0, 0)
+                    self._publish(0.0, 0.0)
                     print("[ROS2Controller] Trava de emergência desativada")
                 return {'command': 'stop', 'action': 'stop', 'linear': 0, 'angular': 0,
                         'left_speed': 0, 'right_speed': 0, 'emergency': is_pressed}
@@ -287,38 +287,38 @@ class ROS2Controller(RobotController):
         if etype == 'axis':
             # Trava ativa — ignora joystick e mantém parado
             if self._emergency_stop:
-                self._publish(0, 0)
+                self._publish(0.0, 0.0)
                 return {'command': 'stop', 'action': 'stop', 'linear': 0, 'angular': 0,
                         'left_speed': 0, 'right_speed': 0, 'emergency': True}
 
-            linear = float(event.get('linear', 0))
-            angular = float(event.get('angular', 0))
+            gp_linear = float(event.get('linear', 0))
+            gp_angular = float(event.get('angular', 0))
 
             # Aplica dead zone
-            if abs(linear) < 0.05:
-                linear = 0.0
-            if abs(angular) < 0.05:
-                angular = 0.0
+            if abs(gp_linear) < 0.05:
+                gp_linear = 0.0
+            if abs(gp_angular) < 0.05:
+                gp_angular = 0.0
 
             # Salva para republicação instantânea ao mudar velocidade
-            self._last_gamepad_linear = linear
-            self._last_gamepad_angular = angular
+            self._last_gamepad_linear = gp_linear
+            self._last_gamepad_angular = gp_angular
 
-            # Velocidade proporcional ao joystick
-            left  = linear * self._linear_speed - angular * self._angular_speed
-            right = linear * self._linear_speed + angular * self._angular_speed
-            self._publish(left, right)
+            # Converte joystick para m/s e rad/s (angular: direita positiva no gamepad = negativo no ROS)
+            linear = gp_linear * self._linear_speed
+            angular = -gp_angular * self._angular_speed
+            self._publish(linear, angular)
 
             # Determina comando semântico para log
-            if abs(linear) < 0.05 and abs(angular) < 0.05:
+            if abs(gp_linear) < 0.05 and abs(gp_angular) < 0.05:
                 cmd = 'stop'
-            elif abs(linear) >= abs(angular):
-                cmd = 'forward' if linear > 0 else 'backward'
+            elif abs(gp_linear) >= abs(gp_angular):
+                cmd = 'forward' if gp_linear > 0 else 'backward'
             else:
-                cmd = 'right' if angular > 0 else 'left'
+                cmd = 'right' if gp_angular > 0 else 'left'
 
             action = 'stop' if cmd == 'stop' else 'start'
             return {'command': cmd, 'action': action, 'linear': linear, 'angular': angular,
-                    'left_speed': left, 'right_speed': right}
+                    'left_speed': 0, 'right_speed': 0}
 
         return None

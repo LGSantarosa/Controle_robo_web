@@ -6,10 +6,11 @@ import logging
 import os
 import json
 import time
+import threading
 import atexit
 from logging.handlers import RotatingFileHandler
 
-# Controlador ROS2 — publica em /wheel_vel_setpoints via wheel_msgs/msg/WheelSpeeds.
+# Controlador ROS2 — publica em /cmd_vel (geometry_msgs/Twist).
 # Pré-requisito: source ~/ros2_ws/install/setup.bash antes de iniciar o servidor.
 controller: RobotController = ROS2Controller()
 
@@ -23,13 +24,40 @@ app.config['SECRET_KEY'] = 'change-me'
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    logger=True,
-    engineio_logger=True,
-    async_mode="eventlet",
+    logger=False,
+    engineio_logger=False,
+    async_mode="threading",
 )
 
 # Configuração básica de logs no terminal
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
+# Suprime o aviso de "production deployment" do Werkzeug (esperado para uso local)
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
+
+# ---- Detector de obstáculos (LiDAR) ----
+# O nó obstacle_detector roda como processo separado (via launch.sh) e escreve em
+# /tmp/obstacle_current.json.  Esta função lê esse arquivo a 5 Hz via background
+# task do eventlet (sem ROS2 dentro do Flask = sem conflito com eventlet).
+OBSTACLE_FILE = '/tmp/obstacle_current.json'
+_last_obstacle_mtime = None
+
+def _obstacle_background_task():
+    """Lê /tmp/obstacle_current.json a 5 Hz e emite via Socket.IO."""
+    global _last_obstacle_mtime
+    log = logging.getLogger(__name__)
+    while True:
+        try:
+            mtime = os.path.getmtime(OBSTACLE_FILE)
+            if mtime != _last_obstacle_mtime:
+                _last_obstacle_mtime = mtime
+                with open(OBSTACLE_FILE) as f:
+                    data = json.load(f)
+                socketio.emit('obstacle_info', data, namespace='/')
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log.debug(f'[LiDAR] leitura: {e}')
+        time.sleep(0.2)  # 5 Hz
 
 # Log de movimentos (JSON Lines) gravado em arquivo rotativo + arquivo legível
 os.makedirs('logs', exist_ok=True)
@@ -244,6 +272,9 @@ def handle_client_hello(payload):
     })
 
 if __name__ == '__main__':
+    # Lê /tmp/obstacle_current.json a 5 Hz em thread separada
+    t = threading.Thread(target=_obstacle_background_task, daemon=True, name='obstacle_reader')
+    t.start()
     # Sobe o servidor acessível na rede local (0.0.0.0:5000)
     app.logger.info("Starting Socket.IO server on 0.0.0.0:5000")
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False, log_output=True)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
