@@ -1,0 +1,89 @@
+<?xml version="1.0"?>
+<!--
+  Husky A200 URDF p/ simulação — mantém o chain base_footprint → base_link →
+  (wheels, base_laser) usado pelo slam_toolbox e Nav2.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="husky">
+
+  <xacro:property name="wheel_radius"  value="0.1651"/>
+  <xacro:property name="wheel_width"   value="0.1016"/>
+  <xacro:property name="track"         value="0.555"/>   <!-- separação esq-dir -->
+  <xacro:property name="wheelbase"     value="0.512"/>   <!-- dist frente-trás -->
+
+  <xacro:property name="body_length"   value="0.99"/>
+  <xacro:property name="body_width"    value="0.67"/>
+  <xacro:property name="body_height"   value="0.28"/>
+
+  <xacro:property name="lidar_x"       value="0.15"/>
+  <xacro:property name="lidar_z"       value="0.22"/>
+
+  <link name="base_footprint"/>
+
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${wheel_radius}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="base_link">
+    <visual>
+      <geometry><box size="${body_length} ${body_width} ${body_height}"/></geometry>
+      <material name="husky_yellow"><color rgba="1.0 0.82 0.0 1.0"/></material>
+    </visual>
+    <collision>
+      <geometry><box size="${body_length} ${body_width} ${body_height}"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="46.0"/>
+      <inertia ixx="0.6" ixy="0" ixz="0" iyy="1.8" iyz="0" izz="2.0"/>
+    </inertial>
+  </link>
+
+  <xacro:macro name="wheel" params="name x y roll">
+    <joint name="${name}_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${name}"/>
+      <origin xyz="${x} ${y} ${-body_height/2}" rpy="${roll} 0 0"/>
+      <axis xyz="0 0 1"/>
+    </joint>
+    <link name="${name}">
+      <visual>
+        <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+        <material name="black"><color rgba="0.1 0.1 0.1 1.0"/></material>
+      </visual>
+      <collision>
+        <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+      </collision>
+      <inertial>
+        <mass value="2.5"/>
+        <inertia ixx="0.02" ixy="0" ixz="0" iyy="0.02" iyz="0" izz="0.03"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <xacro:wheel name="front_left_wheel"  x="${ wheelbase/2}" y="${ track/2}" roll="${-pi/2}"/>
+  <xacro:wheel name="front_right_wheel" x="${ wheelbase/2}" y="${-track/2}" roll="${ pi/2}"/>
+  <xacro:wheel name="rear_left_wheel"   x="${-wheelbase/2}" y="${ track/2}" roll="${-pi/2}"/>
+  <xacro:wheel name="rear_right_wheel"  x="${-wheelbase/2}" y="${-track/2}" roll="${ pi/2}"/>
+
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="base_laser"/>
+    <origin xyz="${lidar_x} 0 ${body_height/2 + lidar_z - body_height/2}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="base_laser">
+    <visual>
+      <geometry><cylinder radius="0.05" length="0.06"/></geometry>
+      <material name="blue"><color rgba="0.0 0.3 0.8 1.0"/></material>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.05" length="0.06"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+</robot>

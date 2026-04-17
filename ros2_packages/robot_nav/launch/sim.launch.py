@@ -26,8 +26,8 @@ def generate_launch_description():
 
     # Caminhos padrão (sobrescrevíveis via argumentos de launch)
     default_world = os.environ.get('SIM_WORLD', '')  # preenchido pelo launch.sh
-    default_robot_sdf = os.path.join(pkg_robot_nav, 'urdf', 'sim_robot.sdf')
-    urdf_xacro = os.path.join(pkg_robot_nav, 'urdf', 'robot.urdf.xacro')
+    default_robot_sdf = os.path.join(pkg_robot_nav, 'urdf', 'husky.sdf')
+    urdf_xacro = os.path.join(pkg_robot_nav, 'urdf', 'husky.urdf.xacro')
 
     world_arg = DeclareLaunchArgument(
         'world',
@@ -39,9 +39,15 @@ def generate_launch_description():
         default_value=default_robot_sdf,
         description='Caminho para o SDF do robô simulado',
     )
+    spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='2.0')
+    spawn_y_arg = DeclareLaunchArgument('spawn_y', default_value='2.5')
+    spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='0.2')
 
     world = LaunchConfiguration('world')
     robot_sdf = LaunchConfiguration('robot_sdf')
+    spawn_x = LaunchConfiguration('spawn_x')
+    spawn_y = LaunchConfiguration('spawn_y')
+    spawn_z = LaunchConfiguration('spawn_z')
 
     # Carrega a URDF (xacro) para os TFs estáticos do robot_state_publisher
     robot_description = xacro.process_file(urdf_xacro).toxml()
@@ -64,8 +70,8 @@ def generate_launch_description():
         executable='create',
         arguments=[
             '-file', robot_sdf,
-            '-name', 'sim_robot',
-            '-x', '0', '-y', '0', '-z', '0.12',
+            '-name', 'husky',
+            '-x', spawn_x, '-y', spawn_y, '-z', spawn_z,
         ],
         output='screen',
     )
@@ -103,6 +109,9 @@ def generate_launch_description():
     return LaunchDescription([
         world_arg,
         robot_sdf_arg,
+        spawn_x_arg,
+        spawn_y_arg,
+        spawn_z_arg,
         gz_sim_launch,
         bridge,
         spawn_robot,

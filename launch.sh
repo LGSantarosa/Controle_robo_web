@@ -29,6 +29,9 @@ MODE="teleop"                     # teleop | slam | nav2
 MAP_FILE="$SCRIPT_DIR/maps/sala.yaml"
 SIM=false
 WORLD_FILE="$SCRIPT_DIR/worlds/empty.sdf"
+SPAWN_X="2.0"
+SPAWN_Y="2.5"
+SPAWN_Z="0.2"
 
 for arg in "$@"; do
     case $arg in
@@ -37,6 +40,9 @@ for arg in "$@"; do
         --sim)          SIM=true ;;
         --world=*)      WORLD_FILE="${arg#*=}" ;;
         --map=*)        MAP_FILE="${arg#*=}" ;;
+        --spawn-x=*)    SPAWN_X="${arg#*=}" ;;
+        --spawn-y=*)    SPAWN_Y="${arg#*=}" ;;
+        --spawn-z=*)    SPAWN_Z="${arg#*=}" ;;
         --no-lidar)     NO_LIDAR=true ;;
         --no-nav2)      NO_NAV2=true ;;
         --lidar-port=*) LIDAR_PORT="${arg#*=}" ;;
@@ -220,7 +226,8 @@ if [ "$SIM" = true ]; then
     echo "[1/5] Modo SIM — subindo Gazebo com mundo: $WORLD_FILE"
     SIM_LOG="$LOG_DIR/sim.log"
     SIM_WORLD="$WORLD_FILE" ros2 launch robot_nav sim.launch.py \
-        world:="$WORLD_FILE" > "$SIM_LOG" 2>&1 &
+        world:="$WORLD_FILE" \
+        spawn_x:="$SPAWN_X" spawn_y:="$SPAWN_Y" spawn_z:="$SPAWN_Z" > "$SIM_LOG" 2>&1 &
     SIM_PID=$!
     echo "      PID: $SIM_PID  |  Log: $SIM_LOG"
     # Gazebo + spawn demora ~5s pra estabilizar os tópicos
