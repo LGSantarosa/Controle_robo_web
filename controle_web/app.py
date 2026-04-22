@@ -164,6 +164,13 @@ def handle_connect():
         'mode': ROBOT_MODE,
         'has_map': map_bridge is not None,
     })
+    # Reemite o último map_update cacheado — o /map do map_server é latched
+    # (publicado 1x no activate), então clientes que conectam depois dessa
+    # primeira emissão ficariam em "aguardando /map" sem isto.
+    if map_bridge is not None:
+        cached = map_bridge.get_last_map_payload()
+        if cached is not None:
+            emit('map_update', cached)
 
 
 @socketio.on('nav_goal')

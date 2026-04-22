@@ -118,6 +118,10 @@ class MapBridge:
         # Guarda o último metadata do mapa para converter clique pixel→mundo
         # no cliente (o cliente já recebe isso no map_update).
         self._last_map_info: Optional[dict] = None
+        # Cache do payload completo do último map_update ({info, png_b64}).
+        # Permite reemitir pra clientes que conectam depois que o map_server
+        # (latched) já foi processado — sem isso, a UI fica em "aguardando /map".
+        self._last_map_payload: Optional[dict] = None
 
         # Executor próprio — permite spin dos callbacks sem bloquear o Flask.
         self._executor = SingleThreadedExecutor()
@@ -191,11 +195,9 @@ class MapBridge:
                 'stamp': time.time(),
             }
             self._last_map_info = info
-            self._sock.emit(
-                'map_update',
-                {'info': info, 'png_b64': png_b64},
-                namespace='/',
-            )
+            payload = {'info': info, 'png_b64': png_b64}
+            self._last_map_payload = payload
+            self._sock.emit('map_update', payload, namespace='/')
             log.info(
                 f"[MapBridge] /map {msg.info.width}x{msg.info.height} "
                 f"@ {msg.info.resolution:.3f} m/px emitido"
@@ -214,6 +216,10 @@ class MapBridge:
             log.debug(f"[MapBridge] erro no /plan: {e}")
 
     # ---- API pública ----
+    def get_last_map_payload(self) -> Optional[dict]:
+        """Retorna o último {info, png_b64} recebido, ou None se nada ainda."""
+        return self._last_map_payload
+
     def send_goal(self, x: float, y: float, yaw: float = 0.0) -> dict:
         """Publica PoseStamped em /goal_pose (frame 'map')."""
         msg = PoseStamped()
