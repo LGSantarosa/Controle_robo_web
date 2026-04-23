@@ -23,10 +23,50 @@
   let plan = [];           // [{ x, y }]
   let lastGoal = null;     // { x, y }
 
+  // Waypoints
+  let waypoints  = [];     // [{x, y, yaw}]
+  let wpMode     = false;  // modo de adição de waypoints ativo
+  let wpActive   = false;  // navegação rodando
+  let wpActiveIdx = 0;     // índice do waypoint atual
+  let wpDrag     = null;   // {worldX, worldY, canvasX, canvasY} durante drag de orientação
+  let wpMouseDown = null;  // posição do mousedown para detectar drag vs click
+
   // Espera o socket de client.js existir. client.js cria `window.robotSocket`.
   function waitForSocket(cb) {
     if (window.robotSocket) return cb(window.robotSocket);
     setTimeout(() => waitForSocket(cb), 50);
+  }
+
+  // Elementos da toolbar de waypoints
+  const wpToolbar   = document.getElementById('wp-toolbar');
+  const btnWpMode   = document.getElementById('btn-wp-mode');
+  const btnWpClear  = document.getElementById('btn-wp-clear');
+  const btnWpStart  = document.getElementById('btn-wp-start');
+  const btnWpStop   = document.getElementById('btn-wp-stop');
+  const btnWpSave   = document.getElementById('btn-wp-save');
+  const btnWpLoad   = document.getElementById('btn-wp-load');
+  const wpRouteSelect = document.getElementById('wp-route-select');
+  const wpLoopChk   = document.getElementById('wp-loop');
+  const wpStatusEl  = document.getElementById('wp-status');
+
+  function setWpMode(on) {
+    wpMode = on;
+    if (btnWpMode) {
+      btnWpMode.textContent = on ? '✕ Cancelar' : '+ Waypoint';
+      btnWpMode.classList.toggle('active', on);
+    }
+    canvas.style.cursor = on ? 'crosshair' : 'default';
+    if (clickHint) clickHint.textContent = on
+      ? 'clique = waypoint | clique+arraste = define direção'
+      : (currentMode === 'nav2' ? '(clique no mapa para enviar o robô até o ponto)' : '');
+  }
+
+  function updateWpButtons() {
+    if (!btnWpStart || !btnWpStop) return;
+    btnWpStart.disabled = waypoints.length === 0 || wpActive;
+    btnWpStop.disabled  = !wpActive;
+    if (btnWpClear) btnWpClear.disabled = wpActive;
+    if (btnWpMode)  btnWpMode.disabled  = wpActive;
   }
 
   waitForSocket((socket) => {
@@ -44,6 +84,7 @@
       } else {
         panel.style.display = 'none';
       }
+      if (wpToolbar) wpToolbar.style.display = currentMode === 'nav2' ? '' : 'none';
     });
 
     socket.on('map_update', (data) => {
@@ -82,6 +123,124 @@
       }
     });
 
+    socket.on('waypoint_status', (data) => {
+      if (!data) return;
+      wpActive    = !!data.active;
+      wpActiveIdx = data.index || 0;
+      if (wpStatusEl) {
+        if (data.done) {
+          wpStatusEl.textContent = 'concluído ✓';
+        } else if (data.timeout) {
+          wpStatusEl.textContent = `⚠ timeout — indo para ${data.index + 1}/${data.total}`;
+        } else if (data.active) {
+          wpStatusEl.textContent = `waypoint ${data.index + 1}/${data.total}`;
+        } else {
+          wpStatusEl.textContent = '';
+        }
+      }
+      updateWpButtons();
+      render();
+    });
+
+    socket.on('waypoints_ack', (data) => {
+      if (!data.ok) {
+        if (wpStatusEl) wpStatusEl.textContent = 'erro: ' + (data.error || '?');
+        wpActive = false;
+        updateWpButtons();
+      }
+    });
+
+    // --- Botões de waypoints ---
+    if (btnWpMode) btnWpMode.addEventListener('click', () => setWpMode(!wpMode));
+
+    if (btnWpClear) btnWpClear.addEventListener('click', () => {
+      waypoints = [];
+      lastGoal = null;
+      setWpMode(false);
+      updateWpButtons();
+      render();
+    });
+
+    if (btnWpStart) btnWpStart.addEventListener('click', () => {
+      if (waypoints.length === 0) return;
+      setWpMode(false);
+      socket.emit('start_waypoints', {
+        waypoints,
+        loop: wpLoopChk ? wpLoopChk.checked : false,
+      });
+    });
+
+    if (btnWpStop) btnWpStop.addEventListener('click', () => {
+      socket.emit('stop_waypoints');
+    });
+
+    // --- Salvar rota ---
+    if (btnWpSave) btnWpSave.addEventListener('click', () => {
+      if (waypoints.length === 0) { alert('Adicione waypoints antes de salvar.'); return; }
+      const name = prompt('Nome da rota:', 'rota1');
+      if (!name) return;
+      socket.emit('save_route', { name, waypoints });
+    });
+
+    socket.on('save_route_ack', (data) => {
+      if (data.ok) {
+        if (wpStatusEl) wpStatusEl.textContent = `salvo: ${data.name}`;
+      } else {
+        alert('Erro ao salvar: ' + (data.error || '?'));
+      }
+    });
+
+    // --- Carregar rota ---
+    if (btnWpLoad) btnWpLoad.addEventListener('click', () => {
+      socket.emit('list_routes');
+    });
+
+    socket.on('list_routes_ack', (data) => {
+      if (!data.ok || !data.routes.length) {
+        alert('Nenhuma rota salva encontrada.');
+        return;
+      }
+      if (!wpRouteSelect) return;
+      wpRouteSelect.innerHTML = '<option value="">— selecionar —</option>' +
+        data.routes.map(r => `<option value="${r}">${r}</option>`).join('');
+      wpRouteSelect.style.display = '';
+      wpRouteSelect.focus();
+    });
+
+    if (wpRouteSelect) wpRouteSelect.addEventListener('change', () => {
+      const name = wpRouteSelect.value;
+      wpRouteSelect.style.display = 'none';
+      if (!name) return;
+      socket.emit('load_route', { name });
+    });
+
+    socket.on('load_route_ack', (data) => {
+      if (!data.ok) {
+        alert('Erro ao carregar: ' + (data.error || '?'));
+        return;
+      }
+      waypoints = data.waypoints || [];
+      if (wpLoopChk) wpLoopChk.checked = false;
+      setWpMode(false);
+      updateWpButtons();
+      if (wpStatusEl) wpStatusEl.textContent = `carregado: ${data.name} (${waypoints.length} pts)`;
+      render();
+    });
+
+    // --- Restaurar waypoints após F5 ---
+    socket.on('waypoints_restored', (data) => {
+      if (!data || !data.waypoints || data.waypoints.length === 0) return;
+      waypoints    = data.waypoints;
+      wpActive     = !!data.active;
+      wpActiveIdx  = data.index || 0;
+      if (wpLoopChk) wpLoopChk.checked = !!data.loop;
+      updateWpButtons();
+      if (wpStatusEl && data.active) {
+        wpStatusEl.textContent = `waypoint ${data.index + 1}/${data.total}`;
+      }
+      render();
+    });
+
     socket.on('save_map_ack', (data) => {
       if (data.ok) {
         alert(`Mapa salvo!\n${data.yaml}`);
@@ -100,19 +259,71 @@
       statusEl.textContent = 'salvando...';
     });
 
-    // --- Click → goal_pose (só em NAV2) ---
-    canvas.addEventListener('click', (ev) => {
-      if (!mapInfo || !mapImage) return;
-      if (currentMode !== 'nav2') return;
+    // --- Interação com o canvas (goal único + waypoints) ---
+    const DRAG_THRESHOLD = 8; // pixels para considerar drag
+
+    canvas.addEventListener('mousedown', (ev) => {
+      if (!mapInfo || !mapImage || currentMode !== 'nav2') return;
       const rect = canvas.getBoundingClientRect();
       const cx = ev.clientX - rect.left;
       const cy = ev.clientY - rect.top;
       const world = canvasToWorld(cx, cy);
       if (!world) return;
-      lastGoal = world;
-      socket.emit('nav_goal', { x: world.x, y: world.y, yaw: 0.0 });
-      statusEl.textContent = `alvo: (${world.x.toFixed(2)}, ${world.y.toFixed(2)})`;
+      wpMouseDown = { cx, cy, world };
+      if (wpMode) {
+        wpDrag = { worldX: world.x, worldY: world.y, canvasX: cx, canvasY: cy, curX: cx, curY: cy };
+      }
+    });
+
+    canvas.addEventListener('mousemove', (ev) => {
+      if (!wpDrag || !wpMode) return;
+      const rect = canvas.getBoundingClientRect();
+      wpDrag.curX = ev.clientX - rect.left;
+      wpDrag.curY = ev.clientY - rect.top;
       render();
+    });
+
+    canvas.addEventListener('mouseup', (ev) => {
+      if (!mapInfo || !mapImage || currentMode !== 'nav2') return;
+      const rect = canvas.getBoundingClientRect();
+      const cx = ev.clientX - rect.left;
+      const cy = ev.clientY - rect.top;
+
+      if (wpMode && wpMouseDown) {
+        const dx = cx - wpMouseDown.cx;
+        const dy = cy - wpMouseDown.cy;
+        const dragged = Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD;
+        const world = wpMouseDown.world;
+        // yaw: canvas y cresce pra baixo, ROS y cresce pra cima — inverte dy
+        const yaw = dragged ? Math.atan2(-dy, dx) : 0.0;
+        waypoints.push({ x: world.x, y: world.y, yaw });
+        updateWpButtons();
+        wpDrag = null;
+        wpMouseDown = null;
+        render();
+        return;
+      }
+
+      // Click simples (sem modo waypoint) → goal único
+      if (!wpMode && wpMouseDown) {
+        const ddx = cx - wpMouseDown.cx;
+        const ddy = cy - wpMouseDown.cy;
+        if (Math.sqrt(ddx * ddx + ddy * ddy) < DRAG_THRESHOLD) {
+          const world = wpMouseDown.world;
+          lastGoal = world;
+          socket.emit('nav_goal', { x: world.x, y: world.y, yaw: 0.0 });
+          statusEl.textContent = `alvo: (${world.x.toFixed(2)}, ${world.y.toFixed(2)})`;
+          render();
+        }
+      }
+
+      wpDrag = null;
+      wpMouseDown = null;
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      wpDrag = null;
+      wpMouseDown = null;
     });
   });
 
@@ -189,8 +400,8 @@
       ctx.stroke();
     }
 
-    // Último alvo (bolinha vermelha)
-    if (lastGoal) {
+    // Último alvo goal único (bolinha vermelha) — esconde se waypoints ativos
+    if (lastGoal && waypoints.length === 0) {
       const c = worldToCanvas(lastGoal.x, lastGoal.y);
       if (c) {
         ctx.fillStyle = '#e33';
@@ -198,6 +409,94 @@
         ctx.arc(c.x, c.y, 6, 0, Math.PI * 2);
         ctx.fill();
       }
+    }
+
+    // Linhas conectando waypoints
+    if (waypoints.length > 1) {
+      ctx.strokeStyle = 'rgba(96,165,250,0.5)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      waypoints.forEach((wp, i) => {
+        const c = worldToCanvas(wp.x, wp.y);
+        if (!c) return;
+        if (i === 0) ctx.moveTo(c.x, c.y); else ctx.lineTo(c.x, c.y);
+      });
+      if (wpLoopChk && wpLoopChk.checked && waypoints.length > 1) {
+        const c0 = worldToCanvas(waypoints[0].x, waypoints[0].y);
+        if (c0) ctx.lineTo(c0.x, c0.y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Marcadores de waypoints
+    waypoints.forEach((wp, i) => {
+      const c = worldToCanvas(wp.x, wp.y);
+      if (!c) return;
+      const isActive = wpActive && i === wpActiveIdx;
+      const isDone   = wpActive && i < wpActiveIdx;
+      const r = 10;
+
+      // Seta de orientação
+      ctx.save();
+      ctx.translate(c.x, c.y);
+      ctx.rotate(-wp.yaw);
+      ctx.strokeStyle = isActive ? '#facc15' : isDone ? '#4ade80' : '#60a5fa';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(r + 6, 0);
+      ctx.moveTo(r + 6, 0);
+      ctx.lineTo(r, -4);
+      ctx.moveTo(r + 6, 0);
+      ctx.lineTo(r, 4);
+      ctx.stroke();
+      ctx.restore();
+
+      // Círculo com número
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = isActive ? '#facc15' : isDone ? '#065f46' : '#1d4ed8';
+      ctx.fill();
+      ctx.strokeStyle = isActive ? '#fff' : '#93c5fd';
+      ctx.lineWidth = isActive ? 2 : 1;
+      ctx.stroke();
+
+      ctx.fillStyle = isActive ? '#000' : '#fff';
+      ctx.font = `bold ${r}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(i + 1, c.x, c.y);
+    });
+
+    // Preview de orientação durante drag
+    if (wpDrag && wpMode) {
+      const c = { x: wpDrag.canvasX, y: wpDrag.canvasY };
+      const dx = wpDrag.curX - c.x;
+      const dy = wpDrag.curY - c.y;
+      if (Math.sqrt(dx * dx + dy * dy) > 4) {
+        ctx.save();
+        ctx.translate(c.x, c.y);
+        ctx.rotate(Math.atan2(dy, dx));
+        ctx.strokeStyle = '#facc15';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(Math.sqrt(dx * dx + dy * dy), 0);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+      // Círculo preview
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 10, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(250,204,21,0.3)';
+      ctx.fill();
+      ctx.strokeStyle = '#facc15';
+      ctx.lineWidth = 2;
+      ctx.stroke();
     }
 
     // Robô (seta laranja apontando para o yaw)

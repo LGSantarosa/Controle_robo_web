@@ -146,6 +146,10 @@ def handle_connect():
         cached = map_bridge.get_last_map_payload()
         if cached is not None:
             emit('map_update', cached)
+        # Restaura waypoints para clientes que reconectaram (F5)
+        wp_state = map_bridge.get_waypoints_state()
+        if wp_state['waypoints']:
+            emit('waypoints_restored', wp_state)
 
 
 @socketio.on('nav_goal')
@@ -166,6 +170,56 @@ def handle_nav_goal(data):
         emit('nav_goal_ack', result)
     except Exception as e:
         emit('nav_goal_ack', {'ok': False, 'error': str(e)})
+
+
+@socketio.on('start_waypoints')
+def handle_start_waypoints(data):
+    if map_bridge is None:
+        emit('waypoints_ack', {'ok': False, 'error': 'mapa indisponível neste modo'})
+        return
+    if ROBOT_MODE != 'nav2':
+        emit('waypoints_ack', {'ok': False, 'error': 'waypoints só funcionam em modo NAV2'})
+        return
+    waypoints = (data or {}).get('waypoints', [])
+    loop = bool((data or {}).get('loop', False))
+    result = map_bridge.start_waypoints(waypoints, loop)
+    emit('waypoints_ack', result)
+
+
+@socketio.on('stop_waypoints')
+def handle_stop_waypoints():
+    if map_bridge is None:
+        return
+    map_bridge.stop_waypoints()
+
+
+@socketio.on('save_route')
+def handle_save_route(data):
+    if map_bridge is None:
+        emit('save_route_ack', {'ok': False, 'error': 'indisponível'})
+        return
+    name = (data or {}).get('name', 'rota')
+    waypoints = (data or {}).get('waypoints')  # lista vinda do frontend
+    result = map_bridge.save_route(name, waypoints)
+    emit('save_route_ack', result)
+
+
+@socketio.on('load_route')
+def handle_load_route(data):
+    if map_bridge is None:
+        emit('load_route_ack', {'ok': False, 'error': 'indisponível'})
+        return
+    name = (data or {}).get('name', '')
+    result = map_bridge.load_route(name)
+    emit('load_route_ack', result)
+
+
+@socketio.on('list_routes')
+def handle_list_routes():
+    if map_bridge is None:
+        emit('list_routes_ack', {'ok': True, 'routes': []})
+        return
+    emit('list_routes_ack', map_bridge.list_routes())
 
 
 @socketio.on('save_map')
