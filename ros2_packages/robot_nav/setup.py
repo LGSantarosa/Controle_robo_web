@@ -27,7 +27,6 @@ setup(
         'console_scripts': [
             'odom_publisher = robot_nav.odom_publisher:main',
             'cmd_vel_to_wheels = robot_nav.cmd_vel_to_wheels:main',
-            'obstacle_detector = robot_nav.obstacle_detector:main',
         ],
     },
 )

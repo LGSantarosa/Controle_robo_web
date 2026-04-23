@@ -125,7 +125,6 @@ fi
 # --- Limpa órfãos de execuções anteriores (nós ROS2 e app.py) ---
 pkill -9 -f "robot_nav/odom_publisher"      2>/dev/null
 pkill -9 -f "robot_nav/cmd_vel_to_wheels"   2>/dev/null
-pkill -9 -f "robot_nav/obstacle_detector"   2>/dev/null
 pkill -9 -f "robot_state_publisher"         2>/dev/null
 pkill -9 -f "ldlidar_stl_ros2_node"         2>/dev/null
 pkill -9 -f "ros2-hoverboard-driver/main"   2>/dev/null
@@ -152,7 +151,6 @@ DRIVER_PID=""
 SERVER_PID=""
 ROBOT_PID=""
 LIDAR_PID=""
-OBSTACLE_PID=""
 NAV2_PID=""
 SLAM_PID=""
 SIM_PID=""
@@ -180,14 +178,13 @@ cleanup() {
     kill_tree "$SERVER_PID"
     kill_tree "$SLAM_PID"
     kill_tree "$NAV2_PID"
-    kill_tree "$OBSTACLE_PID"
     kill_tree "$LIDAR_PID"
     kill_tree "$ROBOT_PID"
     kill_tree "$DRIVER_PID"
     kill_tree "$SIM_PID"
     sleep 1
     # Segunda passada: SIGKILL em qualquer filho que tenha sobrevivido
-    for pid in $SERVER_PID $SLAM_PID $NAV2_PID $OBSTACLE_PID $LIDAR_PID $ROBOT_PID $DRIVER_PID $SIM_PID; do
+    for pid in $SERVER_PID $SLAM_PID $NAV2_PID $LIDAR_PID $ROBOT_PID $DRIVER_PID $SIM_PID; do
         for desc in $(pgrep -P "$pid" 2>/dev/null) $pid; do
             kill -9 "$desc" 2>/dev/null
         done
@@ -195,8 +192,7 @@ cleanup() {
     # Rede de segurança: mata qualquer nó do robot_nav órfão que reste
     pkill -9 -f "robot_nav/odom_publisher"      2>/dev/null
     pkill -9 -f "robot_nav/cmd_vel_to_wheels"   2>/dev/null
-    pkill -9 -f "robot_nav/obstacle_detector"   2>/dev/null
-    pkill -9 -f "robot_state_publisher"         2>/dev/null
+        pkill -9 -f "robot_state_publisher"         2>/dev/null
     pkill -9 -f "ldlidar_stl_ros2_node"         2>/dev/null
     pkill -9 -f "ros2-hoverboard-driver/main"   2>/dev/null
     pkill -9 -f "async_slam_toolbox_node"       2>/dev/null
@@ -212,7 +208,6 @@ cleanup() {
     pkill -9 -f "ruby.*gz sim"                  2>/dev/null
     pkill -9 -f "gz sim"                        2>/dev/null
     pkill -9 -f "parameter_bridge"              2>/dev/null
-    rm -f /tmp/obstacle_current.json
     echo "Pronto."
     exit 0
 }
@@ -269,12 +264,7 @@ else
             echo "      PID: $LIDAR_PID  |  Log: $LIDAR_LOG"
             sleep 1
 
-            echo "      Iniciando detector de obstáculos..."
-            OBSTACLE_LOG="$LOG_DIR/obstacle_detector.log"
-            ros2 run robot_nav obstacle_detector > "$OBSTACLE_LOG" 2>&1 &
-            OBSTACLE_PID=$!
-            echo "      PID: $OBSTACLE_PID  |  Log: $OBSTACLE_LOG"
-            sleep 1
+
         else
             echo "[3/5] AVISO: Porta do LiDAR $LIDAR_PORT não encontrada. Pulando LiDAR."
             echo "      Para especificar outra porta: ./launch.sh --lidar-port=/dev/ttyUSB2"
