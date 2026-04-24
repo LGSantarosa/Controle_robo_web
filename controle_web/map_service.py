@@ -34,6 +34,7 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReli
 
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import OccupancyGrid, Path
+from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformException, TransformListener
 
 
@@ -114,6 +115,12 @@ class MapBridge:
         # TF map→base_link para rastrear o robô no mapa.
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self._node)
+
+        # Serviço de limpeza do costmap local — chamado entre waypoints para
+        # evitar que o robô fique preso em células de custo alto após parar.
+        self._clear_costmap_srv = self._node.create_client(
+            Empty, '/local_costmap/clear_entirely_local_costmap'
+        )
 
         # Guarda o último metadata do mapa para converter clique pixel→mundo
         # no cliente (o cliente já recebe isso no map_update).
@@ -320,6 +327,10 @@ class MapBridge:
             self._wp_current_idx = i
             wp = self._wp_list[i]
             self._sock.emit('waypoint_status', {'active': True, 'index': i, 'total': total})
+            # Limpa o costmap local antes de enviar o próximo goal — evita que
+            # o robô fique preso em células de custo alto depois de parar.
+            if self._clear_costmap_srv.wait_for_service(timeout_sec=1.0):
+                self._clear_costmap_srv.call_async(Empty.Request())
             time.sleep(0.8)
             if not self._wp_stop.is_set():
                 self.send_goal(wp['x'], wp['y'], wp.get('yaw', 0.0))
