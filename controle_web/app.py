@@ -24,6 +24,9 @@ controller: RobotController = ROS2Controller()
 
 # Ponte de mapa/pose/navegação — opcional (só sobe se rclpy importou OK).
 map_bridge = None
+# Coletor de métricas Nav2 — grava CSV por tentativa pra servir de base
+# quando formos ajustar parâmetros do stack de navegação.
+nav_metrics = None
 
 # rclpy.init() instala seus próprios handlers de SIGINT/SIGTERM que engolem o
 # Ctrl+C (o processo fica preso esperando o executor do ROS2 que nunca acorda).
@@ -31,6 +34,11 @@ map_bridge = None
 _shutting_down = False
 
 def _shutdown_all():
+    try:
+        if nav_metrics is not None:
+            nav_metrics.shutdown()
+    except Exception:
+        pass
     try:
         if map_bridge is not None:
             map_bridge.shutdown()
@@ -88,6 +96,19 @@ if ROBOT_MODE in ('slam', 'nav2'):
             f"[app] Falha ao iniciar MapBridge: {e}. Mapa e navegação desabilitados."
         )
         map_bridge = None
+
+# Coletor de métricas só faz sentido em NAV2 (action navigate_to_pose ativa).
+if ROBOT_MODE == 'nav2':
+    try:
+        from nav_metrics import NavMetricsCollector
+        nav_metrics = NavMetricsCollector(
+            log_dir=os.path.join(os.path.dirname(__file__), 'logs', 'nav_metrics')
+        )
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            f"[app] Falha ao iniciar NavMetricsCollector: {e}. Métricas desabilitadas."
+        )
+        nav_metrics = None
 
 
 # Log de movimentos (JSON Lines) gravado em arquivo rotativo + arquivo legível
