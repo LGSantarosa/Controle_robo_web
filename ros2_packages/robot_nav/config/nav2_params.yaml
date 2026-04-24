@@ -72,7 +72,9 @@ controller_server:
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: false
-      min_vel_x: -0.1
+      # Navegação normal só pra frente. Quando o robô trava, o BT aciona o
+      # recovery (BackUp no behavior_server) que pode dar ré livremente.
+      min_vel_x: 0.0
       max_vel_x: 0.35
       min_vel_y: 0.0
       max_vel_y: 0.0

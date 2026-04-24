@@ -28,11 +28,14 @@ import numpy as np
 from PIL import Image
 
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 
+from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
+from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid, Path
 from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformException, TransformListener
@@ -122,6 +125,13 @@ class MapBridge:
             Empty, '/local_costmap/clear_entirely_local_costmap'
         )
 
+        # Action client do Nav2 — usado pelo runner de waypoints pra saber
+        # quando o Nav2 realmente termina um goal (SUCCEEDED/ABORTED/CANCELED)
+        # em vez de inferir chegada por distância/yaw.
+        self._nav_action = ActionClient(
+            self._node, NavigateToPose, 'navigate_to_pose'
+        )
+
         # Guarda o último metadata do mapa para converter clique pixel→mundo
         # no cliente (o cliente já recebe isso no map_update).
         self._last_map_info: Optional[dict] = None
@@ -137,6 +147,11 @@ class MapBridge:
         self._wp_thread: Optional[threading.Thread] = None
         self._wp_current_idx: int = 0
         self._wp_active: bool = False
+        # Estado do goal corrente na NavigateToPose action. Escrito pelos
+        # callbacks (thread do executor ROS) e lido pelo _wp_runner.
+        self._wp_goal_done: threading.Event = threading.Event()
+        self._wp_goal_status: Optional[int] = None
+        self._wp_goal_handle = None
 
         # Executor próprio — permite spin dos callbacks sem bloquear o Flask.
         self._executor = SingleThreadedExecutor()
@@ -265,6 +280,13 @@ class MapBridge:
 
     def stop_waypoints(self) -> dict:
         self._wp_stop.set()
+        # Cancela o goal ativo no Nav2 (se houver) pra não deixar o robô
+        # continuar indo até o último alvo depois de parar a rota.
+        if self._wp_goal_handle is not None:
+            try:
+                self._wp_goal_handle.cancel_goal_async()
+            except Exception as e:
+                log.debug(f"[MapBridge] erro ao cancelar goal: {e}")
         if self._wp_thread and self._wp_thread.is_alive():
             self._wp_thread.join(timeout=2.0)
         self._wp_thread = None
@@ -317,93 +339,163 @@ class MapBridge:
             names = []
         return {'ok': True, 'routes': names}
 
-    def _wp_runner(self):
-        total    = len(self._wp_list)
-        DIST_TOL = 0.10   # metros — ligeiramente acima do xy_goal_tolerance do Nav2 (0.07)
-        YAW_TOL  = 0.18   # radianos (~10°) — ligeiramente acima do yaw_goal_tolerance (0.15)
-        TIMEOUT  = 60.0   # segundos por waypoint antes de avançar forçado
+    def _wp_send_goal_action(self, x: float, y: float, yaw: float = 0.0):
+        """Envia um goal via NavigateToPose (action). Os callbacks
+        `_on_goal_response` e `_on_goal_result` atualizam `_wp_goal_status`
+        e sinalizam `_wp_goal_done` quando o Nav2 termina (SUCCEEDED,
+        ABORTED, CANCELED)."""
+        self._wp_goal_done.clear()
+        self._wp_goal_status = None
+        self._wp_goal_handle = None
 
-        def _send_next(i):
+        if not self._nav_action.wait_for_server(timeout_sec=2.0):
+            log.warning("[MapBridge] navigate_to_pose action server indisponível")
+            self._wp_goal_status = GoalStatus.STATUS_ABORTED
+            self._wp_goal_done.set()
+            return
+
+        goal = NavigateToPose.Goal()
+        goal.pose.header.frame_id = 'map'
+        goal.pose.header.stamp = self._node.get_clock().now().to_msg()
+        goal.pose.pose.position.x = float(x)
+        goal.pose.pose.position.y = float(y)
+        qx, qy, qz, qw = _yaw_to_quat(float(yaw))
+        goal.pose.pose.orientation.x = qx
+        goal.pose.pose.orientation.y = qy
+        goal.pose.pose.orientation.z = qz
+        goal.pose.pose.orientation.w = qw
+
+        send_future = self._nav_action.send_goal_async(goal)
+        send_future.add_done_callback(self._on_goal_response)
+        log.info(f"[MapBridge] NavigateToPose → ({x:.2f}, {y:.2f}, yaw={yaw:.2f})")
+
+    def _on_goal_response(self, future):
+        try:
+            handle = future.result()
+        except Exception as e:
+            log.warning(f"[MapBridge] erro no send_goal: {e}")
+            self._wp_goal_status = GoalStatus.STATUS_ABORTED
+            self._wp_goal_done.set()
+            return
+        if not handle.accepted:
+            log.warning("[MapBridge] goal rejeitado pelo Nav2")
+            self._wp_goal_status = GoalStatus.STATUS_ABORTED
+            self._wp_goal_done.set()
+            return
+        self._wp_goal_handle = handle
+        handle.get_result_async().add_done_callback(self._on_goal_result)
+
+    def _on_goal_result(self, future):
+        try:
+            result = future.result()
+            self._wp_goal_status = result.status
+        except Exception as e:
+            log.warning(f"[MapBridge] erro no get_result: {e}")
+            self._wp_goal_status = GoalStatus.STATUS_ABORTED
+        self._wp_goal_handle = None
+        self._wp_goal_done.set()
+
+    def _wp_runner(self):
+        total        = len(self._wp_list)
+        TIMEOUT      = 120.0  # rede de segurança — Nav2 já tem progress_checker
+        MAX_RETRIES  = 2      # tentativas extras quando o Nav2 aborta
+
+        def _send(i: int):
             self._wp_current_idx = i
             wp = self._wp_list[i]
             self._sock.emit('waypoint_status', {'active': True, 'index': i, 'total': total})
-            # Limpa o costmap local antes de enviar o próximo goal — evita que
-            # o robô fique preso em células de custo alto depois de parar.
+            # Limpa o costmap local antes de enviar o próximo goal — evita
+            # que o robô fique preso em células de custo alto após parar.
             if self._clear_costmap_srv.wait_for_service(timeout_sec=1.0):
                 self._clear_costmap_srv.call_async(Empty.Request())
-            time.sleep(0.8)
+            time.sleep(0.5)
             if not self._wp_stop.is_set():
-                self.send_goal(wp['x'], wp['y'], wp.get('yaw', 0.0))
+                self._wp_send_goal_action(wp['x'], wp['y'], wp.get('yaw', 0.0))
 
-        idx = 0
-        _send_next(idx)
-        goal_t0 = time.monotonic()
-
-        while not self._wp_stop.is_set():
-            time.sleep(0.2)
-
-            # ---- Timeout por waypoint ----
-            if time.monotonic() - goal_t0 > TIMEOUT:
-                log.warning(f"[MapBridge] timeout waypoint {idx + 1}/{total} — avançando")
-                self._sock.emit('waypoint_status', {
-                    'active': True, 'index': idx, 'total': total, 'timeout': True,
-                })
-                idx += 1
-                if idx >= total:
-                    if self._wp_loop:
-                        idx = 0
-                    else:
-                        self._wp_active = False
-                        self._sock.emit('waypoint_status', {
-                            'active': False, 'index': total, 'total': total, 'done': True,
-                        })
-                        return
-                _send_next(idx)
-                goal_t0 = time.monotonic()
-                continue
-
-            # ---- Checa chegada via TF ----
-            try:
-                t = self._tf_buffer.lookup_transform(
-                    'map', 'base_link', rclpy.time.Time()
-                )
-            except Exception:
-                continue
-
-            wp   = self._wp_list[idx]
-            dx   = t.transform.translation.x - wp['x']
-            dy   = t.transform.translation.y - wp['y']
-            dist = (dx ** 2 + dy ** 2) ** 0.5
-
-            if dist > DIST_TOL:
-                continue
-
-            robot_yaw  = _quat_to_yaw(
-                t.transform.rotation.x, t.transform.rotation.y,
-                t.transform.rotation.z, t.transform.rotation.w,
-            )
-            target_yaw = wp.get('yaw', 0.0)
-            yaw_diff   = abs((robot_yaw - target_yaw + math.pi) % (2 * math.pi) - math.pi)
-
-            if yaw_diff > YAW_TOL:
-                continue
-
-            # Chegou — avança para o próximo
+        def _advance() -> bool:
+            """Avança idx; retorna False quando a rota terminou (sem loop)."""
+            nonlocal idx, retries
+            retries = 0
             idx += 1
             if idx >= total:
                 if self._wp_loop:
                     idx = 0
-                else:
-                    self._wp_active = False
+                    return True
+                return False
+            return True
+
+        idx = 0
+        retries = 0
+        _send(idx)
+        t0 = time.monotonic()
+
+        while not self._wp_stop.is_set():
+            # Espera o Nav2 responder. Se demorar além de TIMEOUT, cancela e
+            # pula — cobre o caso do action server travar sem devolver status.
+            if not self._wp_goal_done.wait(timeout=0.5):
+                if time.monotonic() - t0 > TIMEOUT:
+                    log.warning(f"[MapBridge] timeout {TIMEOUT}s waypoint {idx + 1}/{total} — cancelando")
+                    if self._wp_goal_handle is not None:
+                        try:
+                            self._wp_goal_handle.cancel_goal_async()
+                        except Exception:
+                            pass
                     self._sock.emit('waypoint_status', {
-                        'active': False, 'index': total, 'total': total, 'done': True,
+                        'active': True, 'index': idx, 'total': total, 'timeout': True,
                     })
-                    return
-            _send_next(idx)
-            goal_t0 = time.monotonic()
+                    if not _advance():
+                        break
+                    _send(idx)
+                    t0 = time.monotonic()
+                continue
+
+            status = self._wp_goal_status
+
+            if status == GoalStatus.STATUS_SUCCEEDED:
+                log.info(f"[MapBridge] waypoint {idx + 1}/{total} concluído")
+                if not _advance():
+                    break
+                _send(idx)
+                t0 = time.monotonic()
+
+            elif status == GoalStatus.STATUS_ABORTED:
+                retries += 1
+                if retries <= MAX_RETRIES:
+                    log.warning(f"[MapBridge] waypoint {idx + 1}/{total} abortado — tentativa {retries}/{MAX_RETRIES}")
+                    self._sock.emit('waypoint_status', {
+                        'active': True, 'index': idx, 'total': total, 'retry': retries,
+                    })
+                    time.sleep(2.0)  # dá tempo do Nav2 se recuperar
+                    _send(idx)
+                    t0 = time.monotonic()
+                else:
+                    log.warning(f"[MapBridge] pulando waypoint {idx + 1}/{total} após {MAX_RETRIES} tentativas")
+                    self._sock.emit('waypoint_status', {
+                        'active': True, 'index': idx, 'total': total, 'skipped': True,
+                    })
+                    if not _advance():
+                        break
+                    _send(idx)
+                    t0 = time.monotonic()
+
+            elif status == GoalStatus.STATUS_CANCELED:
+                # Cancelado externamente (stop_waypoints) — sai do loop.
+                break
+
+            else:
+                log.warning(f"[MapBridge] status inesperado do goal: {status}")
+                if not _advance():
+                    break
+                _send(idx)
+                t0 = time.monotonic()
 
         self._wp_active = False
-        self._sock.emit('waypoint_status', {'active': False, 'index': idx, 'total': total})
+        if idx >= total and not self._wp_loop:
+            self._sock.emit('waypoint_status', {
+                'active': False, 'index': total, 'total': total, 'done': True,
+            })
+        else:
+            self._sock.emit('waypoint_status', {'active': False, 'index': idx, 'total': total})
 
     def send_goal(self, x: float, y: float, yaw: float = 0.0) -> dict:
         """Publica PoseStamped em /goal_pose (frame 'map')."""
