@@ -85,9 +85,14 @@ controller_server:
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: false
-      # Navegação normal só pra frente. Quando o robô trava, o BT aciona o
-      # recovery (BackUp no behavior_server) que pode dar ré livremente.
-      min_vel_x: 0.0
+      # Permite ré pequena (-0.1 m/s) em navegação normal pra DWB ter como
+      # opção em manobra apertada. Antes era 0.0 — só dava ré via BackUp
+      # recovery, que só dispara após ~15 s de "travado" pelo progress
+      # checker. Resultado: robô parava 15 s antes de fazer uma manobra
+      # que precisaria de 1–2 s de ré pra ajeitar. Os critics PathAlign/
+      # GoalAlign continuam preferindo frente em campo aberto, então a ré
+      # só é escolhida quando realmente é a melhor opção.
+      min_vel_x: -0.1
       max_vel_x: 0.35
       min_vel_y: 0.0
       max_vel_y: 0.0
@@ -112,7 +117,12 @@ controller_server:
       limit_vel_cmd_in_traj: false
       stateful: true
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 0.02
+      # 0.15 (era 0.02) faz o DWB pesar muito mais "fica longe de obstáculo"
+      # ao escolher trajetória — sem mexer em geometria de costmap, que está
+      # funcionando bem. Antes o peso era 1600× menor que PathDist (32) →
+      # robô seguia a rota mesmo encostando. Agora é ~200× menor — ainda
+      # segue rota, mas evita trajetórias que passem raspando.
+      BaseObstacle.scale: 0.15
       PathAlign.scale: 32.0
       PathAlign.forward_point_distance: 0.1
       GoalAlign.scale: 32.0
@@ -122,6 +132,13 @@ controller_server:
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 2.0
       RotateToGoal.lookahead_time: -1.0
+      # Oscillation default é 1.0 — pune mudanças de sinal de velocidade,
+      # achando que oscilar = ruim. Em manobra apertada (frente-gira-frente)
+      # essas alternâncias são LEGÍTIMAS e o critic vetava elas, deixando o
+      # DWB sem opção viável → robô ficava parado "pensando" 2 min até o
+      # cenário mudar sozinho. 0.1 mantém aversão a oscilar gratuitamente
+      # em campo aberto, sem matar manobras necessárias.
+      Oscillation.scale: 0.1
 
 local_costmap:
   local_costmap:
