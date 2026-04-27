@@ -18,8 +18,12 @@ Interface web para controlar um robô hoverboard com ROS2, LiDAR FHL-LD20, detec
   - [Modo SLAM — mapear a sala](#modo-slam--mapear-a-sala)
   - [Modo NAV2 — navegação autônoma](#modo-nav2--navegação-autônoma)
 - [Controles](#controles)
+- [Câmera RGB-D](#câmera-rgb-d)
+- [Navegação por waypoints](#navegação-por-waypoints)
+- [Métricas Nav2 (CSV)](#métricas-nav2-csv)
 - [Arquitetura](#arquitetura)
   - [Ponte ROS2 ↔ Web para mapa e navegação](#ponte-ros2--web-para-mapa-e-navegação)
+- [Tuning do Nav2](#tuning-do-nav2)
 - [Logs](#logs)
 - [Limitações conhecidas](#limitações-conhecidas)
 - [Solução de problemas](#solução-de-problemas)
@@ -140,38 +144,48 @@ Quando o fluxo estiver funcionando no sim, basta tirar o `--sim` dos comandos. A
 ## Visão geral
 
 ```
-Navegador (WASD / Gamepad / Clique no mapa)
+Navegador (WASD / Gamepad / Clique / Waypoints)
         │  Socket.IO
         ▼
   Flask + Socket.IO (porta 5000)
         │  /cmd_vel  (geometry_msgs/Twist)
-        │  /goal_pose (PoseStamped) — só em NAV2
+        │  Action navigate_to_pose  (waypoints e click-to-go em NAV2)
         ▼
   cmd_vel_to_wheels
         │  /wheel_vel_setpoints  (wheel_msgs/WheelSpeeds)
         ▼
   ros2-hoverboard-driver  ──────►  /dev/hoverboard (USB serial)
 
-  LiDAR FHL-LD20  ──────────────►  /dev/lidar (USB serial)
-        │  /scan  (sensor_msgs/LaserScan)
-        ▼
-  ┌─────────────────────────┬─────────────────────────┐
-  │  TELEOP                 │  SLAM                   │  NAV2
-  │  obstacle_detector      │  slam_toolbox           │  map_server + amcl
-  │  → /tmp/obstacle_*.json │  → /map (ao vivo)       │  → /map (estático)
-  │                         │  → TF map→odom          │  + planner + controller
-  │                         │                         │  → /goal_pose → /plan
-  └─────────────────────────┴─────────────────────────┘
+  Sensores:
+    LiDAR FHL-LD20  ─────────────►  /scan        (LaserScan, 360°)
+    Câmera RGB-D    ─────────────►  /camera/image, /camera/depth_image
+                                    /camera/points (PointCloud2 — VoxelLayer)
+
+  ┌─────────────────────────┬─────────────────────────────────────────┐
+  │  TELEOP                 │  SLAM                   │  NAV2          │
+  │  obstacle_detector      │  slam_toolbox           │  map_server +  │
+  │  → /tmp/obstacle_*.json │  → /map (ao vivo)       │  amcl + planner│
+  │  + nav2_collision_mon.  │  → TF map→odom          │  + controller +│
+  │                         │                         │  bt_navigator +│
+  │                         │                         │  behaviors +   │
+  │                         │                         │  velocity_smth │
+  │                         │                         │  + waypoint_fl │
+  │                         │                         │  costmaps com  │
+  │                         │                         │  VoxelLayer    │
+  │                         │                         │  (LiDAR+camera)│
+  └─────────────────────────┴─────────────────────────────────────────┘
         │
-        ▼  map_service.py (ponte ROS2 → Socket.IO)
-  /map (OccupancyGrid → PNG)
-  TF map→base_link (pose do robô, 10 Hz)
-  /plan (trajetória, quando Nav2 está ativo)
+        ▼  Pontes ROS2 → Socket.IO (no app Flask)
+  map_service.py:    /map → PNG, TF map→base_link, /plan,
+                     NavigateToPose action client (click + waypoints)
+  camera_bridge.py:  /camera/image → JPEG @ 5 Hz
+  nav_metrics.py:    grava CSV por navegação (status, replans, recoveries)
         │
         ▼
-  Canvas do mapa no navegador
-    (renderiza mapa + robô + plano;
-     click envia /goal_pose em modo NAV2)
+  Navegador
+    Canvas do mapa: mapa + robô + plano + waypoints + último alvo
+    Painel câmera:  stream do que o robô está vendo
+    Toolbar wp:     adicionar/limpar/iniciar/parar/loop, salvar/carregar rotas
 ```
 
 ---
@@ -184,7 +198,7 @@ O `launch.sh` tem um conceito central: **o modo**. Cada modo sobe uma combinaç�
 |------|------|---------------|-------------------|
 | **TELEOP** | *(padrão)* | Dirigir manualmente pela sala | `nav2_collision_monitor` — só segurança (freia se tiver obstáculo perto) |
 | **SLAM** | `--slam` | Construir o mapa da sala pela primeira vez | `slam_toolbox` em modo *mapping online* (gera `/map` ao vivo) |
-| **NAV2** | `--nav2` | Navegação autônoma usando um mapa já salvo | `map_server` + `amcl` + `planner_server` + `controller_server` + `bt_navigator` + `behavior_server` + `velocity_smoother` + `waypoint_follower` |
+| **NAV2** | `--nav2` | Navegação autônoma + click-to-go + waypoints + métricas | `map_server` + `amcl` (com beam_skip) + `planner_server` + `controller_server` (DWB) + `bt_navigator` + `behavior_server` + `velocity_smoother` + `waypoint_follower` + `NavMetricsCollector` (CSV) |
 
 Nos três modos o web control, o hoverboard e o LiDAR rodam normalmente — você sempre pode dirigir manualmente, mesmo durante SLAM ou NAV2.
 
@@ -211,8 +225,9 @@ A flag `--sim` troca tudo que é hardware por simulação:
 | Odometria | `odom_publisher` (feedback das rodas) | plugin `DiffDrive` do Gazebo |
 | `/cmd_vel → rodas` | `cmd_vel_to_wheels` | plugin `DiffDrive` do Gazebo |
 | LiDAR | `ldlidar_stl_ros2` em `/dev/lidar` | sensor `gpu_lidar` na SDF do robô |
-| Corpo do robô | URDF (`robot.urdf.xacro`) | URDF + SDF (`sim_robot.sdf`) |
-| `/scan`, `/odom`, `/tf` | tópicos reais | via `ros_gz_bridge` (GZ → ROS) |
+| Câmera RGB-D | (futuro) driver da câmera real | sensor `rgbd_camera` na SDF (`/camera/*`) |
+| Corpo do robô | URDF (`husky.urdf.xacro`) | URDF + SDF (`husky.sdf`) |
+| `/scan`, `/odom`, `/tf`, `/camera/*` | tópicos reais | via `ros_gz_bridge` (GZ → ROS) |
 
 O servidor web, o `map_service.py` e a UI são exatamente os mesmos — o sim é transparente do ponto de vista do navegador.
 
@@ -278,15 +293,17 @@ Todas as flags combinam. `--sim --slam --world=worlds/minha_sala.sdf` também fu
 
 ### O robô simulado
 
-O modelo fica em `~/ros2_ws/src/robot_nav/urdf/sim_robot.sdf` — um diff drive de 50×45×10 cm (mesmo tamanho do hoverboard real), rodas de 8,5 cm de raio, caster traseiro e um GPU LiDAR de 360° no topo. A SDF inclui três plugins Gazebo:
+O modelo fica em `~/ros2_ws/src/robot_nav/urdf/husky.sdf` — um diff drive customizado (corpo 31×24×14 cm em formato Husky reduzido), rodas traseiras com tração + caster esférico frontal, GPU LiDAR de 360° no topo e **câmera RGB-D** frontal. A SDF inclui:
 
-- `DiffDrive` — consome `/cmd_vel`, publica `/odom` e o TF `odom → base_link`
-- `JointStatePublisher` — roda as rodas na visualização
-- `PosePublisher` — snapshot da pose dos links
+- Sensor `gpu_lidar` (publica `/scan`, 360° @ 10 Hz)
+- Sensor `rgbd_camera` frontal (publica `/camera/image`, `/camera/depth_image`, `/camera/camera_info`, `/camera/points` — FOV 60°, 320×240 @ 15 Hz)
+- Plugin `DiffDrive` — consome `/cmd_vel`, publica `/odom` e TF `odom → base_link`
+- Plugin `JointStatePublisher` — animação das rodas
+- Plugin `PosePublisher` — snapshot da pose dos links/sensores
 
-As dimensões batem com o URDF do hoverboard real de propósito: assim os parâmetros que você tunar no sim (velocidade do planner, inflation radius do costmap, footprint do Nav2) transferem razoavelmente para o robô real.
+A URDF (`husky.urdf.xacro`) é mantida em paralelo com os mesmos `joints` e `links` (`base_link`, `base_laser`, `camera_link`, rodas) pra que o `robot_state_publisher` publique TFs estáticos consistentes — necessário pro `slam_toolbox`, AMCL e o pipeline da câmera funcionarem.
 
-> **Atenção:** este modo é um scaffold pra você conseguir iterar no pipeline sem hardware. Ele não foi validado end-to-end ainda — espere pequenos ajustes nos parâmetros do `slam_toolbox` e do Nav2 no primeiro uso. Veja [Limitações conhecidas](#limitações-conhecidas).
+A câmera RGB-D entra no Nav2 via `VoxelLayer` no costmap local (alimenta com point cloud), permitindo detectar obstáculos baixos (mochila no chão) e altos (mesa) que o LiDAR plano não vê. Detalhes em [Câmera RGB-D](#câmera-rgb-d).
 
 ---
 
@@ -469,9 +486,13 @@ Segunda etapa: usa um mapa já salvo pelo SLAM e ativa a stack Nav2 completa. Vo
 No painel da UI:
 - **Mapa** aparece com o mapa estático carregado.
 - **Robô** aparece como seta laranja apontando para o yaw, atualizada a 10 Hz via TF `map→base_link`.
-- **Click** no mapa publica `/goal_pose` (PoseStamped, frame `map`) que o `bt_navigator` consome.
+- **Click** no mapa envia o robô pra esse ponto (via action `navigate_to_pose`). Click+drag define o yaw final.
 - **Trajetória planejada** pelo Nav2 aparece como linha azul (escutando `/plan`).
 - **Último alvo** aparece como bolinha vermelha.
+- **Toolbar de waypoints** permite definir uma rota multi-ponto, salvar/carregar, executar em loop. Veja [Navegação por waypoints](#navegação-por-waypoints).
+- **Painel câmera** mostra o stream RGB-D do robô (~5 Hz). Veja [Câmera RGB-D](#câmera-rgb-d).
+
+Cada navegação executada (click ou waypoint) é registrada em CSV pelo `NavMetricsCollector` em `controle_web/logs/nav_metrics/nav_metrics_YYYYMMDD.csv` — útil pra tunar o Nav2 com base em dados reais. Veja [Métricas Nav2 (CSV)](#métricas-nav2-csv).
 
 Se o arquivo de mapa não existir, o `launch.sh` aborta com uma mensagem clara e sugere rodar `--slam` antes.
 
@@ -531,6 +552,120 @@ Combinações são suportadas (ex: `W + D` = frente + direita).
 
 - Base: `0.3 m/s` linear, `0.5 rad/s` angular
 - Multiplicador: `0.8×` a `4.0×` (controlado pelo gamepad ou interface web)
+
+---
+
+## Câmera RGB-D
+
+O robô (sim e potencialmente real) tem uma câmera RGB-D frontal. Ela serve a dois propósitos distintos no sistema:
+
+**1. Detecção de obstáculos no Nav2 (via `VoxelLayer`):**
+
+O point cloud (`/camera/points`) entra como segunda observation source do `local_costmap`, junto com o LiDAR (`/scan`). Como a câmera vê em **3D** (até ~1.5 m de altura), ela detecta:
+
+- Obstáculos **baixos** que o LiDAR plano (mounted a 9 cm do chão no Husky sim) perde — mochilas, livros no chão, base de cadeira.
+- Obstáculos **altos** que o LiDAR não cobre — beira de mesa, peitoril.
+- Obstáculos **dinâmicos** entrando no FOV frontal do robô.
+
+A configuração filtra altura no plugin (`min_obstacle_height: 0.05`, `max_obstacle_height: 1.5`) pra ignorar o chão e o teto. O `VoxelLayer` projeta as marcas 3D no costmap 2D, fazendo a fusão LiDAR + câmera transparente pro DWB.
+
+**Não é usada pra localização** — AMCL fica 100% no LiDAR. Adicionar a câmera no AMCL exigiria re-mapear com os dois sensores juntos e teria pouco ganho (LiDAR já cobre 360°). Pra ganhos reais de localização visual seria necessário migrar pra um SLAM visual tipo RTAB-Map.
+
+**2. Stream pro web (via `camera_bridge.py`):**
+
+O módulo `controle_web/camera_bridge.py` subscreve `/camera/image`, comprime cada frame em JPEG (qualidade 60), throttle de 5 Hz, emite no evento Socket.IO `camera_frame`. A UI exibe num `<img>` abaixo do mapa. Útil pra:
+
+- Ver o que o robô está enxergando enquanto navega.
+- Debug — confirmar visualmente se o robô está orientado certo, se os obstáculos detectados existem mesmo.
+- Futura camada de detecção semântica (objetos/pessoas/zonas).
+
+**Posição da câmera (`husky.sdf` + `husky.urdf.xacro`):**
+
+```
+camera_link
+  pose: x=0.16, y=0, z=0.02 (frente do robô, altura média do corpo)
+  FOV horizontal: 60° (1.0472 rad)
+  resolução: 320×240
+  taxa: 15 Hz
+  alcance: 0.2 – 8.0 m
+```
+
+**Tópicos publicados (modo SIM via `ros_gz_bridge`):**
+
+| Tópico | Tipo | Finalidade |
+|--------|------|------------|
+| `/camera/image` | `sensor_msgs/Image` (RGB) | Stream pro web |
+| `/camera/depth_image` | `sensor_msgs/Image` (float32) | Disponível, não usado direto pelo Nav2 |
+| `/camera/camera_info` | `sensor_msgs/CameraInfo` | Calibração intrínseca |
+| `/camera/points` | `sensor_msgs/PointCloud2` | Alimenta o `VoxelLayer` |
+
+Pra migrar pra hardware real, basta substituir o sensor `rgbd_camera` da SDF pelo driver da câmera real (RealSense, Orbbec, etc.) garantindo que ele publique nos mesmos tópicos. Nada do app ou do Nav2 muda.
+
+---
+
+## Navegação por waypoints
+
+Em modo NAV2, além do click-to-go simples, a UI tem uma **toolbar de waypoints** que permite definir e executar rotas com múltiplos pontos.
+
+**Como definir uma rota:**
+
+1. Clica em **+ Waypoint** pra entrar em modo de adição.
+2. Cada click no mapa adiciona um ponto. Click+drag define o yaw final naquele ponto (a seta do marker mostra a direção desejada).
+3. Marca **Loop** se quiser que a rota repita indefinidamente.
+4. Clica em **▶ Iniciar** — o `MapBridge._wp_runner` envia os goals em sequência via action `navigate_to_pose`, esperando cada um terminar antes do próximo.
+
+**Salvar e recarregar rotas:**
+
+- **💾 Salvar rota** grava em `maps/routes/<nome>.json` com `[{x, y, yaw}, ...]`.
+- **📂 Carregar** lista as rotas salvas e permite restaurar uma.
+- Em refresh da página (F5), se houver waypoints definidos eles são restaurados automaticamente via `waypoints_restored`.
+
+**Como o `_wp_runner` decide avançar:**
+
+Usa o status terminal da action `navigate_to_pose` do Nav2 — não estima chegada por distância/yaw. Comportamento:
+
+- `STATUS_SUCCEEDED` → avança pro próximo waypoint imediatamente.
+- `STATUS_ABORTED` → re-tenta até 2 vezes com 2 s de pausa entre tentativas. Após 3 falhas, pula o waypoint (emite `skipped: true` pra UI).
+- `STATUS_CANCELED` → sai limpo (acontece quando você clica em **■ Parar**).
+- Timeout de segurança de 120 s por waypoint, caso o action server não responda.
+
+Entre cada waypoint, o runner limpa o `local_costmap` (`/local_costmap/clear_entirely_local_costmap`) pra evitar que células de custo alto da última parada atrapalhem o próximo goal.
+
+**Por que não publicar direto em `/goal_pose`:**
+
+Versões anteriores publicavam `/goal_pose` e adivinhavam chegada por TF. Era frágil — se o Nav2 abortava (obstáculo, timeout interno), o runner só descobria após 60 s de timeout. Usando a action, o runner reage a SUCCEEDED/ABORTED em tempo real.
+
+---
+
+## Métricas Nav2 (CSV)
+
+Em modo NAV2, o `NavMetricsCollector` (em `controle_web/nav_metrics.py`) registra cada navegação em CSV. Roda em thread daemon, subscreve tópicos do Nav2 e gera uma linha por tentativa de navegação (do ACCEPTED até SUCCEEDED/ABORTED/CANCELED).
+
+**O que é gravado em `controle_web/logs/nav_metrics/nav_metrics_YYYYMMDD.csv`:**
+
+```
+nav_id, start_ts, end_ts, duration_s, status,
+start_x, start_y, end_x, end_y, end_yaw,
+initial_plan_length_m, replans,
+rec_backup, rec_spin, rec_wait,
+distance_traveled_m, avg_linear_speed, max_linear_speed,
+time_stopped_s, direction_reversals
+```
+
+**Uso típico:**
+
+- **Tuning de DWB:** alta `time_stopped_s` ou alta contagem de `replans` em rotas curtas indica que o controller está oscilando — sintoma de pesos de critic mal calibrados.
+- **Tuning de recoveries:** `rec_backup`/`rec_spin`/`rec_wait` muito altos indicam que o Nav2 está caindo em recovery muito — geralmente costmap saturado ou inflação alta demais.
+- **Detecção de regressão:** depois de mexer em parâmetros, comparar CSV antes/depois numa mesma rota mostra objetivamente se o tuning ajudou ou piorou.
+
+Tópicos consumidos:
+- `/navigate_to_pose/_action/status` — detecta início/fim de cada navegação.
+- `/backup/_action/status`, `/spin/_action/status`, `/wait/_action/status` — conta cada vez que recovery é acionada.
+- `/plan` — comprimento do caminho + replans.
+- `/odom` — distância percorrida + velocidades.
+- `/cmd_vel` — tempo parado + inversões de direção.
+
+CSV diário (não por execução) — todas as navegações do dia ficam num arquivo só, facilitando comparação ao longo do tempo.
 
 ---
 
