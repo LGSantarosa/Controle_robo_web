@@ -159,6 +159,21 @@
     appendLog('socket', 'conectado');
   });
 
+  // --- Câmera RGB do robô — stream de JPEGs vindos do CameraBridge ---
+  const cameraSection = document.getElementById('camera-section');
+  const cameraImg     = document.getElementById('camera-image');
+  const cameraStatus  = document.getElementById('camera-status');
+  socket.on('camera_frame', (data) => {
+    if (!data || !data.jpeg_b64 || !cameraImg) return;
+    cameraImg.src = 'data:image/jpeg;base64,' + data.jpeg_b64;
+    if (cameraSection && cameraSection.style.display === 'none') {
+      cameraSection.style.display = '';
+    }
+    if (cameraStatus) {
+      cameraStatus.textContent = `${data.w}×${data.h} @ ${new Date().toLocaleTimeString()}`;
+    }
+  });
+
   socket.on('server_hello', (data) => {
     appendLog('server', `hello sid=${data?.sid || '-'} ok`);
   });

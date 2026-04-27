@@ -104,4 +104,25 @@
     </inertial>
   </link>
 
+  <!-- Câmera RGB-D frontal — bate com a posição do <link name="camera_link">
+       no husky.sdf. URDF aqui só pra robot_state_publisher publicar o TF
+       estático base_link → camera_link, que o Nav2 e o map_service usam
+       pra transformar o point cloud e a imagem. -->
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="0.16 0 0.02" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_link">
+    <visual>
+      <geometry><box size="0.025 0.080 0.025"/></geometry>
+      <material name="black"><color rgba="0.1 0.1 0.1 1.0"/></material>
+    </visual>
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+  </link>
+
 </robot>
