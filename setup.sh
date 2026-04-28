@@ -14,12 +14,12 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-WS_DIR="${ROS2_WS:-$HOME/ros2_ws}"
+WS_DIR="${ROS2_WS:-$REPO_DIR/.ros2_ws}"
 
 echo "=== [1/4] Instalando dependências apt ==="
 sudo apt update
 sudo apt install -y \
-    git python3-venv python3-pip \
+    git python3-venv python3-pip python3-colcon-common-extensions \
     ros-jazzy-xacro ros-jazzy-robot-state-publisher \
     ros-jazzy-slam-toolbox \
     ros-jazzy-nav2-bringup ros-jazzy-nav2-collision-monitor \

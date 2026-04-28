@@ -4,6 +4,8 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 echo "Instalando Nav2 e dependências..."
 
 sudo apt install -y \
@@ -19,4 +21,4 @@ sudo apt install -y \
 echo ""
 echo "Instalação concluída!"
 echo "Agora compile o workspace:"
-echo "  cd ~/ros2_ws && source /opt/ros/jazzy/setup.bash && colcon build"
+echo "  cd $SCRIPT_DIR && ./setup.sh"

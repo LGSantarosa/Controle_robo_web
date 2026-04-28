@@ -40,9 +40,8 @@ echo "Este script vai pedir que você plugue cada dispositivo"
 echo "separadamente para identificar a porta física de cada um."
 echo ""
 
-# ---- Passo 1: identificar porta do HOVERBOARD ----
-echo "PASSO 1: Hoverboard"
-echo "  1. Desplugue o LiDAR (deixe só o hoverboard plugado)"
+echo "  cd /home/luiz-santarosa/Workspace/Controle_robo_web"
+echo "  ./setup.sh"
 read -p "  2. Pressione ENTER quando estiver pronto..."
 
 sleep 1
@@ -158,6 +157,5 @@ echo "IMPORTANTE: Esses symlinks dependem da porta USB FÍSICA."
 echo "Se trocar o cabo de entrada USB, rode este script novamente."
 echo ""
 echo "Próximo passo — recompile o driver do hoverboard:"
-echo "  cd ~/ros2_ws"
-echo "  colcon build --packages-select ros2-hoverboard-driver"
-echo "  source install/setup.bash"
+echo "  cd /home/luiz-santarosa/Workspace/Controle_robo_web"
+echo "  ./setup.sh"

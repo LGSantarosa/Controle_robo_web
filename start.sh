@@ -3,16 +3,16 @@
 # Uso: ./start.sh
 #
 # Pré-requisito: workspace ROS2 compilado com wheel_msgs e ros2-hoverboard-driver.
-#   cd ~/ros2_ws && colcon build --packages-select ros2-hoverboard-driver wheel_msgs
+#   cd ./ && ./setup.sh
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROS2_SETUP="$HOME/ros2_ws/install/setup.bash"
+ROS2_SETUP="${ROS2_WS:-$SCRIPT_DIR/.ros2_ws}/install/setup.bash"
 
 if [ ! -f "$ROS2_SETUP" ]; then
     echo "ERRO: $ROS2_SETUP não encontrado."
-    echo "Execute: cd ~/ros2_ws && colcon build --packages-select ros2-hoverboard-driver wheel_msgs"
+    echo "Execute: cd $SCRIPT_DIR && ./setup.sh"
     exit 1
 fi
 

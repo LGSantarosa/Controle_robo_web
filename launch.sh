@@ -19,7 +19,7 @@
 # Ctrl+C encerra todos os processos.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROS2_SETUP="$HOME/ros2_ws/install/setup.bash"
+ROS2_SETUP="${ROS2_WS:-$SCRIPT_DIR/.ros2_ws}/install/setup.bash"
 
 # --- Argumentos ---
 NO_LIDAR=false
@@ -91,7 +91,7 @@ mkdir -p "$SCRIPT_DIR/maps"
 
 if [ ! -f "$ROS2_SETUP" ]; then
     echo "ERRO: $ROS2_SETUP não encontrado."
-    echo "Execute: cd ~/ros2_ws && colcon build"
+    echo "Execute: cd $SCRIPT_DIR && ./setup.sh"
     exit 1
 fi
 

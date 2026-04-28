@@ -54,7 +54,7 @@ git clone <url-do-repo> ~/Controle_robo_web
 
 ### 3. Rodar o setup automatizado
 
-O script `setup.sh` na raiz do repo faz tudo de uma vez: instala dependências apt, monta o `~/ros2_ws`, faz symlink do `robot_nav`, clona o `wheel_msgs` e roda `colcon build`.
+O script `setup.sh` na raiz do repo faz tudo de uma vez: instala dependências apt, monta um workspace local em `./.ros2_ws`, faz symlink do `robot_nav`, clona o `wheel_msgs` e roda `colcon build`.
 
 ```bash
 cd ~/Controle_robo_web
@@ -64,7 +64,7 @@ cd ~/Controle_robo_web
 O script é idempotente — se já tiver rodado antes, pode rodar de novo sem quebrar nada. Ele cobre:
 
 - **apt install**: `xacro`, `robot-state-publisher`, `slam-toolbox`, `nav2-bringup`, `nav2-collision-monitor`, `nav2-map-server`, `nav2-amcl`, `ros-gz`, `ros-gz-sim`, `ros-gz-bridge`, `ros-gz-interfaces` (tudo para Jazzy), além de `git`, `python3-venv`, `python3-pip`.
-- **Workspace**: cria `~/ros2_ws/src`, faz o symlink do `robot_nav` deste repo, clona `wheel_msgs` ([Richard-Haes-Ellis/wheel_msgs](https://github.com/Richard-Haes-Ellis/wheel_msgs)), compila com `colcon build` e adiciona o `source` ao `~/.bashrc`.
+- **Workspace**: cria `./.ros2_ws/src`, faz o symlink do `robot_nav` deste repo, clona `wheel_msgs` ([Richard-Haes-Ellis/wheel_msgs](https://github.com/Richard-Haes-Ellis/wheel_msgs)), compila com `colcon build` e adiciona o `source` ao `~/.bashrc`.
 
 Se for usar hardware real, descomente no `setup.sh` as duas linhas de clone de `ros2-hoverboard-driver` e `ldlidar_stl_ros2` antes de rodar, ou clone/compile manualmente depois.
 
@@ -84,7 +84,7 @@ sudo ~/Controle_robo_web/setup_udev.sh
 
 Depois recompile o driver:
 ```bash
-cd ~/ros2_ws && colcon build --packages-select ros2-hoverboard-driver
+cd ~/Controle_robo_web && ./setup.sh
 ```
 
 Pule este passo inteiro se só vai usar `--sim`.
@@ -293,7 +293,7 @@ Todas as flags combinam. `--sim --slam --world=worlds/minha_sala.sdf` também fu
 
 ### O robô simulado
 
-O modelo fica em `~/ros2_ws/src/robot_nav/urdf/husky.sdf` — um diff drive customizado (corpo 31×24×14 cm em formato Husky reduzido), rodas traseiras com tração + caster esférico frontal, GPU LiDAR de 360° no topo e **câmera RGB-D** frontal. A SDF inclui:
+O modelo fica em `./.ros2_ws/src/robot_nav/urdf/husky.sdf` — um diff drive customizado (corpo 31×24×14 cm em formato Husky reduzido), rodas traseiras com tração + caster esférico frontal, GPU LiDAR de 360° no topo e **câmera RGB-D** frontal. A SDF inclui:
 
 - Sensor `gpu_lidar` (publica `/scan`, 360° @ 10 Hz)
 - Sensor `rgbd_camera` frontal (publica `/camera/image`, `/camera/depth_image`, `/camera/camera_info`, `/camera/points` — FOV 60°, 320×240 @ 15 Hz)
@@ -331,6 +331,7 @@ A câmera RGB-D entra no Nav2 via `VoxelLayer` no costmap local (alimenta com po
       ros-$ROS_DISTRO-ros-gz-interfaces
   ```
 - Python 3.10+
+- `colcon` (o `setup.sh` instala `python3-colcon-common-extensions` se estiver faltando)
 
 ---
 
@@ -338,7 +339,7 @@ A câmera RGB-D entra no Nav2 via `VoxelLayer` no costmap local (alimenta com po
 
 ### 1. Workspace ROS2
 
-**Nada disso está neste repositório.** O `~/ros2_ws/` é um workspace ROS2 **que você cria na máquina** e precisa popular manualmente. Só o `robot_nav` mora neste repo (em `ros2_packages/robot_nav/`), via symlink. Os outros pacotes são externos e precisam ser clonados antes do `colcon build`, senão a compilação falha:
+**Nada disso fica fora do repositório.** O workspace ROS2 agora é centralizado em `./.ros2_ws/` e é preparado pelo `setup.sh`. Só o `robot_nav` mora neste repo (em `ros2_packages/robot_nav/`), via symlink. Os outros pacotes são externos e precisam ser clonados antes do `colcon build`, senão a compilação falha:
 
 | Pacote | Origem | Obrigatório? |
 |--------|--------|--------------|
@@ -349,8 +350,8 @@ A câmera RGB-D entra no Nav2 via `VoxelLayer` no costmap local (alimenta com po
 
 ```bash
 # Cria a pasta do workspace e entra nela
-mkdir -p ~/ros2_ws/src
-cd ~/ros2_ws/src
+mkdir -p ./.ros2_ws/src
+cd ./.ros2_ws/src
 
 # 1) robot_nav — symlink do pacote deste repo
 ln -s ~/Controle_robo_web/ros2_packages/robot_nav robot_nav
@@ -363,15 +364,15 @@ git clone https://github.com/victorfdezc/ros2-hoverboard-driver.git ros2-hoverbo
 git clone https://github.com/ldrobotSensorTeam/ldlidar_stl_ros2.git  ldlidar_stl_ros2
 
 # Compila tudo de uma vez
-cd ~/ros2_ws
+cd ./.ros2_ws
 colcon build
 source install/setup.bash
 
 # Adicione ao ~/.bashrc para não precisar fazer source toda vez:
-echo "source ~/ros2_ws/install/setup.bash" >> ~/.bashrc
+echo "source ~/Controle_robo_web/.ros2_ws/install/setup.bash" >> ~/.bashrc
 ```
 
-> **Se o `colcon build` falhar com `Package 'wheel_msgs' not found`**, é porque você pulou o passo 2. Clone o `wheel_msgs` em `~/ros2_ws/src/` e rode de novo.
+> **Se o `colcon build` falhar com `Package 'wheel_msgs' not found`**, é porque você pulou o passo 2. Clone o `wheel_msgs` em `./.ros2_ws/src/` e rode de novo.
 
 Depois de editar qualquer arquivo em `ros2_packages/robot_nav/`, rode `colcon build --packages-select robot_nav` para reinstalar os launches/URDFs no `install/`.
 
@@ -394,7 +395,7 @@ O script vai:
 Depois recompile o driver (necessário porque o `PORT` foi atualizado para `/dev/hoverboard`):
 
 ```bash
-cd ~/ros2_ws
+cd ./.ros2_ws
 colcon build --packages-select ros2-hoverboard-driver
 source install/setup.bash
 ```
@@ -748,7 +749,7 @@ Os dados são escritos em `/tmp/obstacle_current.json` e lidos pelo Flask a 5 Hz
 ```
 Controle_robo_web/
 ├── launch.sh                          # Launcher principal (flags --slam / --nav2 / --sim / --map=)
-├── setup.sh                           # Bootstrap inicial (apt, ros2_ws, colcon build)
+├── setup.sh                           # Bootstrap inicial (apt, .ros2_ws, colcon build)
 ├── setup_udev.sh                      # Configura portas USB fixas
 ├── maps/                              # Mapas e rotas salvos (ignorado pelo git)
 │   ├── sala.yaml                      # Metadados: resolução, origem, thresholds
@@ -760,7 +761,7 @@ Controle_robo_web/
 │   ├── educacao_criativa.sdf          # Mundo customizado
 │   └── small_box.sdf                  # Obstáculo pra spawnar em testes
 ├── ros2_packages/
-│   └── robot_nav/                     # Pacote ROS2 (linkado em ~/ros2_ws/src/robot_nav)
+│   └── robot_nav/                     # Pacote ROS2 (linkado em ./.ros2_ws/src/robot_nav)
 │       ├── launch/                    # robot, lidar, slam, nav2, sim, nav2_collision
 │       ├── urdf/
 │       │   ├── robot.urdf.xacro       # URDF do hoverboard real (referência)
@@ -787,7 +788,7 @@ Controle_robo_web/
     └── logs/                          # Logs rotativos
         └── nav_metrics/               # CSVs do NavMetricsCollector (por dia)
 
-~/ros2_ws/src/
+./.ros2_ws/src/
 ├── robot_nav -> ~/Controle_robo_web/ros2_packages/robot_nav  # symlink
 ├── ros2-hoverboard-driver/                 # Driver C++ do hoverboard (repo separado)
 │   └── include/.../config.hpp              # PORT = /dev/hoverboard

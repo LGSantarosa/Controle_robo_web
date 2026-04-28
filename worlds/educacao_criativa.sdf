@@ -48,12 +48,12 @@
       <link name="link">
         <collision name="col">
           <geometry>
-            <mesh><uri>file:///home/rbe-luis/Workspace/Controle_robo_web/worlds/meshes/educacao_criativa/educacao_criativa.glb</uri><scale>0.0254 0.0254 0.0254</scale></mesh>
+            <mesh><uri>meshes/educacao_criativa/educacao_criativa.glb</uri><scale>0.0254 0.0254 0.0254</scale></mesh>
           </geometry>
         </collision>
         <visual name="vis">
           <geometry>
-            <mesh><uri>file:///home/rbe-luis/Workspace/Controle_robo_web/worlds/meshes/educacao_criativa/educacao_criativa.glb</uri><scale>0.0254 0.0254 0.0254</scale></mesh>
+            <mesh><uri>meshes/educacao_criativa/educacao_criativa.glb</uri><scale>0.0254 0.0254 0.0254</scale></mesh>
           </geometry>
         </visual>
       </link>
