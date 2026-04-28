@@ -673,16 +673,24 @@ CSV diário (não por execução) — todas as navegações do dia ficam num arq
 
 ### Tópicos ROS2
 
-| Tópico | Tipo | Produtor | Consumidor | Quando |
+| Tópico / Action | Tipo | Produtor | Consumidor | Quando |
 |--------|------|----------|------------|--------|
 | `/cmd_vel` | `geometry_msgs/Twist` | servidor web (teleop) / `velocity_smoother` (nav2) | `cmd_vel_to_wheels` | sempre |
 | `/wheel_vel_setpoints` | `wheel_msgs/WheelSpeeds` | `cmd_vel_to_wheels` | hoverboard driver | sempre |
-| `/scan` | `sensor_msgs/LaserScan` | LiDAR driver | `obstacle_detector` / `slam_toolbox` / `amcl` | sempre |
-| `/odom` | `nav_msgs/Odometry` | `odom_publisher` | `slam_toolbox` / `amcl` | sempre |
+| `/scan` | `sensor_msgs/LaserScan` | LiDAR driver | `obstacle_detector` / `slam_toolbox` / `amcl` / `voxel_layer` | sempre |
+| `/odom` | `nav_msgs/Odometry` | `odom_publisher` | `slam_toolbox` / `amcl` / `nav_metrics` | sempre |
 | `/obstacle_info` | `std_msgs/String` (JSON) | `obstacle_detector` | (monitoramento) | teleop |
 | `/map` | `nav_msgs/OccupancyGrid` | `slam_toolbox` / `map_server` | `map_service.py` (ponte web) | slam, nav2 |
-| `/goal_pose` | `geometry_msgs/PoseStamped` | `map_service.py` (click na UI) | `bt_navigator` | nav2 |
-| `/plan` | `nav_msgs/Path` | `planner_server` | `map_service.py` (ponte web) | nav2 |
+| `/goal_pose` | `geometry_msgs/PoseStamped` | `map_service.py` (legacy) | `bt_navigator` | nav2 |
+| `/plan` | `nav_msgs/Path` | `planner_server` | `map_service.py` (ponte web) / `nav_metrics` | nav2 |
+| `/camera/image` | `sensor_msgs/Image` (RGB) | Gazebo `rgbd_camera` (sim) | `camera_bridge.py` (stream web) | sim, futuro real |
+| `/camera/depth_image` | `sensor_msgs/Image` (float32) | Gazebo `rgbd_camera` | (disponível, não consumido) | sim, futuro real |
+| `/camera/camera_info` | `sensor_msgs/CameraInfo` | Gazebo `rgbd_camera` | (calibração) | sim, futuro real |
+| `/camera/points` | `sensor_msgs/PointCloud2` | Gazebo `rgbd_camera` | `voxel_layer` (`local_costmap`) | sim, futuro real |
+| `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | `bt_navigator` (server) | `MapBridge` (client em waypoints e click) / `nav_metrics` | nav2 |
+| `/backup/_action/status` | `action_msgs/GoalStatusArray` | `behavior_server` | `nav_metrics` (contagem de recoveries) | nav2 |
+| `/spin/_action/status` | `action_msgs/GoalStatusArray` | `behavior_server` | `nav_metrics` | nav2 |
+| `/wait/_action/status` | `action_msgs/GoalStatusArray` | `behavior_server` | `nav_metrics` | nav2 |
 
 **TFs publicadas:**
 - `base_link → base_laser`, `base_link → wheels` — static (URDF via `robot_state_publisher`)
@@ -700,10 +708,19 @@ O arquivo `controle_web/map_service.py` contém uma classe `MapBridge` que roda 
 | Receber o mapa | Subscribe `/map` com QoS `TRANSIENT_LOCAL` (a mensagem é *latched*, sem essa durability o subscriber nunca recebe). Converte o `OccupancyGrid` em PNG grayscale com `numpy` + `Pillow` (−1 cinza, 0 branco, ≥50 preto), flipa verticalmente (ROS y sobe, PNG y desce), base64-encoda e emite `map_update` via Socket.IO com `{info, png_b64}` |
 | Rastrear o robô | `tf2_ros.TransformListener` em polling a 10 Hz. Olha `map→base_link`, extrai x/y/yaw (yaw do quaternion via `atan2`), emite `robot_pose` via Socket.IO |
 | Receber trajetória | Subscribe `/plan`, converte cada pose em `{x, y}`, emite `plan_update` via Socket.IO |
-| Enviar goal | Publisher em `/goal_pose` (`PoseStamped`, frame `map`). Handler `nav_goal` do Socket.IO recebe `{x, y, yaw}` do click no canvas e publica — mas só em modo NAV2 (fora disso retorna erro) |
+| Enviar goal (click-to-go simples) | Publisher em `/goal_pose` (`PoseStamped`, frame `map`). Handler `nav_goal` recebe `{x, y, yaw}` do click no canvas |
+| Executar waypoints | `ActionClient` de `NavigateToPose`. O `_wp_runner` (thread separada) envia goals em sequência e reage a SUCCEEDED/ABORTED/CANCELED em tempo real. Re-tenta abortados até 2 vezes, pula após 3 falhas. Limpa o `local_costmap` entre waypoints |
+| Persistir rotas | Handlers `save_route`/`load_route`/`list_routes` gravam JSON em `maps/routes/<nome>.json` |
 | Salvar mapa | Handler `save_map` chama `ros2 run nav2_map_server map_saver_cli -f maps/<nome> --ros-args -p map_subscribe_transient_local:=true` via subprocess. O `map_subscribe_transient_local:=true` é obrigatório porque o `/map` é latched |
 
-**Rodar só em modo slam/nav2:** o `app.py` só instancia o `MapBridge` se `ROBOT_MODE in ('slam', 'nav2')` — no teleop não há `/map` pra subscribee, então o módulo nem sobe. Falha na inicialização do MapBridge não derruba o servidor (só loga um warning e desabilita o painel de mapa).
+**Rodar só em modo slam/nav2:** o `app.py` só instancia o `MapBridge` se `ROBOT_MODE in ('slam', 'nav2')` — no teleop não há `/map` pra subscriber, então o módulo nem sobe. Falha na inicialização do MapBridge não derruba o servidor (só loga um warning e desabilita o painel de mapa).
+
+### Outras pontes
+
+| Módulo | Quando sobe | Função |
+|--------|-------------|--------|
+| `camera_bridge.py` | qualquer modo | Subscribe `/camera/image`, comprime JPEG, emite `camera_frame` via Socket.IO @ 5 Hz |
+| `nav_metrics.py` | só `nav2` | Subscribe action statuses + `/plan` + `/odom` + `/cmd_vel`, grava CSV por navegação |
 
 **Cliente (navegador):** o `static/js/map.js` escuta todos esses eventos, mantém estado local (`mapInfo`, `mapImage`, `robotPose`, `plan`, `lastGoal`) e redesenha o canvas a ~15 Hz. A conversão click→mundo usa `origin + resolution`:
 
@@ -730,33 +747,45 @@ Os dados são escritos em `/tmp/obstacle_current.json` e lidos pelo Flask a 5 Hz
 
 ```
 Controle_robo_web/
-├── launch.sh                          # Launcher principal (flags --slam / --nav2 / --map=)
+├── launch.sh                          # Launcher principal (flags --slam / --nav2 / --sim / --map=)
+├── setup.sh                           # Bootstrap inicial (apt, ros2_ws, colcon build)
 ├── setup_udev.sh                      # Configura portas USB fixas
-├── maps/                              # Mapas salvos pelo SLAM (ignorado pelo git)
+├── maps/                              # Mapas e rotas salvos (ignorado pelo git)
 │   ├── sala.yaml                      # Metadados: resolução, origem, thresholds
-│   └── sala.pgm                       # Grayscale do occupancy grid
+│   ├── sala.pgm                       # Grayscale do occupancy grid
+│   └── routes/                        # Rotas de waypoints (JSON)
+│       └── <nome>.json
 ├── worlds/                            # Mundos do Gazebo usados pelo --sim
-│   └── empty.sdf                      # Mundo padrão (sala 6×6 m vazia)
+│   ├── empty.sdf                      # Mundo padrão (sala 6×6 m vazia)
+│   ├── educacao_criativa.sdf          # Mundo customizado
+│   └── small_box.sdf                  # Obstáculo pra spawnar em testes
 ├── ros2_packages/
 │   └── robot_nav/                     # Pacote ROS2 (linkado em ~/ros2_ws/src/robot_nav)
-│       ├── launch/                    # robot.launch.py, lidar, slam, nav2, sim, ...
-│       ├── urdf/robot.urdf.xacro      # URDF do hoverboard real
-│       ├── urdf/sim_robot.sdf         # SDF do robô simulado
-│       ├── config/nav2_params.yaml
+│       ├── launch/                    # robot, lidar, slam, nav2, sim, nav2_collision
+│       ├── urdf/
+│       │   ├── robot.urdf.xacro       # URDF do hoverboard real (referência)
+│       │   ├── husky.urdf.xacro       # URDF principal (com camera_link)
+│       │   └── husky.sdf              # SDF do robô simulado (com sensor RGB-D)
+│       ├── config/
+│       │   ├── nav2_params.yaml       # Tuning AMCL + DWB + costmaps + voxel_layer
+│       │   └── collision_monitor.yaml # Zonas de freada (modo teleop)
 │       └── robot_nav/                 # Nodes Python (odom, cmd_vel_to_wheels, ...)
 └── controle_web/
     ├── app.py                         # Servidor Flask + Socket.IO (lê ROBOT_MODE)
-    ├── map_service.py                 # Ponte ROS2↔Web: /map, TF, /plan, /goal_pose
+    ├── map_service.py                 # Ponte mapa/pose/plan + ActionClient + waypoints
+    ├── camera_bridge.py               # Subscribe /camera/image → JPEG via Socket.IO
+    ├── nav_metrics.py                 # Coleta métricas do Nav2 em CSV
     ├── controllers/
     │   └── robot_controller.py        # ROS2Controller (publica /cmd_vel)
-    ├── templates/index.html           # Interface web (badge de modo + painel de mapa)
+    ├── templates/index.html           # Interface web (badge + mapa + waypoints + câmera)
     ├── static/
     │   ├── css/styles.css
     │   └── js/
-    │       ├── client.js              # Teclado/gamepad → Socket.IO
+    │       ├── client.js              # Teclado/gamepad → Socket.IO + handler câmera
     │       ├── gamepad.js             # Leitura do gamepad e visualização
-    │       └── map.js                 # Canvas do mapa, render, click → goal
+    │       └── map.js                 # Canvas do mapa, render, click → goal, waypoints
     └── logs/                          # Logs rotativos
+        └── nav_metrics/               # CSVs do NavMetricsCollector (por dia)
 
 ~/ros2_ws/src/
 ├── robot_nav -> ~/Controle_robo_web/ros2_packages/robot_nav  # symlink
@@ -765,6 +794,60 @@ Controle_robo_web/
 ├── ldlidar_stl_ros2/                       # Driver do LiDAR FHL-LD20 (repo separado)
 └── wheel_msgs/                             # Mensagens custom das rodas (repo separado)
 ```
+
+---
+
+## Tuning do Nav2
+
+A configuração em `ros2_packages/robot_nav/config/nav2_params.yaml` foi calibrada iterativamente pra ambiente dinâmico (sala de aula com pessoas e móveis se mexendo). Os valores não-default importantes:
+
+**AMCL (localização):**
+
+| Parâmetro | Valor | Por quê |
+|-----------|-------|---------|
+| `do_beamskip` | `true` | Quando feixes batem em obstáculos não-mapeados (cadeira nova, pessoa), AMCL ignora esses raios em vez de penalizar partículas que estariam corretas. Sem isso, ~30% de feixes "fora do mapa" derruba a localização |
+| `beam_skip_distance` | `0.5` | Distância máx pra considerar feixe como "match" |
+| `beam_skip_threshold` | `0.3` | Fração de partículas que precisa concordar pra fazer skip |
+
+**Planner (`nav2_navfn_planner`):**
+
+| Parâmetro | Valor | Por quê |
+|-----------|-------|---------|
+| `tolerance` | `0.30` | Se o ponto exato estiver bloqueado (cadeira encostada, pessoa parada), planner aceita rota até 30 cm do alvo em vez de falhar |
+
+**Goal checker:**
+
+| Parâmetro | Valor | Por quê |
+|-----------|-------|---------|
+| `xy_goal_tolerance` | `0.40` | Folga pra ambiente dinâmico — se obstáculo atrapalha o ponto exato, robô para a até 40 cm |
+| `yaw_goal_tolerance` | `0.35` | ~20°, mesma lógica |
+
+**DWB Local Planner (controller):**
+
+| Parâmetro | Valor | Por quê |
+|-----------|-------|---------|
+| `min_vel_x` | `-0.1` | Permite ré pequena em manobras apertadas. Antes `0.0` (só frente) fazia robô travar 15 s antes de chamar BackUp recovery |
+| `BaseObstacle.scale` | `0.15` | Era `0.02` — peso 1600× menor que `PathDist` (32). Com 0.15 o controller ainda segue rota mas evita raspar |
+| `Oscillation.scale` | `0.1` | Default `1.0` punia manobras legítimas em passagem apertada como "oscilação" e robô ficava parado pensando 2 min |
+| `PathAlign.scale` / `PathDist.scale` / `GoalAlign.scale` | `32` cada | Manter a rota planejada como prioridade média |
+| `GoalDist.scale` | `24` | Atratividade do destino |
+| `RotateToGoal.scale` | `32` | Rotação final pra atingir yaw alvo |
+
+**Costmap (`local_costmap` com `VoxelLayer`):**
+
+| Parâmetro | Valor | Por quê |
+|-----------|-------|---------|
+| `plugins` | `[voxel_layer, inflation_layer]` | `VoxelLayer` em vez de `ObstacleLayer` pra aceitar tanto `LaserScan` (LiDAR) quanto `PointCloud2` (câmera) e fundir os dois |
+| `observation_sources` | `scan pointcloud` | LiDAR + câmera RGB-D |
+| `pointcloud.min_obstacle_height` | `0.05` | Ignora chão (senão o robô bate em si mesmo como obstáculo) |
+| `pointcloud.max_obstacle_height` | `1.5` | Ignora teto |
+| `inflation_radius` | `0.25` | Raio de inflação pra `cost_scaling_factor: 3.5` (gradiente moderado) |
+
+**Recoveries (`behavior_server`):**
+
+`BackUp` + `Spin` + `Wait` configurados — chamados pelo BT quando o controller não consegue avançar em ~15 s (`progress_checker.movement_time_allowance`). Garante que o robô tenta sair de enrascadas dando ré ou girando antes de declarar falha.
+
+**Observação:** esses valores foram calibrados em sim Gazebo e podem precisar de ajustes finos no hardware real (atrito do hoverboard, latência do LiDAR físico, etc.). Use o CSV do `NavMetricsCollector` pra medir antes/depois de cada mudança.
 
 ---
 
@@ -778,9 +861,13 @@ Todos os logs ficam em `controle_web/logs/`:
 | `robot_nodes.log` | robot_state_publisher, odom, cmd_vel_to_wheels |
 | `lidar.log` | Driver LiDAR |
 | `obstacle_detector.log` | Detecção de obstáculos |
-| `nav2_collision.log` | Nav2 Collision Monitor (se ativo) |
+| `nav2_collision.log` | Nav2 Collision Monitor (modo teleop) |
+| `nav2.log` | Stack Nav2 completa (modo nav2) — planner, controller, BT, recoveries |
+| `slam.log` | slam_toolbox (modo slam) |
+| `sim.log` | Gazebo + bridges (modo sim) |
 | `movements.log` | Histórico de comandos em JSON Lines |
 | `movements.txt` | Histórico legível em português |
+| `nav_metrics/nav_metrics_YYYYMMDD.csv` | Uma linha por navegação: status, replans, recoveries, distância, velocidade |
 
 Para acompanhar em tempo real:
 
@@ -795,13 +882,13 @@ tail -f controle_web/logs/lidar.log
 
 Coisas que ainda não funcionam perfeitamente ou que exigem atenção ao usar SLAM/Nav2:
 
-- **Click no mapa manda o robô com `yaw = 0`.** A UI só captura o ponto clicado, não a orientação final desejada. O `bt_navigator` aceita o goal, mas o robô chega apontando para o eixo X do mapa — não necessariamente a direção que você queria. *Mitigação futura:* capturar drag no canvas para definir yaw.
-- **Contenção do `/cmd_vel` em modo NAV2.** Tanto o teleop (Socket.IO → `/cmd_vel`) quanto o `velocity_smoother` do Nav2 publicam no mesmo tópico. Se você mover o joystick durante uma navegação autônoma, os comandos se atropelam — o último mensagem vence. Na prática funciona como "override manual por cima do Nav2", mas não é um protocolo robusto. *Mitigação futura:* roteamento explícito via `twist_mux`.
+- **Contenção do `/cmd_vel` em modo NAV2.** Tanto o teleop (Socket.IO → `/cmd_vel`) quanto o `velocity_smoother` do Nav2 publicam no mesmo tópico. Se você mover o joystick durante uma navegação autônoma, os comandos se atropelam — a última mensagem vence. Na prática funciona como "override manual por cima do Nav2", mas não é um protocolo robusto. *Mitigação futura:* roteamento explícito via `twist_mux`.
 - **Drift de odometria.** O `odom_publisher` integra o feedback das rodas do hoverboard. Em mapeamentos longos ou salas com piso escorregadio, o drift acumula e o SLAM fecha loops mal. Dirija devagar e volte por onde já passou para ajudar o `slam_toolbox` a corrigir.
-- **Ambientes muito simétricos.** Corredor longo com paredes lisas, salas quadradas vazias: o scan-matching do SLAM não encontra features suficientes e o mapa pode dobrar sobre si mesmo. Prefira mapear ambientes com móveis, quinas e variação.
+- **Ambientes muito simétricos.** Corredor longo com paredes lisas, salas quadradas vazias: o scan-matching do SLAM não encontra features suficientes e o mapa pode dobrar sobre si mesmo. AMCL tem o mesmo problema: pose pode "deslizar" ao longo do corredor. Prefira mapear ambientes com móveis, quinas e variação. *Mitigação futura:* RTAB-Map (visual SLAM) usa features visuais da câmera pra desambiguar.
+- **Câmera não contribui pra localização.** A câmera RGB-D entra no costmap (desvio de obstáculos baixos/altos) mas o AMCL fica 100% no LiDAR. Adicionar a câmera no AMCL exigiria re-mapear com os dois sensores e ainda assim teria ganho modesto. Pra ganho real de localização visual, o caminho é trocar AMCL por RTAB-Map.
 - **Bateria do hoverboard.** Sem bateria o driver até sobe, mas falha ao escrever na porta serial (`Error writing to hoverboard serial port`) — não é bug do código. Conecte a bateria antes de abrir um bug.
-- **Pipeline não validado end-to-end em hardware.** A integração SLAM → salvar → Nav2 → click-to-go passou nos smoke tests (imports, subida de processos, SIGINT limpo), mas ainda não rodou na sala real com o LiDAR e o hoverboard conectados. Espere pequenos ajustes de tuning ao primeiro uso (parâmetros do `slam_toolbox`, `amcl` e dos planners).
-- **Modo `--sim` é um scaffold, não foi executado ponta-a-ponta.** O `sim.launch.py`, o `sim_robot.sdf` e o `worlds/empty.sdf` compilam e carregam, mas a primeira execução real no Gazebo Harmonic pode pedir ajustes: frame do LiDAR (`gz_frame_id`), QoS do bridge, nomes de tópicos `gz.msgs.*` (que às vezes mudam entre releases). Se o `/scan` não aparecer no `ros2 topic list`, é quase certo algum desses três. *Mitigação:* testar incrementalmente — primeiro `./launch.sh --sim` só com teleop, depois `--sim --slam`, depois `--sim --nav2`.
+- **Pipeline não validado end-to-end em hardware.** O fluxo todo (TELEOP, SLAM, NAV2, waypoints, câmera) foi exercitado extensivamente no sim Gazebo. No hardware real ainda faltam ajustes finos de tuning conforme a dinâmica do hoverboard físico — use o CSV do `NavMetricsCollector` pra calibrar.
+- **Câmera no real precisa de driver específico.** No sim a câmera vem do plugin Gazebo. Pra hardware real, escolher o modelo (RealSense D435, Orbbec, etc.) e substituir o sensor da SDF pelo driver ROS2 correspondente publicando nos mesmos tópicos `/camera/*`.
 
 ---
 
