@@ -27,8 +27,6 @@ map_bridge = None
 # Coletor de métricas Nav2 — grava CSV por tentativa pra servir de base
 # quando formos ajustar parâmetros do stack de navegação.
 nav_metrics = None
-# Stream da câmera RGB-D do robô — JPEG via Socket.IO em ~5 Hz.
-camera_bridge = None
 
 # rclpy.init() instala seus próprios handlers de SIGINT/SIGTERM que engolem o
 # Ctrl+C (o processo fica preso esperando o executor do ROS2 que nunca acorda).
@@ -36,11 +34,6 @@ camera_bridge = None
 _shutting_down = False
 
 def _shutdown_all():
-    try:
-        if camera_bridge is not None:
-            camera_bridge.shutdown()
-    except Exception:
-        pass
     try:
         if nav_metrics is not None:
             nav_metrics.shutdown()
@@ -116,19 +109,6 @@ if ROBOT_MODE == 'nav2':
             f"[app] Falha ao iniciar NavMetricsCollector: {e}. Métricas desabilitadas."
         )
         nav_metrics = None
-
-# Stream da câmera — em qualquer modo (sim ou real) onde tiver o tópico.
-# Se /camera/image não existir, o subscriber só fica ocioso, sem custo.
-if ROBOT_MODE in ('slam', 'nav2', 'teleop'):
-    try:
-        from camera_bridge import CameraBridge
-        camera_bridge = CameraBridge(socketio=socketio)
-    except Exception as e:
-        logging.getLogger(__name__).warning(
-            f"[app] Falha ao iniciar CameraBridge: {e}. Câmera desabilitada."
-        )
-        camera_bridge = None
-
 
 # Log de movimentos (JSON Lines) gravado em arquivo rotativo + arquivo legível
 os.makedirs('logs', exist_ok=True)

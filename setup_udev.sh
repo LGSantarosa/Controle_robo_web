@@ -3,8 +3,10 @@
 # Funciona mesmo quando dois dispositivos têm o mesmo VID:PID (ex: CH340).
 # Uso: sudo ./setup_udev.sh
 #
-# O script pede que você plugue cada dispositivo separadamente para
-# identificar em qual porta física cada um está.
+# Identifica:
+#   /dev/mega   — Arduino MEGA 2560 (ponte para as 2 placas de hoverboard
+#                 e sensores BNO055 + PMW3901)
+#   /dev/lidar  — FHL-LD20
 
 set -e
 
@@ -16,11 +18,10 @@ fi
 RULES_FILE="/etc/udev/rules.d/99-robot-usb.rules"
 
 get_devpath() {
-    # Retorna o fragmento de path físico (ex: "1-2.1") de um ttyUSB
     local dev="$1"
     udevadm info "$dev" 2>/dev/null \
         | awk -F= '/DEVPATH/{print $2}' \
-        | grep -oP '[0-9]+-[0-9]+(\.[0-9]+)*(?=:[0-9]+\.[0-9]+/ttyUSB)' \
+        | grep -oP '[0-9]+-[0-9]+(\.[0-9]+)*(?=:[0-9]+\.[0-9]+/ttyUSB|:[0-9]+\.[0-9]+/ttyACM)' \
         | head -1
 }
 
@@ -32,69 +33,67 @@ get_vidpid() {
     echo "${vid}:${pid}"
 }
 
+list_tty_ports() {
+    ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
+}
+
 echo "========================================================"
-echo "  Configuração de portas USB fixas — Hoverboard + LiDAR"
+echo "  Configuração de portas USB fixas — MEGA + LiDAR"
 echo "========================================================"
-echo ""
-echo "Este script vai pedir que você plugue cada dispositivo"
-echo "separadamente para identificar a porta física de cada um."
 echo ""
 
-# ---- Passo 1: identificar porta do HOVERBOARD ----
-echo "PASSO 1: Hoverboard"
-echo "  1. Desplugue o LiDAR (deixe só o hoverboard plugado)"
+# ---- Passo 1: identificar porta da MEGA ----
+echo "PASSO 1: Arduino MEGA 2560"
+echo "  1. Desplugue o LiDAR (deixe só a MEGA plugada)"
 read -p "  2. Pressione ENTER quando estiver pronto..."
 
 sleep 1
 udevadm settle
 
-PORTS_HOVER=$(ls /dev/ttyUSB* 2>/dev/null)
-if [ -z "$PORTS_HOVER" ]; then
-    echo "ERRO: Nenhum /dev/ttyUSB* encontrado. Verifique a conexão do hoverboard."
+PORTS_MEGA=$(list_tty_ports)
+if [ -z "$PORTS_MEGA" ]; then
+    echo "ERRO: Nenhum /dev/ttyUSB* ou /dev/ttyACM* encontrado. Verifique a conexão da MEGA."
     exit 1
 fi
 
 echo "  Dispositivos detectados:"
-for p in $PORTS_HOVER; do
+for p in $PORTS_MEGA; do
     vidpid=$(get_vidpid "$p")
     path=$(get_devpath "$p")
     echo "    $p  [VID:PID=$vidpid  USB path=$path]"
 done
 
-if [ "$(echo "$PORTS_HOVER" | wc -l)" -eq 1 ]; then
-    HOVER_PORT="$PORTS_HOVER"
+if [ "$(echo "$PORTS_MEGA" | wc -l)" -eq 1 ]; then
+    MEGA_PORT="$PORTS_MEGA"
 else
-    read -p "  Qual é a porta do hoverboard? (ex: /dev/ttyUSB0): " HOVER_PORT
+    read -p "  Qual é a porta da MEGA? (ex: /dev/ttyACM0): " MEGA_PORT
 fi
 
-HOVER_PATH=$(get_devpath "$HOVER_PORT")
-HOVER_VIDPID=$(get_vidpid "$HOVER_PORT")
-HOVER_VID=$(echo "$HOVER_VIDPID" | cut -d: -f1)
-HOVER_PID=$(echo "$HOVER_VIDPID" | cut -d: -f2)
+MEGA_PATH=$(get_devpath "$MEGA_PORT")
+MEGA_VIDPID=$(get_vidpid "$MEGA_PORT")
 
-echo "  Hoverboard identificado: $HOVER_PORT → path=$HOVER_PATH  VID:PID=$HOVER_VIDPID"
+echo "  MEGA identificada: $MEGA_PORT → path=$MEGA_PATH  VID:PID=$MEGA_VIDPID"
 echo ""
 
 # ---- Passo 2: identificar porta do LIDAR ----
 echo "PASSO 2: LiDAR"
-echo "  1. Plugue o LiDAR (pode deixar o hoverboard plugado também)"
+echo "  1. Plugue o LiDAR (pode deixar a MEGA plugada também)"
 read -p "  2. Pressione ENTER quando estiver pronto..."
 
 sleep 1
 udevadm settle
 
-PORTS_ALL=$(ls /dev/ttyUSB* 2>/dev/null)
-# Descobre a porta nova (que não existia antes)
+PORTS_ALL=$(list_tty_ports)
 LIDAR_PORT=""
 for p in $PORTS_ALL; do
-    if [ "$p" != "$HOVER_PORT" ]; then
+    if [ "$p" != "$MEGA_PORT" ]; then
         LIDAR_PORT="$p"
         break
     fi
 done
 
 if [ -z "$LIDAR_PORT" ]; then
-    echo "AVISO: Não detectou porta nova. O LiDAR está na mesma porta que o hoverboard?"
+    echo "AVISO: Não detectou porta nova. O LiDAR está na mesma porta que a MEGA?"
     echo "  Portas disponíveis:"
     for p in $PORTS_ALL; do
         vidpid=$(get_vidpid "$p")
@@ -106,15 +105,13 @@ fi
 
 LIDAR_PATH=$(get_devpath "$LIDAR_PORT")
 LIDAR_VIDPID=$(get_vidpid "$LIDAR_PORT")
-LIDAR_VID=$(echo "$LIDAR_VIDPID" | cut -d: -f1)
-LIDAR_PID=$(echo "$LIDAR_VIDPID" | cut -d: -f2)
 
 echo "  LiDAR identificado: $LIDAR_PORT → path=$LIDAR_PATH  VID:PID=$LIDAR_VIDPID"
 echo ""
 
 # ---- Validação ----
-if [ "$HOVER_PATH" = "$LIDAR_PATH" ]; then
-    echo "ERRO: Hoverboard e LiDAR têm o mesmo caminho USB ($HOVER_PATH)."
+if [ "$MEGA_PATH" = "$LIDAR_PATH" ]; then
+    echo "ERRO: MEGA e LiDAR têm o mesmo caminho USB ($MEGA_PATH)."
     echo "  Isso não deveria acontecer. Verifique as conexões e tente novamente."
     exit 1
 fi
@@ -123,15 +120,16 @@ fi
 echo "Criando $RULES_FILE ..."
 
 cat > "$RULES_FILE" << EOF
-# Regras udev para nomes estáveis — hoverboard + LiDAR.
+# Regras udev para nomes estáveis — Arduino MEGA + LiDAR.
 # Usa localização física da porta USB (KERNELS) para diferenciar
-# dispositivos com o mesmo VID:PID (ex: chip CH340 genérico).
+# dispositivos com o mesmo VID:PID.
 # Gerado por setup_udev.sh em $(date).
 #
 # Para regenerar: sudo ~/Controle_robo_web/setup_udev.sh
 
-# Hoverboard driver — porta USB física: $HOVER_PATH
-SUBSYSTEM=="tty", KERNELS=="$HOVER_PATH", SYMLINK+="hoverboard", MODE="0666", GROUP="dialout"
+# Arduino MEGA 2560 — ponte 2 placas hoverboard + sensores
+# porta USB física: $MEGA_PATH
+SUBSYSTEM=="tty", KERNELS=="$MEGA_PATH", SYMLINK+="mega", MODE="0666", GROUP="dialout"
 
 # LiDAR FHL-LD20 — porta USB física: $LIDAR_PATH
 SUBSYSTEM=="tty", KERNELS=="$LIDAR_PATH", SYMLINK+="lidar", MODE="0666", GROUP="dialout"
@@ -149,7 +147,7 @@ sleep 1
 
 echo ""
 echo "=== Verificando symlinks ==="
-ls -la /dev/hoverboard /dev/lidar 2>/dev/null || echo "AVISO: Symlinks não apareceram ainda — desplugue e replugue os dispositivos."
+ls -la /dev/mega /dev/lidar 2>/dev/null || echo "AVISO: Symlinks não apareceram ainda — desplugue e replugue os dispositivos."
 
 echo ""
 echo "=== Pronto! ==="
@@ -157,7 +155,7 @@ echo ""
 echo "IMPORTANTE: Esses symlinks dependem da porta USB FÍSICA."
 echo "Se trocar o cabo de entrada USB, rode este script novamente."
 echo ""
-echo "Próximo passo — recompile o driver do hoverboard:"
+echo "Próximo passo — recompile o workspace ROS2:"
 echo "  cd ~/ros2_ws"
-echo "  colcon build --packages-select ros2-hoverboard-driver"
+echo "  colcon build --packages-select robot_nav wheel_msgs"
 echo "  source install/setup.bash"

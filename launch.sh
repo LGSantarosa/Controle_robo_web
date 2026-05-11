@@ -89,6 +89,45 @@ fi
 
 mkdir -p "$SCRIPT_DIR/maps"
 
+WS_DIR="${ROS2_WS:-$HOME/ros2_ws}"
+
+# --- Symlink do robot_nav no workspace ROS2 (se faltar) ---
+if [ ! -d "$WS_DIR/src" ]; then
+    echo "ERRO: workspace ROS2 ($WS_DIR) não existe. Rode primeiro: ./setup.sh"
+    exit 1
+fi
+if [ ! -e "$WS_DIR/src/robot_nav" ]; then
+    echo "Linkando robot_nav em $WS_DIR/src/"
+    ln -s "$SCRIPT_DIR/ros2_packages/robot_nav" "$WS_DIR/src/robot_nav"
+fi
+
+# --- colcon build incremental (hash dos fontes do robot_nav) ---
+PKG_STAMP="$WS_DIR/install/.robot_nav.sha1"
+PKG_HASH=$(find "$SCRIPT_DIR/ros2_packages/robot_nav" -type f \
+    \( -name "*.py" -o -name "*.xml" -o -name "*.xacro" -o -name "*.yaml" \) \
+    -not -path "*/build/*" -not -path "*/install/*" \
+    2>/dev/null | sort | xargs sha1sum 2>/dev/null | sha1sum | awk '{print $1}')
+
+if [ ! -f "$ROS2_SETUP" ] \
+   || [ ! -f "$PKG_STAMP" ] \
+   || [ "$(cat "$PKG_STAMP" 2>/dev/null)" != "$PKG_HASH" ]; then
+    echo "Compilando workspace ROS2 (mudanças detectadas)..."
+    if [ -z "$ROS_DISTRO" ]; then
+        for d in /opt/ros/*/setup.bash; do
+            [ -f "$d" ] && source "$d" && break
+        done
+    fi
+    if ! command -v colcon >/dev/null 2>&1; then
+        echo "ERRO: colcon não encontrado. Instale: sudo apt install python3-colcon-common-extensions"
+        exit 1
+    fi
+    (cd "$WS_DIR" && colcon build --symlink-install --packages-select robot_nav wheel_msgs) || {
+        echo "ERRO: colcon build falhou."
+        exit 1
+    }
+    echo "$PKG_HASH" > "$PKG_STAMP"
+fi
+
 if [ ! -f "$ROS2_SETUP" ]; then
     echo "ERRO: $ROS2_SETUP não encontrado."
     echo "Execute: cd ~/ros2_ws && colcon build"
@@ -96,6 +135,18 @@ if [ ! -f "$ROS2_SETUP" ]; then
 fi
 
 source "$ROS2_SETUP"
+
+# --- python3-serial (dependência do mega_bridge) ---
+if ! python3 -c "import serial" 2>/dev/null; then
+    echo "Instalando python3-serial (sudo)..."
+    sudo apt install -y python3-serial
+fi
+
+# --- Aviso de /dev/mega (modo real) ---
+if [ "$SIM" = false ] && [ ! -e /dev/mega ]; then
+    echo "AVISO: /dev/mega não encontrado."
+    echo "       Plugue a Arduino MEGA e rode: sudo $SCRIPT_DIR/setup_udev.sh"
+fi
 
 # --- Bootstrap do venv com dependências Python ---
 VENV_DIR="$SCRIPT_DIR/controle_web/.venv"
@@ -125,9 +176,9 @@ fi
 # --- Limpa órfãos de execuções anteriores (nós ROS2 e app.py) ---
 pkill -9 -f "robot_nav/odom_publisher"      2>/dev/null
 pkill -9 -f "robot_nav/cmd_vel_to_wheels"   2>/dev/null
+pkill -9 -f "robot_nav/mega_bridge"         2>/dev/null
 pkill -9 -f "robot_state_publisher"         2>/dev/null
 pkill -9 -f "ldlidar_stl_ros2_node"         2>/dev/null
-pkill -9 -f "ros2-hoverboard-driver/main"   2>/dev/null
 pkill -9 -f "async_slam_toolbox_node"       2>/dev/null
 pkill -9 -f "nav2_map_server"               2>/dev/null
 pkill -9 -f "nav2_amcl"                     2>/dev/null
@@ -147,7 +198,6 @@ if [ -n "$PORT_PID" ]; then
     sleep 1
 fi
 
-DRIVER_PID=""
 SERVER_PID=""
 ROBOT_PID=""
 LIDAR_PID=""
@@ -180,11 +230,10 @@ cleanup() {
     kill_tree "$NAV2_PID"
     kill_tree "$LIDAR_PID"
     kill_tree "$ROBOT_PID"
-    kill_tree "$DRIVER_PID"
     kill_tree "$SIM_PID"
     sleep 1
     # Segunda passada: SIGKILL em qualquer filho que tenha sobrevivido
-    for pid in $SERVER_PID $SLAM_PID $NAV2_PID $LIDAR_PID $ROBOT_PID $DRIVER_PID $SIM_PID; do
+    for pid in $SERVER_PID $SLAM_PID $NAV2_PID $LIDAR_PID $ROBOT_PID $SIM_PID; do
         for desc in $(pgrep -P "$pid" 2>/dev/null) $pid; do
             kill -9 "$desc" 2>/dev/null
         done
@@ -192,9 +241,9 @@ cleanup() {
     # Rede de segurança: mata qualquer nó do robot_nav órfão que reste
     pkill -9 -f "robot_nav/odom_publisher"      2>/dev/null
     pkill -9 -f "robot_nav/cmd_vel_to_wheels"   2>/dev/null
-        pkill -9 -f "robot_state_publisher"         2>/dev/null
+    pkill -9 -f "robot_nav/mega_bridge"         2>/dev/null
+    pkill -9 -f "robot_state_publisher"         2>/dev/null
     pkill -9 -f "ldlidar_stl_ros2_node"         2>/dev/null
-    pkill -9 -f "ros2-hoverboard-driver/main"   2>/dev/null
     pkill -9 -f "async_slam_toolbox_node"       2>/dev/null
     pkill -9 -f "nav2_map_server"               2>/dev/null
     pkill -9 -f "nav2_amcl"                     2>/dev/null
@@ -218,7 +267,7 @@ mkdir -p "$LOG_DIR"
 
 if [ "$SIM" = true ]; then
     # --- [SIM] Gazebo Harmonic + robô diff-drive + bridges ROS↔GZ ---
-    echo "[1/5] Modo SIM — subindo Gazebo com mundo: $WORLD_FILE"
+    echo "[1/4] Modo SIM — subindo Gazebo com mundo: $WORLD_FILE"
     SIM_LOG="$LOG_DIR/sim.log"
     SIM_WORLD="$WORLD_FILE" ros2 launch robot_nav sim.launch.py \
         world:="$WORLD_FILE" \
@@ -230,23 +279,12 @@ if [ "$SIM" = true ]; then
     # Hardware desligado no sim
     NO_LIDAR=true
 else
-    # --- [1] Driver do hoverboard ---
-    echo "[1/5] Iniciando driver do hoverboard (porta: /dev/hoverboard)..."
-    DRIVER_LOG="$LOG_DIR/hoverboard_driver.log"
-    ros2 run ros2-hoverboard-driver main > "$DRIVER_LOG" 2>&1 &
-    DRIVER_PID=$!
-    echo "      PID: $DRIVER_PID  |  Log: $DRIVER_LOG"
-
-    sleep 2
-
-    if ! kill -0 "$DRIVER_PID" 2>/dev/null; then
-        echo "AVISO: Driver do hoverboard falhou. Veja o log:"
-        cat "$DRIVER_LOG"
-        echo "(Continuando sem hardware — modo simulação)"
+    # --- [1+2] Nós do robô (mega_bridge + URDF + odom + cmd_vel_to_wheels) ---
+    echo "[1/4] Iniciando nós do robô (MEGA bridge, URDF, odometria, cmd_vel->wheels)..."
+    if [ ! -e "/dev/mega" ]; then
+        echo "      AVISO: /dev/mega não encontrado — rode sudo ./setup_udev.sh primeiro,"
+        echo "      ou plug a Arduino MEGA antes de subir."
     fi
-
-    # --- [2] Nós do robô (robot_state_publisher + odom + cmd_vel_to_wheels) ---
-    echo "[2/5] Iniciando nós do robô (URDF, odometria, cmd_vel->wheels)..."
     ROBOT_LOG="$LOG_DIR/robot_nodes.log"
     ros2 launch robot_nav robot.launch.py > "$ROBOT_LOG" 2>&1 &
     ROBOT_PID=$!
@@ -257,7 +295,7 @@ else
     # --- [3] LiDAR FHL-LD20 + detector de obstáculos ---
     if [ "$NO_LIDAR" = false ]; then
         if [ -e "$LIDAR_PORT" ]; then
-            echo "[3/5] Iniciando LiDAR FHL-LD20 em $LIDAR_PORT..."
+            echo "[2/4] Iniciando LiDAR FHL-LD20 em $LIDAR_PORT..."
             LIDAR_LOG="$LOG_DIR/lidar.log"
             ros2 launch robot_nav lidar.launch.py lidar_port:="$LIDAR_PORT" > "$LIDAR_LOG" 2>&1 &
             LIDAR_PID=$!
@@ -266,12 +304,12 @@ else
 
 
         else
-            echo "[3/5] AVISO: Porta do LiDAR $LIDAR_PORT não encontrada. Pulando LiDAR."
+            echo "[2/4] AVISO: Porta do LiDAR $LIDAR_PORT não encontrada. Pulando LiDAR."
             echo "      Para especificar outra porta: ./launch.sh --lidar-port=/dev/ttyUSB2"
             NO_LIDAR=true
         fi
     else
-        echo "[3/5] LiDAR desativado (--no-lidar)"
+        echo "[2/4] LiDAR desativado (--no-lidar)"
     fi
 fi
 
@@ -283,7 +321,7 @@ fi
 
 case "$MODE" in
     slam)
-        echo "[4/5] Modo SLAM — subindo slam_toolbox (mapping online)..."
+        echo "[3/4] Modo SLAM — subindo slam_toolbox (mapping online)..."
         SLAM_LOG="$LOG_DIR/slam.log"
         ros2 launch robot_nav slam.launch.py $SIM_TIME_ARG > "$SLAM_LOG" 2>&1 &
         SLAM_PID=$!
@@ -291,7 +329,7 @@ case "$MODE" in
         sleep 3
         ;;
     nav2)
-        echo "[4/5] Modo NAV2 — subindo Nav2 com mapa $MAP_FILE..."
+        echo "[3/4] Modo NAV2 — subindo Nav2 com mapa $MAP_FILE..."
         NAV2_LOG="$LOG_DIR/nav2.log"
         ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
@@ -300,16 +338,16 @@ case "$MODE" in
         ;;
     teleop)
         if [ "$SIM" = true ]; then
-            echo "[4/5] Modo SIM+TELEOP — sem collision monitor (dirija manualmente no Gazebo)."
+            echo "[3/4] Modo SIM+TELEOP — sem collision monitor (dirija manualmente no Gazebo)."
         elif [ "$NO_NAV2" = false ] && ros2 pkg list 2>/dev/null | grep -q "nav2_collision_monitor"; then
-            echo "[4/5] Modo TELEOP — subindo Nav2 Collision Monitor..."
+            echo "[3/4] Modo TELEOP — subindo Nav2 Collision Monitor..."
             NAV2_LOG="$LOG_DIR/nav2_collision.log"
             ros2 launch robot_nav nav2_collision.launch.py > "$NAV2_LOG" 2>&1 &
             NAV2_PID=$!
             echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
             sleep 2
         else
-            echo "[4/5] Modo TELEOP — sem collision monitor."
+            echo "[3/4] Modo TELEOP — sem collision monitor."
         fi
         ;;
 esac
@@ -318,7 +356,7 @@ esac
 echo ""
 SIM_TAG=""
 [ "$SIM" = true ] && SIM_TAG=" [SIM/Gazebo]"
-echo "[5/5] Iniciando servidor web em http://0.0.0.0:5000 (modo: $MODE$SIM_TAG)"
+echo "[4/4] Iniciando servidor web em http://0.0.0.0:5000 (modo: $MODE$SIM_TAG)"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 case "$MODE" in

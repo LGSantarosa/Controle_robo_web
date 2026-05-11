@@ -51,8 +51,9 @@ clone_if_missing() {
 }
 
 clone_if_missing wheel_msgs             https://github.com/Richard-Haes-Ellis/wheel_msgs.git
-# Descomente as duas linhas abaixo se for usar o hardware real:
-# clone_if_missing ros2-hoverboard-driver https://github.com/victorfdezc/ros2-hoverboard-driver.git
+# Descomente abaixo se for usar o hardware real (LiDAR FHL-LD20).
+# A ponte para os hoverboards é nativa do robot_nav (mega_bridge), não precisa
+# de driver C++ externo — o firmware da Arduino MEGA fica em firmware/mega_bridge/.
 # clone_if_missing ldlidar_stl_ros2       https://github.com/ldrobotSensorTeam/ldlidar_stl_ros2.git
 
 echo
