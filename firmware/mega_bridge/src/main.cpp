@@ -44,6 +44,7 @@ struct Setpoint { int16_t steer; int16_t speed; };
 static Setpoint sp_front      = {0, 0};
 static Setpoint sp_rear       = {0, 0};
 static uint32_t last_setpoint = 0;
+static bool     imu_ok        = false;
 
 static uint32_t last_tx_hover = 0;
 static uint32_t last_tx_state = 0;
@@ -65,9 +66,22 @@ static void handlePcFrame(uint8_t type, uint8_t len, const uint8_t* p) {
             break;
         }
         case protocol::FT_LEDS: {
-            if (len != 4) return;
-            ring.setColor(p[0], p[1], p[2]);
-            ring.setMode(p[3]);
+            // len=1: id de estado (ver enum leds::State).
+            //        5 (WAYPOINT) usa triggerWaypoint pra ter auto-timeout de 3 s.
+            //        0xFF sai do override manual e volta ao automático.
+            // len=4: RGB + pattern (modo manual, compat com ROS2 antigo).
+            if (len == 1) {
+                const uint8_t id = p[0];
+                if (id == 0xFF) {
+                    ring.clearManual();
+                } else if (id == (uint8_t)leds::State::WAYPOINT) {
+                    ring.triggerWaypoint();
+                } else {
+                    ring.setState(static_cast<leds::State>(id));
+                }
+            } else if (len == 4) {
+                ring.setManual(p[0], p[1], p[2], p[3]);
+            }
             break;
         }
         case protocol::FT_RELAY: {
@@ -212,20 +226,17 @@ void setup() {
 
     io_signals::begin();
 
-    ring.begin();
-    ring.setColor(0, 0, 32);
+    ring.begin();   // entra em BOOT (pulso branco curto)
 
     Wire.begin();
     Wire.setClock(400000);
-    if (!imu_dev.begin()) {
-        ring.setColor(32, 0, 0);
-    }
+    imu_ok = imu_dev.begin();
 
     SPI.begin();
     flow_dev.begin();
 
-    last_setpoint = millis();
-    ring.setColor(0, 32, 0);
+    // Sem setpoint ainda — não marcamos last_setpoint pra ficar IDLE assim que sair do BOOT.
+    last_setpoint = 0;
 }
 
 void loop() {
@@ -235,5 +246,10 @@ void loop() {
     txState();
     txImu();
     txFlow();
+
+    const bool active = (last_setpoint != 0) &&
+                        (millis() - last_setpoint < SETPOINT_TIMEOUT_MS);
+    ring.setActive(active);
+    ring.setError(!imu_ok);
     ring.tick();
 }
