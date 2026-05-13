@@ -16,6 +16,7 @@
 #   --no-lidar             desabilita o LiDAR (só modo real)
 #   --no-nav2              desabilita o collision monitor (modo teleop)
 #   --lidar-port=/dev/X    sobrescreve a porta do LiDAR (padrão /dev/lidar)
+#   --pi                   usa nav2_params_pi.yaml (perfil leve pra Raspberry Pi)
 #
 # Ctrl+C encerra todos os processos.
 
@@ -28,6 +29,7 @@ NO_NAV2=false
 LIDAR_PORT="/dev/lidar"
 MODE="teleop"                     # teleop | slam | nav2 | trekking
 MAP_FILE="$SCRIPT_DIR/maps/sala.yaml"
+PI_PROFILE=false
 SIM=false
 WORLD_FILE="$SCRIPT_DIR/worlds/empty.sdf"
 SPAWN_X="2.0"
@@ -48,7 +50,17 @@ for arg in "$@"; do
         --no-lidar)     NO_LIDAR=true ;;
         --no-nav2)      NO_NAV2=true ;;
         --lidar-port=*) LIDAR_PORT="${arg#*=}" ;;
+        --pi)           PI_PROFILE=true ;;
     esac
+done
+
+# Auto-detecta Pi (arm64) se o usuário não passou --pi explicitamente.
+if [ "$PI_PROFILE" = false ] && [ "$(uname -m)" = "aarch64" ]; then
+    PI_PROFILE=true
+    echo "Detectado arm64 — usando perfil --pi automaticamente (override com --no-pi)."
+fi
+for arg in "$@"; do
+    [ "$arg" = "--no-pi" ] && PI_PROFILE=false
 done
 
 # Normaliza caminho do mundo (aceita relativo a SCRIPT_DIR)
@@ -337,9 +349,20 @@ case "$MODE" in
         sleep 3
         ;;
     nav2)
-        echo "[3/4] Modo NAV2 — subindo Nav2 com mapa $MAP_FILE..."
+        NAV2_PARAMS_ARG=""
+        if [ "$PI_PROFILE" = true ]; then
+            PI_YAML="$(ros2 pkg prefix robot_nav 2>/dev/null)/share/robot_nav/config/nav2_params_pi.yaml"
+            if [ -f "$PI_YAML" ]; then
+                NAV2_PARAMS_ARG="params_file:=$PI_YAML"
+                echo "[3/4] Modo NAV2 (perfil PI) — params: $PI_YAML"
+            else
+                echo "[3/4] Modo NAV2 — aviso: nav2_params_pi.yaml não encontrado, usando defaults"
+            fi
+        else
+            echo "[3/4] Modo NAV2 — subindo Nav2 com mapa $MAP_FILE..."
+        fi
         NAV2_LOG="$LOG_DIR/nav2.log"
-        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG > "$NAV2_LOG" 2>&1 &
+        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
         sleep 5
