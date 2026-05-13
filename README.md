@@ -14,6 +14,7 @@ Interface web para controlar um robô **skid-steer de 4 rodas** com duas placas 
   - [2. Portas USB fixas](#2-portas-usb-fixas-obrigatório)
   - [3. Firmware da Arduino MEGA](#3-firmware-da-arduino-mega)
   - [4. Dependências Python](#4-dependências-python)
+  - [5. Raspberry Pi — setup enxuto](#5-raspberry-pi--setup-enxuto)
 - [Como rodar](#como-rodar)
   - [Modo TELEOP (padrão)](#modo-teleop-padrão)
   - [Modo SLAM — mapear a sala](#modo-slam--mapear-a-sala)
@@ -62,6 +63,8 @@ cd ~/Controle_robo_web
 Cobre:
 - **apt install**: `xacro`, `robot-state-publisher`, `slam-toolbox`, `nav2-bringup`, `nav2-collision-monitor`, `nav2-map-server`, `nav2-amcl`, `ros-gz*` (para Jazzy), `git`, `python3-venv`, `python3-pip`.
 - **Workspace**: cria `~/ros2_ws/src`, faz symlink do `robot_nav` deste repo, clona `wheel_msgs` ([Richard-Haes-Ellis/wheel_msgs](https://github.com/Richard-Haes-Ellis/wheel_msgs)), compila com `colcon build` e adiciona o `source` ao `~/.bashrc`.
+
+> **Rodando na Raspberry Pi?** Use `./setup_pi.sh` em vez do `setup.sh` — pula Gazebo, limita o `colcon build` a 2 workers (Pi 4 4 GB não aguenta 4 paralelos) e clona o driver do LiDAR. Detalhes em [Raspberry Pi — setup enxuto](#5-raspberry-pi--setup-enxuto).
 
 | Pacote | Origem | Obrigatório? |
 |--------|--------|--------------|
@@ -268,7 +271,7 @@ Dois caminhos:
 - `<model name="ground_plane">` estático — senão o robô despenca
 - Todos os objetos com `<collision>` — senão o LiDAR trespassa
 
-O `worlds/empty.sdf` serve como template pronto.
+O `worlds/empty.sdf` serve como template pronto. O repositório também inclui `worlds/educacao_criativa.sdf` (cena do projeto Educação Criativa, com cones e obstáculos) e `worlds/small_box.sdf` (mundo mínimo pra ensaiar collision_monitor).
 
 ### Rodando no modo SIM
 
@@ -416,6 +419,29 @@ pip install -r requirements.txt
 
 O `start.sh` e o `launch.sh` também fazem isso automaticamente se o venv não existir, com cache por hash do `requirements.txt`.
 
+### 5. Raspberry Pi — setup enxuto
+
+Quando o destino é uma **Raspberry Pi 4/5 arm64** (Ubuntu 24.04 + Jazzy), use o `setup_pi.sh` em vez do `setup.sh`. Ele:
+
+- pula `ros-gz*` (Pi não roda Gazebo);
+- instala só o essencial (`xacro`, `robot-state-publisher`, `tf2-tools`, `python3-serial`) e, opcionalmente, Nav2 + slam_toolbox com `--with-nav2`;
+- clona `wheel_msgs` **e** `ldlidar_stl_ros2` (este é obrigatório no hardware real);
+- roda `colcon build --executor sequential --parallel-workers 2` com `MAKEFLAGS=-j2` — sem isso a Pi 4 4 GB estoura RAM e trava;
+- avisa se o `/` está em microSD (recomendado bootar de SSD USB3), se a RAM livre é baixa ou se a CPU está quente;
+- adiciona o usuário em `dialout` pra abrir USB sem `sudo`.
+
+```bash
+cd ~/Controle_robo_web
+
+./setup_pi.sh                  # base — só pra teleop/trekking
+./setup_pi.sh --with-nav2      # inclui Nav2 + slam_toolbox
+
+sudo ./setup_udev.sh           # depois — fixa /dev/mega e /dev/lidar
+./launch.sh --trekking         # ou --slam / --nav2 se instalou --with-nav2
+```
+
+O `launch.sh` **detecta arm64 automaticamente** e passa `--pi`, que troca o tuning do Nav2 por `nav2_params_pi.yaml` (perfil leve — AMCL com 200–800 partículas, `ObstacleLayer` no lugar do `VoxelLayer`, menos amostras DWB). Force o perfil de notebook com `--no-pi` se precisar comparar.
+
 ---
 
 ## Como rodar
@@ -551,6 +577,8 @@ ros2 launch robot_nav trekking.launch.py v_max:=0.8 flow_height:=0.13
 ./launch.sh --no-lidar              # Sobe sem LiDAR (só teleop)
 ./launch.sh --no-nav2               # Teleop sem collision_monitor
 ./launch.sh --lidar-port=/dev/lidar # Porta do LiDAR (padrão: /dev/lidar)
+./launch.sh --pi                    # Força nav2_params_pi.yaml (auto em arm64)
+./launch.sh --no-pi                 # Força nav2_params.yaml (sobrescreve auto-detect)
 ```
 
 ### Encerrar
@@ -747,6 +775,7 @@ steer = (left - right) / 2
 | Módulo | Quando sobe | Função |
 |--------|-------------|--------|
 | `nav_metrics.py` | só `nav2` | Subscribe action statuses + `/plan` + `/odom` + `/cmd_vel`, grava CSV por navegação |
+| `trekking_service.py` | só `trekking` | `TrekkingBridge` — subscribe `/trekking/state`, publish `/trekking/cmd`, persiste rotas em `maps/routes/trekking/<nome>.json`, emite `trekking_state` a ~10 Hz pra UI |
 
 **Cliente (navegador):** `static/js/map.js` escuta esses eventos, mantém estado local (`mapInfo`, `mapImage`, `robotPose`, `plan`, `lastGoal`) e redesenha o canvas a ~15 Hz. Conversão click→mundo:
 
@@ -761,9 +790,11 @@ Inverte y porque o PNG foi flipado antes do envio.
 
 ```
 Controle_robo_web/
-├── launch.sh                          # Launcher (--slam / --nav2 / --sim / --map=)
+├── launch.sh                          # Launcher (--slam / --nav2 / --trekking / --sim / --map= / --pi)
 ├── start.sh                           # Só web server (modo dev)
-├── setup.sh                           # Bootstrap inicial (apt, ros2_ws, colcon build)
+├── setup.sh                           # Bootstrap inicial — notebook x86_64 (apt, ros2_ws, colcon build)
+├── setup_pi.sh                        # Bootstrap enxuto pra Raspberry Pi arm64 (sem Gazebo, j2 no colcon)
+├── install_nav2.sh                    # Atalho pra apt-install só dos pacotes Nav2 do Jazzy
 ├── setup_udev.sh                      # Configura /dev/mega e /dev/lidar
 ├── firmware/
 │   └── mega_bridge/                   # Firmware C++ da Arduino MEGA (PlatformIO)
@@ -781,24 +812,32 @@ Controle_robo_web/
 │   └── routes/<nome>.json
 ├── worlds/                            # Mundos do Gazebo
 │   ├── empty.sdf                      # Sala 6×6 m vazia (padrão)
-│   └── ...
+│   ├── educacao_criativa.sdf          # Cena do projeto Educação Criativa (cones/obstáculos)
+│   ├── small_box.sdf                  # Mundo mínimo pra ensaio de collision_monitor
+│   └── meshes/                        # Meshes auxiliares
 ├── ros2_packages/
 │   └── robot_nav/                     # Pacote ROS2 (linkado em ~/ros2_ws/src/robot_nav)
-│       ├── launch/                    # robot, lidar, slam, nav2, sim, nav2_collision
+│       ├── launch/                    # robot, lidar, slam, nav2, nav2_collision, sim, trekking
 │       ├── urdf/
 │       │   ├── robot.urdf.xacro       # URDF do robô 4 rodas (real)
-│       │   ├── husky.urdf.xacro       # URDF do robô simulado (2 rodas, sim legacy)
-│       │   └── husky.sdf              # SDF do robô simulado
+│       │   ├── husky.urdf.xacro       # URDF do robô simulado (2 rodas, sim legacy — usado por sim.launch.py)
+│       │   ├── husky.sdf              # SDF do robô simulado (default atual do sim)
+│       │   └── sim_robot.sdf          # SDF 4-wheel diff-drive (WIP, ainda não conectado ao sim.launch.py)
 │       ├── config/
-│       │   ├── nav2_params.yaml       # Tuning AMCL + DWB + costmaps
+│       │   ├── nav2_params.yaml       # Tuning AMCL + DWB + costmaps (notebook x86_64)
+│       │   ├── nav2_params_pi.yaml    # Mesmos parâmetros, perfil leve pra Raspberry Pi (--pi)
 │       │   └── collision_monitor.yaml # Zonas de freada (modo teleop)
 │       └── robot_nav/                 # Nós Python
 │           ├── mega_bridge.py         # Ponte USB ↔ MEGA ↔ 2 hoverboards + sensores
 │           ├── cmd_vel_to_wheels.py   # /cmd_vel → /wheel_vel_setpoints
-│           └── odom_publisher.py      # 4 RPMs → /odom + TF odom→base_link
+│           ├── odom_publisher.py      # 4 RPMs → /odom + TF odom→base_link
+│           ├── pose_estimator.py      # Fusão IMU + flow + rodas (modo trekking)
+│           ├── cone_detector.py       # Clusteriza /scan em cones candidatos (modo trekking)
+│           └── trekking_runner.py     # FSM IDLE/RECORD/PLAY + PID + snap-to-cone (modo trekking)
 └── controle_web/
     ├── app.py                         # Servidor Flask + Socket.IO (lê ROBOT_MODE)
-    ├── map_service.py                 # Ponte mapa/pose/plan + ActionClient + waypoints
+    ├── map_service.py                 # Ponte mapa/pose/plan + ActionClient + waypoints (slam/nav2)
+    ├── trekking_service.py            # TrekkingBridge — UI ↔ trekking_runner (só modo trekking)
     ├── nav_metrics.py                 # Coleta métricas do Nav2 em CSV
     ├── controllers/
     │   └── robot_controller.py        # ROS2Controller (publica /cmd_vel)
@@ -900,7 +939,7 @@ tail -f controle_web/logs/lidar.log
 - **Sem câmera.** A versão atual do robô não tem câmera RGB-D — foi removida do hardware. O sistema funciona 100% com LiDAR. Voltar com câmera no futuro implica reintroduzir um `camera_bridge.py` e o pointcloud no `VoxelLayer`.
 - **Bateria das placas.** Sem bateria a MEGA até liga, mas as placas de hoverboard não respondem aos `SerialCommand` — a UI segue funcionando, só o robô não anda. O `mega_bridge` continua publicando `0` em todas as velocidades.
 - **Pipeline não validado end-to-end em hardware real.** O fluxo (TELEOP, SLAM, NAV2, waypoints) foi exercitado em Gazebo. Na transição para o robô 4-rodas físico ainda faltam ajustes finos: sinais de cada lado (`left_wheel_sign`/`right_wheel_sign` do `odom_publisher`), escala `linear_scale`/`angular_scale` do `cmd_vel_to_wheels`, calibração do BNO055.
-- **Modelo simulado divergente.** O `husky.sdf`/`husky.urdf.xacro` usados em `--sim` ainda descrevem um diff-drive 2-rodas com caster, não o robô real 4-rodas skid-steer. Funciona para validar Nav2/SLAM, mas a dinâmica é diferente.
+- **Modelo simulado divergente.** O `husky.sdf`/`husky.urdf.xacro` usados em `--sim` ainda descrevem um diff-drive 2-rodas com caster, não o robô real 4-rodas skid-steer. Já existe um `urdf/sim_robot.sdf` 4-wheel com dimensões batendo no real, mas o `sim.launch.py` ainda carrega `husky.sdf` por padrão — pendente de troca. Funciona para validar Nav2/SLAM, mas a dinâmica é diferente.
 
 ---
 
