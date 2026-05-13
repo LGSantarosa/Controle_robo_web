@@ -12,7 +12,7 @@ import atexit
 from logging.handlers import RotatingFileHandler
 
 # Modo de operação — setado pelo launch.sh via env var. Valores: 'teleop',
-# 'slam' ou 'nav2'. Controla quais componentes do SocketIO ficam ativos.
+# 'slam', 'nav2' ou 'trekking'. Controla quais componentes do SocketIO ficam ativos.
 ROBOT_MODE = os.environ.get('ROBOT_MODE', 'teleop').lower()
 MAPS_DIR = os.environ.get('ROBOT_MAPS_DIR', os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'maps')
@@ -27,6 +27,8 @@ map_bridge = None
 # Coletor de métricas Nav2 — grava CSV por tentativa pra servir de base
 # quando formos ajustar parâmetros do stack de navegação.
 nav_metrics = None
+# Ponte ROS↔Web do modo TREKKING (pose fundida, waypoints, cones, comandos)
+trekking_bridge = None
 
 # rclpy.init() instala seus próprios handlers de SIGINT/SIGTERM que engolem o
 # Ctrl+C (o processo fica preso esperando o executor do ROS2 que nunca acorda).
@@ -42,6 +44,11 @@ def _shutdown_all():
     try:
         if map_bridge is not None:
             map_bridge.shutdown()
+    except Exception:
+        pass
+    try:
+        if trekking_bridge is not None:
+            trekking_bridge.shutdown()
     except Exception:
         pass
     try:
@@ -96,6 +103,17 @@ if ROBOT_MODE in ('slam', 'nav2'):
             f"[app] Falha ao iniciar MapBridge: {e}. Mapa e navegação desabilitados."
         )
         map_bridge = None
+
+# Ponte de trekking — só sobe no modo dedicado.
+if ROBOT_MODE == 'trekking':
+    try:
+        from trekking_service import TrekkingBridge
+        trekking_bridge = TrekkingBridge(socketio=socketio, maps_dir=MAPS_DIR)
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            f"[app] Falha ao iniciar TrekkingBridge: {e}. Modo trekking desabilitado."
+        )
+        trekking_bridge = None
 
 # Coletor de métricas só faz sentido em NAV2 (action navigate_to_pose ativa).
 if ROBOT_MODE == 'nav2':
@@ -158,6 +176,7 @@ def handle_connect():
     emit('mode_info', {
         'mode': ROBOT_MODE,
         'has_map': map_bridge is not None,
+        'has_trekking': trekking_bridge is not None,
     })
     # Reemite o último map_update cacheado — o /map do map_server é latched
     # (publicado 1x no activate), então clientes que conectam depois dessa
@@ -419,6 +438,48 @@ def handle_client_hello(payload):
         'sid': request.sid,
         'msg': 'hello from server',
     })
+
+# ---------------- Trekking (ponto-a-ponto) ----------------
+
+@socketio.on('trekking_cmd')
+def handle_trekking_cmd(data):
+    """Comandos do painel trekking → /trekking/cmd."""
+    if trekking_bridge is None:
+        emit('trekking_ack', {'ok': False, 'error': 'trekking indisponível neste modo'})
+        return
+    cmd = (data or {}).get('cmd', '').lower()
+    kwargs = {k: v for k, v in (data or {}).items() if k != 'cmd'}
+    result = trekking_bridge.send_cmd(cmd, **kwargs)
+    app.logger.info(f"trekking_cmd from {request.remote_addr}: {cmd} {kwargs}")
+    emit('trekking_ack', {'cmd': cmd, **result})
+
+
+@socketio.on('trekking_save_route')
+def handle_trekking_save_route(data):
+    if trekking_bridge is None:
+        emit('trekking_save_ack', {'ok': False, 'error': 'indisponível'})
+        return
+    name = (data or {}).get('name', 'rota')
+    waypoints = (data or {}).get('waypoints')  # opcional — se ausente, usa último estado
+    emit('trekking_save_ack', trekking_bridge.save_route(name, waypoints))
+
+
+@socketio.on('trekking_load_route')
+def handle_trekking_load_route(data):
+    if trekking_bridge is None:
+        emit('trekking_load_ack', {'ok': False, 'error': 'indisponível'})
+        return
+    name = (data or {}).get('name', '')
+    emit('trekking_load_ack', trekking_bridge.load_route(name))
+
+
+@socketio.on('trekking_list_routes')
+def handle_trekking_list_routes():
+    if trekking_bridge is None:
+        emit('trekking_routes', {'ok': True, 'routes': []})
+        return
+    emit('trekking_routes', trekking_bridge.list_routes())
+
 
 if __name__ == '__main__':
     # Sobe o servidor acessível na rede local (0.0.0.0:5000)

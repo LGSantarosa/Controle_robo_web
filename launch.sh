@@ -6,6 +6,7 @@
 #   ./launch.sh --slam                            # SLAM — mapeia o ambiente em tempo real
 #   ./launch.sh --nav2                            # NAV2 — navegação autônoma (mapa padrão)
 #   ./launch.sh --nav2 --map=/caminho/sala.yaml   # NAV2 — mapa específico
+#   ./launch.sh --trekking                        # TREKKING — ponto-a-ponto com PID (sem Nav2)
 #   ./launch.sh --sim                             # SIM — Gazebo Harmonic + robô diff-drive
 #   ./launch.sh --sim --slam                      # SIM + SLAM (mapeia a sala no Gazebo)
 #   ./launch.sh --sim --nav2                      # SIM + NAV2 (navega com mapa salvo)
@@ -25,7 +26,7 @@ ROS2_SETUP="$HOME/ros2_ws/install/setup.bash"
 NO_LIDAR=false
 NO_NAV2=false
 LIDAR_PORT="/dev/lidar"
-MODE="teleop"                     # teleop | slam | nav2
+MODE="teleop"                     # teleop | slam | nav2 | trekking
 MAP_FILE="$SCRIPT_DIR/maps/sala.yaml"
 SIM=false
 WORLD_FILE="$SCRIPT_DIR/worlds/empty.sdf"
@@ -37,6 +38,7 @@ for arg in "$@"; do
     case $arg in
         --slam)         MODE="slam" ;;
         --nav2)         MODE="nav2" ;;
+        --trekking)     MODE="trekking" ;;
         --sim)          SIM=true ;;
         --world=*)      WORLD_FILE="${arg#*=}" ;;
         --map=*)        MAP_FILE="${arg#*=}" ;;
@@ -177,6 +179,9 @@ fi
 pkill -9 -f "robot_nav/odom_publisher"      2>/dev/null
 pkill -9 -f "robot_nav/cmd_vel_to_wheels"   2>/dev/null
 pkill -9 -f "robot_nav/mega_bridge"         2>/dev/null
+pkill -9 -f "robot_nav/pose_estimator"      2>/dev/null
+pkill -9 -f "robot_nav/cone_detector"       2>/dev/null
+pkill -9 -f "robot_nav/trekking_runner"     2>/dev/null
 pkill -9 -f "robot_state_publisher"         2>/dev/null
 pkill -9 -f "ldlidar_stl_ros2_node"         2>/dev/null
 pkill -9 -f "async_slam_toolbox_node"       2>/dev/null
@@ -242,6 +247,9 @@ cleanup() {
     pkill -9 -f "robot_nav/odom_publisher"      2>/dev/null
     pkill -9 -f "robot_nav/cmd_vel_to_wheels"   2>/dev/null
     pkill -9 -f "robot_nav/mega_bridge"         2>/dev/null
+    pkill -9 -f "robot_nav/pose_estimator"      2>/dev/null
+    pkill -9 -f "robot_nav/cone_detector"       2>/dev/null
+    pkill -9 -f "robot_nav/trekking_runner"     2>/dev/null
     pkill -9 -f "robot_state_publisher"         2>/dev/null
     pkill -9 -f "ldlidar_stl_ros2_node"         2>/dev/null
     pkill -9 -f "async_slam_toolbox_node"       2>/dev/null
@@ -336,6 +344,14 @@ case "$MODE" in
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
         sleep 5
         ;;
+    trekking)
+        echo "[3/4] Modo TREKKING — subindo pose_estimator + cone_detector + trekking_runner..."
+        NAV2_LOG="$LOG_DIR/trekking.log"
+        ros2 launch robot_nav trekking.launch.py > "$NAV2_LOG" 2>&1 &
+        NAV2_PID=$!
+        echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
+        sleep 2
+        ;;
     teleop)
         if [ "$SIM" = true ]; then
             echo "[3/4] Modo SIM+TELEOP — sem collision monitor (dirija manualmente no Gazebo)."
@@ -368,6 +384,11 @@ case "$MODE" in
         echo "  MODO NAV2$SIM_TAG — clique no mapa web para enviar o robô a um destino."
         echo "  Mapa: $MAP_FILE"
         echo "  AMCL publicando map→odom. bt_navigator consome /goal_pose."
+        ;;
+    trekking)
+        echo "  MODO TREKKING$SIM_TAG — ponto-a-ponto com PID e snap-to-cone."
+        echo "  1) Aperte ● Gravar  2) dirija até cada ponto e + Ponto"
+        echo "  3) volte ao início  4) ▶ Play"
         ;;
     teleop)
         echo "  MODO TELEOP$SIM_TAG — Web → /cmd_vel → robô"

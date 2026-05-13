@@ -199,6 +199,7 @@ Navegador (WASD / Gamepad / Clique / Waypoints)
 | **TELEOP** | *(padrão)* | Dirigir manualmente | `nav2_collision_monitor` — só segurança (freia se tiver obstáculo perto) |
 | **SLAM** | `--slam` | Construir o mapa da sala | `slam_toolbox` em modo *mapping online* (gera `/map` ao vivo) |
 | **NAV2** | `--nav2` | Navegação autônoma + click-to-go + waypoints + métricas | `map_server` + `amcl` (com beam_skip) + `planner_server` + `controller_server` (DWB) + `bt_navigator` + `behavior_server` + `velocity_smoother` + `waypoint_follower` + `NavMetricsCollector` (CSV) |
+| **TREKKING** | `--trekking` | Ponto-a-ponto rápido com PID, fusão de 3 sensores e snap-to-cone via LiDAR (sem Nav2) | `pose_estimator` (IMU + flow + rodas) + `cone_detector` + `trekking_runner` (máquina de estado + PID + LED ring) |
 
 Nos três modos o servidor web, a ponte MEGA (`mega_bridge`) e o LiDAR rodam normalmente — você sempre pode dirigir manualmente, mesmo durante SLAM ou NAV2.
 
@@ -474,6 +475,75 @@ No painel:
 - **Toolbar de waypoints** para rotas multi-ponto. Veja [Navegação por waypoints](#navegação-por-waypoints).
 
 Cada navegação é registrada em CSV pelo `NavMetricsCollector` — útil para tuning do Nav2. Veja [Métricas Nav2 (CSV)](#métricas-nav2-csv).
+
+### Modo TREKKING — ponto-a-ponto com PID
+
+Modo dedicado pra competição de trekking. **Não usa Nav2 nem mapa SLAM.** O
+robô grava waypoints conforme você dirige manualmente, depois volta sozinho
+no `Play` seguindo os pontos com um PID de heading + velocidade proporcional.
+
+```bash
+./launch.sh --trekking
+```
+
+O que sobe a mais (3 nós Python leves, ~10% CPU total):
+
+| Nó | Tópico produzido | Função |
+|----|------------------|--------|
+| `pose_estimator` | `/trekking/pose`, `/trekking/odom`, `/trekking/slip` | Funde **BNO055 (yaw)** + **PMW3901 (flow)** + **4 RPMs**. Quando `quality` do flow é alta, ele assume — corrige slip das rodas. |
+| `cone_detector`  | `/trekking/cones` | Clusteriza `/scan` por gap, filtra por largura (5–40 cm) e publica candidatos a cone em frame `odom`. |
+| `trekking_runner`| `/cmd_vel`, `/leds/color`, `/trekking/state`, `/trekking/target` | Máquina IDLE/RECORD/PLAY com PID heading + `v = v_max·cos²(err)·brake`, snap-to-cone re-âncora o alvo a cada waypoint. |
+
+**Fluxo de uso pela UI web:**
+
+1. Aperte **● Gravar** (entra em RECORD). O anel de LED fica verde piscando.
+2. Dirija manualmente (WASD/gamepad) até o primeiro cone. Aperte **+ Ponto**
+   (ou o botão físico de partida na MEGA — pino 9) → grava posição **+ cone
+   detectado naquele momento** (posição mundial + bearing relativo ao yaw
+   gravado). Anel verde flash = ok; amarelo = cone não visto.
+3. Repita para todos os cones da rota.
+4. Volte manualmente até a origem.
+5. Aperte **▶ Play** → percorre todos os waypoints. Em cada um:
+   - PID guia em direção ao ponto gravado.
+   - Quando entra no raio de busca (1.5 m), procura cone próximo da posição
+     esperada **E** com bearing relativo compatível com o gravado. Casando:
+     **snap** — alvo corrigido = `cone_observado + (waypoint − cone_gravado)`.
+     Isso zera o drift de odometria *naquele waypoint*.
+   - Ao chegar (< 25 cm ou pass-by detectado), flash laranja de 600 ms no
+     anel WS2812 e avança pro próximo.
+6. **💾 Salvar rota** grava em `maps/routes/trekking/<nome>.json`.
+
+**Por que 3 sensores?**
+- **IMU**: yaw absoluto (sem drift apreciável com fusão do BNO055).
+- **Rodas**: velocidade contínua, mas mentem em slip (grama, derrapagem em curva).
+- **Flow**: velocidade real no chão; lateral também (skid-steer é cego a `vy`).
+- **LiDAR**: ground truth pontual a cada cone (apaga o drift acumulado).
+
+**Calibrações importantes antes da primeira corrida:**
+
+| Parâmetro | Onde | Default | Observação |
+|-----------|------|---------|------------|
+| `flow_height` | `pose_estimator` | `0.12` m | Altura do PMW3901 ao chão. Crítico — m/contagem = `h · tan(rad/pix)`. |
+| `flow_x_sign`, `flow_y_sign`, `flow_swap_xy` | `pose_estimator` | `1, 1, false` | Conforme a orientação física do sensor. Dirija pra frente — `vx_body` deve crescer. |
+| `lidar_offset_x` | `cone_detector` | `0.10` m | Conforme o URDF (`base_link → base_laser`). |
+| `v_max` | `trekking_runner` | `0.35` m/s | Subir gradualmente até o limite seguro do ambiente. |
+| `arrival_tolerance` | `trekking_runner` | `0.25` m | Quão perto do ponto conta como chegada. |
+| `cone_search_radius` / `cone_match_radius` / `cone_bearing_tol_deg` | `trekking_runner` | `1.5 m / 0.6 m / 60°` | Filtro do snap-to-cone. |
+
+Tudo pode ser sobrescrito pelo `launch.sh --trekking` via:
+```bash
+ros2 launch robot_nav trekking.launch.py v_max:=0.8 flow_height:=0.13
+```
+
+**Limitações conhecidas:**
+- Sem GPS — o sistema é cego para drift global se TODOS os cones falharem
+  no scan. Por isso o filtro de bearing relativo é importante: descarta
+  falsos positivos (tronco, mochila no chão).
+- O `pose_estimator` usa frame `odom` mas não publica TF — o `odom_publisher`
+  do `robot.launch.py` continua publicando o TF `odom→base_link` baseado só
+  nas rodas (pro RViz/CLI). Os dois estados divergem, isso é esperado.
+- PMW3901 em grama alta vai oscilar `quality` — a fusão cuida disso, mas em
+  terreno muito ruim a integração fica pior. O cone como landmark salva.
 
 ### Outras flags
 
