@@ -21,7 +21,7 @@
 # Ctrl+C encerra todos os processos.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROS2_SETUP="$HOME/ros2_ws/install/setup.bash"
+ROS2_SETUP="$SCRIPT_DIR/install/setup.bash"
 
 # --- Argumentos ---
 NO_LIDAR=false
@@ -103,19 +103,10 @@ fi
 
 mkdir -p "$SCRIPT_DIR/maps"
 
-WS_DIR="${ROS2_WS:-$HOME/ros2_ws}"
-
-# --- Symlink do robot_nav no workspace ROS2 (se faltar) ---
-if [ ! -d "$WS_DIR/src" ]; then
-    echo "ERRO: workspace ROS2 ($WS_DIR) não existe. Rode primeiro: ./setup.sh"
-    exit 1
-fi
-if [ ! -e "$WS_DIR/src/robot_nav" ]; then
-    echo "Linkando robot_nav em $WS_DIR/src/"
-    ln -s "$SCRIPT_DIR/ros2_packages/robot_nav" "$WS_DIR/src/robot_nav"
-fi
+WS_DIR="$SCRIPT_DIR"
 
 # --- colcon build incremental (hash dos fontes do robot_nav) ---
+# Pacotes vivem em ros2_packages/ — colcon descobre via --base-paths.
 PKG_STAMP="$WS_DIR/install/.robot_nav.sha1"
 PKG_HASH=$(find "$SCRIPT_DIR/ros2_packages/robot_nav" -type f \
     \( -name "*.py" -o -name "*.xml" -o -name "*.xacro" -o -name "*.yaml" \) \
@@ -125,7 +116,6 @@ PKG_HASH=$(find "$SCRIPT_DIR/ros2_packages/robot_nav" -type f \
 if [ ! -f "$ROS2_SETUP" ] \
    || [ ! -f "$PKG_STAMP" ] \
    || [ "$(cat "$PKG_STAMP" 2>/dev/null)" != "$PKG_HASH" ]; then
-    echo "Compilando workspace ROS2 (mudanças detectadas)..."
     if [ -z "$ROS_DISTRO" ]; then
         for d in /opt/ros/*/setup.bash; do
             [ -f "$d" ] && source "$d" && break
@@ -135,16 +125,26 @@ if [ ! -f "$ROS2_SETUP" ] \
         echo "ERRO: colcon não encontrado. Instale: sudo apt install python3-colcon-common-extensions"
         exit 1
     fi
-    (cd "$WS_DIR" && colcon build --symlink-install --packages-select robot_nav wheel_msgs) || {
-        echo "ERRO: colcon build falhou."
-        exit 1
-    }
+    if [ ! -f "$ROS2_SETUP" ]; then
+        # Primeira build: compila todos os pacotes (incluindo os de terceiros).
+        echo "Compilando workspace ROS2 (primeira build — todos os pacotes)..."
+        (cd "$WS_DIR" && colcon build --base-paths ros2_packages --symlink-install) || {
+            echo "ERRO: colcon build falhou."
+            exit 1
+        }
+    else
+        echo "Compilando workspace ROS2 (mudanças detectadas em robot_nav)..."
+        (cd "$WS_DIR" && colcon build --base-paths ros2_packages --symlink-install --packages-select robot_nav wheel_msgs) || {
+            echo "ERRO: colcon build falhou."
+            exit 1
+        }
+    fi
     echo "$PKG_HASH" > "$PKG_STAMP"
 fi
 
 if [ ! -f "$ROS2_SETUP" ]; then
     echo "ERRO: $ROS2_SETUP não encontrado."
-    echo "Execute: cd ~/ros2_ws && colcon build"
+    echo "Execute: cd $SCRIPT_DIR && colcon build --base-paths ros2_packages"
     exit 1
 fi
 

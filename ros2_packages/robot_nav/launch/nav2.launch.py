@@ -5,7 +5,7 @@ waypoint_follower + behavior_server + velocity_smoother + costmaps),
 consumindo um mapa estático previamente gerado com slam_toolbox.
 
 Uso:
-    ros2 launch robot_nav nav2.launch.py map:=/home/ubuntu/ros2_ws/maps/meu_mapa.yaml
+    ros2 launch robot_nav nav2.launch.py map:=$HOME/Workspace/Controle_robo_web/maps/meu_mapa.yaml
 """
 
 import os

@@ -5,7 +5,7 @@ SLAM launch: slam_toolbox em modo online async.
 Usa /scan (LiDAR) + /odom + TF (base_link, base_laser) para construir
 um mapa 2D em tempo real. Depois de mapear, salve com:
 
-    ros2 run nav2_map_server map_saver_cli -f ~/ros2_ws/maps/meu_mapa
+    ros2 run nav2_map_server map_saver_cli -f ~/Workspace/Controle_robo_web/maps/meu_mapa
 
 E use o arquivo .yaml gerado com nav2.launch.py.
 

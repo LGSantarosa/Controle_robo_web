@@ -19,4 +19,4 @@ sudo apt install -y \
 echo ""
 echo "Instalação concluída!"
 echo "Agora compile o workspace:"
-echo "  cd ~/ros2_ws && source /opt/ros/jazzy/setup.bash && colcon build"
+echo "  cd ~/Workspace/Controle_robo_web && source /opt/ros/jazzy/setup.bash && colcon build --base-paths ros2_packages --symlink-install"

@@ -1,0 +1,3 @@
+Skipped: teb_local_planner C++ needs libg2o-dev (sudo apt install libg2o-dev).
+teb_msgs (sibling dir) still builds — Nav2 default DWB controller does not need teb.
+Delete this file after installing libg2o-dev to enable the TEB planner.

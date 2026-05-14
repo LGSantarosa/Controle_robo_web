@@ -62,15 +62,17 @@ cd ~/Controle_robo_web
 
 Cobre:
 - **apt install**: `xacro`, `robot-state-publisher`, `slam-toolbox`, `nav2-bringup`, `nav2-collision-monitor`, `nav2-map-server`, `nav2-amcl`, `ros-gz*` (para Jazzy), `git`, `python3-venv`, `python3-pip`.
-- **Workspace**: cria `~/ros2_ws/src`, faz symlink do `robot_nav` deste repo, clona `wheel_msgs` ([Richard-Haes-Ellis/wheel_msgs](https://github.com/Richard-Haes-Ellis/wheel_msgs)), compila com `colcon build` e adiciona o `source` ao `~/.bashrc`.
+- **Workspace**: compila este próprio diretório como workspace colcon (`colcon build --base-paths ros2_packages --symlink-install`) e adiciona `source $HOME/Workspace/Controle_robo_web/install/setup.bash` ao `~/.bashrc`. Todos os pacotes ROS2 (`robot_nav`, `wheel_msgs`, `costmap_converter`, `teb_local_planner`) vivem em `ros2_packages/`.
 
 > **Rodando na Raspberry Pi?** Use `./setup_pi.sh` em vez do `setup.sh` — pula Gazebo, limita o `colcon build` a 2 workers (Pi 4 4 GB não aguenta 4 paralelos) e clona o driver do LiDAR. Detalhes em [Raspberry Pi — setup enxuto](#5-raspberry-pi--setup-enxuto).
 
 | Pacote | Origem | Obrigatório? |
 |--------|--------|--------------|
-| `robot_nav` | este repo (symlink) | **sempre** |
-| `wheel_msgs` | repo externo | **sempre** (até no sim, senão `colcon build` falha) |
-| `ldlidar_stl_ros2` | repo externo | só no modo real (hardware) |
+| `robot_nav` | `ros2_packages/robot_nav` (este repo) | **sempre** |
+| `wheel_msgs` | `ros2_packages/wheel_msgs` (vendored neste repo) | **sempre** (até no sim, senão `colcon build` falha) |
+| `costmap_converter` | `ros2_packages/costmap_converter` (vendored) | usado pelo Nav2 (opcional p/ teb) |
+| `teb_local_planner` | `ros2_packages/teb_local_planner` (vendored, `COLCON_IGNORE` no sub-pacote C++) | opcional — precisa de `libg2o-dev` |
+| `ldlidar_stl_ros2` | clonado por `setup_pi.sh` em `ros2_packages/` | só no modo real (hardware) |
 
 > Não existe mais driver C++ separado do hoverboard. A ponte para as duas placas é nativa: o nó `mega_bridge` (Python, em `robot_nav`) conversa com a Arduino MEGA via USB, e a MEGA repassa para as placas de hoverboard pelos UARTs hardware.
 
@@ -319,35 +321,28 @@ O `worlds/empty.sdf` serve como template pronto. O repositório também inclui `
 
 ### 1. Workspace ROS2
 
-**Nada disso está neste repositório.** O `~/ros2_ws/` é um workspace ROS2 que você cria na máquina. Só o `robot_nav` mora aqui (em `ros2_packages/robot_nav/`), via symlink. Os outros pacotes externos precisam ser clonados antes do `colcon build`:
+O **próprio repositório é o workspace colcon**. Todos os pacotes ROS2 vivem em `ros2_packages/` (`robot_nav`, `wheel_msgs`, `costmap_converter`, `teb_local_planner` — esses três últimos vendored com seus `.git` preservados). Não existe `~/ros2_ws/` separado.
 
 | Pacote | Origem | Obrigatório? |
 |--------|--------|--------------|
-| `robot_nav` | este repo (symlink) | **sempre** |
-| `wheel_msgs` | repo externo | **sempre** — o `robot_nav` declara `<depend>wheel_msgs</depend>` |
-| `ldlidar_stl_ros2` | repo externo | só no modo real (hardware) |
+| `robot_nav` | `ros2_packages/robot_nav` | **sempre** |
+| `wheel_msgs` | `ros2_packages/wheel_msgs` (vendored) | **sempre** — o `robot_nav` declara `<depend>wheel_msgs</depend>` |
+| `costmap_converter` | `ros2_packages/costmap_converter` (vendored) | dependência do Nav2 |
+| `teb_local_planner` | `ros2_packages/teb_local_planner` (vendored) | opcional — sub-pacote C++ tem `COLCON_IGNORE` (precisa `libg2o-dev`) |
+| `ldlidar_stl_ros2` | clonado pelo `setup_pi.sh` em `ros2_packages/` | só no modo real (hardware) |
 
 ```bash
-mkdir -p ~/ros2_ws/src
-cd ~/ros2_ws/src
-
-# 1) robot_nav — symlink (o start.sh/launch.sh também faz isso se faltar)
-ln -s ~/Controle_robo_web/ros2_packages/robot_nav robot_nav
-
-# 2) wheel_msgs — sempre obrigatório
-git clone https://github.com/Richard-Haes-Ellis/wheel_msgs.git wheel_msgs
-
-# 3) Só se for rodar no hardware real
-git clone https://github.com/ldrobotSensorTeam/ldlidar_stl_ros2.git ldlidar_stl_ros2
-
-# Compila
-cd ~/ros2_ws
-colcon build
+# Build a partir do próprio repo (o ./setup.sh / ./launch.sh faz isso por você)
+cd ~/Workspace/Controle_robo_web
+source /opt/ros/jazzy/setup.bash
+colcon build --base-paths ros2_packages --symlink-install
 source install/setup.bash
-echo "source ~/ros2_ws/install/setup.bash" >> ~/.bashrc
+echo "source $HOME/Workspace/Controle_robo_web/install/setup.bash" >> ~/.bashrc
 ```
 
 > Depois de editar qualquer arquivo em `ros2_packages/robot_nav/`, o `start.sh`/`launch.sh` detecta a mudança por hash e recompila automaticamente. Só preciso rodar `colcon build` manual se quiser controlar.
+>
+> **Habilitar o TEB local planner:** `sudo apt install libg2o-dev` e apague `ros2_packages/teb_local_planner/teb_local_planner/COLCON_IGNORE`. Por padrão o Nav2 roda com DWB.
 
 ### 2. Portas USB fixas (obrigatório)
 
@@ -792,7 +787,7 @@ Inverte y porque o PNG foi flipado antes do envio.
 Controle_robo_web/
 ├── launch.sh                          # Launcher (--slam / --nav2 / --trekking / --sim / --map= / --pi)
 ├── start.sh                           # Só web server (modo dev)
-├── setup.sh                           # Bootstrap inicial — notebook x86_64 (apt, ros2_ws, colcon build)
+├── setup.sh                           # Bootstrap inicial — notebook x86_64 (apt + colcon build)
 ├── setup_pi.sh                        # Bootstrap enxuto pra Raspberry Pi arm64 (sem Gazebo, j2 no colcon)
 ├── install_nav2.sh                    # Atalho pra apt-install só dos pacotes Nav2 do Jazzy
 ├── setup_udev.sh                      # Configura /dev/mega e /dev/lidar
@@ -815,8 +810,11 @@ Controle_robo_web/
 │   ├── educacao_criativa.sdf          # Cena do projeto Educação Criativa (cones/obstáculos)
 │   ├── small_box.sdf                  # Mundo mínimo pra ensaio de collision_monitor
 │   └── meshes/                        # Meshes auxiliares
-├── ros2_packages/
-│   └── robot_nav/                     # Pacote ROS2 (linkado em ~/ros2_ws/src/robot_nav)
+├── ros2_packages/                    # Workspace colcon (--base-paths ros2_packages)
+│   ├── wheel_msgs/                    # Mensagens custom das rodas (vendored, .git preservado)
+│   ├── costmap_converter/             # Plugin Nav2 (vendored)
+│   ├── teb_local_planner/             # TEB planner (vendored, COLCON_IGNORE até instalar libg2o-dev)
+│   └── robot_nav/                     # Pacote ROS2 deste projeto
 │       ├── launch/                    # robot, lidar, slam, nav2, nav2_collision, sim, trekking
 │       ├── urdf/
 │       │   ├── robot.urdf.xacro       # URDF do robô 4 rodas (real)
@@ -848,11 +846,9 @@ Controle_robo_web/
     └── logs/                          # Logs rotativos
         └── nav_metrics/               # CSVs do NavMetricsCollector (por dia)
 
-~/ros2_ws/src/
-├── robot_nav -> ~/Controle_robo_web/ros2_packages/robot_nav  # symlink
-├── ldlidar_stl_ros2/                  # Driver do LiDAR FHL-LD20 (repo separado)
-└── wheel_msgs/                        # Mensagens custom das rodas (repo separado)
 ```
+
+> No modo real, o `setup_pi.sh` também clona `ros2_packages/ldlidar_stl_ros2/` (driver do LiDAR FHL-LD20).
 
 ---
 

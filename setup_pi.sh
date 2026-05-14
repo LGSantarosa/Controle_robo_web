@@ -19,7 +19,7 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-WS_DIR="${ROS2_WS:-$HOME/ros2_ws}"
+WS_DIR="$REPO_DIR"
 
 WITH_NAV2=false
 for arg in "$@"; do
@@ -34,7 +34,7 @@ done
 
 # --- Checagens não-fatais (avisos, não bloqueia) ---
 
-echo "=== [0/5] Checagens da máquina ==="
+echo "=== [0/4] Checagens da máquina ==="
 
 ARCH="$(uname -m)"
 if [[ "$ARCH" != "aarch64" && "$ARCH" != "armv7l" ]]; then
@@ -77,7 +77,7 @@ fi
 echo
 
 # --- 1/5 — apt: só o essencial ---
-echo "=== [1/5] Instalando dependências apt (enxuto pro modo real) ==="
+echo "=== [1/4] Instalando dependências apt (enxuto pro modo real) ==="
 APT_BASE=(
     git python3-venv python3-pip python3-serial
     "ros-${ROS_DISTRO}-xacro"
@@ -101,52 +101,36 @@ fi
 sudo apt update
 sudo apt install -y "${APT_BASE[@]}"
 
-# --- 2/5 — Workspace ---
+# --- 2/4 — Driver do LiDAR (única dep externa que ainda precisa ser clonada) ---
 echo
-echo "=== [2/5] Workspace ROS2 em $WS_DIR ==="
-mkdir -p "$WS_DIR/src"
-cd "$WS_DIR/src"
-
-if [ ! -e robot_nav ]; then
-    ln -s "$REPO_DIR/ros2_packages/robot_nav" robot_nav
-    echo "  symlink robot_nav -> $REPO_DIR/ros2_packages/robot_nav"
+echo "=== [2/4] Clonando driver do LiDAR FHL-LD20 em ros2_packages/ ==="
+# Os pacotes do projeto (robot_nav, wheel_msgs, costmap_converter, teb_local_planner)
+# já vivem em ros2_packages/. Só o driver do LiDAR não está versionado aqui.
+LIDAR_DIR="$REPO_DIR/ros2_packages/ldlidar_stl_ros2"
+if [ -d "$LIDAR_DIR" ]; then
+    echo "  ldlidar_stl_ros2 já clonado"
 else
-    echo "  robot_nav já presente"
+    git clone https://github.com/ldrobotSensorTeam/ldlidar_stl_ros2.git "$LIDAR_DIR"
 fi
 
-# --- 3/5 — Pacotes externos (hardware real) ---
+# --- 3/4 — colcon build (paralelismo limitado pra não estourar RAM) ---
 echo
-echo "=== [3/5] Clonando pacotes externos ==="
-clone_if_missing() {
-    local dir="$1" url="$2"
-    if [ -d "$dir" ]; then
-        echo "  $dir já clonado"
-    else
-        git clone "$url" "$dir"
-    fi
-}
-
-clone_if_missing wheel_msgs        https://github.com/Richard-Haes-Ellis/wheel_msgs.git
-clone_if_missing ldlidar_stl_ros2  https://github.com/ldrobotSensorTeam/ldlidar_stl_ros2.git
-
-# --- 4/5 — colcon build (paralelismo limitado pra não estourar RAM) ---
-echo
-echo "=== [4/5] colcon build (use 2 workers — Pi 4 4GB não aguenta 4 paralelos) ==="
+echo "=== [3/4] colcon build (use 2 workers — Pi 4 4GB não aguenta 4 paralelos) ==="
 cd "$WS_DIR"
 # MAKEFLAGS pra Pi: limita também o paralelismo interno dos pacotes C++ (LiDAR driver).
 export MAKEFLAGS="-j2"
-colcon build --symlink-install --executor sequential --parallel-workers 2
+colcon build --base-paths ros2_packages --symlink-install --executor sequential --parallel-workers 2
 
-# --- 5/5 — bashrc ---
+# --- 4/4 — bashrc ---
 BASHRC_LINE="source $WS_DIR/install/setup.bash"
 if ! grep -qxF "$BASHRC_LINE" "$HOME/.bashrc"; then
     echo "$BASHRC_LINE" >> "$HOME/.bashrc"
     echo
-    echo "=== [5/5] ~/.bashrc atualizado ==="
+    echo "=== [4/4] ~/.bashrc atualizado ==="
     echo "  adicionado: $BASHRC_LINE"
 else
     echo
-    echo "=== [5/5] ~/.bashrc já tinha o source — ok ==="
+    echo "=== [4/4] ~/.bashrc já tinha o source — ok ==="
 fi
 
 # --- Permissão na dialout (USB serial sem sudo) ---

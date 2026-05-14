@@ -14,12 +14,13 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-WS_DIR="${ROS2_WS:-$HOME/ros2_ws}"
+WS_DIR="$REPO_DIR"
 
-echo "=== [1/4] Instalando dependências apt ==="
+echo "=== [1/3] Instalando dependências apt ==="
 sudo apt update
 sudo apt install -y \
     git python3-venv python3-pip \
+    python3-colcon-common-extensions \
     ros-jazzy-xacro ros-jazzy-robot-state-publisher \
     ros-jazzy-slam-toolbox \
     ros-jazzy-nav2-bringup ros-jazzy-nav2-collision-monitor \
@@ -28,39 +29,12 @@ sudo apt install -y \
     ros-jazzy-ros-gz-bridge ros-jazzy-ros-gz-interfaces
 
 echo
-echo "=== [2/4] Preparando workspace em $WS_DIR ==="
-mkdir -p "$WS_DIR/src"
-cd "$WS_DIR/src"
-
-if [ ! -e robot_nav ]; then
-    ln -s "$REPO_DIR/ros2_packages/robot_nav" robot_nav
-    echo "  symlink robot_nav -> $REPO_DIR/ros2_packages/robot_nav"
-else
-    echo "  robot_nav já presente, pulando"
-fi
-
-echo
-echo "=== [3/4] Clonando pacotes externos ==="
-clone_if_missing() {
-    local dir="$1" url="$2"
-    if [ -d "$dir" ]; then
-        echo "  $dir já clonado, pulando"
-    else
-        git clone "$url" "$dir"
-    fi
-}
-
-clone_if_missing wheel_msgs             https://github.com/Richard-Haes-Ellis/wheel_msgs.git
-# Descomente abaixo se for usar o hardware real (LiDAR FHL-LD20).
-# A ponte para os hoverboards é nativa do robot_nav (mega_bridge), não precisa
-# de driver C++ externo — o firmware da Arduino MEGA fica em firmware/mega_bridge/.
-# clone_if_missing ldlidar_stl_ros2       https://github.com/ldrobotSensorTeam/ldlidar_stl_ros2.git
-
-echo
-echo "=== [4/4] Compilando com colcon ==="
+echo "=== [2/3] Compilando workspace em $WS_DIR ==="
+# Os pacotes ROS2 vivem em ros2_packages/ (robot_nav, wheel_msgs,
+# costmap_converter, teb_local_planner). colcon descobre via --base-paths.
 cd "$WS_DIR"
 source /opt/ros/jazzy/setup.bash
-colcon build
+colcon build --base-paths ros2_packages --symlink-install
 
 BASHRC_LINE="source $WS_DIR/install/setup.bash"
 if ! grep -qxF "$BASHRC_LINE" "$HOME/.bashrc"; then
@@ -69,7 +43,7 @@ if ! grep -qxF "$BASHRC_LINE" "$HOME/.bashrc"; then
 fi
 
 echo
-echo "=== Pronto! ==="
+echo "=== [3/3] Pronto! ==="
 echo "Abra um terminal novo (ou rode: source $WS_DIR/install/setup.bash)"
 echo "e teste com:"
 echo "  cd $REPO_DIR && ./launch.sh --sim"
