@@ -13,13 +13,23 @@
 
 set -e
 
+# NÃO rode com sudo: o pipx instala o PlatformIO no $HOME do usuário,
+# se rodar como root o 'pio' acaba em /root/.local/bin e fica invisível
+# pro seu shell normal. O script pede sudo internamente só pro 'apt'.
+if [ "$EUID" -eq 0 ]; then
+    echo "ERRO: não rode este script com sudo." >&2
+    echo "       Rode assim:  ./setup.sh" >&2
+    echo "       (o script vai pedir senha do sudo quando precisar)" >&2
+    exit 1
+fi
+
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 WS_DIR="$REPO_DIR"
 
 echo "=== [1/4] Instalando dependências apt ==="
 sudo apt update
 sudo apt install -y \
-    git python3-venv python3-pip \
+    git python3-venv python3-pip pipx \
     python3-colcon-common-extensions \
     python3-serial \
     ros-jazzy-xacro ros-jazzy-robot-state-publisher \
@@ -29,24 +39,32 @@ sudo apt install -y \
     ros-jazzy-ros-gz ros-jazzy-ros-gz-sim \
     ros-jazzy-ros-gz-bridge ros-jazzy-ros-gz-interfaces
 
+# Se houver platformio velho do apt (4.3.4 é incompatível com Click do 24.04,
+# quebra com 'resultcallback' AttributeError), remove antes de instalar via pipx.
+if dpkg -l platformio >/dev/null 2>&1; then
+    echo "  Removendo platformio antigo do apt (incompatível)..."
+    sudo apt remove --purge -y platformio
+    hash -r
+fi
+
 echo
 echo "=== [2/4] Instalando PlatformIO (firmware MEGA) ==="
-# PlatformIO é a toolchain pra compilar/flashear o firmware C++ da MEGA.
-# Instala no --user pra não exigir sudo nem poluir o venv do servidor web.
-# Idempotente: pula se 'pio' já está disponível.
-if command -v pio >/dev/null 2>&1; then
+# Usa pipx (recomendação oficial) pra isolar o PlatformIO do Python do sistema.
+# Pacote 'pipx' já foi instalado no passo [1/4].
+pipx ensurepath >/dev/null 2>&1 || true
+export PATH="$HOME/.local/bin:$PATH"
+
+# Detecta pio válido (não o apt quebrado). Reinstala se 'pio --version' falhar.
+if command -v pio >/dev/null 2>&1 && pio --version >/dev/null 2>&1; then
     echo "  PlatformIO já instalado: $(pio --version 2>&1 | head -1)"
 else
-    pip install --user --upgrade platformio
-    if ! command -v pio >/dev/null 2>&1; then
-        case ":$PATH:" in
-            *":$HOME/.local/bin:"*) ;;
-            *)
-                echo "  AVISO: ~/.local/bin não está no PATH. Adicione ao seu ~/.bashrc:"
-                echo "         export PATH=\"\$HOME/.local/bin:\$PATH\""
-                ;;
-        esac
-    fi
+    pipx install --force platformio
+fi
+
+if ! pio --version >/dev/null 2>&1; then
+    echo "  AVISO: 'pio' ainda não funciona. Abra um terminal novo e rode 'pio --version'."
+    echo "         Se faltar PATH, adicione ao ~/.bashrc:"
+    echo "         export PATH=\"\$HOME/.local/bin:\$PATH\""
 fi
 
 echo

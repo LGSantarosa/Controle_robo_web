@@ -234,8 +234,11 @@ def main():
         sys.exit(1)
 
     print(f"Porta {args.port} aberta @ {args.baud} baud")
-    print("Aguardando 0.5s pra MEGA estabilizar após reset por DTR...")
-    time.sleep(0.5)
+    # Reset por DTR + bootloader + Adafruit_BNO055::begin() (timeout I²C se a
+    # IMU não estiver plugada) somam ~1.8 s antes da MEGA emitir o primeiro
+    # frame. 2.5 s deixa margem confortável.
+    print("Aguardando 2.5s pra MEGA estabilizar (DTR reset + init dos sensores)...")
+    time.sleep(2.5)
     ser.reset_input_buffer()
 
     decoder = Decoder()

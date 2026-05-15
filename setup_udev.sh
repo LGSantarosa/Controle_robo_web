@@ -18,11 +18,23 @@ fi
 RULES_FILE="/etc/udev/rules.d/99-robot-usb.rules"
 
 get_devpath() {
+    # Resolve a porta USB FÍSICA (ex: "1-7" ou "1-2.3") andando pela árvore
+    # de pais em /sys. Funciona pra ttyUSB* (FTDI/CH340) e ttyACM*
+    # (CDC-ACM, Arduino genuíno) sem depender de awk avançado.
     local dev="$1"
-    udevadm info "$dev" 2>/dev/null \
-        | awk -F= '/DEVPATH/{print $2}' \
-        | grep -oP '[0-9]+-[0-9]+(\.[0-9]+)*(?=:[0-9]+\.[0-9]+/ttyUSB|:[0-9]+\.[0-9]+/ttyACM)' \
-        | head -1
+    local devname
+    devname=$(basename "$dev")
+    local syspath
+    syspath=$(readlink -f "/sys/class/tty/$devname/device" 2>/dev/null)
+    while [ -n "$syspath" ] && [ "$syspath" != "/" ]; do
+        local base
+        base=$(basename "$syspath")
+        if [[ "$base" =~ ^[0-9]+-[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "$base"
+            return 0
+        fi
+        syspath=$(dirname "$syspath")
+    done
 }
 
 get_vidpid() {
@@ -34,7 +46,11 @@ get_vidpid() {
 }
 
 list_tty_ports() {
-    ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
+    ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || true
+}
+
+settle_udev() {
+    udevadm settle --timeout=5 >/dev/null 2>&1 || true
 }
 
 echo "========================================================"
@@ -42,31 +58,72 @@ echo "  Configuração de portas USB fixas — MEGA + LiDAR"
 echo "========================================================"
 echo ""
 
-# ---- Passo 1: identificar porta da MEGA ----
-echo "PASSO 1: Arduino MEGA 2560"
-echo "  1. Desplugue o LiDAR (deixe só a MEGA plugada)"
-read -p "  2. Pressione ENTER quando estiver pronto..."
+# Daqui pra baixo o script faz I/O com hardware imprevisível (udev, USB).
+# Desligo o 'set -e' pra não morrer silencioso em substituição de comando.
+set +e
 
+# ---- Passo 1: identificar porta do LIDAR (opcional) ----
+# A MEGA é obrigatória, o LiDAR é opcional — por isso o LiDAR vem primeiro:
+# se o usuário não tiver LiDAR, ele passa direto e a MEGA é detectada no passo 2.
+echo "PASSO 1: LiDAR FHL-LD20 (opcional)"
+echo "  Se TEM LiDAR: plugue SÓ o LiDAR (a MEGA fica desplugada por enquanto)."
+echo "  Se NÃO TEM LiDAR: deixe tudo desplugado e siga adiante."
+read -r -p "  Pressione ENTER quando estiver pronto... " _DUMMY
+
+echo "  Aguardando 1s e estabilizando eventos udev..."
 sleep 1
-udevadm settle
+settle_udev
 
-PORTS_MEGA=$(list_tty_ports)
-if [ -z "$PORTS_MEGA" ]; then
+PORTS_LIDAR=$(list_tty_ports)
+LIDAR_PORT=""
+LIDAR_PATH=""
+
+if [ -z "$PORTS_LIDAR" ]; then
+    echo "  Nenhum dispositivo detectado — assumindo que não há LiDAR."
+else
+    echo "  Dispositivos detectados:"
+    for p in $PORTS_LIDAR; do
+        vidpid=$(get_vidpid "$p")
+        path=$(get_devpath "$p")
+        echo "    $p  [VID:PID=$vidpid  USB path=$path]"
+    done
+    if [ "$(echo "$PORTS_LIDAR" | wc -l)" -eq 1 ]; then
+        LIDAR_PORT="$PORTS_LIDAR"
+    else
+        read -r -p "  Qual é a porta do LiDAR? (ex: /dev/ttyUSB0): " LIDAR_PORT
+    fi
+    LIDAR_PATH=$(get_devpath "$LIDAR_PORT")
+    LIDAR_VIDPID=$(get_vidpid "$LIDAR_PORT")
+    echo "  LiDAR identificado: $LIDAR_PORT → path=$LIDAR_PATH  VID:PID=$LIDAR_VIDPID"
+fi
+echo ""
+
+# ---- Passo 2: identificar porta da MEGA (obrigatória) ----
+echo "PASSO 2: Arduino MEGA 2560 (obrigatória)"
+echo "  Plugue a MEGA agora (o LiDAR pode permanecer plugado)."
+read -r -p "  Pressione ENTER quando estiver pronto... " _DUMMY
+
+echo "  Aguardando 1s e estabilizando eventos udev..."
+sleep 1
+settle_udev
+
+PORTS_ALL=$(list_tty_ports)
+if [ -z "$PORTS_ALL" ]; then
     echo "ERRO: Nenhum /dev/ttyUSB* ou /dev/ttyACM* encontrado. Verifique a conexão da MEGA."
     exit 1
 fi
 
-echo "  Dispositivos detectados:"
-for p in $PORTS_MEGA; do
-    vidpid=$(get_vidpid "$p")
-    path=$(get_devpath "$p")
-    echo "    $p  [VID:PID=$vidpid  USB path=$path]"
+MEGA_PORT=""
+for p in $PORTS_ALL; do
+    if [ "$p" != "$LIDAR_PORT" ]; then
+        MEGA_PORT="$p"
+        break
+    fi
 done
 
-if [ "$(echo "$PORTS_MEGA" | wc -l)" -eq 1 ]; then
-    MEGA_PORT="$PORTS_MEGA"
-else
-    read -p "  Qual é a porta da MEGA? (ex: /dev/ttyACM0): " MEGA_PORT
+if [ -z "$MEGA_PORT" ]; then
+    echo "ERRO: Não detectei nenhuma porta nova além do LiDAR. A MEGA está plugada?"
+    exit 1
 fi
 
 MEGA_PATH=$(get_devpath "$MEGA_PORT")
@@ -75,42 +132,11 @@ MEGA_VIDPID=$(get_vidpid "$MEGA_PORT")
 echo "  MEGA identificada: $MEGA_PORT → path=$MEGA_PATH  VID:PID=$MEGA_VIDPID"
 echo ""
 
-# ---- Passo 2: identificar porta do LIDAR ----
-echo "PASSO 2: LiDAR"
-echo "  1. Plugue o LiDAR (pode deixar a MEGA plugada também)"
-read -p "  2. Pressione ENTER quando estiver pronto..."
-
-sleep 1
-udevadm settle
-
-PORTS_ALL=$(list_tty_ports)
-LIDAR_PORT=""
-for p in $PORTS_ALL; do
-    if [ "$p" != "$MEGA_PORT" ]; then
-        LIDAR_PORT="$p"
-        break
-    fi
-done
-
-if [ -z "$LIDAR_PORT" ]; then
-    echo "AVISO: Não detectou porta nova. O LiDAR está na mesma porta que a MEGA?"
-    echo "  Portas disponíveis:"
-    for p in $PORTS_ALL; do
-        vidpid=$(get_vidpid "$p")
-        path=$(get_devpath "$p")
-        echo "    $p  [VID:PID=$vidpid  USB path=$path]"
-    done
-    read -p "  Informe manualmente a porta do LiDAR (ex: /dev/ttyUSB1): " LIDAR_PORT
-fi
-
-LIDAR_PATH=$(get_devpath "$LIDAR_PORT")
-LIDAR_VIDPID=$(get_vidpid "$LIDAR_PORT")
-
-echo "  LiDAR identificado: $LIDAR_PORT → path=$LIDAR_PATH  VID:PID=$LIDAR_VIDPID"
-echo ""
+# Reativa set -e pra escrita do arquivo / udevadm reload (essas devem dar certo).
+set -e
 
 # ---- Validação ----
-if [ "$MEGA_PATH" = "$LIDAR_PATH" ]; then
+if [ -n "$LIDAR_PATH" ] && [ "$MEGA_PATH" = "$LIDAR_PATH" ]; then
     echo "ERRO: MEGA e LiDAR têm o mesmo caminho USB ($MEGA_PATH)."
     echo "  Isso não deveria acontecer. Verifique as conexões e tente novamente."
     exit 1
@@ -119,7 +145,8 @@ fi
 # ---- Cria as regras udev ----
 echo "Criando $RULES_FILE ..."
 
-cat > "$RULES_FILE" << EOF
+{
+    cat << EOF
 # Regras udev para nomes estáveis — Arduino MEGA + LiDAR.
 # Usa localização física da porta USB (KERNELS) para diferenciar
 # dispositivos com o mesmo VID:PID.
@@ -130,10 +157,16 @@ cat > "$RULES_FILE" << EOF
 # Arduino MEGA 2560 — ponte 2 placas hoverboard + sensores
 # porta USB física: $MEGA_PATH
 SUBSYSTEM=="tty", KERNELS=="$MEGA_PATH", SYMLINK+="mega", MODE="0666", GROUP="dialout"
+EOF
+
+    if [ -n "$LIDAR_PATH" ]; then
+        cat << EOF
 
 # LiDAR FHL-LD20 — porta USB física: $LIDAR_PATH
 SUBSYSTEM=="tty", KERNELS=="$LIDAR_PATH", SYMLINK+="lidar", MODE="0666", GROUP="dialout"
 EOF
+    fi
+} > "$RULES_FILE"
 
 echo ""
 echo "Arquivo criado:"
@@ -147,7 +180,11 @@ sleep 1
 
 echo ""
 echo "=== Verificando symlinks ==="
-ls -la /dev/mega /dev/lidar 2>/dev/null || echo "AVISO: Symlinks não apareceram ainda — desplugue e replugue os dispositivos."
+EXPECTED_LINKS="/dev/mega"
+[ -n "$LIDAR_PATH" ] && EXPECTED_LINKS="$EXPECTED_LINKS /dev/lidar"
+if ! ls -la $EXPECTED_LINKS 2>/dev/null; then
+    echo "AVISO: Symlinks não apareceram ainda — desplugue e replugue os dispositivos."
+fi
 
 echo ""
 echo "=== Pronto! ==="
