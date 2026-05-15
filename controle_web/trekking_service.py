@@ -37,6 +37,7 @@ class TrekkingBridge:
         if not rclpy.ok():
             rclpy.init()
 
+        self._running = False
         self._node: Node = rclpy.create_node('web_trekking_bridge')
 
         self._node.create_subscription(
@@ -70,9 +71,17 @@ class TrekkingBridge:
                 log.warning(f'[TrekkingBridge] erro no spin: {e}')
 
     def shutdown(self):
+        # Ordem importante: para o loop → encerra executor (drena callbacks
+        # em voo) → só então destroy_node. Sem isso, a thread daemon dá
+        # alguns ms de spin sobre um nó já destruído e cospe RCLError no log.
         self._running = False
         try:
-            self._executor.remove_node(self._node)
+            if hasattr(self, '_spin_thread') and self._spin_thread.is_alive():
+                self._spin_thread.join(timeout=1.0)
+        except Exception:
+            pass
+        try:
+            self._executor.shutdown()
         except Exception:
             pass
         try:
@@ -105,7 +114,8 @@ class TrekkingBridge:
             return {'ok': False, 'error': str(e)}
 
     # ---- Rotas em disco ----
-    def _safe_name(self, name: str) -> str:
+    def _safe_name(self, name) -> str:
+        # Mesma regra do MapBridge._safe_name — alfanumérico + '-_', fallback 'rota'.
         return ''.join(c for c in (name or '') if c.isalnum() or c in '-_') or 'rota'
 
     def save_route(self, name: str, waypoints: list = None) -> dict:

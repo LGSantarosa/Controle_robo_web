@@ -250,7 +250,13 @@
 
     socket.on('trekking_state', (data) => {
       state = data;
-      if (state.have_pose) {
+      // Limpa trail quando volta pra IDLE sem waypoints — sinaliza "novo
+      // ensaio". Sem isso o trail acumula entre sessões e suja o canvas.
+      if (state.mode === 'idle' && (state.total || 0) === 0) {
+        trail.length = 0;
+        trailLastX = null;
+        trailLastY = null;
+      } else if (state.have_pose) {
         if (trailLastX === null || Math.hypot(state.x - trailLastX, state.y - trailLastY) > 0.05) {
           trail.push([state.x, state.y]);
           trailLastX = state.x; trailLastY = state.y;

@@ -179,52 +179,67 @@ class NavMetricsCollector:
     # ---------------- Callbacks ----------------
 
     def _on_nav_status(self, msg: GoalStatusArray):
-        """Detecta início e fim de uma navegação pela action NavigateToPose."""
+        """Detecta início e fim de uma navegação pela action NavigateToPose.
+
+        Itera a lista inteira em vez de pegar só `status_list[-1]` — quando
+        waypoints sequenciais disparam goals em rápida sucessão, o último
+        status pode ser do *próximo* goal e mascarar o SUCCEEDED/ABORTED do
+        anterior. Processa terminal do goal corrente antes de aceitar um novo.
+        """
         if not msg.status_list:
             return
-        last      = msg.status_list[-1]
-        status    = last.status
-        goal_id   = bytes(last.goal_info.goal_id.uuid)
 
-        # Novo goal em execução → abre tentativa
-        if status in (GoalStatus.STATUS_ACCEPTED, GoalStatus.STATUS_EXECUTING):
-            if self._attempt is None or self._nav_goal_id != goal_id:
-                # Fecha tentativa anterior sem status terminal (raro; cleanup).
-                if self._attempt is not None and self._attempt.end_ts is None:
-                    self._attempt.status = GoalStatus.STATUS_ABORTED
+        # 1) Procura status terminal do goal corrente
+        if self._attempt is not None and self._nav_goal_id is not None:
+            for s in msg.status_list:
+                goal_id = bytes(s.goal_info.goal_id.uuid)
+                if goal_id == self._nav_goal_id and s.status in _TERMINAL_STATUSES:
+                    self._attempt.status = s.status
                     self._attempt.end_ts = self._now()
+                    if self._last_odom_pose:
+                        self._attempt.end_x, self._attempt.end_y, self._attempt.end_yaw = self._last_odom_pose
                     self._flush_attempt(self._attempt)
-                self._nav_goal_id = goal_id
-                self._attempt = NavAttempt(
-                    nav_id=goal_id.hex()[:8],
-                    start_ts=self._now(),
-                    start_x=self._last_odom_pose[0] if self._last_odom_pose else 0.0,
-                    start_y=self._last_odom_pose[1] if self._last_odom_pose else 0.0,
-                )
-                log.info(f"[NavMetrics] início nav {self._attempt.nav_id}")
-            return
+                    self._attempt = None
+                    self._nav_goal_id = None
+                    break
 
-        # Status terminal do goal corrente → fecha tentativa
-        if status in _TERMINAL_STATUSES and self._attempt is not None \
-                and self._nav_goal_id == goal_id:
-            self._attempt.status = status
-            self._attempt.end_ts = self._now()
-            if self._last_odom_pose:
-                self._attempt.end_x, self._attempt.end_y, self._attempt.end_yaw = self._last_odom_pose
-            self._flush_attempt(self._attempt)
-            self._attempt = None
-            self._nav_goal_id = None
+        # 2) Procura ACCEPTED/EXECUTING (novo goal) — sempre o último encontrado,
+        # que é o goal "ativo" agora.
+        new_id = None
+        for s in msg.status_list:
+            if s.status in (GoalStatus.STATUS_ACCEPTED, GoalStatus.STATUS_EXECUTING):
+                new_id = bytes(s.goal_info.goal_id.uuid)
+        if new_id is not None and (self._attempt is None or self._nav_goal_id != new_id):
+            # Fecha tentativa anterior sem status terminal (raro; cleanup).
+            if self._attempt is not None and self._attempt.end_ts is None:
+                self._attempt.status = GoalStatus.STATUS_ABORTED
+                self._attempt.end_ts = self._now()
+                self._flush_attempt(self._attempt)
+            self._nav_goal_id = new_id
+            # B16: limpa contagem de recoveries da tentativa anterior pra não
+            # ignorar recoveries reais do goal novo só porque o UUID coincidiu.
+            self._recovery_ids.clear()
+            self._attempt = NavAttempt(
+                nav_id=new_id.hex()[:8],
+                start_ts=self._now(),
+                start_x=self._last_odom_pose[0] if self._last_odom_pose else 0.0,
+                start_y=self._last_odom_pose[1] if self._last_odom_pose else 0.0,
+            )
+            log.info(f"[NavMetrics] início nav {self._attempt.nav_id}")
 
     def _on_recovery_status(self, msg: GoalStatusArray, name: str):
         """Conta +1 na primeira vez que vemos cada goal_id de recovery."""
         if not msg.status_list or self._attempt is None:
             return
-        last    = msg.status_list[-1]
-        goal_id = bytes(last.goal_info.goal_id.uuid)
-        if last.status in (GoalStatus.STATUS_ACCEPTED, GoalStatus.STATUS_EXECUTING) \
-                and self._recovery_ids.get(name) != goal_id:
-            self._recovery_ids[name] = goal_id
-            self._attempt.recoveries[name] += 1
+        # Itera lista inteira: o último status pode ser de um recovery de outro
+        # goal — só conta o primeiro ACCEPTED/EXECUTING que vier de cada UUID.
+        for s in msg.status_list:
+            if s.status not in (GoalStatus.STATUS_ACCEPTED, GoalStatus.STATUS_EXECUTING):
+                continue
+            goal_id = bytes(s.goal_info.goal_id.uuid)
+            if self._recovery_ids.get(name) != goal_id:
+                self._recovery_ids[name] = goal_id
+                self._attempt.recoveries[name] += 1
 
     def _on_plan(self, msg: Path):
         if self._attempt is None:

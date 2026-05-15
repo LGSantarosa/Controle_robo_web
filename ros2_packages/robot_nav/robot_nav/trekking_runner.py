@@ -46,14 +46,7 @@ MODE_RECORD = 'record'
 MODE_PLAY   = 'play'
 
 
-def _wrap_pi(a: float) -> float:
-    return math.atan2(math.sin(a), math.cos(a))
-
-
-def _quat_to_yaw(qx, qy, qz, qw):
-    siny_cosp = 2.0 * (qw * qz + qx * qy)
-    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-    return math.atan2(siny_cosp, cosy_cosp)
+from .utils import quat_to_yaw as _quat_to_yaw, wrap_pi as _wrap_pi
 
 
 def _yaw_to_quat(yaw):

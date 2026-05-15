@@ -20,16 +20,13 @@ publicando).
 import math
 import threading
 
+import numpy as np
 import rclpy
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 
-
-def _quat_to_yaw(qx, qy, qz, qw):
-    siny_cosp = 2.0 * (qw * qz + qx * qy)
-    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-    return math.atan2(siny_cosp, cosy_cosp)
+from .utils import quat_to_yaw as _quat_to_yaw
 
 
 class ConeDetector(Node):
@@ -104,56 +101,53 @@ class ConeDetector(Node):
                 return
             px, py, pyaw = self._pose_x, self._pose_y, self._pose_yaw
 
-        # 1) Scan → (xl, yl) no frame base_laser
-        points = []  # lista de (xl, yl)
-        a = scan.angle_min
-        da = scan.angle_increment
-        for r in scan.ranges:
-            ang = a
-            a += da
-            if not math.isfinite(r):
-                continue
-            if r < self.r_min or r > self.r_max:
-                continue
-            if ang < self.a_min or ang > self.a_max:
-                continue
-            points.append((r * math.cos(ang), r * math.sin(ang)))
-
-        if not points:
+        # 1) Scan → (xl, yl) no frame base_laser. Vetorizado: cos/sin de 360
+        # pontos viram dois passes do numpy em vez de 360 chamadas a math.cos.
+        ranges = np.asarray(scan.ranges, dtype=np.float32)
+        if ranges.size == 0:
             self._publish_empty(scan)
             return
+        angles = scan.angle_min + np.arange(ranges.size, dtype=np.float32) * scan.angle_increment
+        valid = (
+            np.isfinite(ranges)
+            & (ranges >= self.r_min) & (ranges <= self.r_max)
+            & (angles >= self.a_min) & (angles <= self.a_max)
+        )
+        rs = ranges[valid]
+        if rs.size == 0:
+            self._publish_empty(scan)
+            return
+        ang = angles[valid]
+        xs = rs * np.cos(ang)
+        ys = rs * np.sin(ang)
 
-        # 2) Cluster sequencial por gap. As leituras do LD20 vêm ordenadas em
-        # ângulo, então caminhar em sequência cobre o caso (com o wrap, o
-        # último cluster pode tocar o primeiro, mas a perda é desprezível
-        # pra cones — só pioraria se um cone caísse exatamente em ±π).
+        # 2) Cluster sequencial por gap. Vetoriza o cálculo dos gaps; o split
+        # ainda é Python mas só itera os índices de quebra (poucos).
+        dx = np.diff(xs)
+        dy = np.diff(ys)
+        gap_too_big = np.hypot(dx, dy) > self.gap_thr
+        # Índices onde o cluster anterior termina (inclusivos no fim).
+        breaks = np.where(gap_too_big)[0] + 1
+        # Pontos do LD20 vêm ordenados em ângulo. O wrap em ±π pode partir um
+        # cone em dois clusters; a perda é desprezível e o snap-to-cone tolera.
         clusters = []
-        cur = [points[0]]
-        for i in range(1, len(points)):
-            xp, yp = points[i - 1]
-            xc, yc = points[i]
-            if math.hypot(xc - xp, yc - yp) <= self.gap_thr:
-                cur.append((xc, yc))
-            else:
-                clusters.append(cur)
-                cur = [(xc, yc)]
-        clusters.append(cur)
+        prev = 0
+        for b in breaks.tolist():
+            clusters.append((xs[prev:b], ys[prev:b]))
+            prev = b
+        clusters.append((xs[prev:], ys[prev:]))
 
         # 3) Filtra por número de pontos e por largura (extensão geométrica
         # entre primeiro e último ponto do cluster — barato e suficiente
         # pra cones, que são pequenos e convexos).
         cones_laser = []     # (cx, cy, width)
-        for c in clusters:
-            if len(c) < self.min_pts:
+        for cxs, cys in clusters:
+            if cxs.size < self.min_pts:
                 continue
-            x0, y0 = c[0]
-            xN, yN = c[-1]
-            width = math.hypot(xN - x0, yN - y0)
+            width = float(math.hypot(cxs[-1] - cxs[0], cys[-1] - cys[0]))
             if width < self.min_w or width > self.max_w:
                 continue
-            cx = sum(p[0] for p in c) / len(c)
-            cy = sum(p[1] for p in c) / len(c)
-            cones_laser.append((cx, cy, width))
+            cones_laser.append((float(cxs.mean()), float(cys.mean()), width))
 
         if not cones_laser:
             self._publish_empty(scan)

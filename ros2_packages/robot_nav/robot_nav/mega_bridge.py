@@ -193,6 +193,11 @@ class MegaBridge(Node):
         Logo:
             speed = (left + right) / 2
             steer = (left - right) / 2
+
+        `_wheel_scale` amplia o valor antes do `int(round)` — comandos
+        fracionários pequenos (ex.: 0.4 unidades) iam para 0 e criavam
+        deadband artificial. Subir wheel_scale resolve sem mexer no
+        cmd_vel_to_wheels. Default 1.0 mantém comportamento antigo.
         """
         L = left * self._wheel_scale
         R = right * self._wheel_scale

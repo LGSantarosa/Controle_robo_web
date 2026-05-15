@@ -11,6 +11,13 @@
 
 set -e
 
+case "${1:-}" in
+    --help|-h)
+        sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WS_DIR="$SCRIPT_DIR"
 ROS2_SETUP="$WS_DIR/install/setup.bash"

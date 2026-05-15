@@ -45,14 +45,20 @@ log = logging.getLogger(__name__)
 
 
 def _occupancy_to_png_b64(grid: OccupancyGrid) -> str:
-    """Converte um OccupancyGrid em PNG grayscale (base64)."""
+    """Converte um OccupancyGrid em PNG grayscale (base64).
+
+    Convenção OccupancyGrid: -1 desconhecido, 0 livre, 1..100 ocupado (graus
+    de confiança). Antes valores 1..49 caíam em "desconhecido" (cinza 205),
+    perdendo nuances do inflation layer. Agora mapeia linearmente — 0→255
+    (branco), 100→0 (preto), -1 (desconhecido) fica em 205.
+    """
     w = grid.info.width
     h = grid.info.height
     arr = np.array(grid.data, dtype=np.int16).reshape((h, w))
-    # Convenção OccupancyGrid: -1 desconhecido, 0 livre, 100 ocupado.
-    img = np.full((h, w), 205, dtype=np.uint8)  # cinza (desconhecido)
-    img[arr == 0] = 254                          # branco (livre)
-    img[arr >= 50] = 0                           # preto (ocupado)
+    img = np.full((h, w), 205, dtype=np.uint8)
+    known = arr >= 0
+    occ = arr.clip(0, 100).astype(np.uint16)
+    img[known] = (255 - (occ[known] * 255 // 100)).astype(np.uint8)
     # ROS: y cresce pra cima; PNG: y cresce pra baixo — inverte linhas.
     img = np.flipud(img)
     pil = Image.fromarray(img, mode='L')
@@ -305,11 +311,16 @@ class MapBridge:
         self._sock.emit('waypoint_status', {'active': False, 'index': 0, 'total': 0})
         return {'ok': True}
 
+    @staticmethod
+    def _safe_name(name) -> str:
+        """Sanitiza nome de rota/mapa. Rejeita strings vazias com fallback 'rota'."""
+        return ''.join(c for c in (name or '') if c.isalnum() or c in '-_') or 'rota'
+
     def save_route(self, name: str, waypoints: list = None) -> dict:
         wps = waypoints if waypoints is not None else self._wp_list
         if not wps:
             return {'ok': False, 'error': 'nenhum waypoint para salvar'}
-        safe = ''.join(c for c in name if c.isalnum() or c in '-_') or 'rota'
+        safe = self._safe_name(name)
         routes_dir = os.path.join(self._maps_dir, 'routes')
         os.makedirs(routes_dir, exist_ok=True)
         path = os.path.join(routes_dir, safe + '.json')
@@ -337,7 +348,7 @@ class MapBridge:
             return {'ok': False, 'error': str(e)}
 
     def load_route(self, name: str) -> dict:
-        safe = ''.join(c for c in name if c.isalnum() or c in '-_')
+        safe = self._safe_name(name)
         path = os.path.join(self._maps_dir, 'routes', safe + '.json')
         try:
             import json as _json
@@ -540,8 +551,7 @@ class MapBridge:
 
     def save_map(self, name: str) -> dict:
         """Salva o mapa atual em disco via map_saver_cli."""
-        # Sanitiza nome: só alfanumérico, '-' e '_'.
-        safe = ''.join(c for c in name if c.isalnum() or c in '-_') or 'sala'
+        safe = self._safe_name(name)
         base_path = os.path.join(self._maps_dir, safe)
         cmd = [
             'ros2', 'run', 'nav2_map_server', 'map_saver_cli',

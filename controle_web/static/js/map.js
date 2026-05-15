@@ -87,19 +87,22 @@
       if (wpToolbar) wpToolbar.style.display = currentMode === 'nav2' ? '' : 'none';
     });
 
+    // Image() reaproveitada — em SLAM o /map vem a 5–10 Hz; alocar uma
+    // Image nova a cada update gera lixo desnecessário no GC.
+    const mapImg = new Image();
+    mapImg.onload = () => {
+      mapImage = mapImg;
+      sizeEl.textContent = `${mapInfo.width} × ${mapInfo.height} px`;
+      resEl.textContent  = `${mapInfo.resolution.toFixed(3)} m/px`;
+      statusEl.textContent = 'recebido';
+      statusEl.className = 'map-status ok';
+      render();
+    };
+
     socket.on('map_update', (data) => {
       if (!data || !data.info || !data.png_b64) return;
       mapInfo = data.info;
-      const img = new Image();
-      img.onload = () => {
-        mapImage = img;
-        sizeEl.textContent = `${mapInfo.width} × ${mapInfo.height} px`;
-        resEl.textContent  = `${mapInfo.resolution.toFixed(3)} m/px`;
-        statusEl.textContent = 'recebido';
-        statusEl.className = 'map-status ok';
-        render();
-      };
-      img.src = 'data:image/png;base64,' + data.png_b64;
+      mapImg.src = 'data:image/png;base64,' + data.png_b64;
     });
 
     socket.on('robot_pose', (data) => {

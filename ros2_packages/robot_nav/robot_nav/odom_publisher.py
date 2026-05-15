@@ -21,6 +21,7 @@ Mantemos como parâmetros pra calibração final no robô.
 """
 
 import math
+import threading
 
 import rclpy
 from geometry_msgs.msg import TransformStamped
@@ -57,7 +58,11 @@ class OdomPublisher(Node):
         self.theta = 0.0
         self.last_time = self.get_clock().now()
 
-        # Velocidades das 4 rodas em m/s
+        # Velocidades das 4 rodas em m/s. `_wheel_lock` protege escrita pelos
+        # 4 callbacks vs leitura pelo timer. Hoje os callbacks rodam no mesmo
+        # SingleThreadedExecutor (serializados), mas migrar para
+        # MultiThreadedExecutor é uma linha de mudança — o lock futuro-proof.
+        self._wheel_lock = threading.Lock()
         self.v_fl = 0.0
         self.v_fr = 0.0
         self.v_rl = 0.0
@@ -89,14 +94,15 @@ class OdomPublisher(Node):
         # Aplica sinal por lado (calibração de polaridade) e converte RPM → m/s
         sign = self.left_sign if which in ('fl', 'rl') else self.right_sign
         v = self._rpm_to_ms(msg.data * sign)
-        if which == 'fl':
-            self.v_fl = v
-        elif which == 'fr':
-            self.v_fr = v
-        elif which == 'rl':
-            self.v_rl = v
-        elif which == 'rr':
-            self.v_rr = v
+        with self._wheel_lock:
+            if which == 'fl':
+                self.v_fl = v
+            elif which == 'fr':
+                self.v_fr = v
+            elif which == 'rl':
+                self.v_rl = v
+            elif which == 'rr':
+                self.v_rr = v
 
     def _publish_odom(self):
         now = self.get_clock().now()
@@ -106,8 +112,9 @@ class OdomPublisher(Node):
             return
 
         # Média das duas rodas de cada lado — reduz erro quando uma derrapa
-        v_left = (self.v_fl + self.v_rl) / 2.0
-        v_right = (self.v_fr + self.v_rr) / 2.0
+        with self._wheel_lock:
+            v_left = (self.v_fl + self.v_rl) / 2.0
+            v_right = (self.v_fr + self.v_rr) / 2.0
 
         linear = (v_right + v_left) / 2.0
         angular = (v_right - v_left) / self.wheel_base

@@ -35,10 +35,7 @@ from sensor_msgs.msg import Imu
 from std_msgs.msg import Float32, Float64
 
 
-def _quat_to_yaw(qx: float, qy: float, qz: float, qw: float) -> float:
-    siny_cosp = 2.0 * (qw * qz + qx * qy)
-    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-    return math.atan2(siny_cosp, cosy_cosp)
+from .utils import quat_to_yaw as _quat_to_yaw  # noqa: F401
 
 
 def _sigmoid(x: float) -> float:

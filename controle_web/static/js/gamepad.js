@@ -247,8 +247,11 @@
     stickDot.style.top = py + 'px';
   }
 
+  // BASE_LINEAR (100, em client.js) × SPEED_MULT_MAX (4.0, robot_controller.py)
+  const MAX_LINEAR_SCALED = 100 * 4;
+
   function updateSpeedBars(left, right) {
-    const maxSpeed = 100 * 4; // BASE_LINEAR_SPEED * SPEED_MULT_MAX
+    const maxSpeed = MAX_LINEAR_SCALED;
     if (speedLeftBar) {
       const pct = Math.min(Math.abs(left) / maxSpeed * 100, 100);
       speedLeftBar.style.width = pct + '%';

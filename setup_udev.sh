@@ -10,6 +10,13 @@
 
 set -e
 
+case "${1:-}" in
+    --help|-h)
+        sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+esac
+
 if [ "$EUID" -ne 0 ]; then
     echo "ERRO: Execute com sudo: sudo ./setup_udev.sh"
     exit 1

@@ -13,6 +13,13 @@
 
 set -e
 
+case "${1:-}" in
+    --help|-h)
+        sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+esac
+
 # NÃO rode com sudo: o pipx instala o PlatformIO no $HOME do usuário,
 # se rodar como root o 'pio' acaba em /root/.local/bin e fica invisível
 # pro seu shell normal. O script pede sudo internamente só pro 'apt'.

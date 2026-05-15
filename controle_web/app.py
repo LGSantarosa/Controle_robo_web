@@ -3,6 +3,7 @@ from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
 from controllers.robot_controller import RobotController, ROS2Controller
 import logging
+import math
 import os
 import json
 import secrets
@@ -84,6 +85,28 @@ signal.signal(signal.SIGTERM, _force_shutdown_full)
 
 # Encerra tudo ao sair
 atexit.register(_shutdown_all)
+
+
+def _validate_xy(x, y, *, max_abs: float = 1000.0):
+    """Converte e valida coordenadas (rejeita NaN, Inf e absurdos).
+
+    `max_abs` evita que um cliente comprometido mande coordenadas tipo 1e18
+    e quebre o Nav2 ou trave o filtro do AMCL. Mapas reais cabem em ±1000m.
+    """
+    fx = float(x)
+    fy = float(y)
+    if not (math.isfinite(fx) and math.isfinite(fy)):
+        raise ValueError("coordenadas precisam ser finitas")
+    if abs(fx) > max_abs or abs(fy) > max_abs:
+        raise ValueError(f"coordenadas fora do range ±{max_abs} m")
+    return fx, fy
+
+
+def _validate_yaw(yaw) -> float:
+    fy = float(yaw)
+    if not math.isfinite(fy):
+        raise ValueError("yaw precisa ser finito")
+    return fy
 
 # Instancia a aplicação web
 app = Flask(__name__)
@@ -236,9 +259,8 @@ def handle_nav_goal(data):
         emit('nav_goal_ack', {'ok': False, 'error': 'clique-para-ir só funciona em modo NAV2'})
         return
     try:
-        x = float(data.get('x'))
-        y = float(data.get('y'))
-        yaw = float(data.get('yaw', 0.0))
+        x, y = _validate_xy(data.get('x'), data.get('y'))
+        yaw = _validate_yaw(data.get('yaw', 0.0))
         result = map_bridge.send_goal(x, y, yaw)
         app.logger.info(f"nav_goal from {request.remote_addr}: ({x:.2f}, {y:.2f})")
         emit('nav_goal_ack', result)
@@ -254,7 +276,21 @@ def handle_start_waypoints(data):
     if ROBOT_MODE != 'nav2':
         emit('waypoints_ack', {'ok': False, 'error': 'waypoints só funcionam em modo NAV2'})
         return
-    waypoints = (data or {}).get('waypoints', [])
+    raw_wps = (data or {}).get('waypoints', [])
+    if not isinstance(raw_wps, list):
+        emit('waypoints_ack', {'ok': False, 'error': 'waypoints precisa ser lista'})
+        return
+    try:
+        waypoints = []
+        for w in raw_wps:
+            if not isinstance(w, dict):
+                raise ValueError("cada waypoint precisa ser objeto")
+            wx, wy = _validate_xy(w.get('x'), w.get('y'))
+            wyaw = _validate_yaw(w.get('yaw', 0.0))
+            waypoints.append({'x': wx, 'y': wy, 'yaw': wyaw})
+    except (TypeError, ValueError) as e:
+        emit('waypoints_ack', {'ok': False, 'error': f'waypoint inválido: {e}'})
+        return
     loop = bool((data or {}).get('loop', False))
     result = map_bridge.start_waypoints(waypoints, loop)
     emit('waypoints_ack', result)
@@ -460,9 +496,13 @@ def handle_gamepad_event(data):
 def handle_set_speed(data):
     # Altera o multiplicador de velocidade do robô
     try:
-        mult = float(data.get('multiplier', 1.0))
+        mult = float((data or {}).get('multiplier', 1.0))
+        if not math.isfinite(mult):
+            raise ValueError("multiplier precisa ser finito")
         effective = controller.set_speed_multiplier(mult)
         app.logger.info(f"set_speed from {request.remote_addr}: mult={mult:.2f} → effective={effective:.2f}")
+        # Broadcast só no caminho feliz — todos os clientes precisam reagir
+        # ao novo multiplicador (UI compartilhada).
         emit('speed_update', {
             'ok': True,
             'multiplier': effective,
@@ -470,7 +510,9 @@ def handle_set_speed(data):
             'angular_speed': controller._angular_speed,
         }, broadcast=True)
     except Exception as e:
-        emit('speed_update', {'ok': False, 'error': str(e)}, broadcast=False)
+        # Erro: responde só ao cliente que mandou — broadcast aqui mostraria
+        # "Não recebido" pra todo mundo só porque um cliente mandou lixo.
+        emit('speed_update', {'ok': False, 'error': str(e)}, room=request.sid)
 
 @socketio.on('client_hello')
 def handle_client_hello(payload):
@@ -483,16 +525,27 @@ def handle_client_hello(payload):
 
 # ---------------- Trekking (ponto-a-ponto) ----------------
 
+_TREKKING_CMDS = {
+    'start', 'stop', 'reset', 'record', 'play',
+    'save_point', 'remove_last', 'load_waypoints',
+}
+# Apenas estes kwargs passam para o runner — rejeita o resto pra não acabar
+# como vetor de injeção (`os.system` numa lib futura, etc.).
+_TREKKING_KWARGS = {'waypoints', 'v_max', 'kp_heading', 'kd_heading', 'index'}
+
 @socketio.on('trekking_cmd')
 def handle_trekking_cmd(data):
     """Comandos do painel trekking → /trekking/cmd."""
     if trekking_bridge is None:
         emit('trekking_ack', {'ok': False, 'error': 'trekking indisponível neste modo'})
         return
-    cmd = (data or {}).get('cmd', '').lower()
-    kwargs = {k: v for k, v in (data or {}).items() if k != 'cmd'}
+    cmd = str((data or {}).get('cmd', '')).lower()
+    if cmd not in _TREKKING_CMDS:
+        emit('trekking_ack', {'ok': False, 'error': f'cmd desconhecido: {cmd}'})
+        return
+    kwargs = {k: v for k, v in (data or {}).items() if k in _TREKKING_KWARGS}
     result = trekking_bridge.send_cmd(cmd, **kwargs)
-    app.logger.info(f"trekking_cmd from {request.remote_addr}: {cmd} {kwargs}")
+    app.logger.info(f"trekking_cmd from {request.remote_addr}: {cmd} {list(kwargs)}")
     emit('trekking_ack', {'cmd': cmd, **result})
 
 

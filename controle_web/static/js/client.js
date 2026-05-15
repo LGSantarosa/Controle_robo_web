@@ -29,6 +29,10 @@
   const speedMultDisplay = document.getElementById('speed-mult-display');
   const speedLinearVal = document.getElementById('speed-linear-val');
   const speedAngularVal = document.getElementById('speed-angular-val');
+  // Valores em "unidades internas" exibidos na UI (não SI). O servidor
+  // converte a velocidade SI real (m/s, rad/s) via BASE_LINEAR_SPEED e
+  // BASE_ANGULAR_SPEED em robot_controller.py; estes aqui só dão um número
+  // estável pro slider mostrar enquanto o ack do servidor não chega.
   const BASE_LINEAR = 100;
   const BASE_ANGULAR = 65;
   let currentMultiplier = 1.0;
