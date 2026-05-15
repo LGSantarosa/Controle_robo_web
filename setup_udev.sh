@@ -120,17 +120,31 @@ if [ -z "$PORTS_ALL" ]; then
     exit 1
 fi
 
-MEGA_PORT=""
+# Lista portas candidatas (todas exceto LiDAR). Se houver mais de uma
+# (modem 3G/4G, debugger, etc.) pergunta interativamente em vez de
+# pegar a primeira "qualquer porta diferente do LiDAR".
+CAND_MEGA=""
 for p in $PORTS_ALL; do
     if [ "$p" != "$LIDAR_PORT" ]; then
-        MEGA_PORT="$p"
-        break
+        CAND_MEGA="$CAND_MEGA $p"
     fi
 done
+CAND_MEGA=$(echo "$CAND_MEGA" | xargs)  # trim
+CAND_COUNT=$(echo "$CAND_MEGA" | wc -w)
 
-if [ -z "$MEGA_PORT" ]; then
+if [ "$CAND_COUNT" -eq 0 ]; then
     echo "ERRO: Não detectei nenhuma porta nova além do LiDAR. A MEGA está plugada?"
     exit 1
+elif [ "$CAND_COUNT" -eq 1 ]; then
+    MEGA_PORT="$CAND_MEGA"
+else
+    echo "  Múltiplas portas candidatas detectadas:"
+    for p in $CAND_MEGA; do
+        vidpid=$(get_vidpid "$p")
+        path=$(get_devpath "$p")
+        echo "    $p  [VID:PID=$vidpid  USB path=$path]"
+    done
+    read -r -p "  Qual é a porta da MEGA? (ex: /dev/ttyACM0): " MEGA_PORT
 fi
 
 MEGA_PATH=$(get_devpath "$MEGA_PORT")

@@ -247,11 +247,17 @@ void setup() {
 }
 
 void loop() {
+    // pumpPcSerial drena o buffer do USB (64 B). Com PC_BAUD=230400 +
+    // FastLED.show() bloqueante (~750 µs por 24 LEDs) + I²C do BNO055, em
+    // pico chega a >64 B entre ticks — drenar uma vez só perde bytes.
+    // Chamadas extras no meio mantêm o buffer com folga sem custo perceptível.
     pumpPcSerial();
     pumpHoverboardFeedback();
     txHoverboard();
+    pumpPcSerial();
     txState();
     txImu();
+    pumpPcSerial();
     txFlow();
 
     const bool active = (last_setpoint != 0) &&

@@ -531,6 +531,8 @@
     }
   }
 
-  // Redesenha ~15 Hz para cobrir updates de pose sem precisar chamar render manualmente
-  setInterval(render, 66);
+  // Cada handler que muda estado (map_update, robot_pose, plan_update,
+  // mouse, waypoints, ...) já chama render() diretamente — manter um
+  // setInterval(render, 66) redesenharia o canvas a 15 Hz mesmo parado,
+  // queimando CPU sem motivo no Pi 4. Removido a favor do "render on demand".
 })();

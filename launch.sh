@@ -352,6 +352,24 @@ trap cleanup INT TERM EXIT
 LOG_DIR="$SCRIPT_DIR/controle_web/logs"
 mkdir -p "$LOG_DIR"
 
+# Health-check em vez de `sleep N` fixo: espera um tópico ROS aparecer no
+# discovery (até $2 segundos). Em hardware lento (Pi 4 / SD) o sleep curto
+# pode subir o próximo nó antes do anterior estar pronto; o longo desperdiça
+# tempo no PC. Sai 0 quando o tópico aparece, 1 no timeout (o caller decide
+# se segue mesmo assim).
+wait_for_topic() {
+    local topic=$1 timeout=${2:-30} elapsed=0
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if ros2 topic list 2>/dev/null | grep -qx "$topic"; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    echo "  [wait_for_topic] timeout $timeout s aguardando $topic"
+    return 1
+}
+
 if [ "$SIM" = true ]; then
     # --- [SIM] Gazebo Harmonic + robô diff-drive + bridges ROS↔GZ ---
     echo "[1/4] Modo SIM — subindo Gazebo com mundo: $WORLD_FILE"
@@ -361,8 +379,8 @@ if [ "$SIM" = true ]; then
         spawn_x:="$SPAWN_X" spawn_y:="$SPAWN_Y" spawn_z:="$SPAWN_Z" > "$SIM_LOG" 2>&1 &
     SIM_PID=$!
     echo "      PID: $SIM_PID  |  Log: $SIM_LOG"
-    # Gazebo + spawn demora ~5s pra estabilizar os tópicos
-    sleep 6
+    # Espera o /clock vir do bridge GZ → ROS antes de seguir.
+    wait_for_topic /clock 30 || echo "  AVISO: Gazebo ainda não publicou /clock — seguindo mesmo assim."
     # Hardware desligado no sim
     NO_LIDAR=true
 else
@@ -377,7 +395,7 @@ else
     ROBOT_PID=$!
     echo "      PID: $ROBOT_PID  |  Log: $ROBOT_LOG"
 
-    sleep 2
+    wait_for_topic /odom 15 || echo "  AVISO: odom_publisher ainda não publicou /odom — seguindo."
 
     # --- [3] LiDAR FHL-LD20 + detector de obstáculos ---
     if [ "$NO_LIDAR" = false ]; then
@@ -387,7 +405,7 @@ else
             ros2 launch robot_nav lidar.launch.py lidar_port:="$LIDAR_PORT" > "$LIDAR_LOG" 2>&1 &
             LIDAR_PID=$!
             echo "      PID: $LIDAR_PID  |  Log: $LIDAR_LOG"
-            sleep 1
+            wait_for_topic /scan 10 || echo "  AVISO: LiDAR ainda não publicou /scan — seguindo."
 
 
         else
@@ -413,7 +431,7 @@ case "$MODE" in
         ros2 launch robot_nav slam.launch.py $SIM_TIME_ARG > "$SLAM_LOG" 2>&1 &
         SLAM_PID=$!
         echo "      PID: $SLAM_PID  |  Log: $SLAM_LOG"
-        sleep 3
+        wait_for_topic /map 30 || echo "  AVISO: slam_toolbox ainda não publicou /map — seguindo."
         ;;
     nav2)
         NAV2_PARAMS_ARG=""
@@ -432,7 +450,8 @@ case "$MODE" in
         ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
-        sleep 5
+        # Nav2 demora pra ativar todos os lifecycle nodes; espera o costmap global.
+        wait_for_topic /global_costmap/costmap 30 || echo "  AVISO: Nav2 ainda não publicou /global_costmap/costmap — seguindo."
         ;;
     trekking)
         echo "[3/4] Modo TREKKING — subindo pose_estimator + cone_detector + trekking_runner..."
@@ -440,7 +459,7 @@ case "$MODE" in
         ros2 launch robot_nav trekking.launch.py > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
-        sleep 2
+        wait_for_topic /trekking/pose 15 || echo "  AVISO: trekking_runner ainda não publicou /trekking/pose — seguindo."
         ;;
     teleop)
         echo "[3/4] Modo TELEOP — dirija manualmente (sem camada extra de segurança)."
