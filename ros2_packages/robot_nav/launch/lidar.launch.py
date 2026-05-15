@@ -20,8 +20,8 @@ from launch_ros.actions import Node
 def generate_launch_description():
 
     port_arg = DeclareLaunchArgument(
-        'lidar_port', default_value='/dev/ttyUSB1',
-        description='Serial port for the FHL-LD20 LiDAR'
+        'lidar_port', default_value='/dev/lidar',
+        description='Serial port for the FHL-LD20 LiDAR (default: /dev/lidar criado pelo setup_udev.sh)'
     )
     product_arg = DeclareLaunchArgument(
         'lidar_product', default_value='LDLiDAR_LD19',

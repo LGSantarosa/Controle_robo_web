@@ -128,6 +128,28 @@ cd "$WS_DIR"
 export MAKEFLAGS="-j2"
 colcon build --base-paths ros2_packages --symlink-install --executor sequential --parallel-workers 2
 
+# --- PlatformIO (firmware MEGA) ---
+echo
+echo "=== PlatformIO (toolchain do firmware da MEGA) ==="
+if command -v pio >/dev/null 2>&1; then
+    echo "  PlatformIO já instalado: $(pio --version 2>&1 | head -1)"
+else
+    # --user evita sudo; --break-system-packages contorna o PEP 668 do
+    # Ubuntu 24.04 (Pi roda 24.04 arm64 nesse projeto). Se preferir não
+    # quebrar o "externally managed", crie um venv só pra pio.
+    pip install --user --upgrade --break-system-packages platformio || \
+        pip install --user --upgrade platformio
+    if ! command -v pio >/dev/null 2>&1; then
+        case ":$PATH:" in
+            *":$HOME/.local/bin:"*) ;;
+            *)
+                echo "  AVISO: ~/.local/bin não está no PATH. Adicione ao ~/.bashrc:"
+                echo "         export PATH=\"\$HOME/.local/bin:\$PATH\""
+                ;;
+        esac
+    fi
+fi
+
 # --- 4/4 — bashrc ---
 BASHRC_LINE="source $WS_DIR/install/setup.bash"
 if ! grep -qxF "$BASHRC_LINE" "$HOME/.bashrc"; then

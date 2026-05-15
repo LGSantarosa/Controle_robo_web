@@ -81,13 +81,20 @@ Cobre:
 O firmware C++ da MEGA fica em `firmware/mega_bridge/` (projeto PlatformIO).
 
 ```bash
-# Instale o PlatformIO (uma vez):
-pip install --user platformio
-
 # Compile e flasheia com a MEGA plugada via USB:
 cd ~/Controle_robo_web/firmware/mega_bridge
 pio run -t upload
 ```
+
+> O `setup.sh` / `setup_pi.sh` já instalam o PlatformIO via `pip install --user platformio`. Se `pio` não estiver no PATH, adicione `export PATH="$HOME/.local/bin:$PATH"` ao `~/.bashrc`.
+
+**Testar a comunicação MEGA ↔ placa antes de tudo:**
+
+```bash
+python3 firmware/mega_bridge/tools/test_mega.py --front-only
+```
+
+Esse script abre `/dev/mega`, manda o mesmo protocolo `0xAA 0x55` que o `mega_bridge.py` ROS2 usa, lê o feedback `STATE` e relata se a placa está respondendo. Use `--front-only` quando só a placa da frente estiver conectada. Mais opções: `--help`.
 
 Pule este passo se só vai usar `--sim`.
 
@@ -303,7 +310,7 @@ O `worlds/empty.sdf` serve como template pronto. O repositório também inclui `
       ros-$ROS_DISTRO-ros-gz-interfaces
   ```
 - **Firmware da MEGA (só hardware real)**:
-  - [PlatformIO Core](https://platformio.org/install/cli): `pip install --user platformio`
+  - [PlatformIO Core](https://platformio.org/install/cli): instalado automaticamente pelo `setup.sh` / `setup_pi.sh` via `pip install --user platformio`
   - Bibliotecas (instaladas pelo `pio` automaticamente na primeira build): `Adafruit BNO055`, `Adafruit Unified Sensor`, `Bitcraze PMW3901`, `FastLED`
 - Python 3.10+
 
@@ -382,27 +389,38 @@ O firmware C++ fica em `firmware/mega_bridge/` (projeto PlatformIO). Ele:
 | Botão de partida | 9 (pull-up interno) | Botão até GND |
 | Vin / GND | jack DC ou pino | 12 V da bateria principal |
 
-**Cabo da placa hoverboard (4 fios cada placa):**
+**Cabo da placa hoverboard (3 fios usados + 1 opcional):**
 
-Cada placa de hoverboard expõe um conector de 4 fios — TX, RX, GND, VCC. A tabela acima só lista TX/RX porque são os únicos que vão para pinos digitais da MEGA; os outros dois ainda precisam ser ligados:
+Cada placa de hoverboard expõe um conector com 4 fios — TX, RX, GND e VCC — mas só 3 são usados na ligação com a MEGA. As cores abaixo são as **deste robô** (confirmadas em campo na configuração antiga USB-UART, onde verde do adaptador ia no verde da placa e branco do adaptador ia no azul da placa — ou seja: verde = RX da placa, azul = TX da placa):
 
-| Fio do cabo | Conecta em | Observação |
-|-------------|------------|------------|
-| TX (placa) | RX da UART correspondente (19 p/ frente, 17 p/ trás) | Sinal de feedback da placa para a MEGA |
-| RX (placa) | TX da UART correspondente (18 p/ frente, 16 p/ trás) | Sinal de comando da MEGA para a placa |
-| **GND** | **GND da MEGA** (qualquer pino GND) | **Obrigatório** — referência comum. Sem o GND amarrado, TX/RX flutuam e não há comunicação, mesmo com a USB do PC conectada. |
-| **VCC (5 V ou 15 V, varia por fork)** | **Não conectar** na MEGA por padrão | A placa hoverboard oferece esse trilho de saída, mas a MEGA já é alimentada pela USB (debug) ou pelo Vin 12 V (campo). Conectar VCC junto cria conflito entre reguladores. Só use se quiser alimentar a MEGA a partir da placa — nesse caso entra no **Vin** (não no 5 V) e a USB deve ficar desplugada. |
+| Cor na placa | Função | Conecta em |
+|--------------|--------|------------|
+| **Verde** | **RX da placa** (placa escuta os comandos) | **TX da MEGA** — pino 18 (frente, Serial1) ou pino 16 (trás, Serial2) |
+| **Azul** | **TX da placa** (placa envia feedback) | **RX da MEGA** — pino 19 (frente, Serial1) ou pino 17 (trás, Serial2) |
+| **Preto** | **GND** | **GND da MEGA** (qualquer pino GND). **Obrigatório** — referência comum. Sem o GND amarrado, TX/RX flutuam e não há comunicação, mesmo com a USB do PC conectada. |
+| *(4º fio: VCC, 5 V ou 15 V, varia por fork)* | Saída de alimentação | **Não conectar** na MEGA por padrão. A MEGA já é alimentada pela USB (debug) ou pelo Vin 12 V (campo). Conectar VCC junto cria conflito entre reguladores. Só use se quiser alimentar a MEGA a partir da placa — nesse caso entra no **Vin** (não no 5 V) e a USB deve ficar desplugada. |
+
+Mnemônica: **TX da MEGA sempre no fio verde, RX da MEGA sempre no fio azul.** Se inverter, não queima nada — só não há comunicação (a UI sobe, mas o robô fica parado e `mega_bridge` reporta RPM 0 nas 4 rodas).
 
 **Build e flash:**
 
 ```bash
-pip install --user platformio    # uma vez por máquina
+# PlatformIO já vem instalado pelo setup.sh / setup_pi.sh (pip install --user
+# platformio). Se faltar:  pip install --user platformio
 
 cd ~/Controle_robo_web/firmware/mega_bridge
 pio run                          # compila
 pio run -t upload                # compila e flasheia (com MEGA conectada)
 pio device monitor -b 230400     # monitor serial pra debug
 ```
+
+**Validar transmissão MEGA ↔ placa sem subir ROS2:**
+
+```bash
+python3 ~/Controle_robo_web/firmware/mega_bridge/tools/test_mega.py --front-only
+```
+
+O script abre `/dev/mega`, manda frames `0xAA 0x55` (mesmo protocolo do `mega_bridge.py`), lê o feedback `STATE` e relata se a placa está respondendo, qual a tensão da bateria, e se os RPMs subiram ao enviar comando. `--front-only` evita comandar a placa de trás se ela não estiver conectada. Veja `--help` para mais opções.
 
 Cada arquivo `.cpp/.h` é comentado no diretório. O `platformio.ini` lista as bibliotecas externas — o PlatformIO baixa na primeira build.
 
