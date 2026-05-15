@@ -40,6 +40,7 @@ bool FeedbackParser::feed(uint8_t b) {
             ^ f.cmdLed);
         if (expected == f.checksum) {
             last_ = f;
+            last_recv_ms_ = millis();
             return true;
         }
     }

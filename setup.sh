@@ -23,7 +23,7 @@ sudo apt install -y \
     python3-colcon-common-extensions \
     ros-jazzy-xacro ros-jazzy-robot-state-publisher \
     ros-jazzy-slam-toolbox \
-    ros-jazzy-nav2-bringup ros-jazzy-nav2-collision-monitor \
+    ros-jazzy-nav2-bringup \
     ros-jazzy-nav2-map-server ros-jazzy-nav2-amcl \
     ros-jazzy-ros-gz ros-jazzy-ros-gz-sim \
     ros-jazzy-ros-gz-bridge ros-jazzy-ros-gz-interfaces

@@ -108,9 +108,8 @@ class ROS2Controller(RobotController):
     Controlador real que publica cmd_vel via ROS2 para integração com Nav2.
 
     Tópico de saída: /cmd_vel (geometry_msgs/Twist)
-    O Nav2 Collision Monitor intercepta /cmd_vel, filtra obstáculos e
-    publica /cmd_vel_filtered. O nó cmd_vel_to_wheels converte para
-    /wheel_vel_setpoints que o driver do hoverboard consome.
+    O nó cmd_vel_to_wheels consome /cmd_vel e publica em
+    /wheel_vel_setpoints, que o mega_bridge encaminha às placas hoverboard.
 
     Velocidades em unidades SI:
         BASE_LINEAR_SPEED  = velocidade linear base (m/s)
@@ -128,8 +127,11 @@ class ROS2Controller(RobotController):
     BASE_LINEAR_SPEED: float = 0.3   # m/s
     BASE_ANGULAR_SPEED: float = 0.5  # rad/s
 
-    # Limites do multiplicador de velocidade
-    SPEED_MULT_MIN: float = 0.8
+    # Limites do multiplicador de velocidade.
+    # MIN bate com o `min` do slider em index.html (0.5) e permite que o
+    # preset "Ajuste fino" do gamepad (0.75×) e do botão (○) passem sem
+    # clipagem silenciosa.
+    SPEED_MULT_MIN: float = 0.5
     SPEED_MULT_MAX: float = 4.0
 
     # Mapeamento tecla → direção semântica

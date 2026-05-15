@@ -33,6 +33,10 @@ class FeedbackParser {
  public:
     bool feed(uint8_t b);
     const Feedback& last() const { return last_; }
+    uint32_t last_recv_ms() const { return last_recv_ms_; }
+    bool stale(uint32_t now_ms, uint32_t timeout_ms = 200) const {
+        return last_recv_ms_ == 0 || (now_ms - last_recv_ms_) > timeout_ms;
+    }
 
  private:
     uint16_t shifter_ = 0;
@@ -40,6 +44,7 @@ class FeedbackParser {
     uint8_t  buf_[FEEDBACK_SIZE] = {0};
     uint8_t  got_     = 0;
     Feedback last_{};
+    uint32_t last_recv_ms_ = 0;
 };
 
 }  // namespace hoverboard

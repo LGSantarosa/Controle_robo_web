@@ -5,6 +5,7 @@ from controllers.robot_controller import RobotController, ROS2Controller
 import logging
 import os
 import json
+import secrets
 import signal
 import sys
 import time
@@ -76,11 +77,27 @@ atexit.register(_shutdown_all)
 
 # Instancia a aplicação web
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'change-me'
+# SECRET_KEY: prefere FLASK_SECRET_KEY do ambiente (deploy persistente).
+# Sem env: gera valor aleatório por processo — sessões não sobrevivem a
+# restart, mas isso é OK pra LAN/dev e impede o `change-me` hardcoded de
+# ir pra prod.
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or secrets.token_hex(32)
+
+# CORS: por padrão restringe à mesma origem (mais seguro). Para liberar a
+# UI a clientes de outras máquinas da LAN, exporte CORS_ORIGIN com a
+# lista de origens permitidas (separadas por vírgula), ou "*" para tudo.
+_cors_env = os.environ.get('CORS_ORIGIN', '').strip()
+if _cors_env == '*':
+    _cors_origins = '*'
+elif _cors_env:
+    _cors_origins = [o.strip() for o in _cors_env.split(',') if o.strip()]
+else:
+    _cors_origins = []
+
 # Cria o servidor Socket.IO (tempo real) com logs habilitados
 socketio = SocketIO(
     app,
-    cors_allowed_origins="*",
+    cors_allowed_origins=_cors_origins,
     logger=False,
     engineio_logger=False,
     async_mode="threading",

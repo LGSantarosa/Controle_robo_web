@@ -3,8 +3,8 @@
 #
 # Diferenças vs setup.sh (notebook):
 #   * NÃO instala Gazebo (ros-gz*) — Pi não roda simulação.
-#   * NÃO instala Nav2 completo nem slam_toolbox por padrão. Adiciona com:
-#       ./setup_pi.sh --with-nav2     (instala nav2 + slam_toolbox)
+#   * Instala Nav2 + slam_toolbox sempre (costmap_converter e teb_local_planner
+#     dependem disso pra buildar). Sem isso o colcon falha em find_package.
 #   * Clona o driver do LiDAR FHL-LD20 (obrigatório no hardware real).
 #
 # Pré-requisitos: Ubuntu 24.04 arm64 com ROS2 Jazzy instalado.
@@ -14,17 +14,15 @@
 #   cd ~/Controle_robo_web
 #   ./setup_pi.sh
 #   sudo ./setup_udev.sh           # depois — fixa /dev/mega e /dev/lidar
-#   ./launch.sh --trekking         # ou --slam / --nav2 se instalou
+#   ./launch.sh --trekking         # ou --slam / --nav2
 
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 WS_DIR="$REPO_DIR"
 
-WITH_NAV2=false
 for arg in "$@"; do
     case $arg in
-        --with-nav2) WITH_NAV2=true ;;
         -h|--help)
             sed -n '2,20p' "$0"
             exit 0
@@ -85,18 +83,19 @@ APT_BASE=(
     "ros-${ROS_DISTRO}-tf2-ros"
     "ros-${ROS_DISTRO}-tf2-tools"
     python3-colcon-common-extensions
+    # Nav2 + deps de build de costmap_converter e teb_local_planner.
+    # bringup já puxa costmap-2d/amcl/map-server transitivamente, mas listamos
+    # explicitamente pra não depender de transitividade do apt.
+    "ros-${ROS_DISTRO}-slam-toolbox"
+    "ros-${ROS_DISTRO}-nav2-bringup"
+    "ros-${ROS_DISTRO}-nav2-costmap-2d"
+    "ros-${ROS_DISTRO}-nav2-core"
+    "ros-${ROS_DISTRO}-nav2-util"
+    "ros-${ROS_DISTRO}-nav2-map-server"
+    "ros-${ROS_DISTRO}-nav2-amcl"
+    "ros-${ROS_DISTRO}-dwb-critics"
+    "ros-${ROS_DISTRO}-nav-2d-utils"
 )
-
-if [ "$WITH_NAV2" = true ]; then
-    echo "  --with-nav2: incluindo Nav2 + slam_toolbox"
-    APT_BASE+=(
-        "ros-${ROS_DISTRO}-slam-toolbox"
-        "ros-${ROS_DISTRO}-nav2-bringup"
-        "ros-${ROS_DISTRO}-nav2-collision-monitor"
-        "ros-${ROS_DISTRO}-nav2-map-server"
-        "ros-${ROS_DISTRO}-nav2-amcl"
-    )
-fi
 
 sudo apt update
 sudo apt install -y "${APT_BASE[@]}"
@@ -111,6 +110,14 @@ if [ -d "$LIDAR_DIR" ]; then
     echo "  ldlidar_stl_ros2 já clonado"
 else
     git clone https://github.com/ldrobotSensorTeam/ldlidar_stl_ros2.git "$LIDAR_DIR"
+fi
+
+# Patch: no ARM (raspi) o <mutex> não puxa <pthread.h> transitivamente,
+# então log_module.cpp não compila ("pthread_mutex_lock was not declared").
+LOG_MODULE="$LIDAR_DIR/ldlidar_driver/src/logger/log_module.cpp"
+if [ -f "$LOG_MODULE" ] && ! grep -q "^#include <pthread.h>" "$LOG_MODULE"; then
+    sed -i '0,/^#include/{s|^#include|#include <pthread.h>\n#include|}' "$LOG_MODULE"
+    echo "  patch aplicado: #include <pthread.h> em log_module.cpp"
 fi
 
 # --- 3/4 — colcon build (paralelismo limitado pra não estourar RAM) ---
@@ -154,7 +161,7 @@ Próximos passos:
         cd $REPO_DIR
         ./launch.sh --trekking
 
-  Outras opções (precisam de --with-nav2 no setup):
+  Outras opções:
         ./launch.sh --slam
         ./launch.sh --nav2
 

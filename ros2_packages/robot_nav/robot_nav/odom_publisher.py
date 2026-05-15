@@ -141,6 +141,14 @@ class OdomPublisher(Node):
         odom.pose.pose.orientation.w = q_w
         odom.twist.twist.linear.x = linear
         odom.twist.twist.angular.z = angular
+        # Covariâncias finitas: sem isso o AMCL/EKF trata a odom como
+        # infinitamente confiável (zeros) ou ignora (NaN). Valores
+        # razoáveis para skid-steer com média das 4 rodas.
+        odom.pose.covariance[0]  = 0.05   # var(x)
+        odom.pose.covariance[7]  = 0.05   # var(y)
+        odom.pose.covariance[35] = 0.10   # var(yaw)
+        odom.twist.covariance[0]  = 0.01  # var(vx)
+        odom.twist.covariance[35] = 0.05  # var(vyaw)
         self.odom_pub.publish(odom)
 
 

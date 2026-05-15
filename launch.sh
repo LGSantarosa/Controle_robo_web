@@ -2,7 +2,7 @@
 # Launcher completo: hoverboard driver + LiDAR + servidor web.
 #
 # Modos:
-#   ./launch.sh                                   # TELEOP (padrão) — web + collision monitor
+#   ./launch.sh                                   # TELEOP (padrão) — web manual
 #   ./launch.sh --slam                            # SLAM — mapeia o ambiente em tempo real
 #   ./launch.sh --nav2                            # NAV2 — navegação autônoma (mapa padrão)
 #   ./launch.sh --nav2 --map=/caminho/sala.yaml   # NAV2 — mapa específico
@@ -14,7 +14,6 @@
 #
 # Outras flags:
 #   --no-lidar             desabilita o LiDAR (só modo real)
-#   --no-nav2              desabilita o collision monitor (modo teleop)
 #   --lidar-port=/dev/X    sobrescreve a porta do LiDAR (padrão /dev/lidar)
 #   --pi                   usa nav2_params_pi.yaml (perfil leve pra Raspberry Pi)
 #
@@ -25,7 +24,6 @@ ROS2_SETUP="$SCRIPT_DIR/install/setup.bash"
 
 # --- Argumentos ---
 NO_LIDAR=false
-NO_NAV2=false
 LIDAR_PORT="/dev/lidar"
 MODE="teleop"                     # teleop | slam | nav2 | trekking
 MAP_FILE="$SCRIPT_DIR/maps/sala.yaml"
@@ -48,7 +46,6 @@ for arg in "$@"; do
         --spawn-y=*)    SPAWN_Y="${arg#*=}" ;;
         --spawn-z=*)    SPAWN_Z="${arg#*=}" ;;
         --no-lidar)     NO_LIDAR=true ;;
-        --no-nav2)      NO_NAV2=true ;;
         --lidar-port=*) LIDAR_PORT="${arg#*=}" ;;
         --pi)           PI_PROFILE=true ;;
     esac
@@ -376,18 +373,7 @@ case "$MODE" in
         sleep 2
         ;;
     teleop)
-        if [ "$SIM" = true ]; then
-            echo "[3/4] Modo SIM+TELEOP — sem collision monitor (dirija manualmente no Gazebo)."
-        elif [ "$NO_NAV2" = false ] && ros2 pkg list 2>/dev/null | grep -q "nav2_collision_monitor"; then
-            echo "[3/4] Modo TELEOP — subindo Nav2 Collision Monitor..."
-            NAV2_LOG="$LOG_DIR/nav2_collision.log"
-            ros2 launch robot_nav nav2_collision.launch.py > "$NAV2_LOG" 2>&1 &
-            NAV2_PID=$!
-            echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
-            sleep 2
-        else
-            echo "[3/4] Modo TELEOP — sem collision monitor."
-        fi
+        echo "[3/4] Modo TELEOP — dirija manualmente (sem camada extra de segurança)."
         ;;
 esac
 
@@ -431,7 +417,7 @@ if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 fi
 
-echo "Logs dos nós em $LOG_DIR/ (ex: tail -f $DRIVER_LOG)"
+echo "Logs dos nós em $LOG_DIR/ (ex: tail -f $LOG_DIR/robot_nodes.log)"
 echo ""
 
 # Passa o modo e o diretório de mapas para o app.py via env.

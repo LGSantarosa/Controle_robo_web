@@ -127,15 +127,21 @@ static void txState() {
 
     // Convenção: placa FRENTE → speedL_meas=FL, speedR_meas=FR
     //            placa TRÁS   → speedL_meas=RL, speedR_meas=RR
+    // Se a placa parou de responder (cabo, alimentação), republicar o
+    // último frame para sempre poluiria a odometria com RPMs antigos.
+    // Threshold de 200 ms: placa responde a ~50 Hz, então 10 frames
+    // perdidos já indica problema real.
+    const bool front_stale = fb_front.stale(now);
+    const bool rear_stale  = fb_rear.stale(now);
     const auto& ff = fb_front.last();
     const auto& fr = fb_rear.last();
 
-    int16_t rpm_FL = ff.speedL_meas;
-    int16_t rpm_FR = ff.speedR_meas;
-    int16_t rpm_RL = fr.speedL_meas;
-    int16_t rpm_RR = fr.speedR_meas;
-    int16_t batF   = ff.batVoltage;
-    int16_t batR   = fr.batVoltage;
+    int16_t rpm_FL = front_stale ? 0 : ff.speedL_meas;
+    int16_t rpm_FR = front_stale ? 0 : ff.speedR_meas;
+    int16_t rpm_RL = rear_stale  ? 0 : fr.speedL_meas;
+    int16_t rpm_RR = rear_stale  ? 0 : fr.speedR_meas;
+    int16_t batF   = front_stale ? 0 : ff.batVoltage;
+    int16_t batR   = rear_stale  ? 0 : fr.batVoltage;
     uint8_t btn    = io_signals::readButton() ? 1 : 0;
 
     uint8_t buf[16];

@@ -2,7 +2,7 @@
 # Stack: map_server + amcl + planner + controller + bt_navigator +
 #        waypoint_follower + behavior_server + velocity_smoother.
 # Entrada: /scan (LiDAR LD20), /odom (odom_publisher), TF odom->base_link.
-# Saída de comando: /cmd_vel (interceptado pelo collision_monitor → /cmd_vel_filtered).
+# Saída de comando: /cmd_vel (direto, sem filtro intermediário).
 
 amcl:
   ros__parameters:
@@ -152,7 +152,7 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.18
+      footprint: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
       # VoxelLayer mantido (mais conservador que ObstacleLayer) mas com
       # apenas LaserScan como fonte — a câmera RGB-D foi removida do robô.
       plugins: ["voxel_layer", "inflation_layer"]
@@ -192,7 +192,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      robot_radius: 0.18
+      footprint: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]

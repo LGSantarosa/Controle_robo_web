@@ -6,7 +6,7 @@ Sobe:
   1. robot_state_publisher (URDF/TF)
   2. mega_bridge          (USB ↔ Arduino MEGA ↔ 2 hoverboards + sensores)
   3. odom_publisher       (4 RPMs → /odom + TF odom→base_link)
-  4. cmd_vel_to_wheels    (/cmd_vel_filtered → /wheel_vel_setpoints)
+  4. cmd_vel_to_wheels    (/cmd_vel → /wheel_vel_setpoints)
 """
 
 import os
@@ -35,9 +35,13 @@ def generate_launch_description():
         'linear_scale', default_value='400.0',
         description='Unidades do hoverboard por m/s'
     )
-    angular_scale_arg = DeclareLaunchArgument(
-        'angular_scale', default_value='150.0',
-        description='Unidades do hoverboard por rad/s'
+    left_wheel_sign_arg = DeclareLaunchArgument(
+        'left_wheel_sign', default_value='1.0',
+        description='Polaridade do lado esquerdo (-1.0 inverte). Aplicado em cmd_vel_to_wheels E odom_publisher.'
+    )
+    right_wheel_sign_arg = DeclareLaunchArgument(
+        'right_wheel_sign', default_value='1.0',
+        description='Polaridade do lado direito (-1.0 inverte). Aplicado em cmd_vel_to_wheels E odom_publisher.'
     )
     mega_port_arg = DeclareLaunchArgument(
         'mega_port', default_value='/dev/mega',
@@ -80,6 +84,8 @@ def generate_launch_description():
         parameters=[{
             'wheel_radius': LaunchConfiguration('wheel_radius'),
             'wheel_base': LaunchConfiguration('wheel_base'),
+            'left_wheel_sign': LaunchConfiguration('left_wheel_sign'),
+            'right_wheel_sign': LaunchConfiguration('right_wheel_sign'),
         }],
     )
 
@@ -89,8 +95,10 @@ def generate_launch_description():
         name='cmd_vel_to_wheels',
         output='screen',
         parameters=[{
+            'wheel_base': LaunchConfiguration('wheel_base'),
             'linear_scale': LaunchConfiguration('linear_scale'),
-            'angular_scale': LaunchConfiguration('angular_scale'),
+            'left_wheel_sign': LaunchConfiguration('left_wheel_sign'),
+            'right_wheel_sign': LaunchConfiguration('right_wheel_sign'),
             'cmd_vel_topic': 'cmd_vel',
         }],
     )
@@ -99,7 +107,8 @@ def generate_launch_description():
         wheel_radius_arg,
         wheel_base_arg,
         linear_scale_arg,
-        angular_scale_arg,
+        left_wheel_sign_arg,
+        right_wheel_sign_arg,
         mega_port_arg,
         mega_baud_arg,
         robot_state_publisher,
