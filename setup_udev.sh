@@ -132,6 +132,17 @@ MEGA_VIDPID=$(get_vidpid "$MEGA_PORT")
 echo "  MEGA identificada: $MEGA_PORT → path=$MEGA_PATH  VID:PID=$MEGA_VIDPID"
 echo ""
 
+# Sem o USB path a regra udev vira `KERNELS==""` (casa com nada, ou pior,
+# casa com tudo dependendo do kernel). Aborta antes de gravar lixo em /etc.
+if [ -z "$MEGA_PATH" ]; then
+    echo "ERRO: não consegui extrair o USB path da MEGA ($MEGA_PORT). Aborto."
+    exit 1
+fi
+if [ -n "$LIDAR_PORT" ] && [ -z "$LIDAR_PATH" ]; then
+    echo "ERRO: não consegui extrair o USB path do LiDAR ($LIDAR_PORT). Aborto."
+    exit 1
+fi
+
 # Reativa set -e pra escrita do arquivo / udevadm reload (essas devem dar certo).
 set -e
 
@@ -156,14 +167,14 @@ echo "Criando $RULES_FILE ..."
 
 # Arduino MEGA 2560 — ponte 2 placas hoverboard + sensores
 # porta USB física: $MEGA_PATH
-SUBSYSTEM=="tty", KERNELS=="$MEGA_PATH", SYMLINK+="mega", MODE="0666", GROUP="dialout"
+SUBSYSTEM=="tty", KERNELS=="$MEGA_PATH", SYMLINK+="mega", MODE="0660", GROUP="dialout"
 EOF
 
     if [ -n "$LIDAR_PATH" ]; then
         cat << EOF
 
 # LiDAR FHL-LD20 — porta USB física: $LIDAR_PATH
-SUBSYSTEM=="tty", KERNELS=="$LIDAR_PATH", SYMLINK+="lidar", MODE="0666", GROUP="dialout"
+SUBSYSTEM=="tty", KERNELS=="$LIDAR_PATH", SYMLINK+="lidar", MODE="0660", GROUP="dialout"
 EOF
     fi
 } > "$RULES_FILE"

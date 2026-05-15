@@ -140,7 +140,12 @@ class MapBridge:
         # (latched) já foi processado — sem isso, a UI fica em "aguardando /map".
         self._last_map_payload: Optional[dict] = None
 
-        # Waypoint navigation state
+        # Waypoint navigation state.
+        # _wp_lock protege mutações em _wp_list/_wp_loop/_wp_active/_wp_current_idx
+        # e o handle do goal corrente. Sem ele o request HTTP que dispara
+        # start/stop_waypoints corre com o _wp_runner (thread daemon) e com
+        # os callbacks do executor ROS — race observável em troca rápida de rotas.
+        self._wp_lock: threading.Lock = threading.Lock()
         self._wp_list: list = []
         self._wp_loop: bool = False
         self._wp_stop: threading.Event = threading.Event()
@@ -254,27 +259,29 @@ class MapBridge:
 
     def get_waypoints_state(self) -> dict:
         """Estado atual dos waypoints — emitido para clientes que reconectam."""
-        return {
-            'waypoints': self._wp_list,
-            'loop':      self._wp_loop,
-            'active':    self._wp_active,
-            'index':     self._wp_current_idx,
-            'total':     len(self._wp_list),
-        }
+        with self._wp_lock:
+            return {
+                'waypoints': list(self._wp_list),
+                'loop':      self._wp_loop,
+                'active':    self._wp_active,
+                'index':     self._wp_current_idx,
+                'total':     len(self._wp_list),
+            }
 
     def start_waypoints(self, waypoints: list, loop: bool = False) -> dict:
         if not waypoints:
             return {'ok': False, 'error': 'lista de waypoints vazia'}
         self.stop_waypoints()
-        self._wp_list = waypoints
-        self._wp_loop = loop
-        self._wp_active = True
-        self._wp_current_idx = 0
-        self._wp_stop = threading.Event()
-        self._wp_thread = threading.Thread(
-            target=self._wp_runner, daemon=True, name='waypoint_runner'
-        )
-        self._wp_thread.start()
+        with self._wp_lock:
+            self._wp_list = waypoints
+            self._wp_loop = loop
+            self._wp_active = True
+            self._wp_current_idx = 0
+            self._wp_stop.clear()
+            self._wp_thread = threading.Thread(
+                target=self._wp_runner, daemon=True, name='waypoint_runner'
+            )
+            self._wp_thread.start()
         log.info(f"[MapBridge] waypoints: {len(waypoints)} pontos, loop={loop}")
         return {'ok': True}
 
@@ -282,15 +289,19 @@ class MapBridge:
         self._wp_stop.set()
         # Cancela o goal ativo no Nav2 (se houver) pra não deixar o robô
         # continuar indo até o último alvo depois de parar a rota.
-        if self._wp_goal_handle is not None:
+        with self._wp_lock:
+            handle = self._wp_goal_handle
+            thread = self._wp_thread
+        if handle is not None:
             try:
-                self._wp_goal_handle.cancel_goal_async()
+                handle.cancel_goal_async()
             except Exception as e:
                 log.debug(f"[MapBridge] erro ao cancelar goal: {e}")
-        if self._wp_thread and self._wp_thread.is_alive():
-            self._wp_thread.join(timeout=2.0)
-        self._wp_thread = None
-        self._wp_active = False
+        if thread and thread.is_alive():
+            thread.join(timeout=2.0)
+        with self._wp_lock:
+            self._wp_thread = None
+            self._wp_active = False
         self._sock.emit('waypoint_status', {'active': False, 'index': 0, 'total': 0})
         return {'ok': True}
 
@@ -302,10 +313,24 @@ class MapBridge:
         routes_dir = os.path.join(self._maps_dir, 'routes')
         os.makedirs(routes_dir, exist_ok=True)
         path = os.path.join(routes_dir, safe + '.json')
+        # Escrita atômica: arquivo temporário no mesmo diretório + os.replace.
+        # Sem isso, um crash no meio do dump deixa JSON inválido em disco.
+        import json as _json
+        import tempfile
         try:
-            import json as _json
-            with open(path, 'w') as f:
-                _json.dump({'name': safe, 'waypoints': wps}, f, indent=2)
+            fd, tmp_path = tempfile.mkstemp(prefix='.' + safe + '.', suffix='.json.tmp', dir=routes_dir)
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    _json.dump({'name': safe, 'waypoints': wps}, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
             log.info(f"[MapBridge] rota salva: {path}")
             return {'ok': True, 'name': safe}
         except Exception as e:

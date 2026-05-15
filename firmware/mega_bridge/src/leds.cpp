@@ -4,7 +4,10 @@ namespace leds {
 
 void Ring::begin() {
     FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds_, NUM_LEDS);
-    FastLED.setBrightness(255);
+    // 24 LEDs WS2812 a 255 = ~1.44 A no 5 V — acima do orçamento do USB da
+    // MEGA (500 mA), risco de brown-out durante o modo RUN (branco cheio).
+    // 80 dá brilho útil pro PMW3901 enxergar o chão sem estressar a fonte.
+    FastLED.setBrightness(80);
     FastLED.clear(true);
     transition_(State::BOOT);
 }

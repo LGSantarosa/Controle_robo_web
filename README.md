@@ -595,18 +595,12 @@ ros2 launch robot_nav trekking.launch.py v_max:=0.8 flow_height:=0.13
 >    PMW3901 no chassi. Fix exige ler o registrador `0x07` (SQUAL) do
 >    PMW3901 — o lib Bitcraze não expõe esse getter, precisa de fork ou
 >    leitura SPI manual.
-> 2. **Altura do PMW3901 ao chão tem 3 valores divergentes:**
->    - `urdf/robot.urdf.xacro` (joint `flow_joint`) → `z ≈ -0.075 m`
->      (negativo, abaixo do chão — fisicamente impossível, está errado).
->    - `pose_estimator.flow_height` default → `0.12 m` (no launch).
->    - Esta README, mais abaixo, diz "~3 cm pela posição no URDF".
->
->    Fix: medir fisicamente a altura do sensor montado no robô, corrigir
->    o `flow_joint` no URDF (z positivo correspondente) e alinhar
->    `flow_height` default ao mesmo valor.
->
-> Até esses dois itens serem fechados, o ground-truth de pose durante o
-> trekking depende exclusivamente do snap-to-cone via LiDAR.
+Até esse item ser fechado, o ground-truth de pose durante o trekking
+depende exclusivamente do snap-to-cone via LiDAR. A altura do PMW3901
+ao chão está alinhada em **0.12 m** entre URDF (`flow_z=0.035` sobre
+`base_link`, que fica a `wheel_radius=0.085` do chão) e o default
+`flow_height` em `trekking.launch.py` — calibração fina conforme medida
+física no robô.
 
 ### Outras flags
 
@@ -650,7 +644,7 @@ Ao soltar o botão, o multiplicador volta ao valor anterior do slider. A UI tamb
 
 ### Velocidades
 
-- Base (multiplicador 1.0×): `0.3 m/s` linear, `0.5 rad/s` angular
+- Base (multiplicador 1.0×): `0.3 m/s` linear, `1.5 rad/s` angular
 - Multiplicador: `0.5×` (mínimo do slider) a `4.0×` (Max)
 
 ---

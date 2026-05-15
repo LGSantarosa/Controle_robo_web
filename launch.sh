@@ -33,21 +33,41 @@ WORLD_FILE="$SCRIPT_DIR/worlds/empty.sdf"
 SPAWN_X="2.0"
 SPAWN_Y="2.5"
 SPAWN_Z="0.2"
+# Firmware MEGA: 'auto' = flasheia só se hash de firmware/mega_bridge mudou.
+# --flash-mega força; --no-flash-mega pula sempre.
+FLASH_MEGA="auto"
 
 for arg in "$@"; do
     case $arg in
-        --slam)         MODE="slam" ;;
-        --nav2)         MODE="nav2" ;;
-        --trekking)     MODE="trekking" ;;
-        --sim)          SIM=true ;;
-        --world=*)      WORLD_FILE="${arg#*=}" ;;
-        --map=*)        MAP_FILE="${arg#*=}" ;;
-        --spawn-x=*)    SPAWN_X="${arg#*=}" ;;
-        --spawn-y=*)    SPAWN_Y="${arg#*=}" ;;
-        --spawn-z=*)    SPAWN_Z="${arg#*=}" ;;
-        --no-lidar)     NO_LIDAR=true ;;
-        --lidar-port=*) LIDAR_PORT="${arg#*=}" ;;
-        --pi)           PI_PROFILE=true ;;
+        --slam)            MODE="slam" ;;
+        --nav2)            MODE="nav2" ;;
+        --trekking)        MODE="trekking" ;;
+        --sim)             SIM=true ;;
+        --world=*)         WORLD_FILE="${arg#*=}" ;;
+        --map=*)           MAP_FILE="${arg#*=}" ;;
+        --spawn-x=*)       SPAWN_X="${arg#*=}" ;;
+        --spawn-y=*)       SPAWN_Y="${arg#*=}" ;;
+        --spawn-z=*)       SPAWN_Z="${arg#*=}" ;;
+        --no-lidar)        NO_LIDAR=true ;;
+        --lidar-port=*)    LIDAR_PORT="${arg#*=}" ;;
+        --pi)              PI_PROFILE=true ;;
+        --no-pi)           PI_PROFILE=false ;;
+        --flash-mega)      FLASH_MEGA="force" ;;
+        --no-flash-mega)   FLASH_MEGA="off" ;;
+        --help|-h)
+            echo "Uso: $0 [--slam|--nav2|--trekking] [--sim] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
+            echo ""
+            echo "  --flash-mega     força \`pio run -t upload\` mesmo sem mudança"
+            echo "  --no-flash-mega  pula o flash da MEGA sempre"
+            echo "  (sem flag)       auto: flasheia só quando o hash de firmware/mega_bridge/{src,include,platformio.ini} muda"
+            exit 0
+            ;;
+        # Sem ramo "*) erro" o launch.sh aceitava typos como --slamm silenciosamente
+        # e o usuário só descobria pelo modo TELEOP padrão. Falha rápido.
+        *)
+            echo "ERRO: flag desconhecida '$arg'. Use --help."
+            exit 1
+            ;;
     esac
 done
 
@@ -102,11 +122,13 @@ mkdir -p "$SCRIPT_DIR/maps"
 
 WS_DIR="$SCRIPT_DIR"
 
-# --- colcon build incremental (hash dos fontes do robot_nav) ---
+# --- colcon build incremental (hash dos fontes do workspace) ---
 # Pacotes vivem em ros2_packages/ — colcon descobre via --base-paths.
+# Hash cobre robot_nav E wheel_msgs (incluindo .msg) — sem wheel_msgs no scan,
+# alterar WheelSpeeds.msg não dispara rebuild apesar do colcon recompilá-lo.
 PKG_STAMP="$WS_DIR/install/.robot_nav.sha1"
-PKG_HASH=$(find "$SCRIPT_DIR/ros2_packages/robot_nav" -type f \
-    \( -name "*.py" -o -name "*.xml" -o -name "*.xacro" -o -name "*.yaml" \) \
+PKG_HASH=$(find "$SCRIPT_DIR/ros2_packages/robot_nav" "$SCRIPT_DIR/ros2_packages/wheel_msgs" -type f \
+    \( -name "*.py" -o -name "*.xml" -o -name "*.xacro" -o -name "*.yaml" -o -name "*.msg" \) \
     -not -path "*/build/*" -not -path "*/install/*" \
     2>/dev/null | sort | xargs sha1sum 2>/dev/null | sha1sum | awk '{print $1}')
 
@@ -203,6 +225,54 @@ pkill -9 -f "nav2_bt_navigator"             2>/dev/null
 pkill -9 -f "nav2_velocity_smoother"        2>/dev/null
 pkill -9 -f "nav2_lifecycle_manager"        2>/dev/null
 pkill -9 -f "nav2_waypoint_follower"        2>/dev/null
+
+# --- [opcional] Flash da MEGA (firmware/mega_bridge) ---
+# Default: auto. Hash de src/, include/ e platformio.ini define quando
+# refazer o upload — assim mudar só app.py ou um YAML do Nav2 não dispara
+# `pio run`. Pula em SIM e quando o usuário pediu --no-flash-mega.
+# pkill acima já liberou /dev/mega (mega_bridge antigo morto).
+if [ "$SIM" = false ] && [ "$FLASH_MEGA" != "off" ]; then
+    FW_DIR="$SCRIPT_DIR/firmware/mega_bridge"
+    if [ -d "$FW_DIR" ]; then
+        FW_STAMP="$FW_DIR/.pio/.flash.sha1"
+        FW_HASH=$(find "$FW_DIR/src" "$FW_DIR/include" "$FW_DIR/platformio.ini" \
+            -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.ini" \) 2>/dev/null \
+            | sort | xargs sha1sum 2>/dev/null | sha1sum | awk '{print $1}')
+        NEED_FLASH=false
+        if [ "$FLASH_MEGA" = "force" ]; then
+            NEED_FLASH=true
+            echo "[MEGA] --flash-mega: forçando upload."
+        elif [ -z "$FW_HASH" ]; then
+            echo "[MEGA] não consegui calcular hash de $FW_DIR — pulando flash."
+        elif [ ! -f "$FW_STAMP" ] || [ "$(cat "$FW_STAMP" 2>/dev/null)" != "$FW_HASH" ]; then
+            NEED_FLASH=true
+            echo "[MEGA] firmware mudou — flasheando..."
+        fi
+
+        if [ "$NEED_FLASH" = true ]; then
+            if ! command -v pio >/dev/null 2>&1; then
+                echo "ERRO: 'pio' não encontrado. Instale PlatformIO ou use --no-flash-mega."
+                exit 1
+            fi
+            if [ ! -e /dev/mega ]; then
+                echo "AVISO: /dev/mega ausente — pulando flash da MEGA."
+            else
+                (cd "$FW_DIR" && pio run -t upload)
+                FW_RC=$?
+                if [ $FW_RC -eq 0 ]; then
+                    mkdir -p "$FW_DIR/.pio"
+                    echo "$FW_HASH" > "$FW_STAMP"
+                    echo "[MEGA] flash concluído."
+                else
+                    echo "ERRO: pio run -t upload falhou (exit=$FW_RC)."
+                    exit $FW_RC
+                fi
+            fi
+        elif [ -n "$FW_HASH" ]; then
+            echo "[MEGA] firmware atualizado (hash bate) — pulando flash."
+        fi
+    fi
+fi
 
 # --- Libera porta 5000 se já estiver em uso ---
 PORT_PID=$(ss -tlnp 2>/dev/null | awk '/:5000 /{match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}')

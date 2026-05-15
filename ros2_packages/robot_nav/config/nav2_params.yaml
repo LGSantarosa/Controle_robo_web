@@ -30,7 +30,9 @@ amcl:
       z: 0.0
       yaw: 0.0
     tf_broadcast: true
-    transform_tolerance: 1.0
+    # Alinhado com DWB e behaviors em 0.5 — antes AMCL=1.0 e DWB=0.2,
+    # com errros transientes de TF quando AMCL atualizava map→odom devagar.
+    transform_tolerance: 0.5
     update_min_a: 0.2
     update_min_d: 0.25
     resample_interval: 1
@@ -110,7 +112,7 @@ controller_server:
       sim_time: 1.5
       linear_granularity: 0.05
       angular_granularity: 0.025
-      transform_tolerance: 0.2
+      transform_tolerance: 0.5
       xy_goal_tolerance: 0.07
       trans_stopped_velocity: 0.05
       short_circuit_trajectory_evaluation: true
@@ -257,7 +259,7 @@ behavior_server:
       plugin: "nav2_behaviors::Wait"
     global_frame: odom
     robot_base_frame: base_link
-    transform_tolerance: 0.1
+    transform_tolerance: 0.5
     simulate_ahead_time: 2.0
     max_rotational_vel: 0.8
     min_rotational_vel: 0.2

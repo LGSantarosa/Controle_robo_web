@@ -21,3 +21,10 @@ log/
 
 # PlatformIO build artifacts (firmware/mega_bridge)
 .pio/
+firmware/**/.pio/
+
+# Editor/SO
+*.swp
+.DS_Store
+.vscode/
+.idea/

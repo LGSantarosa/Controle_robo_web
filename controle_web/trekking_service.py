@@ -95,10 +95,6 @@ class TrekkingBridge:
             log.debug(f'[TrekkingBridge] emit falhou: {e}')
 
     # ---- API pública (chamada pelo app.py) ----
-    def get_last_state(self) -> Optional[dict]:
-        with self._state_lock:
-            return self._last_state
-
     def send_cmd(self, cmd: str, **kwargs) -> dict:
         payload = {'cmd': cmd, **kwargs}
         msg = String(data=json.dumps(payload))
@@ -120,13 +116,27 @@ class TrekkingBridge:
             return {'ok': False, 'error': 'nenhum waypoint para salvar'}
         safe = self._safe_name(name)
         path = os.path.join(self._routes_dir, safe + '.json')
+        # Atomic write (tempfile no mesmo diretório + os.replace) — evita JSON
+        # parcial em disco caso o processo morra no meio do dump.
+        import tempfile
         try:
-            with open(path, 'w') as f:
-                json.dump({
-                    'name': safe,
-                    'waypoints': wps,
-                    'saved_ts': time.time(),
-                }, f, indent=2)
+            fd, tmp_path = tempfile.mkstemp(prefix='.' + safe + '.', suffix='.json.tmp', dir=self._routes_dir)
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    json.dump({
+                        'name': safe,
+                        'waypoints': wps,
+                        'saved_ts': time.time(),
+                    }, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
             log.info(f'[TrekkingBridge] rota salva: {path}')
             return {'ok': True, 'name': safe}
         except Exception as e:

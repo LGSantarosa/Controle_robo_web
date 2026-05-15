@@ -24,7 +24,12 @@ bool Decoder::feed(uint8_t b) {
             if (b == START0) st_ = State::S1;
             return false;
         case State::S1:
-            st_ = (b == START1) ? State::TYPE : State::S0;
+            // Resync: depois de um 0xAA, aceita 0x55 (header completo) OU
+            // outro 0xAA (header novo começando — mantém em S1).
+            // Sem isso, a sequência 0xAA 0xAA 0x55 perde o frame por ir pra S0.
+            if (b == START1)      st_ = State::TYPE;
+            else if (b == START0) st_ = State::S1;
+            else                  st_ = State::S0;
             return false;
         case State::TYPE:
             type_ = b;

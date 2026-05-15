@@ -304,14 +304,18 @@
         return;
       }
 
-      // Click simples (sem modo waypoint) → goal único
+      // Click simples (sem modo waypoint) → goal único.
+      // Click sem drag → yaw=0. Click+drag → yaw aponta na direção do drag
+      // (mesma convenção dos waypoints; canvas y cresce pra baixo, ROS pra cima).
       if (!wpMode && wpMouseDown) {
         const ddx = cx - wpMouseDown.cx;
         const ddy = cy - wpMouseDown.cy;
-        if (Math.sqrt(ddx * ddx + ddy * ddy) < DRAG_THRESHOLD) {
-          const world = wpMouseDown.world;
+        const dragged = Math.sqrt(ddx * ddx + ddy * ddy) > DRAG_THRESHOLD;
+        const world = wpMouseDown.world;
+        const yaw = dragged ? Math.atan2(-ddy, ddx) : 0.0;
+        {
           lastGoal = world;
-          socket.emit('nav_goal', { x: world.x, y: world.y, yaw: 0.0 });
+          socket.emit('nav_goal', { x: world.x, y: world.y, yaw });
           statusEl.textContent = `alvo: (${world.x.toFixed(2)}, ${world.y.toFixed(2)})`;
           render();
         }

@@ -44,7 +44,6 @@ struct Setpoint { int16_t steer; int16_t speed; };
 static Setpoint sp_front      = {0, 0};
 static Setpoint sp_rear       = {0, 0};
 static uint32_t last_setpoint = 0;
-static bool     imu_ok        = false;
 
 static uint32_t last_tx_hover = 0;
 static uint32_t last_tx_state = 0;
@@ -160,8 +159,10 @@ static void txState() {
 }
 
 static int16_t f_to_q14(double v) {
-    if (v >  1.999) v =  1.999;
-    if (v < -2.000) v = -2.000;
+    // Quaternion unitário tem |q| ≤ 1; clamp em ±1.0 preserva 1 bit extra
+    // de precisão (lround usa 16384.0 = Q14 sobre [-2, 2] no firmware antigo).
+    if (v >  0.99994) v =  0.99994;
+    if (v < -1.00000) v = -1.00000;
     return (int16_t)lround(v * 16384.0);
 }
 
@@ -236,7 +237,7 @@ void setup() {
 
     Wire.begin();
     Wire.setClock(400000);
-    imu_ok = imu_dev.begin();
+    imu_dev.begin();
 
     SPI.begin();
     flow_dev.begin();
@@ -256,6 +257,8 @@ void loop() {
     const bool active = (last_setpoint != 0) &&
                         (millis() - last_setpoint < SETPOINT_TIMEOUT_MS);
     ring.setActive(active);
-    ring.setError(!imu_ok);
+    // Lê imu_dev.ok() direto — assim acompanha mudanças runtime (recovery
+    // automático em sensors_imu.cpp), em vez do snapshot do setup().
+    ring.setError(!imu_dev.ok());
     ring.tick();
 }

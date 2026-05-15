@@ -191,8 +191,29 @@ class ROS2Controller(RobotController):
 
         print("[ROS2Controller] Nó inicializado. Publicando em /cmd_vel @ 50 Hz")
 
+    def force_stop(self) -> None:
+        """Zera teclas pressionadas + último eixo de gamepad e publica Twist(0).
+
+        Chamado quando um cliente Socket.IO cai com tecla segurada: sem isso
+        o republicador a 50 Hz continua mandando o último /cmd_vel até o
+        cliente reconectar (ou o watchdog do firmware estourar 500 ms).
+        """
+        try:
+            self.pressed.clear()
+            self._last_gamepad_linear = 0.0
+            self._last_gamepad_angular = 0.0
+            self._publish(0.0, 0.0)
+        except Exception:
+            pass
+
     def shutdown(self) -> None:
-        """Encerra o nó ROS2 corretamente."""
+        """Encerra o nó ROS2 (sem mexer no contexto global do rclpy).
+
+        Quem chama `rclpy.shutdown()` é o `_shutdown_all` em `app.py`, depois
+        que todas as bridges (`MapBridge`, `TrekkingBridge`, `NavMetricsCollector`)
+        terminaram. Se este método derrubasse o contexto, as outras bridges
+        morreriam no meio de um callback.
+        """
         try:
             self._pub_stop.set()
             self._pub_thread.join(timeout=1.0)
@@ -200,8 +221,6 @@ class ROS2Controller(RobotController):
             pass
         try:
             self._node.destroy_node()
-            if self._rclpy.ok():
-                self._rclpy.shutdown()
             print("[ROS2Controller] Nó encerrado.")
         except Exception as e:
             print(f"[ROS2Controller] Erro ao encerrar: {e}")

@@ -33,7 +33,7 @@ import rclpy
 import serial
 from geometry_msgs.msg import Vector3Stamped
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState, Imu
 from std_msgs.msg import Bool, ColorRGBA, Float64
 from wheel_msgs.msg import WheelSpeeds
@@ -79,7 +79,15 @@ class _Decoder:
                 self._st = 1
             return None
         if self._st == 1:
-            self._st = 2 if b == START1 else 0
+            # Resync: depois de um 0xAA, 0x55 fecha o header. Outro 0xAA
+            # mantém em S1 (header novo começou); qualquer outra coisa
+            # volta a S0. Sem isso, 0xAA 0xAA 0x55 perdia frame.
+            if b == START1:
+                self._st = 2
+            elif b == START0:
+                self._st = 1
+            else:
+                self._st = 0
             return None
         if self._st == 2:
             self._type = b
@@ -138,25 +146,30 @@ class MegaBridge(Node):
         self._tx_lock = threading.Lock()
         self._decoder = _Decoder()
 
-        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        # QoS por tipo de dado:
+        # - sensor_data (BEST_EFFORT, depth=5) para IMU 50 Hz e flow 100 Hz —
+        #   sob jitter, RELIABLE força reenvio e empilha latência; melhor
+        #   perder uma amostra do que receber tudo atrasado.
+        # - RELIABLE depth=10 para setpoints/comandos (perder pode parar o robô).
+        qos_cmd = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
 
         # Publishers
         self._pub_rpm = {
-            ('front', 'left'):  self.create_publisher(Float64, 'hoverboard/front/left/velocity', qos),
-            ('front', 'right'): self.create_publisher(Float64, 'hoverboard/front/right/velocity', qos),
-            ('rear',  'left'):  self.create_publisher(Float64, 'hoverboard/rear/left/velocity', qos),
-            ('rear',  'right'): self.create_publisher(Float64, 'hoverboard/rear/right/velocity', qos),
+            ('front', 'left'):  self.create_publisher(Float64, 'hoverboard/front/left/velocity', qos_cmd),
+            ('front', 'right'): self.create_publisher(Float64, 'hoverboard/front/right/velocity', qos_cmd),
+            ('rear',  'left'):  self.create_publisher(Float64, 'hoverboard/rear/left/velocity', qos_cmd),
+            ('rear',  'right'): self.create_publisher(Float64, 'hoverboard/rear/right/velocity', qos_cmd),
         }
-        self._pub_imu = self.create_publisher(Imu, 'imu/data', qos)
-        self._pub_flow = self.create_publisher(Vector3Stamped, 'optical_flow', qos)
-        self._pub_bat_front = self.create_publisher(BatteryState, 'battery/front', qos)
-        self._pub_bat_rear = self.create_publisher(BatteryState, 'battery/rear', qos)
-        self._pub_button = self.create_publisher(Bool, 'start_button', qos)
+        self._pub_imu = self.create_publisher(Imu, 'imu/data', qos_profile_sensor_data)
+        self._pub_flow = self.create_publisher(Vector3Stamped, 'optical_flow', qos_profile_sensor_data)
+        self._pub_bat_front = self.create_publisher(BatteryState, 'battery/front', qos_cmd)
+        self._pub_bat_rear = self.create_publisher(BatteryState, 'battery/rear', qos_cmd)
+        self._pub_button = self.create_publisher(Bool, 'start_button', qos_cmd)
 
         # Subscribers
-        self.create_subscription(WheelSpeeds, 'wheel_vel_setpoints', self._on_setpoint, qos)
-        self.create_subscription(ColorRGBA, 'leds/color', self._on_leds, qos)
-        self.create_subscription(Bool, 'light/cmd', self._on_light, qos)
+        self.create_subscription(WheelSpeeds, 'wheel_vel_setpoints', self._on_setpoint, qos_cmd)
+        self.create_subscription(ColorRGBA, 'leds/color', self._on_leds, qos_cmd)
+        self.create_subscription(Bool, 'light/cmd', self._on_light, qos_cmd)
 
         # Thread de leitura — bloqueante em ser.read, fora do executor pra não atrapalhar callbacks.
         self._stop = False

@@ -24,9 +24,12 @@
   <xacro:property name="lidar_x"          value="0.10"/>
   <xacro:property name="lidar_z"          value="0.12"/>
 
-  <!-- IMU (BNO055) e PMW3901 (optical flow) — montados no centro do chassi -->
+  <!-- IMU (BNO055) e PMW3901 (optical flow) — montados no centro do chassi.
+       flow_z é a altura do flow_link relativa ao base_link. Combinado com
+       base_link a wheel_radius=0.085 do chão, o sensor fica a 0.12 m do
+       chão — mesmo valor do default `flow_height` em trekking.launch.py. -->
   <xacro:property name="imu_z"            value="0.02"/>
-  <xacro:property name="flow_z"           value="-0.03"/>
+  <xacro:property name="flow_z"           value="0.035"/>
 
   <!-- ======= base_footprint ======= -->
   <link name="base_footprint"/>
@@ -54,7 +57,12 @@
     </collision>
     <inertial>
       <mass value="15.46"/>
-      <inertia ixx="0.5" ixy="0" ixz="0" iyy="0.5" iyz="0" izz="0.5"/>
+      <!-- Inércia da caixa 0.50×0.50×0.26 m para m=15.46 kg:
+             ixx = m(y²+z²)/12 ≈ 0.41
+             iyy = m(x²+z²)/12 ≈ 0.41
+             izz = m(x²+y²)/12 ≈ 0.64
+           Usado se algum dia migrarmos para sim com este URDF. -->
+      <inertia ixx="0.41" ixy="0" ixz="0" iyy="0.41" iyz="0" izz="0.64"/>
     </inertial>
   </link>
 
@@ -139,11 +147,11 @@
     </inertial>
   </link>
 
-  <!-- ======= Optical flow (PMW3901) — embaixo, olhando pro chão ======= -->
+  <!-- ======= Optical flow (PMW3901) — olhando pro chão ======= -->
   <joint name="flow_joint" type="fixed">
     <parent link="base_link"/>
     <child link="flow_link"/>
-    <origin xyz="0 0 ${-body_height/2 + flow_z}" rpy="0 ${pi} 0"/>
+    <origin xyz="0 0 ${flow_z}" rpy="0 ${pi} 0"/>
   </joint>
   <link name="flow_link">
     <visual>

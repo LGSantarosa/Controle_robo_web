@@ -37,6 +37,10 @@ trekking_bridge = None
 _shutting_down = False
 
 def _shutdown_all():
+    # Cada bridge destrói só o próprio nó; rclpy.shutdown() é chamado uma
+    # única vez no fim, depois que todas as bridges saíram dos callbacks.
+    # Sem essa ordem o contexto global cai no meio de um spin_once() e as
+    # bridges restantes lançam RCLError.
     try:
         if nav_metrics is not None:
             nav_metrics.shutdown()
@@ -55,6 +59,12 @@ def _shutdown_all():
     try:
         if hasattr(controller, 'shutdown'):
             controller.shutdown()
+    except Exception:
+        pass
+    try:
+        import rclpy as _rclpy
+        if _rclpy.ok():
+            _rclpy.shutdown()
     except Exception:
         pass
 
@@ -145,18 +155,22 @@ if ROBOT_MODE == 'nav2':
         )
         nav_metrics = None
 
-# Log de movimentos (JSON Lines) gravado em arquivo rotativo + arquivo legível
-os.makedirs('logs', exist_ok=True)
+# Log de movimentos (JSON Lines) gravado em arquivo rotativo + arquivo legível.
+# Paths absolutos baseados na pasta do app.py — sem isso, rodar de outro diretório
+# (ex.: `python -m ...` ou via systemd) grava logs em CWD aleatório.
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_LOGS_DIR = os.path.join(_APP_DIR, 'logs')
+os.makedirs(_LOGS_DIR, exist_ok=True)
 movement_logger = logging.getLogger('movements')
 movement_logger.setLevel(logging.INFO)
 if not movement_logger.handlers:
-    _mh = RotatingFileHandler('logs/movements.log', maxBytes=1_048_576, backupCount=5)
+    _mh = RotatingFileHandler(os.path.join(_LOGS_DIR, 'movements.log'), maxBytes=1_048_576, backupCount=5)
     _mh.setFormatter(logging.Formatter('%(message)s'))
     movement_logger.addHandler(_mh)
     # Logger adicional com linhas legíveis em português
     movement_human = logging.getLogger('movements_human')
     movement_human.setLevel(logging.INFO)
-    _mht = RotatingFileHandler('logs/movements.txt', maxBytes=1_048_576, backupCount=5)
+    _mht = RotatingFileHandler(os.path.join(_LOGS_DIR, 'movements.txt'), maxBytes=1_048_576, backupCount=5)
     _mht.setFormatter(logging.Formatter('%(message)s'))
     movement_human.addHandler(_mht)
 else:
@@ -164,7 +178,10 @@ else:
 
 @app.before_request
 def _log_request_start():
-    # Loga início de cada requisição HTTP (método, rota, IP e user-agent)
+    # Loga início de cada requisição HTTP — mas pula /socket.io/ pra não
+    # inundar o terminal com o long-poll (uma requisição a cada ~25 s por cliente).
+    if request.path.startswith('/socket.io/'):
+        return
     try:
         app.logger.info(f"HTTP {request.method} {request.path} from {request.remote_addr} UA={request.headers.get('User-Agent','-')}")
     except Exception:
@@ -172,7 +189,8 @@ def _log_request_start():
 
 @app.after_request
 def _log_request_end(response):
-    # Loga fim de cada requisição HTTP com status
+    if request.path.startswith('/socket.io/'):
+        return response
     try:
         app.logger.info(f"HTTP {response.status_code} {request.method} {request.path}")
     except Exception:
@@ -291,8 +309,15 @@ def handle_save_map(data):
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    # Evento de desconexão de um cliente Socket.IO
+    # Evento de desconexão de um cliente Socket.IO. Força stop pra não
+    # deixar o republicador a 50 Hz mandando o último cmd_vel enquanto
+    # ninguém está conectado (cliente que cai com tecla segurada).
     app.logger.info(f"Client disconnected: addr={request.remote_addr} sid={request.sid}")
+    try:
+        if hasattr(controller, 'force_stop'):
+            controller.force_stop()
+    except Exception as e:
+        app.logger.debug(f"force_stop falhou: {e}")
 
 @socketio.on('key_event')
 def handle_key_event(data):

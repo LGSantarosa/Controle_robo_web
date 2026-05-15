@@ -15,11 +15,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WS_DIR="$SCRIPT_DIR"
 ROS2_SETUP="$WS_DIR/install/setup.bash"
 
-# --- [1/4] colcon build incremental (hash dos fontes do robot_nav) ---
+# --- [1/4] colcon build incremental (hash dos fontes do workspace) ---
 # Pacotes vivem em ros2_packages/ — colcon descobre via --base-paths.
+# Hash cobre robot_nav E wheel_msgs (incluindo .msg) — sem isso, alterar
+# WheelSpeeds.msg não dispara rebuild apesar do colcon recompilá-lo.
 PKG_STAMP="$WS_DIR/install/.robot_nav.sha1"
-PKG_HASH=$(find "$SCRIPT_DIR/ros2_packages/robot_nav" -type f \
-    \( -name "*.py" -o -name "*.xml" -o -name "*.xacro" -o -name "*.yaml" \) \
+PKG_HASH=$(find "$SCRIPT_DIR/ros2_packages/robot_nav" "$SCRIPT_DIR/ros2_packages/wheel_msgs" -type f \
+    \( -name "*.py" -o -name "*.xml" -o -name "*.xacro" -o -name "*.yaml" -o -name "*.msg" \) \
     -not -path "*/build/*" -not -path "*/install/*" \
     2>/dev/null | sort | xargs sha1sum 2>/dev/null | sha1sum | awk '{print $1}')
 

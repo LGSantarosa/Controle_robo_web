@@ -92,13 +92,10 @@ class NavMetricsCollector:
     def __init__(self, log_dir: str):
         self._log_dir = log_dir
         os.makedirs(log_dir, exist_ok=True)
-        # CSV por dia — permite comparar antes/depois ao longo do tempo sem
-        # juntar tudo num arquivo único gigante.
-        self._csv_path = os.path.join(
-            log_dir, f'nav_metrics_{time.strftime("%Y%m%d")}.csv'
-        )
+        # CSV por dia — calculado a cada flush baseado em `end_ts` (clock ROS),
+        # senão um servidor rodando 24h grava as tentativas do dia novo no
+        # arquivo do dia anterior.
         self._csv_lock = threading.Lock()
-        self._ensure_csv_header()
 
         if not rclpy.ok():
             rclpy.init()
@@ -143,7 +140,20 @@ class NavMetricsCollector:
         )
         self._spin_th.start()
 
-        log.info(f"[NavMetrics] coletor iniciado. CSV: {self._csv_path}")
+        log.info(f"[NavMetrics] coletor iniciado. CSV dir: {self._log_dir}")
+
+    def _now(self) -> float:
+        """Tempo em segundos do clock ROS (respeita use_sim_time)."""
+        try:
+            return self._node.get_clock().now().nanoseconds * 1e-9
+        except Exception:
+            return time.time()
+
+    def _csv_path_for(self, ts: float) -> str:
+        return os.path.join(
+            self._log_dir,
+            f'nav_metrics_{time.strftime("%Y%m%d", time.localtime(ts))}.csv',
+        )
 
     def _spin_loop(self):
         while self._running and rclpy.ok():
@@ -157,7 +167,7 @@ class NavMetricsCollector:
         # Se estava no meio de uma navegação, marca como ABORTED e grava.
         if self._attempt is not None and self._attempt.end_ts is None:
             self._attempt.status = GoalStatus.STATUS_ABORTED
-            self._attempt.end_ts = time.time()
+            self._attempt.end_ts = self._now()
             self._flush_attempt(self._attempt)
             self._attempt = None
         try:
@@ -182,12 +192,12 @@ class NavMetricsCollector:
                 # Fecha tentativa anterior sem status terminal (raro; cleanup).
                 if self._attempt is not None and self._attempt.end_ts is None:
                     self._attempt.status = GoalStatus.STATUS_ABORTED
-                    self._attempt.end_ts = time.time()
+                    self._attempt.end_ts = self._now()
                     self._flush_attempt(self._attempt)
                 self._nav_goal_id = goal_id
                 self._attempt = NavAttempt(
                     nav_id=goal_id.hex()[:8],
-                    start_ts=time.time(),
+                    start_ts=self._now(),
                     start_x=self._last_odom_pose[0] if self._last_odom_pose else 0.0,
                     start_y=self._last_odom_pose[1] if self._last_odom_pose else 0.0,
                 )
@@ -198,7 +208,7 @@ class NavMetricsCollector:
         if status in _TERMINAL_STATUSES and self._attempt is not None \
                 and self._nav_goal_id == goal_id:
             self._attempt.status = status
-            self._attempt.end_ts = time.time()
+            self._attempt.end_ts = self._now()
             if self._last_odom_pose:
                 self._attempt.end_x, self._attempt.end_y, self._attempt.end_yaw = self._last_odom_pose
             self._flush_attempt(self._attempt)
@@ -238,13 +248,16 @@ class NavMetricsCollector:
             2.0 * (q.w * q.z + q.x * q.y),
             1.0 - 2.0 * (q.y * q.y + q.z * q.z),
         )
+        prev = self._last_odom_pose
         self._last_odom_pose = (x, y, yaw)
-        now = time.time()
-        if self._attempt is not None and self._last_odom_ts is not None:
+        now = self._now()
+        if self._attempt is not None and self._last_odom_ts is not None and prev is not None:
             vx    = msg.twist.twist.linear.x
             speed = abs(vx)
             dt    = now - self._last_odom_ts
-            self._attempt.distance_traveled_m += speed * dt
+            # Distância via pose (hypot) — em slip, integrar velocidade
+            # reportada infla o número.
+            self._attempt.distance_traveled_m += math.hypot(x - prev[0], y - prev[1])
             self._attempt.sum_linear_speed    += speed
             self._attempt.linear_samples      += 1
             if speed > self._attempt.max_linear_speed:
@@ -256,7 +269,7 @@ class NavMetricsCollector:
         if a is None:
             return
         vx   = msg.linear.x
-        now  = time.time()
+        now  = self._now()
         sign = 0 if abs(vx) < 0.01 else (1 if vx > 0 else -1)
         if a._last_cmd_ts is not None:
             dt = now - a._last_cmd_ts
@@ -269,13 +282,6 @@ class NavMetricsCollector:
         a._last_cmd_ts = now
 
     # ---------------- CSV ----------------
-
-    def _ensure_csv_header(self):
-        with self._csv_lock:
-            exists = os.path.isfile(self._csv_path)
-            if not exists:
-                with open(self._csv_path, 'w', newline='') as f:
-                    csv.writer(f).writerow(CSV_FIELDS)
 
     def _flush_attempt(self, a: NavAttempt):
         end   = a.end_ts or a.start_ts
@@ -293,9 +299,16 @@ class NavMetricsCollector:
             f'{a.distance_traveled_m:.3f}', f'{avg:.3f}', f'{a.max_linear_speed:.3f}',
             f'{a.time_stopped_s:.3f}', a.direction_reversals,
         ]
+        csv_path = self._csv_path_for(end)
         with self._csv_lock:
-            with open(self._csv_path, 'a', newline='') as f:
-                csv.writer(f).writerow(row)
+            new_file = not os.path.isfile(csv_path)
+            with open(csv_path, 'a', newline='') as f:
+                w = csv.writer(f)
+                if new_file:
+                    w.writerow(CSV_FIELDS)
+                w.writerow(row)
+                f.flush()
+                os.fsync(f.fileno())
         log.info(
             f"[NavMetrics] nav {a.nav_id} → {STATUS_NAMES.get(a.status or 0)} "
             f"em {dur:.1f}s | replans={a.replans} | "
