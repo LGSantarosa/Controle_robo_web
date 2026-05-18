@@ -2,7 +2,7 @@
 <!--
   Robô diferencial para simulação no Gazebo Harmonic (Jazzy).
 
-  Dimensões batem com o URDF real (wheel_base=0.45, wheel_radius=0.085)
+  Dimensões batem com o URDF real (track_width=0.50, wheel_radius=0.085)
   para que os tunings de slam_toolbox/Nav2 transfiram razoavelmente.
 
   Tópicos publicados pelos plugins:
