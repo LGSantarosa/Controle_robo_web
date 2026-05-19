@@ -25,19 +25,23 @@
   <xacro:property name="lidar_z"          value="0.12"/>
 
   <!-- IMU (BNO055) e PMW3901 (optical flow) — montados no centro do chassi.
-       flow_z é a altura do flow_link relativa ao base_link. Combinado com
-       base_link a wheel_radius=0.085 do chão, o sensor fica a 0.12 m do
-       chão — mesmo valor do default `flow_height` em trekking.launch.py. -->
+       flow_z é o offset do flow_link em relação ao base_link (CoM do corpo).
+       Combinado com base_link a (wheel_radius + body_height/2) = 0.215 m do
+       chão, e flow_z = -0.095, o sensor fica a 0.12 m do chão — mesmo valor
+       do default `flow_height` em trekking.launch.py. -->
   <xacro:property name="imu_z"            value="0.02"/>
-  <xacro:property name="flow_z"           value="0.035"/>
+  <xacro:property name="flow_z"           value="-0.095"/>
 
   <!-- ======= base_footprint ======= -->
   <link name="base_footprint"/>
 
+  <!-- base_link no CoM do corpo (REP-103). Posição do chão:
+       wheel_radius (centro da roda) + body_height/2 (do centro da roda ao
+       CoM do corpo, já que o eixo da roda está alinhado ao fundo do corpo). -->
   <joint name="base_footprint_joint" type="fixed">
     <parent link="base_footprint"/>
     <child link="base_link"/>
-    <origin xyz="0 0 ${wheel_radius}" rpy="0 0 0"/>
+    <origin xyz="0 0 ${wheel_radius + body_height/2}" rpy="0 0 0"/>
   </joint>
 
   <!-- ======= base_link ======= -->

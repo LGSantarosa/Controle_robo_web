@@ -18,13 +18,17 @@ Tópicos publicados:
   /optical_flow                            (geometry_msgs/Vector3Stamped, x=dx, y=dy, z=quality)
   /battery/{front,rear}                    (sensor_msgs/BatteryState, V)
   /start_button                            (std_msgs/Bool)
+  /system/health                           (std_msgs/String, JSON)
 
 Tópicos consumidos:
   /wheel_vel_setpoints                     (wheel_msgs/WheelSpeeds, mesmo formato do cmd_vel_to_wheels)
   /leds/color                              (std_msgs/ColorRGBA)
-  /light/cmd                               (std_msgs/Bool)
+  /light/cmd                               (std_msgs/Bool)    relé da luz
+  /light/marker                            (std_msgs/Bool)    LED de marco
 """
+import json
 import math
+import queue
 import struct
 import threading
 import time
@@ -35,7 +39,7 @@ from geometry_msgs.msg import Vector3Stamped
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState, Imu
-from std_msgs.msg import Bool, ColorRGBA, Float64
+from std_msgs.msg import Bool, ColorRGBA, Float64, String
 from wheel_msgs.msg import WheelSpeeds
 
 START0 = 0xAA
@@ -165,16 +169,34 @@ class MegaBridge(Node):
         self._pub_bat_front = self.create_publisher(BatteryState, 'battery/front', qos_cmd)
         self._pub_bat_rear = self.create_publisher(BatteryState, 'battery/rear', qos_cmd)
         self._pub_button = self.create_publisher(Bool, 'start_button', qos_cmd)
+        self._pub_health = self.create_publisher(String, 'system/health', qos_cmd)
+        # Cache do último health para evitar reemitir JSON idêntico a 50 Hz.
+        self._last_health_json: str = ''
+
+        # Estado do FT_RELAY (1 byte relé + 1 byte marker). Guardamos os dois
+        # bits aqui pra que comandos vindos em /light/cmd e /light/marker não
+        # se sobrescrevam — cada callback atualiza só o próprio bit antes do
+        # send.
+        self._light_state = False
+        self._marker_state = False
 
         # Subscribers
         self.create_subscription(WheelSpeeds, 'wheel_vel_setpoints', self._on_setpoint, qos_cmd)
         self.create_subscription(ColorRGBA, 'leds/color', self._on_leds, qos_cmd)
         self.create_subscription(Bool, 'light/cmd', self._on_light, qos_cmd)
+        self.create_subscription(Bool, 'light/marker', self._on_marker, qos_cmd)
 
         # Thread de leitura — bloqueante em ser.read, fora do executor pra não atrapalhar callbacks.
+        # A thread enfileira frames decodificados em `_rx_queue`; o timer ROS
+        # `_drain_rx` os processa dentro de um callback do executor. Sem isso,
+        # publicar direto da thread RX quebra com MultiThreadedExecutor e
+        # dificulta o tracing de logs (ros2 não associa o publish ao nó).
         self._stop = False
+        self._rx_queue: "queue.Queue[tuple[int, bytes]]" = queue.Queue(maxsize=256)
         self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True, name='mega_rx')
         self._rx_thread.start()
+        # 200 Hz: cobre flow a 100 Hz + IMU 50 Hz + STATE 50 Hz com folga.
+        self._drain_timer = self.create_timer(0.005, self._drain_rx)
 
         self.get_logger().info(
             f'MegaBridge: {self._port}@{self._baud} | wheel_scale={self._wheel_scale}'
@@ -223,7 +245,18 @@ class MegaBridge(Node):
         self._send(FT_LEDS, bytes([r, g, b, mode]))
 
     def _on_light(self, msg: Bool):
-        self._send(FT_RELAY, bytes([1 if msg.data else 0, 0]))
+        self._light_state = bool(msg.data)
+        self._send_relay()
+
+    def _on_marker(self, msg: Bool):
+        self._marker_state = bool(msg.data)
+        self._send_relay()
+
+    def _send_relay(self):
+        self._send(FT_RELAY, bytes([
+            1 if self._light_state else 0,
+            1 if self._marker_state else 0,
+        ]))
 
     def _send(self, ft: int, payload: bytes):
         frame = _build_frame(ft, payload)
@@ -249,23 +282,42 @@ class MegaBridge(Node):
                 frame = self._decoder.feed(b)
                 if frame is None:
                     continue
-                ft, payload = frame
                 try:
-                    if ft == FT_STATE:
-                        self._handle_state(payload)
-                    elif ft == FT_IMU:
-                        self._handle_imu(payload)
-                    elif ft == FT_FLOW:
-                        self._handle_flow(payload)
-                except Exception as e:
-                    self.get_logger().warn(f'erro decodificando frame 0x{ft:02x}: {e}')
+                    # Drop o mais novo se a fila encheu — manter o mais antigo
+                    # geraria latência crescente sem upside (publishers ROS
+                    # também só consomem o mais recente em best-effort).
+                    self._rx_queue.put_nowait(frame)
+                except queue.Full:
+                    pass
+
+    def _drain_rx(self):
+        # Processa todo o backlog acumulado desde o último tick. Limite alto
+        # de iterações é só rede de segurança — em prática a fila fica vazia
+        # rapidamente.
+        for _ in range(64):
+            try:
+                ft, payload = self._rx_queue.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                if ft == FT_STATE:
+                    self._handle_state(payload)
+                elif ft == FT_IMU:
+                    self._handle_imu(payload)
+                elif ft == FT_FLOW:
+                    self._handle_flow(payload)
+            except Exception as e:
+                self.get_logger().warn(f'erro decodificando frame 0x{ft:02x}: {e}')
 
     def _handle_state(self, p: bytes):
-        # 16 bytes: rpm_FL, rpm_FR, rpm_RL, rpm_RR, batF_x100, batR_x100, faultF, faultR, btn, _pad
+        # 16 bytes: rpm_FL/FR/RL/RR, batF_x100, batR_x100, faultF, faultR, btn, sensor_flags
         if len(p) != 16:
             return
         rpm_FL, rpm_FR, rpm_RL, rpm_RR, batF, batR = struct.unpack('<hhhhhh', p[:12])
+        faultF = p[12]
+        faultR = p[13]
         btn = p[14]
+        sensor_flags = p[15]
 
         for (board, side), value in (
             (('front', 'left'),  rpm_FL),
@@ -283,6 +335,19 @@ class MegaBridge(Node):
             pub.publish(b)
 
         self._pub_button.publish(Bool(data=bool(btn)))
+
+        # /system/health — JSON. Só emite quando muda, evita poluir tópico
+        # a 50 Hz com a mesma string.
+        health = {
+            'front_stale': bool(faultF & 0x01),
+            'rear_stale':  bool(faultR & 0x01),
+            'imu_ok':      bool(sensor_flags & 0x01),
+            'flow_ok':     bool(sensor_flags & 0x02),
+        }
+        as_json = json.dumps(health, sort_keys=True)
+        if as_json != self._last_health_json:
+            self._last_health_json = as_json
+            self._pub_health.publish(String(data=as_json))
 
     def _handle_imu(self, p: bytes):
         # 20 bytes: quat w,x,y,z (Q14); gyro x,y,z (rad/s ×1000); accel x,y,z (m/s²×1000)

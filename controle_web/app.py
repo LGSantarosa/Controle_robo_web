@@ -21,7 +21,7 @@ MAPS_DIR = os.environ.get('ROBOT_MAPS_DIR', os.path.abspath(
 ))
 
 # Controlador ROS2 — publica em /cmd_vel (geometry_msgs/Twist).
-# Pré-requisito: source ~/ros2_ws/install/setup.bash antes de iniciar o servidor.
+# Pré-requisito: source install/setup.bash antes de iniciar o servidor.
 controller: RobotController = ROS2Controller()
 
 # Ponte de mapa/pose/navegação — opcional (só sobe se rclpy importou OK).
@@ -410,9 +410,9 @@ def handle_key_event(data):
             'code': entry['code'],
             'action': entry.get('action'),
             'command': entry.get('command'),
-        }, broadcast=False)
+        }, room=request.sid)
         # Eco opcional para debug na página (mantido comentado)
-        # emit('server_echo', {'received': data}, broadcast=False)
+        # emit('server_echo', {'received': data}, room=request.sid)
     except Exception as e:
         # Em caso de erro, retorna ACK negativo com mensagem
         emit('ack', {
@@ -421,7 +421,7 @@ def handle_key_event(data):
             'seq': data.get('seq'),
             'type': data.get('type'),
             'code': data.get('code') or data.get('key'),
-        }, broadcast=False)
+        }, room=request.sid)
 
 @socketio.on('gamepad_event')
 def handle_gamepad_event(data):
@@ -485,12 +485,12 @@ def handle_gamepad_event(data):
             'left_speed': result.get('left_speed') if result else None,
             'right_speed': result.get('right_speed') if result else None,
             'emergency': result.get('emergency') if result else None,
-        }, broadcast=False)
+        }, room=request.sid)
     except Exception as e:
         emit('gamepad_ack', {
             'ok': False,
             'error': str(e),
-        }, broadcast=False)
+        }, room=request.sid)
 
 @socketio.on('set_speed')
 def handle_set_speed(data):
@@ -525,13 +525,15 @@ def handle_client_hello(payload):
 
 # ---------------- Trekking (ponto-a-ponto) ----------------
 
+# Espelha o `_on_cmd` do trekking_runner.py — qualquer mudança lá precisa vir
+# pra cá, senão app aceita comandos que o runner ignora silenciosamente.
 _TREKKING_CMDS = {
-    'start', 'stop', 'reset', 'record', 'play',
-    'save_point', 'remove_last', 'load_waypoints',
+    'reset', 'record', 'save_point', 'play', 'stop',
+    'load_waypoints', 'clear',
 }
 # Apenas estes kwargs passam para o runner — rejeita o resto pra não acabar
 # como vetor de injeção (`os.system` numa lib futura, etc.).
-_TREKKING_KWARGS = {'waypoints', 'v_max', 'kp_heading', 'kd_heading', 'index'}
+_TREKKING_KWARGS = {'waypoints', 'v_max', 'kp_heading', 'kd_heading'}
 
 @socketio.on('trekking_cmd')
 def handle_trekking_cmd(data):

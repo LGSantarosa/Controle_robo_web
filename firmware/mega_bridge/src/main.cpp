@@ -143,6 +143,15 @@ static void txState() {
     int16_t batR   = rear_stale  ? 0 : fr.batVoltage;
     uint8_t btn    = io_signals::readButton() ? 1 : 0;
 
+    // faultF / faultR: bit 0 = placa stale (sem feedback há > 200 ms).
+    // Outros bits reservados para próximos diagnósticos (over-temp, brownout, etc.).
+    uint8_t faultF = front_stale ? 0x01 : 0;
+    uint8_t faultR = rear_stale  ? 0x01 : 0;
+    // sensor_flags: bit 0 = imu_ok, bit 1 = flow_ok. Lido no bridge para
+    // publicar /system/health (JSON) sem polling I²C/SPI do lado do PC.
+    uint8_t sensor_flags = (uint8_t)((imu_dev.ok() ? 0x01 : 0) |
+                                     (flow_dev.ok() ? 0x02 : 0));
+
     uint8_t buf[16];
     memcpy(buf + 0,  &rpm_FL, 2);
     memcpy(buf + 2,  &rpm_FR, 2);
@@ -150,10 +159,10 @@ static void txState() {
     memcpy(buf + 6,  &rpm_RR, 2);
     memcpy(buf + 8,  &batF,   2);
     memcpy(buf + 10, &batR,   2);
-    buf[12] = 0;
-    buf[13] = 0;
+    buf[12] = faultF;
+    buf[13] = faultR;
     buf[14] = btn;
-    buf[15] = 0;
+    buf[15] = sensor_flags;
 
     protocol::writeFrame(Serial, protocol::FT_STATE, buf, sizeof(buf));
 }

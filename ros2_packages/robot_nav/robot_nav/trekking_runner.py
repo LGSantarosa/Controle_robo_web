@@ -33,6 +33,7 @@ Filosofia:
 """
 import json
 import math
+import threading
 import time
 
 import rclpy
@@ -104,6 +105,11 @@ class TrekkingRunner(Node):
         self.ctrl_dt = 1.0 / float(self.get_parameter('control_hz').value)
 
         # --- Estado do robô ---
+        # _state_lock protege x/y/yaw/have_pose/cones — escritos pelos callbacks
+        # _on_pose/_on_cones e lidos por _control_tick/_state_tick. Hoje o
+        # SingleThreadedExecutor serializa tudo, mas migrar para MultiThreaded
+        # ou ReentrantCallbackGroup quebraria silenciosamente sem o lock.
+        self._state_lock = threading.Lock()
         self.x = 0.0; self.y = 0.0; self.yaw = 0.0
         self.have_pose = False
 
@@ -111,7 +117,14 @@ class TrekkingRunner(Node):
         self.cones = []
 
         # --- Botão ---
-        self.button_prev = False
+        # `button_stable` é o estado debounçado (último estado confirmado);
+        # `button_pending` guarda quantos frames consecutivos vimos o novo
+        # valor. Só atualiza o estável após DEBOUNCE_FRAMES iguais — evita
+        # falsos rising edges no bouncing mecânico a 50 Hz.
+        self.button_stable = False
+        self.button_pending_value = False
+        self.button_pending_count = 0
+        self.DEBOUNCE_FRAMES = 2
 
         # --- Máquina de estado ---
         self.mode = MODE_IDLE
@@ -153,23 +166,45 @@ class TrekkingRunner(Node):
     # Callbacks
     # ------------------------------------------------------------------
     def _on_pose(self, msg: PoseStamped):
-        self.x = msg.pose.position.x
-        self.y = msg.pose.position.y
-        self.yaw = _quat_to_yaw(
+        yaw = _quat_to_yaw(
             msg.pose.orientation.x, msg.pose.orientation.y,
             msg.pose.orientation.z, msg.pose.orientation.w,
         )
-        self.have_pose = True
+        with self._state_lock:
+            self.x = msg.pose.position.x
+            self.y = msg.pose.position.y
+            self.yaw = yaw
+            self.have_pose = True
 
     def _on_cones(self, msg: PoseArray):
-        self.cones = [
+        cones = [
             (p.position.x, p.position.y, p.orientation.x)  # x.orientation = width
             for p in msg.poses
         ]
+        with self._state_lock:
+            self.cones = cones
+
+    def _state_snapshot(self):
+        with self._state_lock:
+            return (self.x, self.y, self.yaw, self.have_pose, list(self.cones))
 
     def _on_button(self, msg: Bool):
-        rising = msg.data and not self.button_prev
-        self.button_prev = msg.data
+        v = bool(msg.data)
+        if v == self.button_stable:
+            # Já estamos no estado v — limpa qualquer transição pendente.
+            self.button_pending_value = v
+            self.button_pending_count = 0
+            return
+        if v != self.button_pending_value:
+            self.button_pending_value = v
+            self.button_pending_count = 1
+        else:
+            self.button_pending_count += 1
+        if self.button_pending_count < self.DEBOUNCE_FRAMES:
+            return
+        rising = v and not self.button_stable
+        self.button_stable = v
+        self.button_pending_count = 0
         # Botão no modo RECORD → grava waypoint.
         if rising and self.mode == MODE_RECORD:
             self._save_point()
@@ -199,9 +234,22 @@ class TrekkingRunner(Node):
             self.last_msg = 'parado'
         elif cmd == 'load_waypoints':
             wps = data.get('waypoints') or []
-            self.waypoints = [self._sanitize_wp(w) for w in wps if w]
+            sane = []
+            errors = 0
+            for w in wps:
+                if not w:
+                    continue
+                try:
+                    sane.append(self._sanitize_wp(w))
+                except (TypeError, ValueError, AttributeError) as e:
+                    errors += 1
+                    self.get_logger().warn(f'waypoint inválido descartado: {e}')
+            self.waypoints = sane
             self.current_idx = 0
-            self.last_msg = f'{len(self.waypoints)} waypoints carregados'
+            if errors:
+                self.last_msg = f'{len(sane)} waypoints carregados ({errors} ignorados)'
+            else:
+                self.last_msg = f'{len(sane)} waypoints carregados'
         elif cmd == 'clear':
             self.waypoints = []
             self.current_idx = 0
@@ -223,9 +271,10 @@ class TrekkingRunner(Node):
         self.mode = MODE_IDLE
         self.locked_cone = None
         self._stop_robot()
-        if self.have_pose:
+        x, y, yaw, have_pose, _ = self._state_snapshot()
+        if have_pose:
             self.last_msg = (
-                f'origem: ({self.x:.2f}, {self.y:.2f}) yaw={math.degrees(self.yaw):.0f}°'
+                f'origem: ({x:.2f}, {y:.2f}) yaw={math.degrees(yaw):.0f}°'
             )
         else:
             self.last_msg = 'origem registrada (sem pose ainda)'
@@ -242,17 +291,18 @@ class TrekkingRunner(Node):
         }
 
     def _save_point(self):
-        if not self.have_pose:
+        x, y, yaw, have_pose, cones = self._state_snapshot()
+        if not have_pose:
             self.last_msg = 'sem pose — pose_estimator parado?'
             return
 
         # Procura cone mais próximo no semicírculo frontal do robô (±90°)
         # com leve preferência pelo mais próximo.
-        cone = self._nearest_front_cone()
+        cone = self._nearest_front_cone(x, y, yaw, cones)
         wp = {
-            'x': self.x,
-            'y': self.y,
-            'yaw': self.yaw,
+            'x': x,
+            'y': y,
+            'yaw': yaw,
             'has_cone': cone is not None,
             'cone_x': cone[0] if cone else 0.0,
             'cone_y': cone[1] if cone else 0.0,
@@ -263,22 +313,22 @@ class TrekkingRunner(Node):
         idx = len(self.waypoints) - 1
         if cone:
             self._flash_led(0.0, 0.5, 0.0, mode=1)   # verde pisca → ok
-            self.last_msg = f'wp{idx}: ({self.x:.2f}, {self.y:.2f}) + cone'
+            self.last_msg = f'wp{idx}: ({x:.2f}, {y:.2f}) + cone'
         else:
             self._flash_led(1.0, 0.7, 0.0, mode=1)   # amarelo pisca → sem cone
-            self.last_msg = f'wp{idx}: ({self.x:.2f}, {self.y:.2f}) — cone não visto'
+            self.last_msg = f'wp{idx}: ({x:.2f}, {y:.2f}) — cone não visto'
 
-    def _nearest_front_cone(self):
+    def _nearest_front_cone(self, x: float, y: float, yaw: float, cones):
         # Retorna (cone_x, cone_y, bearing_relativo) do cone mais próximo
         # cujo bearing relativo ao yaw atual esteja em [-90°, +90°].
         best = None
         best_d = float('inf')
-        for cx, cy, _w in self.cones:
-            dx = cx - self.x; dy = cy - self.y
+        for cx, cy, _w in cones:
+            dx = cx - x; dy = cy - y
             d = math.hypot(dx, dy)
             if d < 0.05 or d > self.r_search * 2:
                 continue
-            bearing = _wrap_pi(math.atan2(dy, dx) - self.yaw)
+            bearing = _wrap_pi(math.atan2(dy, dx) - yaw)
             if abs(bearing) > math.pi / 2.0:
                 continue
             if d < best_d:
@@ -290,7 +340,8 @@ class TrekkingRunner(Node):
         if not self.waypoints:
             self.last_msg = 'sem waypoints — nada pra fazer'
             return
-        if not self.have_pose:
+        _, _, _, have_pose, _ = self._state_snapshot()
+        if not have_pose:
             self.last_msg = 'sem pose — pose_estimator parado?'
             return
         self.mode = MODE_PLAY
@@ -306,7 +357,8 @@ class TrekkingRunner(Node):
     def _control_tick(self):
         if self.mode != MODE_PLAY:
             return
-        if not self.have_pose:
+        x, y, yaw, have_pose, cones = self._state_snapshot()
+        if not have_pose:
             return
         if self.current_idx >= len(self.waypoints):
             self.mode = MODE_IDLE
@@ -321,10 +373,10 @@ class TrekkingRunner(Node):
         target_x, target_y = wp['x'], wp['y']
         if wp['has_cone']:
             dist_to_cone_expected = math.hypot(
-                wp['cone_x'] - self.x, wp['cone_y'] - self.y
+                wp['cone_x'] - x, wp['cone_y'] - y
             )
             if self.locked_cone is None and dist_to_cone_expected < self.r_search:
-                snap = self._find_matching_cone(wp)
+                snap = self._find_matching_cone(wp, x, y, yaw, cones)
                 if snap is not None:
                     self.locked_cone = snap
             if self.locked_cone is not None:
@@ -334,8 +386,8 @@ class TrekkingRunner(Node):
                 target_x = self.locked_cone[0] + ox
                 target_y = self.locked_cone[1] + oy
 
-        dx = target_x - self.x
-        dy = target_y - self.y
+        dx = target_x - x
+        dy = target_y - y
         dist = math.hypot(dx, dy)
 
         # 2) Detecção de chegada
@@ -356,7 +408,7 @@ class TrekkingRunner(Node):
 
         # 3) PID de heading + velocidade adaptativa
         desired_heading = math.atan2(dy, dx)
-        h_err = _wrap_pi(desired_heading - self.yaw)
+        h_err = _wrap_pi(desired_heading - yaw)
         d_err = (h_err - self.prev_heading_err) / max(self.ctrl_dt, 1e-3)
         self.prev_heading_err = h_err
 
@@ -388,7 +440,7 @@ class TrekkingRunner(Node):
         ts.pose.orientation.w = qw
         self.pub_target.publish(ts)
 
-    def _find_matching_cone(self, wp: dict):
+    def _find_matching_cone(self, wp: dict, x: float, y: float, yaw: float, cones):
         expected_x = wp['cone_x']
         expected_y = wp['cone_y']
         # Bearing esperado no FRAME do robô agora (igual ao que foi gravado):
@@ -397,14 +449,14 @@ class TrekkingRunner(Node):
         # se a pose drifteou mas o cone está no mesmo lugar, casa pela posição.
         best = None
         best_score = float('inf')
-        for cx, cy, _w in self.cones:
+        for cx, cy, _w in cones:
             dx = cx - expected_x; dy = cy - expected_y
             d_pos = math.hypot(dx, dy)
             if d_pos > self.r_match:
                 continue
             # checagem angular extra: bearing relativo ao yaw atual deve ser
             # parecido com o gravado.
-            cur_bearing = _wrap_pi(math.atan2(cy - self.y, cx - self.x) - self.yaw)
+            cur_bearing = _wrap_pi(math.atan2(cy - y, cx - x) - yaw)
             d_ang = abs(_wrap_pi(cur_bearing - expected_bearing_world))
             if d_ang > self.bear_tol:
                 continue
@@ -424,15 +476,16 @@ class TrekkingRunner(Node):
     # Estado / LEDs / utilitários
     # ------------------------------------------------------------------
     def _state_tick(self):
+        x, y, yaw, have_pose, cones = self._state_snapshot()
         state = {
             'mode': self.mode,
-            'x': self.x, 'y': self.y, 'yaw': self.yaw,
-            'have_pose': self.have_pose,
+            'x': x, 'y': y, 'yaw': yaw,
+            'have_pose': have_pose,
             'waypoints': self.waypoints,
             'current_idx': self.current_idx,
             'total': len(self.waypoints),
             'locked_cone': list(self.locked_cone) if self.locked_cone else None,
-            'cones': [[c[0], c[1], c[2]] for c in self.cones],
+            'cones': [[c[0], c[1], c[2]] for c in cones],
             'msg': self.last_msg,
             'ts': time.time(),
         }

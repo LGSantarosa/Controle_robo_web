@@ -117,7 +117,7 @@ class ROS2Controller(RobotController):
 
     Pré-requisito: ROS2 instalado e workspace com robot_nav compilado.
     Execute antes de iniciar o servidor:
-        source ~/ros2_ws/install/setup.bash
+        source install/setup.bash
     """
 
     # Velocidades base em unidades SI.

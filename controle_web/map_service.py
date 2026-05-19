@@ -354,12 +354,15 @@ class MapBridge:
             import json as _json
             with open(path) as f:
                 data = _json.load(f)
-            self._wp_list = data['waypoints']
-            self._wp_loop = False
-            self._wp_active = False
-            self._wp_current_idx = 0
-            log.info(f"[MapBridge] rota carregada: {path} ({len(self._wp_list)} pontos)")
-            return {'ok': True, 'name': safe, 'waypoints': self._wp_list}
+            with self._wp_lock:
+                self._wp_list = data['waypoints']
+                self._wp_loop = False
+                self._wp_active = False
+                self._wp_current_idx = 0
+                wp_count = len(self._wp_list)
+                wp_snapshot = list(self._wp_list)
+            log.info(f"[MapBridge] rota carregada: {path} ({wp_count} pontos)")
+            return {'ok': True, 'name': safe, 'waypoints': wp_snapshot}
         except FileNotFoundError:
             return {'ok': False, 'error': f'rota "{safe}" não encontrada'}
         except Exception as e:
@@ -525,8 +528,10 @@ class MapBridge:
                 _send(idx)
                 t0 = time.monotonic()
 
-        self._wp_active = False
-        if idx >= total and not self._wp_loop:
+        with self._wp_lock:
+            self._wp_active = False
+            loop_was_on = self._wp_loop
+        if idx >= total and not loop_was_on:
             self._sock.emit('waypoint_status', {
                 'active': False, 'index': total, 'total': total, 'done': True,
             })

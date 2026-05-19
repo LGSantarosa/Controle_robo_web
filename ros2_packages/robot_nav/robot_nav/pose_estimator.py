@@ -24,6 +24,7 @@ Fusão:
 Quando |vx_roda - vx_flow| > slip_threshold, /trekking/slip recebe a diferença
 e o logger emite warn — útil pra UI marcar derrapagem.
 """
+import json
 import math
 import threading
 
@@ -32,7 +33,7 @@ from geometry_msgs.msg import PoseStamped, Vector3Stamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Float32, Float64
+from std_msgs.msg import Float32, Float64, String
 
 
 from .utils import quat_to_yaw as _quat_to_yaw  # noqa: F401
@@ -131,6 +132,13 @@ class PoseEstimator(Node):
         self.v_wheel_body = 0.0       # cache pra detecção de slip
 
         self.last_pub_time = self.get_clock().now()
+        # Diagnóstico do flow: combinado com C5 (PMW3901 sem SQUAL → quality=0
+        # sempre → alpha ≈ 0), o nó silenciosamente ignora o flow. Marcadores
+        # aqui permitem warns throttled e publish do /trekking/health.
+        self._alpha_low_since = None     # rclpy.time.Time — primeiro tick com α<0.05
+        self._flow_was_stale = False     # estado anterior do flow_age > timeout
+        self._last_alpha = 0.0
+        self._last_flow_age = float('inf')
 
         # --- Subscribers ---
         self.create_subscription(Imu, 'imu/data', self._on_imu, 20)
@@ -148,6 +156,7 @@ class PoseEstimator(Node):
         self.pub_pose = self.create_publisher(PoseStamped, 'trekking/pose', 10)
         self.pub_odom = self.create_publisher(Odometry, 'trekking/odom', 10)
         self.pub_slip = self.create_publisher(Float32, 'trekking/slip', 10)
+        self.pub_health = self.create_publisher(String, 'trekking/health', 10)
 
         self.create_timer(1.0 / rate, self._tick)
 
@@ -231,10 +240,15 @@ class PoseEstimator(Node):
                 alpha = 0.0
                 flow_vx = 0.0
                 flow_vy = 0.0
+                flow_stale = True
             else:
                 alpha = _sigmoid((self.flow_quality - self.q_mid) / max(self.q_slope, 1e-3))
                 flow_vx = self.flow_vx
                 flow_vy = self.flow_vy
+                flow_stale = False
+
+            self._last_alpha = alpha
+            self._last_flow_age = flow_age
 
             vx_body = alpha * flow_vx + (1.0 - alpha) * vx_wheel
             vy_body = alpha * flow_vy                # roda contribui 0 em vy
@@ -260,6 +274,35 @@ class PoseEstimator(Node):
             yaw_rate = self.yaw_rate
             x = self.x; y = self.y
             slip_out = slip
+            quality_out = self.flow_quality
+
+        # ----- diagnóstico do flow -----
+        # Edge "ficou stale": loga uma vez. Edge "voltou": loga info.
+        if flow_stale and not self._flow_was_stale:
+            self.get_logger().warn(
+                f'flow stale (age={flow_age:.2f} s > {self.flow_timeout:.2f} s) — '
+                f'pose_estimator usando só rodas',
+                throttle_duration_sec=60.0,
+            )
+        elif not flow_stale and self._flow_was_stale:
+            self.get_logger().info('flow voltou')
+        self._flow_was_stale = flow_stale
+
+        # alpha persistentemente baixo (>2 s seguidos) → flow ativo mas inútil.
+        # Sinaliza diferente de "stale" pra UI poder mostrar mensagem específica.
+        if alpha < 0.05:
+            if self._alpha_low_since is None:
+                self._alpha_low_since = now
+            else:
+                low_dt = (now - self._alpha_low_since).nanoseconds / 1e9
+                if low_dt > 2.0:
+                    self.get_logger().warn(
+                        f'alpha={alpha:.3f} (quality={quality_out:.0f}) há {low_dt:.1f} s — '
+                        f'flow contribuindo ~0 na fusão',
+                        throttle_duration_sec=60.0,
+                    )
+        else:
+            self._alpha_low_since = None
 
         # ----- publica -----
         stamp = now.to_msg()
@@ -289,6 +332,15 @@ class PoseEstimator(Node):
         self.pub_odom.publish(od)
 
         self.pub_slip.publish(Float32(data=float(slip_out)))
+
+        # /trekking/health: estado da fusão (UI exibe ícones).
+        health = {
+            'flow_stale': bool(flow_stale),
+            'flow_age':   round(flow_age, 3) if flow_age != float('inf') else None,
+            'alpha':      round(alpha, 3),
+            'quality':    int(quality_out),
+        }
+        self.pub_health.publish(String(data=json.dumps(health, sort_keys=True)))
 
 
 def main(args=None):

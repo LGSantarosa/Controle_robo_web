@@ -16,10 +16,11 @@ class Flow {
 
  private:
     Bitcraze_PMW3901 pmw_;
-    bool    ok_      = false;
-    int16_t dx_      = 0;
-    int16_t dy_      = 0;
-    uint8_t quality_ = 0;
+    bool     ok_                = false;
+    int16_t  dx_                = 0;
+    int16_t  dy_                = 0;
+    uint8_t  quality_           = 0;
+    uint32_t last_recover_ms_   = 0;
 };
 
 }  // namespace sensors
