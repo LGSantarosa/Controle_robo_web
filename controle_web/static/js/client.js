@@ -29,6 +29,10 @@
   const speedMultDisplay = document.getElementById('speed-mult-display');
   const speedLinearVal = document.getElementById('speed-linear-val');
   const speedAngularVal = document.getElementById('speed-angular-val');
+  // Valores em "unidades internas" exibidos na UI (não SI). O servidor
+  // converte a velocidade SI real (m/s, rad/s) via BASE_LINEAR_SPEED e
+  // BASE_ANGULAR_SPEED em robot_controller.py; estes aqui só dão um número
+  // estável pro slider mostrar enquanto o ack do servidor não chega.
   const BASE_LINEAR = 100;
   const BASE_ANGULAR = 65;
   let currentMultiplier = 1.0;
@@ -159,21 +163,6 @@
     appendLog('socket', 'conectado');
   });
 
-  // --- Câmera RGB do robô — stream de JPEGs vindos do CameraBridge ---
-  const cameraSection = document.getElementById('camera-section');
-  const cameraImg     = document.getElementById('camera-image');
-  const cameraStatus  = document.getElementById('camera-status');
-  socket.on('camera_frame', (data) => {
-    if (!data || !data.jpeg_b64 || !cameraImg) return;
-    cameraImg.src = 'data:image/jpeg;base64,' + data.jpeg_b64;
-    if (cameraSection && cameraSection.style.display === 'none') {
-      cameraSection.style.display = '';
-    }
-    if (cameraStatus) {
-      cameraStatus.textContent = `${data.w}×${data.h} @ ${new Date().toLocaleTimeString()}`;
-    }
-  });
-
   socket.on('server_hello', (data) => {
     appendLog('server', `hello sid=${data?.sid || '-'} ok`);
   });
@@ -224,14 +213,20 @@
     const li = document.createElement('li');
     li.textContent = `[${ts}] ${tag}: ${message}`;
     logEl.prepend(li);
-    while (logEl.children.length > 50) {
+    while (logEl.children.length > 200) {
       logEl.removeChild(logEl.lastChild);
     }
   }
 
-  // Listeners de teclado (só ativos no modo web)
+  // Listeners de teclado (só ativos no modo web).
+  // Ignora eventos vindos de campos de entrada (prompt de nome de rota, etc.):
+  // sem isso, digitar "rota1" no input acaba comandando o robô.
+  const isTypingInField = (e) =>
+    e.target && e.target.matches && e.target.matches('input,select,textarea,[contenteditable="true"]');
+
   window.addEventListener('keydown', (e) => {
     if (controlMode !== 'web') return;
+    if (isTypingInField(e)) return;
     const code = e.code || e.key;
     if (!pressed.has(code)) {
       pressed.add(code);
@@ -245,6 +240,7 @@
 
   window.addEventListener('keyup', (e) => {
     if (controlMode !== 'web') return;
+    if (isTypingInField(e)) return;
     const code = e.code || e.key;
     if (pressed.has(code)) {
       pressed.delete(code);

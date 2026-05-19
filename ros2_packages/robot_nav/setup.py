@@ -14,7 +14,6 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
         (os.path.join('share', package_name, 'urdf'), glob('urdf/*')),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
-        (os.path.join('share', package_name, 'maps'), glob('maps/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -27,6 +26,10 @@ setup(
         'console_scripts': [
             'odom_publisher = robot_nav.odom_publisher:main',
             'cmd_vel_to_wheels = robot_nav.cmd_vel_to_wheels:main',
+            'mega_bridge = robot_nav.mega_bridge:main',
+            'pose_estimator = robot_nav.pose_estimator:main',
+            'cone_detector = robot_nav.cone_detector:main',
+            'trekking_runner = robot_nav.trekking_runner:main',
         ],
     },
 )

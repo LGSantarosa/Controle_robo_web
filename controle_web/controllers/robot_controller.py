@@ -108,9 +108,8 @@ class ROS2Controller(RobotController):
     Controlador real que publica cmd_vel via ROS2 para integração com Nav2.
 
     Tópico de saída: /cmd_vel (geometry_msgs/Twist)
-    O Nav2 Collision Monitor intercepta /cmd_vel, filtra obstáculos e
-    publica /cmd_vel_filtered. O nó cmd_vel_to_wheels converte para
-    /wheel_vel_setpoints que o driver do hoverboard consome.
+    O nó cmd_vel_to_wheels consome /cmd_vel e publica em
+    /wheel_vel_setpoints, que o mega_bridge encaminha às placas hoverboard.
 
     Velocidades em unidades SI:
         BASE_LINEAR_SPEED  = velocidade linear base (m/s)
@@ -123,13 +122,21 @@ class ROS2Controller(RobotController):
 
     # Velocidades base em unidades SI.
     # Multiplicador de velocidade escala esses valores (0.5x–4.0x).
-    # Normal (1.0x) = 0.3 m/s / 0.5 rad/s.
-    # Boost (□ 2.0x) = 0.6 m/s / 1.0 rad/s.
+    # Normal (1.0x) = 0.3 m/s / 1.5 rad/s.
+    # Boost (□ 2.0x) = 0.6 m/s / 3.0 rad/s.
+    #
+    # Angular subiu de 0.5 → 1.5 rad/s: com 4 rodas no chão e skid-steer
+    # puro, 0.5 rad/s vira só ±50 em comando (linear_scale=400, wheel_base=0.5),
+    # ~5% de PWM — abaixo do atrito estático do hoverboard. Testado a 1.5
+    # rad/s via `ros2 topic pub` e as rodas giram em sentidos opostos.
     BASE_LINEAR_SPEED: float = 0.3   # m/s
-    BASE_ANGULAR_SPEED: float = 0.5  # rad/s
+    BASE_ANGULAR_SPEED: float = 1.5  # rad/s
 
-    # Limites do multiplicador de velocidade
-    SPEED_MULT_MIN: float = 0.8
+    # Limites do multiplicador de velocidade.
+    # MIN bate com o `min` do slider em index.html (0.5) e permite que o
+    # preset "Ajuste fino" do gamepad (0.75×) e do botão (○) passem sem
+    # clipagem silenciosa.
+    SPEED_MULT_MIN: float = 0.5
     SPEED_MULT_MAX: float = 4.0
 
     # Mapeamento tecla → direção semântica
@@ -143,6 +150,8 @@ class ROS2Controller(RobotController):
 
     def __init__(self) -> None:
         import rclpy
+        import threading
+        import time
         from rclpy.node import Node
 
         self.pressed: set = set()
@@ -150,7 +159,9 @@ class ROS2Controller(RobotController):
         self._speed_multiplier: float = 1.0
         self._last_gamepad_linear: float = 0.0
         self._last_gamepad_angular: float = 0.0
+        self._last_printed: tuple = (None, None)
         self._rclpy = rclpy
+        self._time = time
 
         if not rclpy.ok():
             rclpy.init()
@@ -167,14 +178,49 @@ class ROS2Controller(RobotController):
             qos_profile=10,
         )
 
-        print("[ROS2Controller] Nó inicializado. Publicando em /cmd_vel (Nav2)")
+        # Republicador a 50 Hz. O firmware da MEGA tem watchdog de 500 ms
+        # (SETPOINT_TIMEOUT_MS em firmware/mega_bridge/src/main.cpp): sem
+        # novo setpoint nesse intervalo, zera os motores. O navegador manda
+        # apenas um evento por mousedown/keyup — sem republicar, cada
+        # clique vira um pulso curto.
+        self._pub_stop = threading.Event()
+        self._pub_thread = threading.Thread(
+            target=self._publish_loop, daemon=True, name='cmd_vel_republisher'
+        )
+        self._pub_thread.start()
+
+        print("[ROS2Controller] Nó inicializado. Publicando em /cmd_vel @ 50 Hz")
+
+    def force_stop(self) -> None:
+        """Zera teclas pressionadas + último eixo de gamepad e publica Twist(0).
+
+        Chamado quando um cliente Socket.IO cai com tecla segurada: sem isso
+        o republicador a 50 Hz continua mandando o último /cmd_vel até o
+        cliente reconectar (ou o watchdog do firmware estourar 500 ms).
+        """
+        try:
+            self.pressed.clear()
+            self._last_gamepad_linear = 0.0
+            self._last_gamepad_angular = 0.0
+            self._publish(0.0, 0.0)
+        except Exception:
+            pass
 
     def shutdown(self) -> None:
-        """Encerra o nó ROS2 corretamente."""
+        """Encerra o nó ROS2 (sem mexer no contexto global do rclpy).
+
+        Quem chama `rclpy.shutdown()` é o `_shutdown_all` em `app.py`, depois
+        que todas as bridges (`MapBridge`, `TrekkingBridge`, `NavMetricsCollector`)
+        terminaram. Se este método derrubasse o contexto, as outras bridges
+        morreriam no meio de um callback.
+        """
+        try:
+            self._pub_stop.set()
+            self._pub_thread.join(timeout=1.0)
+        except Exception:
+            pass
         try:
             self._node.destroy_node()
-            if self._rclpy.ok():
-                self._rclpy.shutdown()
             print("[ROS2Controller] Nó encerrado.")
         except Exception as e:
             print(f"[ROS2Controller] Erro ao encerrar: {e}")
@@ -184,7 +230,26 @@ class ROS2Controller(RobotController):
         msg.linear.x = float(linear)
         msg.angular.z = float(angular)
         self._publisher.publish(msg)
-        print(f"[ROS2Controller] cmd_vel → linear={linear:+.3f} m/s  angular={angular:+.3f} rad/s")
+        # Log só quando o valor muda — senão a republicação a 50 Hz polui o stdout.
+        rounded = (round(linear, 3), round(angular, 3))
+        if rounded != self._last_printed:
+            print(f"[ROS2Controller] cmd_vel → linear={linear:+.3f} m/s  angular={angular:+.3f} rad/s")
+            self._last_printed = rounded
+
+    def _publish_loop(self) -> None:
+        PERIOD = 0.02  # 50 Hz
+        while not self._pub_stop.is_set():
+            if self._emergency_stop:
+                self._publish(0.0, 0.0)
+            elif self.pressed:
+                linear, angular = self._compute_cmd_vel()
+                self._publish(linear, angular)
+            elif abs(self._last_gamepad_linear) > 0.01 or abs(self._last_gamepad_angular) > 0.01:
+                linear = self._last_gamepad_linear * self._linear_speed
+                angular = -self._last_gamepad_angular * self._angular_speed
+                self._publish(linear, angular)
+            # else: nada ativo — deixa o watchdog do firmware zerar.
+            self._time.sleep(PERIOD)
 
     @property
     def _linear_speed(self) -> float:

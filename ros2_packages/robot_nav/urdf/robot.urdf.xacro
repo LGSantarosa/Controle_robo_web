@@ -1,30 +1,37 @@
 <?xml version="1.0"?>
-<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="hoverboard_robot">
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="robo_4_rodas">
 
   <!-- ============================================================
-       Hoverboard Robot Description
-       Adjust dimensions to match your actual robot:
-         wheel_radius: radius of the hoverboard wheels (meters)
-         wheel_base:   distance between left and right wheel centers (meters)
-         lidar_x:      lidar forward offset from robot center (meters)
-         lidar_z:      lidar height above base_link (meters)
+       Robô skid-steer 4 rodas (2 placas de hoverboard, ponte MEGA).
+       Dimensões medidas no chassi atual (2026-05-11):
+         carcaça externa : 50 × 50 × 26 cm
+         estrutura interna: 37 × 35 × 16 cm (alumínio)
+         roda hoverboard : raio 8,5 cm  largura 6 cm
+         bitola (esq-dir): 50 cm
+         entre-eixos     : 37 cm
        ============================================================ -->
 
-  <xacro:property name="wheel_radius" value="0.085"/>
-  <xacro:property name="wheel_width"  value="0.06"/>
-  <xacro:property name="wheel_base"   value="0.45"/>
+  <xacro:property name="wheel_radius"     value="0.085"/>
+  <xacro:property name="wheel_width"      value="0.06"/>
+  <xacro:property name="track_width"      value="0.50"/>   <!-- bitola: distância entre centros L-R -->
+  <xacro:property name="wheelbase"        value="0.37"/>   <!-- entre-eixos: distância entre eixos F-R -->
 
-  <xacro:property name="body_length"  value="0.50"/>
-  <xacro:property name="body_width"   value="0.45"/>
-  <xacro:property name="body_height"  value="0.10"/>
+  <xacro:property name="body_length"      value="0.50"/>
+  <xacro:property name="body_width"       value="0.50"/>
+  <xacro:property name="body_height"      value="0.26"/>
 
-  <!-- LiDAR position: slightly forward and on top -->
-  <xacro:property name="lidar_x"      value="0.10"/>
-  <xacro:property name="lidar_z"      value="0.12"/>
+  <!-- LiDAR no topo, ligeiramente à frente -->
+  <xacro:property name="lidar_x"          value="0.10"/>
+  <xacro:property name="lidar_z"          value="0.12"/>
 
-  <!-- pi já existe no xacro como constante embutida -->
+  <!-- IMU (BNO055) e PMW3901 (optical flow) — montados no centro do chassi.
+       flow_z é a altura do flow_link relativa ao base_link. Combinado com
+       base_link a wheel_radius=0.085 do chão, o sensor fica a 0.12 m do
+       chão — mesmo valor do default `flow_height` em trekking.launch.py. -->
+  <xacro:property name="imu_z"            value="0.02"/>
+  <xacro:property name="flow_z"           value="0.035"/>
 
-  <!-- ======= base_footprint (ground projection) ======= -->
+  <!-- ======= base_footprint ======= -->
   <link name="base_footprint"/>
 
   <joint name="base_footprint_joint" type="fixed">
@@ -33,7 +40,7 @@
     <origin xyz="0 0 ${wheel_radius}" rpy="0 0 0"/>
   </joint>
 
-  <!-- ======= base_link (center of robot body) ======= -->
+  <!-- ======= base_link ======= -->
   <link name="base_link">
     <visual>
       <geometry>
@@ -49,66 +56,49 @@
       </geometry>
     </collision>
     <inertial>
-      <mass value="10.0"/>
-      <inertia ixx="0.1" ixy="0" ixz="0" iyy="0.1" iyz="0" izz="0.1"/>
+      <mass value="15.46"/>
+      <!-- Inércia da caixa 0.50×0.50×0.26 m para m=15.46 kg:
+             ixx = m(y²+z²)/12 ≈ 0.41
+             iyy = m(x²+z²)/12 ≈ 0.41
+             izz = m(x²+y²)/12 ≈ 0.64
+           Usado se algum dia migrarmos para sim com este URDF. -->
+      <inertia ixx="0.41" ixy="0" ixz="0" iyy="0.41" iyz="0" izz="0.64"/>
     </inertial>
   </link>
 
-  <!-- ======= Left Wheel ======= -->
-  <joint name="left_wheel_joint" type="continuous">
-    <parent link="base_link"/>
-    <child link="left_wheel"/>
-    <origin xyz="0 ${wheel_base/2} ${-body_height/2}" rpy="${-pi/2} 0 0"/>
-    <axis xyz="0 0 1"/>
-  </joint>
+  <!-- ======= Macro de roda ======= -->
+  <xacro:macro name="wheel" params="name x y">
+    <joint name="${name}_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${name}"/>
+      <origin xyz="${x} ${y} ${-body_height/2}" rpy="${-pi/2} 0 0"/>
+      <axis xyz="0 0 1"/>
+    </joint>
+    <link name="${name}">
+      <visual>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+        <material name="black">
+          <color rgba="0.1 0.1 0.1 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="1.5"/>
+        <inertia ixx="0.005" ixy="0" ixz="0" iyy="0.005" iyz="0" izz="0.009"/>
+      </inertial>
+    </link>
+  </xacro:macro>
 
-  <link name="left_wheel">
-    <visual>
-      <geometry>
-        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
-      </geometry>
-      <material name="black">
-        <color rgba="0.1 0.1 0.1 1.0"/>
-      </material>
-    </visual>
-    <collision>
-      <geometry>
-        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
-      </geometry>
-    </collision>
-    <inertial>
-      <mass value="1.5"/>
-      <inertia ixx="0.005" ixy="0" ixz="0" iyy="0.005" iyz="0" izz="0.009"/>
-    </inertial>
-  </link>
-
-  <!-- ======= Right Wheel ======= -->
-  <joint name="right_wheel_joint" type="continuous">
-    <parent link="base_link"/>
-    <child link="right_wheel"/>
-    <origin xyz="0 ${-wheel_base/2} ${-body_height/2}" rpy="${pi/2} 0 0"/>
-    <axis xyz="0 0 1"/>
-  </joint>
-
-  <link name="right_wheel">
-    <visual>
-      <geometry>
-        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
-      </geometry>
-      <material name="black">
-        <color rgba="0.1 0.1 0.1 1.0"/>
-      </material>
-    </visual>
-    <collision>
-      <geometry>
-        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
-      </geometry>
-    </collision>
-    <inertial>
-      <mass value="1.5"/>
-      <inertia ixx="0.005" ixy="0" ixz="0" iyy="0.005" iyz="0" izz="0.009"/>
-    </inertial>
-  </link>
+  <xacro:wheel name="front_left_wheel"  x="${ wheelbase/2}" y="${ track_width/2}"/>
+  <xacro:wheel name="front_right_wheel" x="${ wheelbase/2}" y="${-track_width/2}"/>
+  <xacro:wheel name="rear_left_wheel"   x="${-wheelbase/2}" y="${ track_width/2}"/>
+  <xacro:wheel name="rear_right_wheel"  x="${-wheelbase/2}" y="${-track_width/2}"/>
 
   <!-- ======= LiDAR (FHL-LD20) ======= -->
   <joint name="laser_joint" type="fixed">
@@ -116,7 +106,6 @@
     <child link="base_laser"/>
     <origin xyz="${lidar_x} 0 ${body_height/2 + lidar_z}" rpy="0 0 0"/>
   </joint>
-
   <link name="base_laser">
     <visual>
       <geometry>
@@ -134,6 +123,48 @@
     <inertial>
       <mass value="0.1"/>
       <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <!-- ======= IMU (BNO055) ======= -->
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0 0 ${imu_z}" rpy="0 0 0"/>
+  </joint>
+  <link name="imu_link">
+    <visual>
+      <geometry>
+        <box size="0.02 0.02 0.005"/>
+      </geometry>
+      <material name="red">
+        <color rgba="0.8 0.1 0.1 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.01"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+    </inertial>
+  </link>
+
+  <!-- ======= Optical flow (PMW3901) — olhando pro chão ======= -->
+  <joint name="flow_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="flow_link"/>
+    <origin xyz="0 0 ${flow_z}" rpy="0 ${pi} 0"/>
+  </joint>
+  <link name="flow_link">
+    <visual>
+      <geometry>
+        <box size="0.02 0.02 0.005"/>
+      </geometry>
+      <material name="green">
+        <color rgba="0.1 0.7 0.1 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.01"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
     </inertial>
   </link>
 

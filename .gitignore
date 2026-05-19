@@ -13,3 +13,18 @@ controle_web/logs/
 
 # Mapas gerados pelo SLAM
 maps/
+
+# Colcon workspace (build artifacts deste repo)
+build/
+install/
+log/
+
+# PlatformIO build artifacts (firmware/mega_bridge)
+.pio/
+firmware/**/.pio/
+
+# Editor/SO
+*.swp
+.DS_Store
+.vscode/
+.idea/

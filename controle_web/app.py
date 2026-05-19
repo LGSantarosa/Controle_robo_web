@@ -3,8 +3,10 @@ from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
 from controllers.robot_controller import RobotController, ROS2Controller
 import logging
+import math
 import os
 import json
+import secrets
 import signal
 import sys
 import time
@@ -12,7 +14,7 @@ import atexit
 from logging.handlers import RotatingFileHandler
 
 # Modo de operação — setado pelo launch.sh via env var. Valores: 'teleop',
-# 'slam' ou 'nav2'. Controla quais componentes do SocketIO ficam ativos.
+# 'slam', 'nav2' ou 'trekking'. Controla quais componentes do SocketIO ficam ativos.
 ROBOT_MODE = os.environ.get('ROBOT_MODE', 'teleop').lower()
 MAPS_DIR = os.environ.get('ROBOT_MAPS_DIR', os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'maps')
@@ -27,8 +29,8 @@ map_bridge = None
 # Coletor de métricas Nav2 — grava CSV por tentativa pra servir de base
 # quando formos ajustar parâmetros do stack de navegação.
 nav_metrics = None
-# Stream da câmera RGB-D do robô — JPEG via Socket.IO em ~5 Hz.
-camera_bridge = None
+# Ponte ROS↔Web do modo TREKKING (pose fundida, waypoints, cones, comandos)
+trekking_bridge = None
 
 # rclpy.init() instala seus próprios handlers de SIGINT/SIGTERM que engolem o
 # Ctrl+C (o processo fica preso esperando o executor do ROS2 que nunca acorda).
@@ -36,11 +38,10 @@ camera_bridge = None
 _shutting_down = False
 
 def _shutdown_all():
-    try:
-        if camera_bridge is not None:
-            camera_bridge.shutdown()
-    except Exception:
-        pass
+    # Cada bridge destrói só o próprio nó; rclpy.shutdown() é chamado uma
+    # única vez no fim, depois que todas as bridges saíram dos callbacks.
+    # Sem essa ordem o contexto global cai no meio de um spin_once() e as
+    # bridges restantes lançam RCLError.
     try:
         if nav_metrics is not None:
             nav_metrics.shutdown()
@@ -52,8 +53,19 @@ def _shutdown_all():
     except Exception:
         pass
     try:
+        if trekking_bridge is not None:
+            trekking_bridge.shutdown()
+    except Exception:
+        pass
+    try:
         if hasattr(controller, 'shutdown'):
             controller.shutdown()
+    except Exception:
+        pass
+    try:
+        import rclpy as _rclpy
+        if _rclpy.ok():
+            _rclpy.shutdown()
     except Exception:
         pass
 
@@ -74,13 +86,51 @@ signal.signal(signal.SIGTERM, _force_shutdown_full)
 # Encerra tudo ao sair
 atexit.register(_shutdown_all)
 
+
+def _validate_xy(x, y, *, max_abs: float = 1000.0):
+    """Converte e valida coordenadas (rejeita NaN, Inf e absurdos).
+
+    `max_abs` evita que um cliente comprometido mande coordenadas tipo 1e18
+    e quebre o Nav2 ou trave o filtro do AMCL. Mapas reais cabem em ±1000m.
+    """
+    fx = float(x)
+    fy = float(y)
+    if not (math.isfinite(fx) and math.isfinite(fy)):
+        raise ValueError("coordenadas precisam ser finitas")
+    if abs(fx) > max_abs or abs(fy) > max_abs:
+        raise ValueError(f"coordenadas fora do range ±{max_abs} m")
+    return fx, fy
+
+
+def _validate_yaw(yaw) -> float:
+    fy = float(yaw)
+    if not math.isfinite(fy):
+        raise ValueError("yaw precisa ser finito")
+    return fy
+
 # Instancia a aplicação web
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'change-me'
+# SECRET_KEY: prefere FLASK_SECRET_KEY do ambiente (deploy persistente).
+# Sem env: gera valor aleatório por processo — sessões não sobrevivem a
+# restart, mas isso é OK pra LAN/dev e impede o `change-me` hardcoded de
+# ir pra prod.
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or secrets.token_hex(32)
+
+# CORS: por padrão restringe à mesma origem (mais seguro). Para liberar a
+# UI a clientes de outras máquinas da LAN, exporte CORS_ORIGIN com a
+# lista de origens permitidas (separadas por vírgula), ou "*" para tudo.
+_cors_env = os.environ.get('CORS_ORIGIN', '').strip()
+if _cors_env == '*':
+    _cors_origins = '*'
+elif _cors_env:
+    _cors_origins = [o.strip() for o in _cors_env.split(',') if o.strip()]
+else:
+    _cors_origins = []
+
 # Cria o servidor Socket.IO (tempo real) com logs habilitados
 socketio = SocketIO(
     app,
-    cors_allowed_origins="*",
+    cors_allowed_origins=_cors_origins,
     logger=False,
     engineio_logger=False,
     async_mode="threading",
@@ -104,6 +154,17 @@ if ROBOT_MODE in ('slam', 'nav2'):
         )
         map_bridge = None
 
+# Ponte de trekking — só sobe no modo dedicado.
+if ROBOT_MODE == 'trekking':
+    try:
+        from trekking_service import TrekkingBridge
+        trekking_bridge = TrekkingBridge(socketio=socketio, maps_dir=MAPS_DIR)
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            f"[app] Falha ao iniciar TrekkingBridge: {e}. Modo trekking desabilitado."
+        )
+        trekking_bridge = None
+
 # Coletor de métricas só faz sentido em NAV2 (action navigate_to_pose ativa).
 if ROBOT_MODE == 'nav2':
     try:
@@ -117,31 +178,22 @@ if ROBOT_MODE == 'nav2':
         )
         nav_metrics = None
 
-# Stream da câmera — em qualquer modo (sim ou real) onde tiver o tópico.
-# Se /camera/image não existir, o subscriber só fica ocioso, sem custo.
-if ROBOT_MODE in ('slam', 'nav2', 'teleop'):
-    try:
-        from camera_bridge import CameraBridge
-        camera_bridge = CameraBridge(socketio=socketio)
-    except Exception as e:
-        logging.getLogger(__name__).warning(
-            f"[app] Falha ao iniciar CameraBridge: {e}. Câmera desabilitada."
-        )
-        camera_bridge = None
-
-
-# Log de movimentos (JSON Lines) gravado em arquivo rotativo + arquivo legível
-os.makedirs('logs', exist_ok=True)
+# Log de movimentos (JSON Lines) gravado em arquivo rotativo + arquivo legível.
+# Paths absolutos baseados na pasta do app.py — sem isso, rodar de outro diretório
+# (ex.: `python -m ...` ou via systemd) grava logs em CWD aleatório.
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_LOGS_DIR = os.path.join(_APP_DIR, 'logs')
+os.makedirs(_LOGS_DIR, exist_ok=True)
 movement_logger = logging.getLogger('movements')
 movement_logger.setLevel(logging.INFO)
 if not movement_logger.handlers:
-    _mh = RotatingFileHandler('logs/movements.log', maxBytes=1_048_576, backupCount=5)
+    _mh = RotatingFileHandler(os.path.join(_LOGS_DIR, 'movements.log'), maxBytes=1_048_576, backupCount=5)
     _mh.setFormatter(logging.Formatter('%(message)s'))
     movement_logger.addHandler(_mh)
     # Logger adicional com linhas legíveis em português
     movement_human = logging.getLogger('movements_human')
     movement_human.setLevel(logging.INFO)
-    _mht = RotatingFileHandler('logs/movements.txt', maxBytes=1_048_576, backupCount=5)
+    _mht = RotatingFileHandler(os.path.join(_LOGS_DIR, 'movements.txt'), maxBytes=1_048_576, backupCount=5)
     _mht.setFormatter(logging.Formatter('%(message)s'))
     movement_human.addHandler(_mht)
 else:
@@ -149,7 +201,10 @@ else:
 
 @app.before_request
 def _log_request_start():
-    # Loga início de cada requisição HTTP (método, rota, IP e user-agent)
+    # Loga início de cada requisição HTTP — mas pula /socket.io/ pra não
+    # inundar o terminal com o long-poll (uma requisição a cada ~25 s por cliente).
+    if request.path.startswith('/socket.io/'):
+        return
     try:
         app.logger.info(f"HTTP {request.method} {request.path} from {request.remote_addr} UA={request.headers.get('User-Agent','-')}")
     except Exception:
@@ -157,7 +212,8 @@ def _log_request_start():
 
 @app.after_request
 def _log_request_end(response):
-    # Loga fim de cada requisição HTTP com status
+    if request.path.startswith('/socket.io/'):
+        return response
     try:
         app.logger.info(f"HTTP {response.status_code} {request.method} {request.path}")
     except Exception:
@@ -178,6 +234,7 @@ def handle_connect():
     emit('mode_info', {
         'mode': ROBOT_MODE,
         'has_map': map_bridge is not None,
+        'has_trekking': trekking_bridge is not None,
     })
     # Reemite o último map_update cacheado — o /map do map_server é latched
     # (publicado 1x no activate), então clientes que conectam depois dessa
@@ -202,9 +259,8 @@ def handle_nav_goal(data):
         emit('nav_goal_ack', {'ok': False, 'error': 'clique-para-ir só funciona em modo NAV2'})
         return
     try:
-        x = float(data.get('x'))
-        y = float(data.get('y'))
-        yaw = float(data.get('yaw', 0.0))
+        x, y = _validate_xy(data.get('x'), data.get('y'))
+        yaw = _validate_yaw(data.get('yaw', 0.0))
         result = map_bridge.send_goal(x, y, yaw)
         app.logger.info(f"nav_goal from {request.remote_addr}: ({x:.2f}, {y:.2f})")
         emit('nav_goal_ack', result)
@@ -220,7 +276,21 @@ def handle_start_waypoints(data):
     if ROBOT_MODE != 'nav2':
         emit('waypoints_ack', {'ok': False, 'error': 'waypoints só funcionam em modo NAV2'})
         return
-    waypoints = (data or {}).get('waypoints', [])
+    raw_wps = (data or {}).get('waypoints', [])
+    if not isinstance(raw_wps, list):
+        emit('waypoints_ack', {'ok': False, 'error': 'waypoints precisa ser lista'})
+        return
+    try:
+        waypoints = []
+        for w in raw_wps:
+            if not isinstance(w, dict):
+                raise ValueError("cada waypoint precisa ser objeto")
+            wx, wy = _validate_xy(w.get('x'), w.get('y'))
+            wyaw = _validate_yaw(w.get('yaw', 0.0))
+            waypoints.append({'x': wx, 'y': wy, 'yaw': wyaw})
+    except (TypeError, ValueError) as e:
+        emit('waypoints_ack', {'ok': False, 'error': f'waypoint inválido: {e}'})
+        return
     loop = bool((data or {}).get('loop', False))
     result = map_bridge.start_waypoints(waypoints, loop)
     emit('waypoints_ack', result)
@@ -275,8 +345,15 @@ def handle_save_map(data):
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    # Evento de desconexão de um cliente Socket.IO
+    # Evento de desconexão de um cliente Socket.IO. Força stop pra não
+    # deixar o republicador a 50 Hz mandando o último cmd_vel enquanto
+    # ninguém está conectado (cliente que cai com tecla segurada).
     app.logger.info(f"Client disconnected: addr={request.remote_addr} sid={request.sid}")
+    try:
+        if hasattr(controller, 'force_stop'):
+            controller.force_stop()
+    except Exception as e:
+        app.logger.debug(f"force_stop falhou: {e}")
 
 @socketio.on('key_event')
 def handle_key_event(data):
@@ -419,9 +496,13 @@ def handle_gamepad_event(data):
 def handle_set_speed(data):
     # Altera o multiplicador de velocidade do robô
     try:
-        mult = float(data.get('multiplier', 1.0))
+        mult = float((data or {}).get('multiplier', 1.0))
+        if not math.isfinite(mult):
+            raise ValueError("multiplier precisa ser finito")
         effective = controller.set_speed_multiplier(mult)
         app.logger.info(f"set_speed from {request.remote_addr}: mult={mult:.2f} → effective={effective:.2f}")
+        # Broadcast só no caminho feliz — todos os clientes precisam reagir
+        # ao novo multiplicador (UI compartilhada).
         emit('speed_update', {
             'ok': True,
             'multiplier': effective,
@@ -429,7 +510,9 @@ def handle_set_speed(data):
             'angular_speed': controller._angular_speed,
         }, broadcast=True)
     except Exception as e:
-        emit('speed_update', {'ok': False, 'error': str(e)}, broadcast=False)
+        # Erro: responde só ao cliente que mandou — broadcast aqui mostraria
+        # "Não recebido" pra todo mundo só porque um cliente mandou lixo.
+        emit('speed_update', {'ok': False, 'error': str(e)}, room=request.sid)
 
 @socketio.on('client_hello')
 def handle_client_hello(payload):
@@ -439,6 +522,59 @@ def handle_client_hello(payload):
         'sid': request.sid,
         'msg': 'hello from server',
     })
+
+# ---------------- Trekking (ponto-a-ponto) ----------------
+
+_TREKKING_CMDS = {
+    'start', 'stop', 'reset', 'record', 'play',
+    'save_point', 'remove_last', 'load_waypoints',
+}
+# Apenas estes kwargs passam para o runner — rejeita o resto pra não acabar
+# como vetor de injeção (`os.system` numa lib futura, etc.).
+_TREKKING_KWARGS = {'waypoints', 'v_max', 'kp_heading', 'kd_heading', 'index'}
+
+@socketio.on('trekking_cmd')
+def handle_trekking_cmd(data):
+    """Comandos do painel trekking → /trekking/cmd."""
+    if trekking_bridge is None:
+        emit('trekking_ack', {'ok': False, 'error': 'trekking indisponível neste modo'})
+        return
+    cmd = str((data or {}).get('cmd', '')).lower()
+    if cmd not in _TREKKING_CMDS:
+        emit('trekking_ack', {'ok': False, 'error': f'cmd desconhecido: {cmd}'})
+        return
+    kwargs = {k: v for k, v in (data or {}).items() if k in _TREKKING_KWARGS}
+    result = trekking_bridge.send_cmd(cmd, **kwargs)
+    app.logger.info(f"trekking_cmd from {request.remote_addr}: {cmd} {list(kwargs)}")
+    emit('trekking_ack', {'cmd': cmd, **result})
+
+
+@socketio.on('trekking_save_route')
+def handle_trekking_save_route(data):
+    if trekking_bridge is None:
+        emit('trekking_save_ack', {'ok': False, 'error': 'indisponível'})
+        return
+    name = (data or {}).get('name', 'rota')
+    waypoints = (data or {}).get('waypoints')  # opcional — se ausente, usa último estado
+    emit('trekking_save_ack', trekking_bridge.save_route(name, waypoints))
+
+
+@socketio.on('trekking_load_route')
+def handle_trekking_load_route(data):
+    if trekking_bridge is None:
+        emit('trekking_load_ack', {'ok': False, 'error': 'indisponível'})
+        return
+    name = (data or {}).get('name', '')
+    emit('trekking_load_ack', trekking_bridge.load_route(name))
+
+
+@socketio.on('trekking_list_routes')
+def handle_trekking_list_routes():
+    if trekking_bridge is None:
+        emit('trekking_routes', {'ok': True, 'routes': []})
+        return
+    emit('trekking_routes', trekking_bridge.list_routes())
+
 
 if __name__ == '__main__':
     # Sobe o servidor acessível na rede local (0.0.0.0:5000)

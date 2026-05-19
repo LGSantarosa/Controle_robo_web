@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """
-Converts geometry_msgs/Twist (/cmd_vel_filtered from Nav2 Collision Monitor)
-into wheel_msgs/WheelSpeeds (/wheel_vel_setpoints for the hoverboard driver).
+Converts geometry_msgs/Twist (/cmd_vel) into wheel_msgs/WheelSpeeds
+(/wheel_vel_setpoints for the hoverboard driver).
 
-Differential drive model:
-  right_wheel = linear * LINEAR_SCALE + angular * ANGULAR_SCALE
-  left_wheel  = linear * LINEAR_SCALE - angular * ANGULAR_SCALE
+Cinemática diferencial amarrada à geometria do robô:
+  v_left  = linear - angular * wheel_base / 2     (m/s)
+  v_right = linear + angular * wheel_base / 2     (m/s)
+  cmd_left  = v_left  * linear_scale * left_wheel_sign
+  cmd_right = v_right * linear_scale * right_wheel_sign
 
-The scales convert m/s and rad/s into the hoverboard driver's internal units
-(roughly -1000 to 1000). Tune linear_scale and angular_scale to match your robot.
+`linear_scale` é a constante única que converte m/s nas unidades internas
+do driver (~ -1000..1000). `wheel_base` é a bitola física — assim
+`angular = 1 rad/s` produz, depois da conversão em /odom, exatamente
+1 rad/s medido (sem mais magic number `angular_scale`).
+
+`left_wheel_sign` / `right_wheel_sign` calibram polaridade. Devem casar
+com os mesmos parâmetros do `odom_publisher` — se inverter aqui sem
+inverter lá (ou vice-versa) o AMCL/EKF enxerga divergência entre comando
+e feedback. Por isso a inversão antiga "fios trocados" foi removida.
 """
 
 import rclpy
@@ -22,18 +31,19 @@ class CmdVelToWheels(Node):
     def __init__(self):
         super().__init__('cmd_vel_to_wheels')
 
-        # Scale factors: tune these to match your robot's response
-        # linear_scale: hoverboard units per m/s  (e.g. 400 means 1 m/s = 400 units)
-        # angular_scale: hoverboard units per rad/s
+        self.declare_parameter('wheel_base', 0.50)
         self.declare_parameter('linear_scale', 400.0)
-        self.declare_parameter('angular_scale', 150.0)
+        self.declare_parameter('left_wheel_sign', 1.0)
+        self.declare_parameter('right_wheel_sign', 1.0)
         self.declare_parameter('cmd_vel_topic', 'cmd_vel')
         self.declare_parameter('max_output', 1000.0)
 
-        self.linear_scale = self.get_parameter('linear_scale').value
-        self.angular_scale = self.get_parameter('angular_scale').value
+        self.wheel_base = float(self.get_parameter('wheel_base').value)
+        self.linear_scale = float(self.get_parameter('linear_scale').value)
+        self.left_sign = float(self.get_parameter('left_wheel_sign').value)
+        self.right_sign = float(self.get_parameter('right_wheel_sign').value)
         self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').value
-        self.max_output = self.get_parameter('max_output').value
+        self.max_output = float(self.get_parameter('max_output').value)
 
         self.sub = self.create_subscription(
             Twist,
@@ -46,26 +56,30 @@ class CmdVelToWheels(Node):
 
         self.get_logger().info(
             f'CmdVelToWheels: listening on /{self.cmd_vel_topic} '
-            f'| linear_scale={self.linear_scale} | angular_scale={self.angular_scale}'
+            f'| wheel_base={self.wheel_base} m '
+            f'| linear_scale={self.linear_scale} units/(m/s) '
+            f'| signs L={self.left_sign} R={self.right_sign}'
         )
 
     def _cmd_vel_callback(self, msg: Twist):
         linear = msg.linear.x
         angular = msg.angular.z
 
-        right = linear * self.linear_scale + angular * self.angular_scale
-        left = linear * self.linear_scale - angular * self.angular_scale
+        v_left = linear - angular * self.wheel_base / 2.0
+        v_right = linear + angular * self.wheel_base / 2.0
 
-        # Clamp to safe range
-        right = max(-self.max_output, min(self.max_output, right))
-        left = max(-self.max_output, min(self.max_output, left))
+        left = v_left * self.linear_scale * self.left_sign
+        right = v_right * self.linear_scale * self.right_sign
 
-        # Os fios do hoverboard estão invertidos: o que o driver chama de
-        # "left_wheel" dirige a roda direita e vice-versa. Trocamos aqui para
-        # que a convenção ROS (angular.z > 0 = girar à esquerda) seja respeitada.
+        peak = max(abs(left), abs(right))
+        if peak > self.max_output:
+            scale = self.max_output / peak
+            left *= scale
+            right *= scale
+
         wheels = WheelSpeeds()
-        wheels.right_wheel = float(left)
-        wheels.left_wheel = float(right)
+        wheels.left_wheel = float(left)
+        wheels.right_wheel = float(right)
         self.pub.publish(wheels)
 
 

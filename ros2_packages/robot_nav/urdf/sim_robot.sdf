@@ -2,7 +2,7 @@
 <!--
   Robô diferencial para simulação no Gazebo Harmonic (Jazzy).
 
-  Dimensões batem com o URDF real (wheel_base=0.45, wheel_radius=0.085)
+  Dimensões batem com o URDF real (track_width=0.50, wheel_radius=0.085)
   para que os tunings de slam_toolbox/Nav2 transfiram razoavelmente.
 
   Tópicos publicados pelos plugins:
@@ -163,7 +163,8 @@
     <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
       <left_joint>left_wheel_joint</left_joint>
       <right_joint>right_wheel_joint</right_joint>
-      <wheel_separation>0.45</wheel_separation>
+      <!-- Alinhado com robot.urdf.xacro (track_width=0.50 m). -->
+      <wheel_separation>0.50</wheel_separation>
       <wheel_radius>0.085</wheel_radius>
       <odom_publish_frequency>30</odom_publish_frequency>
       <topic>cmd_vel</topic>

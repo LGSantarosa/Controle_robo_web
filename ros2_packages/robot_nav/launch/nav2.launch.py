@@ -5,7 +5,7 @@ waypoint_follower + behavior_server + velocity_smoother + costmaps),
 consumindo um mapa estático previamente gerado com slam_toolbox.
 
 Uso:
-    ros2 launch robot_nav nav2.launch.py map:=/home/ubuntu/ros2_ws/maps/meu_mapa.yaml
+    ros2 launch robot_nav nav2.launch.py map:=$HOME/Workspace/Controle_robo_web/maps/meu_mapa.yaml
 """
 
 import os
@@ -18,7 +18,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg = get_package_share_directory('robot_nav')
-    params_file = os.path.join(pkg, 'config', 'nav2_params.yaml')
+    default_params = os.path.join(pkg, 'config', 'nav2_params.yaml')
 
     map_arg = DeclareLaunchArgument(
         'map', default_value='',
@@ -28,8 +28,13 @@ def generate_launch_description():
         'use_sim_time', default_value='false',
         description='true no modo sim (usa /clock do Gazebo)',
     )
+    params_arg = DeclareLaunchArgument(
+        'params_file', default_value=default_params,
+        description='Caminho do YAML de params Nav2 (use nav2_params_pi.yaml na Pi)',
+    )
     map_yaml = LaunchConfiguration('map')
     use_sim_time = LaunchConfiguration('use_sim_time')
+    params_file = LaunchConfiguration('params_file')
 
     lifecycle_nodes = [
         'map_server',
@@ -99,4 +104,4 @@ def generate_launch_description():
         ),
     ]
 
-    return LaunchDescription([map_arg, use_sim_time_arg, *nodes])
+    return LaunchDescription([map_arg, use_sim_time_arg, params_arg, *nodes])

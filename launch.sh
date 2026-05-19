@@ -2,10 +2,11 @@
 # Launcher completo: hoverboard driver + LiDAR + servidor web.
 #
 # Modos:
-#   ./launch.sh                                   # TELEOP (padrão) — web + collision monitor
+#   ./launch.sh                                   # TELEOP (padrão) — web manual
 #   ./launch.sh --slam                            # SLAM — mapeia o ambiente em tempo real
 #   ./launch.sh --nav2                            # NAV2 — navegação autônoma (mapa padrão)
 #   ./launch.sh --nav2 --map=/caminho/sala.yaml   # NAV2 — mapa específico
+#   ./launch.sh --trekking                        # TREKKING — ponto-a-ponto com PID (sem Nav2)
 #   ./launch.sh --sim                             # SIM — Gazebo Harmonic + robô diff-drive
 #   ./launch.sh --sim --slam                      # SIM + SLAM (mapeia a sala no Gazebo)
 #   ./launch.sh --sim --nav2                      # SIM + NAV2 (navega com mapa salvo)
@@ -13,40 +14,70 @@
 #
 # Outras flags:
 #   --no-lidar             desabilita o LiDAR (só modo real)
-#   --no-nav2              desabilita o collision monitor (modo teleop)
 #   --lidar-port=/dev/X    sobrescreve a porta do LiDAR (padrão /dev/lidar)
+#   --pi                   usa nav2_params_pi.yaml (perfil leve pra Raspberry Pi)
 #
 # Ctrl+C encerra todos os processos.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROS2_SETUP="${ROS2_WS:-$SCRIPT_DIR/.ros2_ws}/install/setup.bash"
+ROS2_SETUP="$SCRIPT_DIR/install/setup.bash"
 
 # --- Argumentos ---
 NO_LIDAR=false
-NO_NAV2=false
 LIDAR_PORT="/dev/lidar"
-MODE="teleop"                     # teleop | slam | nav2
+MODE="teleop"                     # teleop | slam | nav2 | trekking
 MAP_FILE="$SCRIPT_DIR/maps/sala.yaml"
+PI_PROFILE=false
 SIM=false
 WORLD_FILE="$SCRIPT_DIR/worlds/empty.sdf"
 SPAWN_X="2.0"
 SPAWN_Y="2.5"
 SPAWN_Z="0.2"
+# Firmware MEGA: 'auto' = flasheia só se hash de firmware/mega_bridge mudou.
+# --flash-mega força; --no-flash-mega pula sempre.
+FLASH_MEGA="auto"
 
 for arg in "$@"; do
     case $arg in
-        --slam)         MODE="slam" ;;
-        --nav2)         MODE="nav2" ;;
-        --sim)          SIM=true ;;
-        --world=*)      WORLD_FILE="${arg#*=}" ;;
-        --map=*)        MAP_FILE="${arg#*=}" ;;
-        --spawn-x=*)    SPAWN_X="${arg#*=}" ;;
-        --spawn-y=*)    SPAWN_Y="${arg#*=}" ;;
-        --spawn-z=*)    SPAWN_Z="${arg#*=}" ;;
-        --no-lidar)     NO_LIDAR=true ;;
-        --no-nav2)      NO_NAV2=true ;;
-        --lidar-port=*) LIDAR_PORT="${arg#*=}" ;;
+        --slam)            MODE="slam" ;;
+        --nav2)            MODE="nav2" ;;
+        --trekking)        MODE="trekking" ;;
+        --sim)             SIM=true ;;
+        --world=*)         WORLD_FILE="${arg#*=}" ;;
+        --map=*)           MAP_FILE="${arg#*=}" ;;
+        --spawn-x=*)       SPAWN_X="${arg#*=}" ;;
+        --spawn-y=*)       SPAWN_Y="${arg#*=}" ;;
+        --spawn-z=*)       SPAWN_Z="${arg#*=}" ;;
+        --no-lidar)        NO_LIDAR=true ;;
+        --lidar-port=*)    LIDAR_PORT="${arg#*=}" ;;
+        --pi)              PI_PROFILE=true ;;
+        --no-pi)           PI_PROFILE=false ;;
+        --flash-mega)      FLASH_MEGA="force" ;;
+        --no-flash-mega)   FLASH_MEGA="off" ;;
+        --help|-h)
+            echo "Uso: $0 [--slam|--nav2|--trekking] [--sim] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
+            echo ""
+            echo "  --flash-mega     força \`pio run -t upload\` mesmo sem mudança"
+            echo "  --no-flash-mega  pula o flash da MEGA sempre"
+            echo "  (sem flag)       auto: flasheia só quando o hash de firmware/mega_bridge/{src,include,platformio.ini} muda"
+            exit 0
+            ;;
+        # Sem ramo "*) erro" o launch.sh aceitava typos como --slamm silenciosamente
+        # e o usuário só descobria pelo modo TELEOP padrão. Falha rápido.
+        *)
+            echo "ERRO: flag desconhecida '$arg'. Use --help."
+            exit 1
+            ;;
     esac
+done
+
+# Auto-detecta Pi (arm64) se o usuário não passou --pi explicitamente.
+if [ "$PI_PROFILE" = false ] && [ "$(uname -m)" = "aarch64" ]; then
+    PI_PROFILE=true
+    echo "Detectado arm64 — usando perfil --pi automaticamente (override com --no-pi)."
+fi
+for arg in "$@"; do
+    [ "$arg" = "--no-pi" ] && PI_PROFILE=false
 done
 
 # Normaliza caminho do mundo (aceita relativo a SCRIPT_DIR)
@@ -89,13 +120,66 @@ fi
 
 mkdir -p "$SCRIPT_DIR/maps"
 
+WS_DIR="$SCRIPT_DIR"
+
+# --- colcon build incremental (hash dos fontes do workspace) ---
+# Pacotes vivem em ros2_packages/ — colcon descobre via --base-paths.
+# Hash cobre robot_nav E wheel_msgs (incluindo .msg) — sem wheel_msgs no scan,
+# alterar WheelSpeeds.msg não dispara rebuild apesar do colcon recompilá-lo.
+PKG_STAMP="$WS_DIR/install/.robot_nav.sha1"
+PKG_HASH=$(find "$SCRIPT_DIR/ros2_packages/robot_nav" "$SCRIPT_DIR/ros2_packages/wheel_msgs" -type f \
+    \( -name "*.py" -o -name "*.xml" -o -name "*.xacro" -o -name "*.yaml" -o -name "*.msg" \) \
+    -not -path "*/build/*" -not -path "*/install/*" \
+    2>/dev/null | sort | xargs sha1sum 2>/dev/null | sha1sum | awk '{print $1}')
+
+if [ ! -f "$ROS2_SETUP" ] \
+   || [ ! -f "$PKG_STAMP" ] \
+   || [ "$(cat "$PKG_STAMP" 2>/dev/null)" != "$PKG_HASH" ]; then
+    if [ -z "$ROS_DISTRO" ]; then
+        for d in /opt/ros/*/setup.bash; do
+            [ -f "$d" ] && source "$d" && break
+        done
+    fi
+    if ! command -v colcon >/dev/null 2>&1; then
+        echo "ERRO: colcon não encontrado. Instale: sudo apt install python3-colcon-common-extensions"
+        exit 1
+    fi
+    if [ ! -f "$ROS2_SETUP" ]; then
+        # Primeira build: compila todos os pacotes (incluindo os de terceiros).
+        echo "Compilando workspace ROS2 (primeira build — todos os pacotes)..."
+        (cd "$WS_DIR" && colcon build --base-paths ros2_packages --symlink-install) || {
+            echo "ERRO: colcon build falhou."
+            exit 1
+        }
+    else
+        echo "Compilando workspace ROS2 (mudanças detectadas em robot_nav)..."
+        (cd "$WS_DIR" && colcon build --base-paths ros2_packages --symlink-install --packages-select robot_nav wheel_msgs) || {
+            echo "ERRO: colcon build falhou."
+            exit 1
+        }
+    fi
+    echo "$PKG_HASH" > "$PKG_STAMP"
+fi
+
 if [ ! -f "$ROS2_SETUP" ]; then
     echo "ERRO: $ROS2_SETUP não encontrado."
-    echo "Execute: cd $SCRIPT_DIR && ./setup.sh"
+    echo "Execute: cd $SCRIPT_DIR && colcon build --base-paths ros2_packages"
     exit 1
 fi
 
 source "$ROS2_SETUP"
+
+# --- python3-serial (dependência do mega_bridge) ---
+if ! python3 -c "import serial" 2>/dev/null; then
+    echo "Instalando python3-serial (sudo)..."
+    sudo apt install -y python3-serial
+fi
+
+# --- Aviso de /dev/mega (modo real) ---
+if [ "$SIM" = false ] && [ ! -e /dev/mega ]; then
+    echo "AVISO: /dev/mega não encontrado."
+    echo "       Plugue a Arduino MEGA e rode: sudo $SCRIPT_DIR/setup_udev.sh"
+fi
 
 # --- Bootstrap do venv com dependências Python ---
 VENV_DIR="$SCRIPT_DIR/controle_web/.venv"
@@ -125,9 +209,12 @@ fi
 # --- Limpa órfãos de execuções anteriores (nós ROS2 e app.py) ---
 pkill -9 -f "robot_nav/odom_publisher"      2>/dev/null
 pkill -9 -f "robot_nav/cmd_vel_to_wheels"   2>/dev/null
+pkill -9 -f "robot_nav/mega_bridge"         2>/dev/null
+pkill -9 -f "robot_nav/pose_estimator"      2>/dev/null
+pkill -9 -f "robot_nav/cone_detector"       2>/dev/null
+pkill -9 -f "robot_nav/trekking_runner"     2>/dev/null
 pkill -9 -f "robot_state_publisher"         2>/dev/null
 pkill -9 -f "ldlidar_stl_ros2_node"         2>/dev/null
-pkill -9 -f "ros2-hoverboard-driver/main"   2>/dev/null
 pkill -9 -f "async_slam_toolbox_node"       2>/dev/null
 pkill -9 -f "nav2_map_server"               2>/dev/null
 pkill -9 -f "nav2_amcl"                     2>/dev/null
@@ -139,6 +226,54 @@ pkill -9 -f "nav2_velocity_smoother"        2>/dev/null
 pkill -9 -f "nav2_lifecycle_manager"        2>/dev/null
 pkill -9 -f "nav2_waypoint_follower"        2>/dev/null
 
+# --- [opcional] Flash da MEGA (firmware/mega_bridge) ---
+# Default: auto. Hash de src/, include/ e platformio.ini define quando
+# refazer o upload — assim mudar só app.py ou um YAML do Nav2 não dispara
+# `pio run`. Pula em SIM e quando o usuário pediu --no-flash-mega.
+# pkill acima já liberou /dev/mega (mega_bridge antigo morto).
+if [ "$SIM" = false ] && [ "$FLASH_MEGA" != "off" ]; then
+    FW_DIR="$SCRIPT_DIR/firmware/mega_bridge"
+    if [ -d "$FW_DIR" ]; then
+        FW_STAMP="$FW_DIR/.pio/.flash.sha1"
+        FW_HASH=$(find "$FW_DIR/src" "$FW_DIR/include" "$FW_DIR/platformio.ini" \
+            -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.ini" \) 2>/dev/null \
+            | sort | xargs sha1sum 2>/dev/null | sha1sum | awk '{print $1}')
+        NEED_FLASH=false
+        if [ "$FLASH_MEGA" = "force" ]; then
+            NEED_FLASH=true
+            echo "[MEGA] --flash-mega: forçando upload."
+        elif [ -z "$FW_HASH" ]; then
+            echo "[MEGA] não consegui calcular hash de $FW_DIR — pulando flash."
+        elif [ ! -f "$FW_STAMP" ] || [ "$(cat "$FW_STAMP" 2>/dev/null)" != "$FW_HASH" ]; then
+            NEED_FLASH=true
+            echo "[MEGA] firmware mudou — flasheando..."
+        fi
+
+        if [ "$NEED_FLASH" = true ]; then
+            if ! command -v pio >/dev/null 2>&1; then
+                echo "ERRO: 'pio' não encontrado. Instale PlatformIO ou use --no-flash-mega."
+                exit 1
+            fi
+            if [ ! -e /dev/mega ]; then
+                echo "AVISO: /dev/mega ausente — pulando flash da MEGA."
+            else
+                (cd "$FW_DIR" && pio run -t upload)
+                FW_RC=$?
+                if [ $FW_RC -eq 0 ]; then
+                    mkdir -p "$FW_DIR/.pio"
+                    echo "$FW_HASH" > "$FW_STAMP"
+                    echo "[MEGA] flash concluído."
+                else
+                    echo "ERRO: pio run -t upload falhou (exit=$FW_RC)."
+                    exit $FW_RC
+                fi
+            fi
+        elif [ -n "$FW_HASH" ]; then
+            echo "[MEGA] firmware atualizado (hash bate) — pulando flash."
+        fi
+    fi
+fi
+
 # --- Libera porta 5000 se já estiver em uso ---
 PORT_PID=$(ss -tlnp 2>/dev/null | awk '/:5000 /{match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}')
 if [ -n "$PORT_PID" ]; then
@@ -147,7 +282,6 @@ if [ -n "$PORT_PID" ]; then
     sleep 1
 fi
 
-DRIVER_PID=""
 SERVER_PID=""
 ROBOT_PID=""
 LIDAR_PID=""
@@ -180,11 +314,10 @@ cleanup() {
     kill_tree "$NAV2_PID"
     kill_tree "$LIDAR_PID"
     kill_tree "$ROBOT_PID"
-    kill_tree "$DRIVER_PID"
     kill_tree "$SIM_PID"
     sleep 1
     # Segunda passada: SIGKILL em qualquer filho que tenha sobrevivido
-    for pid in $SERVER_PID $SLAM_PID $NAV2_PID $LIDAR_PID $ROBOT_PID $DRIVER_PID $SIM_PID; do
+    for pid in $SERVER_PID $SLAM_PID $NAV2_PID $LIDAR_PID $ROBOT_PID $SIM_PID; do
         for desc in $(pgrep -P "$pid" 2>/dev/null) $pid; do
             kill -9 "$desc" 2>/dev/null
         done
@@ -192,9 +325,12 @@ cleanup() {
     # Rede de segurança: mata qualquer nó do robot_nav órfão que reste
     pkill -9 -f "robot_nav/odom_publisher"      2>/dev/null
     pkill -9 -f "robot_nav/cmd_vel_to_wheels"   2>/dev/null
-        pkill -9 -f "robot_state_publisher"         2>/dev/null
+    pkill -9 -f "robot_nav/mega_bridge"         2>/dev/null
+    pkill -9 -f "robot_nav/pose_estimator"      2>/dev/null
+    pkill -9 -f "robot_nav/cone_detector"       2>/dev/null
+    pkill -9 -f "robot_nav/trekking_runner"     2>/dev/null
+    pkill -9 -f "robot_state_publisher"         2>/dev/null
     pkill -9 -f "ldlidar_stl_ros2_node"         2>/dev/null
-    pkill -9 -f "ros2-hoverboard-driver/main"   2>/dev/null
     pkill -9 -f "async_slam_toolbox_node"       2>/dev/null
     pkill -9 -f "nav2_map_server"               2>/dev/null
     pkill -9 -f "nav2_amcl"                     2>/dev/null
@@ -216,62 +352,69 @@ trap cleanup INT TERM EXIT
 LOG_DIR="$SCRIPT_DIR/controle_web/logs"
 mkdir -p "$LOG_DIR"
 
+# Health-check em vez de `sleep N` fixo: espera um tópico ROS aparecer no
+# discovery (até $2 segundos). Em hardware lento (Pi 4 / SD) o sleep curto
+# pode subir o próximo nó antes do anterior estar pronto; o longo desperdiça
+# tempo no PC. Sai 0 quando o tópico aparece, 1 no timeout (o caller decide
+# se segue mesmo assim).
+wait_for_topic() {
+    local topic=$1 timeout=${2:-30} elapsed=0
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if ros2 topic list 2>/dev/null | grep -qx "$topic"; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    echo "  [wait_for_topic] timeout $timeout s aguardando $topic"
+    return 1
+}
+
 if [ "$SIM" = true ]; then
     # --- [SIM] Gazebo Harmonic + robô diff-drive + bridges ROS↔GZ ---
-    echo "[1/5] Modo SIM — subindo Gazebo com mundo: $WORLD_FILE"
+    echo "[1/4] Modo SIM — subindo Gazebo com mundo: $WORLD_FILE"
     SIM_LOG="$LOG_DIR/sim.log"
     SIM_WORLD="$WORLD_FILE" ros2 launch robot_nav sim.launch.py \
         world:="$WORLD_FILE" \
         spawn_x:="$SPAWN_X" spawn_y:="$SPAWN_Y" spawn_z:="$SPAWN_Z" > "$SIM_LOG" 2>&1 &
     SIM_PID=$!
     echo "      PID: $SIM_PID  |  Log: $SIM_LOG"
-    # Gazebo + spawn demora ~5s pra estabilizar os tópicos
-    sleep 6
+    # Espera o /clock vir do bridge GZ → ROS antes de seguir.
+    wait_for_topic /clock 30 || echo "  AVISO: Gazebo ainda não publicou /clock — seguindo mesmo assim."
     # Hardware desligado no sim
     NO_LIDAR=true
 else
-    # --- [1] Driver do hoverboard ---
-    echo "[1/5] Iniciando driver do hoverboard (porta: /dev/hoverboard)..."
-    DRIVER_LOG="$LOG_DIR/hoverboard_driver.log"
-    ros2 run ros2-hoverboard-driver main > "$DRIVER_LOG" 2>&1 &
-    DRIVER_PID=$!
-    echo "      PID: $DRIVER_PID  |  Log: $DRIVER_LOG"
-
-    sleep 2
-
-    if ! kill -0 "$DRIVER_PID" 2>/dev/null; then
-        echo "AVISO: Driver do hoverboard falhou. Veja o log:"
-        cat "$DRIVER_LOG"
-        echo "(Continuando sem hardware — modo simulação)"
+    # --- [1+2] Nós do robô (mega_bridge + URDF + odom + cmd_vel_to_wheels) ---
+    echo "[1/4] Iniciando nós do robô (MEGA bridge, URDF, odometria, cmd_vel->wheels)..."
+    if [ ! -e "/dev/mega" ]; then
+        echo "      AVISO: /dev/mega não encontrado — rode sudo ./setup_udev.sh primeiro,"
+        echo "      ou plug a Arduino MEGA antes de subir."
     fi
-
-    # --- [2] Nós do robô (robot_state_publisher + odom + cmd_vel_to_wheels) ---
-    echo "[2/5] Iniciando nós do robô (URDF, odometria, cmd_vel->wheels)..."
     ROBOT_LOG="$LOG_DIR/robot_nodes.log"
     ros2 launch robot_nav robot.launch.py > "$ROBOT_LOG" 2>&1 &
     ROBOT_PID=$!
     echo "      PID: $ROBOT_PID  |  Log: $ROBOT_LOG"
 
-    sleep 2
+    wait_for_topic /odom 15 || echo "  AVISO: odom_publisher ainda não publicou /odom — seguindo."
 
     # --- [3] LiDAR FHL-LD20 + detector de obstáculos ---
     if [ "$NO_LIDAR" = false ]; then
         if [ -e "$LIDAR_PORT" ]; then
-            echo "[3/5] Iniciando LiDAR FHL-LD20 em $LIDAR_PORT..."
+            echo "[2/4] Iniciando LiDAR FHL-LD20 em $LIDAR_PORT..."
             LIDAR_LOG="$LOG_DIR/lidar.log"
             ros2 launch robot_nav lidar.launch.py lidar_port:="$LIDAR_PORT" > "$LIDAR_LOG" 2>&1 &
             LIDAR_PID=$!
             echo "      PID: $LIDAR_PID  |  Log: $LIDAR_LOG"
-            sleep 1
+            wait_for_topic /scan 10 || echo "  AVISO: LiDAR ainda não publicou /scan — seguindo."
 
 
         else
-            echo "[3/5] AVISO: Porta do LiDAR $LIDAR_PORT não encontrada. Pulando LiDAR."
+            echo "[2/4] AVISO: Porta do LiDAR $LIDAR_PORT não encontrada. Pulando LiDAR."
             echo "      Para especificar outra porta: ./launch.sh --lidar-port=/dev/ttyUSB2"
             NO_LIDAR=true
         fi
     else
-        echo "[3/5] LiDAR desativado (--no-lidar)"
+        echo "[2/4] LiDAR desativado (--no-lidar)"
     fi
 fi
 
@@ -283,34 +426,43 @@ fi
 
 case "$MODE" in
     slam)
-        echo "[4/5] Modo SLAM — subindo slam_toolbox (mapping online)..."
+        echo "[3/4] Modo SLAM — subindo slam_toolbox (mapping online)..."
         SLAM_LOG="$LOG_DIR/slam.log"
         ros2 launch robot_nav slam.launch.py $SIM_TIME_ARG > "$SLAM_LOG" 2>&1 &
         SLAM_PID=$!
         echo "      PID: $SLAM_PID  |  Log: $SLAM_LOG"
-        sleep 3
+        wait_for_topic /map 30 || echo "  AVISO: slam_toolbox ainda não publicou /map — seguindo."
         ;;
     nav2)
-        echo "[4/5] Modo NAV2 — subindo Nav2 com mapa $MAP_FILE..."
+        NAV2_PARAMS_ARG=""
+        if [ "$PI_PROFILE" = true ]; then
+            PI_YAML="$(ros2 pkg prefix robot_nav 2>/dev/null)/share/robot_nav/config/nav2_params_pi.yaml"
+            if [ -f "$PI_YAML" ]; then
+                NAV2_PARAMS_ARG="params_file:=$PI_YAML"
+                echo "[3/4] Modo NAV2 (perfil PI) — params: $PI_YAML"
+            else
+                echo "[3/4] Modo NAV2 — aviso: nav2_params_pi.yaml não encontrado, usando defaults"
+            fi
+        else
+            echo "[3/4] Modo NAV2 — subindo Nav2 com mapa $MAP_FILE..."
+        fi
         NAV2_LOG="$LOG_DIR/nav2.log"
-        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG > "$NAV2_LOG" 2>&1 &
+        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
-        sleep 5
+        # Nav2 demora pra ativar todos os lifecycle nodes; espera o costmap global.
+        wait_for_topic /global_costmap/costmap 30 || echo "  AVISO: Nav2 ainda não publicou /global_costmap/costmap — seguindo."
+        ;;
+    trekking)
+        echo "[3/4] Modo TREKKING — subindo pose_estimator + cone_detector + trekking_runner..."
+        NAV2_LOG="$LOG_DIR/trekking.log"
+        ros2 launch robot_nav trekking.launch.py > "$NAV2_LOG" 2>&1 &
+        NAV2_PID=$!
+        echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
+        wait_for_topic /trekking/pose 15 || echo "  AVISO: trekking_runner ainda não publicou /trekking/pose — seguindo."
         ;;
     teleop)
-        if [ "$SIM" = true ]; then
-            echo "[4/5] Modo SIM+TELEOP — sem collision monitor (dirija manualmente no Gazebo)."
-        elif [ "$NO_NAV2" = false ] && ros2 pkg list 2>/dev/null | grep -q "nav2_collision_monitor"; then
-            echo "[4/5] Modo TELEOP — subindo Nav2 Collision Monitor..."
-            NAV2_LOG="$LOG_DIR/nav2_collision.log"
-            ros2 launch robot_nav nav2_collision.launch.py > "$NAV2_LOG" 2>&1 &
-            NAV2_PID=$!
-            echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
-            sleep 2
-        else
-            echo "[4/5] Modo TELEOP — sem collision monitor."
-        fi
+        echo "[3/4] Modo TELEOP — dirija manualmente (sem camada extra de segurança)."
         ;;
 esac
 
@@ -318,7 +470,7 @@ esac
 echo ""
 SIM_TAG=""
 [ "$SIM" = true ] && SIM_TAG=" [SIM/Gazebo]"
-echo "[5/5] Iniciando servidor web em http://0.0.0.0:5000 (modo: $MODE$SIM_TAG)"
+echo "[4/4] Iniciando servidor web em http://0.0.0.0:5000 (modo: $MODE$SIM_TAG)"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 case "$MODE" in
@@ -330,6 +482,11 @@ case "$MODE" in
         echo "  MODO NAV2$SIM_TAG — clique no mapa web para enviar o robô a um destino."
         echo "  Mapa: $MAP_FILE"
         echo "  AMCL publicando map→odom. bt_navigator consome /goal_pose."
+        ;;
+    trekking)
+        echo "  MODO TREKKING$SIM_TAG — ponto-a-ponto com PID e snap-to-cone."
+        echo "  1) Aperte ● Gravar  2) dirija até cada ponto e + Ponto"
+        echo "  3) volte ao início  4) ▶ Play"
         ;;
     teleop)
         echo "  MODO TELEOP$SIM_TAG — Web → /cmd_vel → robô"
@@ -349,7 +506,7 @@ if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 fi
 
-echo "Logs dos nós em $LOG_DIR/ (ex: tail -f $DRIVER_LOG)"
+echo "Logs dos nós em $LOG_DIR/ (ex: tail -f $LOG_DIR/robot_nodes.log)"
 echo ""
 
 # Passa o modo e o diretório de mapas para o app.py via env.

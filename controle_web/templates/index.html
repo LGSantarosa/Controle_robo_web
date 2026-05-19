@@ -141,11 +141,44 @@
         </div>
       </section>
 
-      <!-- Câmera RGB do robô (sim ou hardware) -->
-      <section class="camera-section" id="camera-section" style="display:none">
-        <h2>Câmera</h2>
-        <img id="camera-image" alt="câmera do robô" style="width:320px; height:240px; background:#222; border-radius:6px"/>
-        <div id="camera-status" class="status-line">aguardando frame...</div>
+      <!-- Painel TREKKING (ponto-a-ponto com fusão IMU+flow+rodas e cones via LiDAR) -->
+      <section class="trek-panel" id="trek-panel" style="display:none">
+        <div class="trek-header">
+          <h2>Trekking</h2>
+          <div class="trek-toolbar">
+            <span id="trek-mode-pill" class="trek-pill mode-idle">IDLE</span>
+            <span id="trek-status" class="trek-status">aguardando pose...</span>
+          </div>
+        </div>
+        <div class="trek-info">
+          <span>pose: <strong id="trek-pose">—</strong></span>
+          <span>waypoints: <strong id="trek-wp-count">0</strong></span>
+          <span>cones: <strong id="trek-cone-count">0</strong></span>
+          <span id="trek-snap-info" class="trek-snap"></span>
+        </div>
+        <div class="trek-buttons">
+          <button id="trek-btn-reset"  class="trek-btn">⟲ Resetar</button>
+          <button id="trek-btn-record" class="trek-btn">● Gravar</button>
+          <button id="trek-btn-save-pt" class="trek-btn">+ Ponto</button>
+          <button id="trek-btn-play"   class="trek-btn trek-play">▶ Play</button>
+          <button id="trek-btn-stop"   class="trek-btn trek-stop">■ Parar</button>
+          <span class="trek-sep">|</span>
+          <input id="trek-route-name" type="text" placeholder="nome da rota" class="trek-input"/>
+          <button id="trek-btn-save"   class="trek-btn">💾 Salvar rota</button>
+          <button id="trek-btn-load"   class="trek-btn">📂 Carregar</button>
+          <select id="trek-route-select" class="trek-select" style="display:none"></select>
+        </div>
+        <div class="trek-canvas-wrap">
+          <canvas id="trek-canvas" width="600" height="600"></canvas>
+        </div>
+        <div class="trek-legend">
+          <span><i class="dot dot-robot"></i>robô</span>
+          <span><i class="dot dot-trail"></i>trilha</span>
+          <span><i class="dot dot-wp"></i>waypoint</span>
+          <span><i class="dot dot-cone-rec"></i>cone gravado</span>
+          <span><i class="dot dot-cone-live"></i>cone ao vivo</span>
+          <span><i class="dot dot-target"></i>alvo PID</span>
+        </div>
       </section>
 
       <!-- Log visual de eventos e última entrega confirmada (ACK) -->
@@ -157,9 +190,10 @@
     </main>
 
     <!-- Bibliotecas cliente Socket.IO e scripts do cliente -->
-    <script src="https://cdn.socket.io/3.1.3/socket.io.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="/static/js/client.js?v=6"></script>
     <script src="/static/js/gamepad.js?v=2"></script>
     <script src="/static/js/map.js?v=3"></script>
+    <script src="/static/js/trekking.js?v=1"></script>
   </body>
 </html>

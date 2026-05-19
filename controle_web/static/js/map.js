@@ -89,6 +89,12 @@
 
     socket.on('map_update', (data) => {
       if (!data || !data.info || !data.png_b64) return;
+      // Cria uma Image nova a cada update — reusar uma Image global (set
+      // `.src` na mesma instância) é mais leve para o GC mas alguns
+      // navegadores (Chromium/Safari) não disparam `onload` de forma
+      // confiável em reatribuições rápidas de data URL, e o canvas fica
+      // congelado no primeiro frame após o serviço subir. /map vem a 1 Hz,
+      // então o custo de alocação é desprezível.
       mapInfo = data.info;
       const img = new Image();
       img.onload = () => {
@@ -304,14 +310,18 @@
         return;
       }
 
-      // Click simples (sem modo waypoint) → goal único
+      // Click simples (sem modo waypoint) → goal único.
+      // Click sem drag → yaw=0. Click+drag → yaw aponta na direção do drag
+      // (mesma convenção dos waypoints; canvas y cresce pra baixo, ROS pra cima).
       if (!wpMode && wpMouseDown) {
         const ddx = cx - wpMouseDown.cx;
         const ddy = cy - wpMouseDown.cy;
-        if (Math.sqrt(ddx * ddx + ddy * ddy) < DRAG_THRESHOLD) {
-          const world = wpMouseDown.world;
+        const dragged = Math.sqrt(ddx * ddx + ddy * ddy) > DRAG_THRESHOLD;
+        const world = wpMouseDown.world;
+        const yaw = dragged ? Math.atan2(-ddy, ddx) : 0.0;
+        {
           lastGoal = world;
-          socket.emit('nav_goal', { x: world.x, y: world.y, yaw: 0.0 });
+          socket.emit('nav_goal', { x: world.x, y: world.y, yaw });
           statusEl.textContent = `alvo: (${world.x.toFixed(2)}, ${world.y.toFixed(2)})`;
           render();
         }
@@ -524,6 +534,8 @@
     }
   }
 
-  // Redesenha ~15 Hz para cobrir updates de pose sem precisar chamar render manualmente
-  setInterval(render, 66);
+  // Cada handler que muda estado (map_update, robot_pose, plan_update,
+  // mouse, waypoints, ...) já chama render() diretamente — manter um
+  // setInterval(render, 66) redesenharia o canvas a 15 Hz mesmo parado,
+  // queimando CPU sem motivo no Pi 4. Removido a favor do "render on demand".
 })();
