@@ -245,25 +245,25 @@ class ROS2Controller(RobotController):
                 linear, angular = self._compute_cmd_vel()
                 self._publish(linear, angular)
             elif abs(self._last_gamepad_linear) > 0.01 or abs(self._last_gamepad_angular) > 0.01:
-                linear = self._last_gamepad_linear * self._linear_speed
-                angular = -self._last_gamepad_angular * self._angular_speed
+                linear = self._last_gamepad_linear * self.linear_speed
+                angular = -self._last_gamepad_angular * self.angular_speed
                 self._publish(linear, angular)
             # else: nada ativo — deixa o watchdog do firmware zerar.
             self._time.sleep(PERIOD)
 
     @property
-    def _linear_speed(self) -> float:
+    def linear_speed(self) -> float:
         return self.BASE_LINEAR_SPEED * self._speed_multiplier
 
     @property
-    def _angular_speed(self) -> float:
+    def angular_speed(self) -> float:
         return self.BASE_ANGULAR_SPEED * self._speed_multiplier
 
     def set_speed_multiplier(self, mult: float) -> float:
         """Define o multiplicador de velocidade e republica imediatamente."""
         self._speed_multiplier = max(self.SPEED_MULT_MIN, min(self.SPEED_MULT_MAX, mult))
         print(f"[ROS2Controller] Multiplicador de velocidade: {self._speed_multiplier:.2f}x "
-              f"(linear={self._linear_speed:.0f}, angular={self._angular_speed:.0f})")
+              f"(linear={self.linear_speed:.0f}, angular={self.angular_speed:.0f})")
 
         # Republica com a velocidade nova se estiver em movimento
         if not self._emergency_stop:
@@ -273,8 +273,8 @@ class ROS2Controller(RobotController):
                 self._publish(linear, angular)
             elif abs(self._last_gamepad_linear) > 0.01 or abs(self._last_gamepad_angular) > 0.01:
                 # Modo gamepad — recalcula com último eixo
-                linear = self._last_gamepad_linear * self._linear_speed
-                angular = -self._last_gamepad_angular * self._angular_speed
+                linear = self._last_gamepad_linear * self.linear_speed
+                angular = -self._last_gamepad_angular * self.angular_speed
                 self._publish(linear, angular)
 
         return self._speed_multiplier
@@ -295,7 +295,7 @@ class ROS2Controller(RobotController):
         # +1 esquerda, -1 direita (convenção ROS: anti-horário positivo)
         ang = (1.0 if lft else 0.0) - (1.0 if rgt else 0.0)
 
-        return lin * self._linear_speed, ang * self._angular_speed
+        return lin * self.linear_speed, ang * self.angular_speed
 
     def handle_key_event(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         etype  = event.get('type')
@@ -370,8 +370,8 @@ class ROS2Controller(RobotController):
             self._last_gamepad_angular = gp_angular
 
             # Converte joystick para m/s e rad/s (angular: direita positiva no gamepad = negativo no ROS)
-            linear = gp_linear * self._linear_speed
-            angular = -gp_angular * self._angular_speed
+            linear = gp_linear * self.linear_speed
+            angular = -gp_angular * self.angular_speed
             self._publish(linear, angular)
 
             # Determina comando semântico para log

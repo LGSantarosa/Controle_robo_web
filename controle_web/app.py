@@ -360,7 +360,7 @@ def handle_key_event(data):
     # Recebe um evento de tecla do cliente
     # Esperado: { type: 'down'|'up', key: 'KeyW'|'ArrowUp'|..., code: 'KeyW', repeat: bool, seq?: int }
     try:
-        app.logger.info(f"key_event from {request.remote_addr}: {data}")
+        app.logger.debug(f"key_event from {request.remote_addr}: {data}")
         # Encaminha o evento para o controlador do robô
         result = controller.handle_key_event(data)
         # Monta o registro padrão do evento para arquivo
@@ -427,7 +427,7 @@ def handle_key_event(data):
 def handle_gamepad_event(data):
     # Recebe evento de gamepad (controle PS4/Xbox) com valores analógicos
     try:
-        app.logger.info(f"gamepad_event from {request.remote_addr}: type={data.get('type')} L={data.get('linear','?')} A={data.get('angular','?')}")
+        app.logger.debug(f"gamepad_event from {request.remote_addr}: type={data.get('type')} L={data.get('linear','?')} A={data.get('angular','?')}")
         result = controller.handle_gamepad_event(data)
 
         entry = {
@@ -474,7 +474,7 @@ def handle_gamepad_event(data):
             if result and result.get('command'):
                 cmd_pt = {'forward': 'frente', 'backward': 'ré', 'left': 'esquerda', 'right': 'direita', 'stop': 'parar'}
                 act_pt = {'start': 'Iniciar', 'stop': 'Parar'}
-                app.logger.info(f"[Gamepad] {act_pt.get(result['action'], result['action'])} {cmd_pt.get(result['command'], result['command'])} L={result.get('left_speed',0):.0f} R={result.get('right_speed',0):.0f} from {entry['addr']}")
+                app.logger.debug(f"[Gamepad] {act_pt.get(result['action'], result['action'])} {cmd_pt.get(result['command'], result['command'])} L={result.get('left_speed',0):.0f} R={result.get('right_speed',0):.0f} from {entry['addr']}")
         except Exception:
             pass
 
@@ -506,8 +506,8 @@ def handle_set_speed(data):
         emit('speed_update', {
             'ok': True,
             'multiplier': effective,
-            'linear_speed': controller._linear_speed,
-            'angular_speed': controller._angular_speed,
+            'linear_speed': controller.linear_speed,
+            'angular_speed': controller.angular_speed,
         }, broadcast=True)
     except Exception as e:
         # Erro: responde só ao cliente que mandou — broadcast aqui mostraria

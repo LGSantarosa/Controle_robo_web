@@ -20,6 +20,8 @@ inverter lá (ou vice-versa) o AMCL/EKF enxerga divergência entre comando
 e feedback. Por isso a inversão antiga "fios trocados" foi removida.
 """
 
+import math
+
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
@@ -64,6 +66,13 @@ class CmdVelToWheels(Node):
     def _cmd_vel_callback(self, msg: Twist):
         linear = msg.linear.x
         angular = msg.angular.z
+
+        if not (math.isfinite(linear) and math.isfinite(angular)):
+            self.get_logger().warn(
+                f'cmd_vel não-finito (linear={linear}, angular={angular}); ignorando',
+                throttle_duration_sec=1.0,
+            )
+            return
 
         v_left = linear - angular * self.wheel_base / 2.0
         v_right = linear + angular * self.wheel_base / 2.0

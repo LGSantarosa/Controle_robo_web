@@ -121,7 +121,10 @@ class TrekkingRunner(Node):
         # `button_pending` guarda quantos frames consecutivos vimos o novo
         # valor. Só atualiza o estável após DEBOUNCE_FRAMES iguais — evita
         # falsos rising edges no bouncing mecânico a 50 Hz.
-        self.button_stable = False
+        # `button_stable=None` marca "ainda não calibrado": o primeiro
+        # callback adota o valor recebido sem disparar rising edge — caso
+        # o botão esteja pressionado quando o nó sobe.
+        self.button_stable = None
         self.button_pending_value = False
         self.button_pending_count = 0
         self.DEBOUNCE_FRAMES = 2
@@ -190,6 +193,12 @@ class TrekkingRunner(Node):
 
     def _on_button(self, msg: Bool):
         v = bool(msg.data)
+        if self.button_stable is None:
+            # Primeira amostra — calibra o estado estável sem rising edge.
+            self.button_stable = v
+            self.button_pending_value = v
+            self.button_pending_count = 0
+            return
         if v == self.button_stable:
             # Já estamos no estado v — limpa qualquer transição pendente.
             self.button_pending_value = v
