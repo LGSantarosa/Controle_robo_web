@@ -73,6 +73,12 @@ def generate_launch_description():
         parameters=[{
             'port': LaunchConfiguration('mega_port'),
             'baud': LaunchConfiguration('mega_baud'),
+            # Placa traseira tem motores invertidos E cabos L/R trocados.
+            # As duas inversões se cancelam no eixo do steer (turn funciona
+            # sem compensação), mas se somam no eixo do speed (forward
+            # giraria pra trás). Por isso só `rear_invert_speed=True`.
+            # Validado em bancada com rodas no ar.
+            'rear_invert_speed': True,
         }],
     )
 

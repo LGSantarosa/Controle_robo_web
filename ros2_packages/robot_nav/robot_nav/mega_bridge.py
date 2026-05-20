@@ -134,12 +134,21 @@ class MegaBridge(Node):
         # Reescala wheel_msgs.WheelSpeeds (unidades do hoverboard) caso
         # cmd_vel_to_wheels ainda esteja saindo nas unidades originais.
         self.declare_parameter('wheel_scale', 1.0)
+        # Inversão de polaridade da placa TRÁS: hardware do robô tem os dois
+        # motores RL/RR ligados com fase invertida, então "frente" comanda
+        # PWM positivo mas o motor gira pra trás. Aplicado antes de empacotar
+        # o frame FT_SET_SPEED; default False pra não quebrar quem não tem
+        # esse hardware.
+        self.declare_parameter('rear_invert_speed', False)
+        self.declare_parameter('rear_invert_steer', False)
 
         self._port = self.get_parameter('port').value
         self._baud = int(self.get_parameter('baud').value)
         self._imu_frame = self.get_parameter('imu_frame').value
         self._flow_frame = self.get_parameter('flow_frame').value
         self._wheel_scale = float(self.get_parameter('wheel_scale').value)
+        self._rear_speed_sign = -1 if bool(self.get_parameter('rear_invert_speed').value) else 1
+        self._rear_steer_sign = -1 if bool(self.get_parameter('rear_invert_steer').value) else 1
 
         try:
             self._ser = serial.Serial(self._port, self._baud, timeout=0.05)
@@ -232,8 +241,11 @@ class MegaBridge(Node):
 
     def _on_setpoint(self, msg: WheelSpeeds):
         steer, speed = self._wheelspeeds_to_steer_speed(msg.left_wheel, msg.right_wheel)
-        # Mesma referência pras duas placas — skid-steer 4 rodas.
-        payload = struct.pack('<hhhh', steer, speed, steer, speed)
+        # TRÁS pode estar com polaridade dos motores invertida — aplica os
+        # sinais antes de empacotar (frente fica sempre direto).
+        steer_rear = self._rear_steer_sign * steer
+        speed_rear = self._rear_speed_sign * speed
+        payload = struct.pack('<hhhh', steer, speed, steer_rear, speed_rear)
         self._send(FT_SET_SPEED, payload)
 
     def _on_leds(self, msg: ColorRGBA):

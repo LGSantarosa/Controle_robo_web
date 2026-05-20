@@ -122,15 +122,17 @@ class ROS2Controller(RobotController):
 
     # Velocidades base em unidades SI.
     # Multiplicador de velocidade escala esses valores (0.5x–4.0x).
-    # Normal (1.0x) = 0.3 m/s / 1.5 rad/s.
-    # Boost (□ 2.0x) = 0.6 m/s / 3.0 rad/s.
+    # Normal (1.0x) = 0.3 m/s / 6.0 rad/s.
+    # Boost (□ 2.0x) = 0.6 m/s / 12 rad/s (cliparia em ±1000 no wheel cmd).
     #
-    # Angular subiu de 0.5 → 1.5 rad/s: com 4 rodas no chão e skid-steer
-    # puro, 0.5 rad/s vira só ±50 em comando (linear_scale=400, wheel_base=0.5),
-    # ~5% de PWM — abaixo do atrito estático do hoverboard. Testado a 1.5
-    # rad/s via `ros2 topic pub` e as rodas giram em sentidos opostos.
+    # Angular ficou em 6.0 rad/s: o chassi não apoia as 4 rodas
+    # uniformemente no chão, então as rodas com pouca carga patinam e
+    # comando baixo não move o robô em torno do eixo. Com 6.0 rad/s o
+    # comando bate ~±600 (60% PWM) — suficiente pra vencer o atrito
+    # das rodas carregadas sem boost. Boost satura mas é proposital
+    # (giro rápido pra correção fina).
     BASE_LINEAR_SPEED: float = 0.3   # m/s
-    BASE_ANGULAR_SPEED: float = 1.5  # rad/s
+    BASE_ANGULAR_SPEED: float = 6.0  # rad/s
 
     # Limites do multiplicador de velocidade.
     # MIN bate com o `min` do slider em index.html (0.5) e permite que o
