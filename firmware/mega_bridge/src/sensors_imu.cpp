@@ -1,5 +1,7 @@
 #include "sensors_imu.h"
 
+#include <new>  // placement new usado em tryInit_(); não depender da ordem de include
+
 namespace sensors {
 
 bool Imu::tryInit_(uint8_t addr) {
