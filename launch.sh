@@ -397,10 +397,10 @@ else
 
     wait_for_topic /odom 15 || echo "  AVISO: odom_publisher ainda não publicou /odom — seguindo."
 
-    # --- [3] LiDAR FHL-LD20 + detector de obstáculos ---
+    # --- [3] LiDAR LD06 + detector de obstáculos ---
     if [ "$NO_LIDAR" = false ]; then
         if [ -e "$LIDAR_PORT" ]; then
-            echo "[2/4] Iniciando LiDAR FHL-LD20 em $LIDAR_PORT..."
+            echo "[2/4] Iniciando LiDAR LD06 em $LIDAR_PORT..."
             LIDAR_LOG="$LOG_DIR/lidar.log"
             ros2 launch robot_nav lidar.launch.py lidar_port:="$LIDAR_PORT" > "$LIDAR_LOG" 2>&1 &
             LIDAR_PID=$!
@@ -496,7 +496,7 @@ if [ "$SIM" = true ]; then
     echo "  Mundo Gazebo: $WORLD_FILE"
     echo "  Robô simulado publicando /scan, /odom e TF odom→base_link"
 elif [ "$NO_LIDAR" = false ]; then
-    echo "  LiDAR FHL-LD20 publicando em: /scan"
+    echo "  LiDAR LD06 publicando em: /scan"
 fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
