@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Roda no OUTRO PC: conecta no robô por SSH e sobe/reanexa a stack num só comando.
+# PLANO_HEADLESS_2026-05-22 §4. Instalado em /usr/local/bin pelos setups.
+#
+# Uso:
+#   robot-connect [slam|nav2|trekking|teleop] [args extras do launch.sh]
+#   robot-connect                                  # default: slam
+#   robot-connect nav2 --map=maps/sala.yaml
+#   ROBOT_HOST=192.168.0.50 robot-connect slam     # se o mDNS não pegar
+#
+# Config (variáveis de ambiente):
+#   ROBOT_HOST   host/IP do robô   (default: robot.local)
+#   ROBOT_USER   usuário no robô   (default: o seu usuário local)
+set -euo pipefail
+
+HOST="${ROBOT_HOST:-robot.local}"
+REMOTE_USER="${ROBOT_USER:-$USER}"
+MODE="${1:-slam}"
+shift || true
+
+echo "→ ${REMOTE_USER}@${HOST}  (modo: ${MODE})"
+echo "  Ctrl+B depois D destaca a sessão (robô segue rodando); rode de novo pra voltar."
+
+# -t: aloca TTY pro tmux remoto.
+# ServerAlive*: derruba a conexão limpa se o WiFi cair, sem travar o terminal.
+exec ssh -t \
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+    "${REMOTE_USER}@${HOST}" "robot-up ${MODE} $*"

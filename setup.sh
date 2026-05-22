@@ -44,7 +44,9 @@ sudo apt install -y \
     ros-jazzy-nav2-bringup \
     ros-jazzy-nav2-map-server ros-jazzy-nav2-amcl \
     ros-jazzy-ros-gz ros-jazzy-ros-gz-sim \
-    ros-jazzy-ros-gz-bridge ros-jazzy-ros-gz-interfaces
+    ros-jazzy-ros-gz-bridge ros-jazzy-ros-gz-interfaces \
+    ros-jazzy-joy ros-jazzy-teleop-twist-joy \
+    ros-jazzy-teleop-twist-keyboard ros-jazzy-twist-mux
 
 # Se houver platformio velho do apt (4.3.4 é incompatível com Click do 24.04,
 # quebra com 'resultcallback' AttributeError), remove antes de instalar via pipx.
@@ -89,10 +91,21 @@ if ! grep -qxF "$BASHRC_LINE" "$HOME/.bashrc"; then
 fi
 
 echo
-echo "=== [4/4] Pronto! ==="
+echo "=== [4/4] Operação headless (acesso/operação de outro PC) ==="
+# Deixa esta máquina pronta pra ser robô (anuncia .local, SSH, tmux) E/OU
+# cliente (resolve robot.local, comando robot-connect). PLANO_HEADLESS §4.
+REPO_DIR="$REPO_DIR" bash "$REPO_DIR/scripts/setup_headless.sh"
+
+echo
+echo "=== Pronto! ==="
 echo "Abra um terminal novo (ou rode: source $WS_DIR/install/setup.bash)"
 echo "e teste com:"
 echo "  cd $REPO_DIR && ./launch.sh --sim"
+echo
+echo "Operar o robô a partir DESTE PC (robô já ligado e configurado):"
+echo "  robot-connect slam            # conecta por SSH + sobe a stack no tmux"
+echo "  robot-connect nav2 --map=maps/sala.yaml"
+echo "  (se robot.local não resolver:  ROBOT_HOST=<ip> robot-connect slam)"
 echo
 echo "Para hardware real:"
 echo "  1) Flashear MEGA:  cd $REPO_DIR/firmware/mega_bridge && pio run -t upload"

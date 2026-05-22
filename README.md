@@ -633,22 +633,43 @@ soltar devolve a navegação após o timeout de 0.5 s.
 
 ### Pré-requisitos (uma vez)
 
+Rode o setup **nas duas máquinas** — o mesmo passo deixa cada uma pronta pra ser
+robô *ou* cliente. O `setup.sh`/`setup_pi.sh` já chama o `scripts/setup_headless.sh`
+(SSH + mDNS `robot.local` + tmux + bluez + atalhos `robot-up`/`robot-key`/`robot-connect`).
+
 ```bash
-./setup_pi.sh        # instala joy/teleop/twist-mux + bluez/tmux/avahi/ssh e
-                     # cria robot-up / robot-key no PATH
+# No PC do robô:
+./setup_pi.sh        # (Raspberry Pi)   ou   ./setup.sh  (notebook)
 ./pair-ps4.sh        # pareia o DualShock 4 (trust = reconecta sozinho no boot)
+
+# No outro PC (de onde você opera):
+./setup.sh           # instala o robot-connect e a resolução de robot.local
 ```
 
-### Dia a dia
+### Dia a dia — um comando
+
+Do **outro PC**, com o robô já ligado:
 
 ```bash
-# (liga o robô — o PS4 reconecta sozinho)
-ssh usuario@robot.local        # acesso por mDNS, sem caçar IP
-robot-up slam                  # sobe a stack no tmux (sobrevive ao SSH cair)
-                               #   robot-up nav2 --map=maps/sala.yaml
-# Ctrl+B D destaca a sessão; "robot-up" de novo reanexa.
+robot-connect slam                     # conecta por SSH + sobe a stack no tmux
+robot-connect nav2 --map=maps/sala.yaml
+# Ctrl+B depois D destaca (o robô segue rodando); robot-connect de novo reanexa.
 
-robot-key                      # (noutro terminal SSH) WASD via teclado → key_vel
+# Se o robot.local não resolver na sua rede, passe o IP:
+ROBOT_HOST=192.168.0.50 robot-connect slam
+# Usuário diferente no robô:  ROBOT_USER=pi robot-connect slam
+```
+
+É só isso pro fluxo normal. Por baixo, `robot-connect` faz
+`ssh -t robot.local "robot-up <modo>"`; o `robot-up` sobe (ou reanexa) a stack
+numa sessão tmux chamada `robo`, que **sobrevive à queda do SSH**.
+
+Se já estiver logado no robô (SSH direto), os mesmos atalhos valem lá:
+
+```bash
+ssh usuario@robot.local
+robot-up slam        # sobe/reanexa a stack
+robot-key            # (noutro terminal) WASD via teclado → key_vel
 ```
 
 - **Dirigir**: ligue o PS4 (botão PS) e segure **L1** (dead-man) + analógico

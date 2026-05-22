@@ -107,23 +107,9 @@ APT_BASE=(
 sudo apt update
 sudo apt install -y "${APT_BASE[@]}"
 
-# --- Operação headless: SSH + mDNS (robot.local) + tmux + Bluetooth (PS4) ---
+# --- Operação headless: SSH + mDNS + tmux + bluez + atalhos (script comum) ---
 echo
-echo "=== Headless: SSH + avahi (robot.local) + tmux + bluez (PS4) ==="
-# avahi-daemon → o robô vira acessível como robot.local (mDNS), sem caçar IP.
-# bluez → pareamento do DualShock 4 (pair-ps4.sh). tmux → stack sobrevive ao SSH cair.
-sudo apt install -y bluez tmux avahi-daemon openssh-server
-sudo systemctl enable --now ssh avahi-daemon
-
-# --- Atalhos headless no PATH (robot-up / robot-key) ---
-# Symlinks pra refletir edições no repo sem reinstalar.
-for tool in robot-up robot-key; do
-    if [ -f "$REPO_DIR/bin/$tool" ]; then
-        chmod +x "$REPO_DIR/bin/$tool"
-        sudo ln -sf "$REPO_DIR/bin/$tool" "/usr/local/bin/$tool"
-        echo "  /usr/local/bin/$tool -> $REPO_DIR/bin/$tool"
-    fi
-done
+REPO_DIR="$REPO_DIR" bash "$REPO_DIR/scripts/setup_headless.sh"
 
 # --- 2/4 — Driver do LiDAR (única dep externa que ainda precisa ser clonada) ---
 echo
