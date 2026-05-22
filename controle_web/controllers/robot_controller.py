@@ -150,12 +150,18 @@ class ROS2Controller(RobotController):
         'Space': 'stop',
     }
 
-    def __init__(self) -> None:
+    def __init__(self, enable_publish: bool = True) -> None:
         import rclpy
         import threading
         import time
         from rclpy.node import Node
 
+        # enable_publish=False (WEB_TELEOP off, PLANO_HEADLESS_2026-05-22 Fase 2):
+        # o nó sobe (rclpy/publisher vivos pra não complicar o ciclo de vida do
+        # rclpy compartilhado com as bridges), mas o republicador a 50 Hz NÃO
+        # inicia e _publish vira no-op — assim nada compete com a saída do
+        # twist_mux no /cmd_vel (achado B20). force_stop também fica no-op.
+        self._publish_enabled: bool = enable_publish
         self.pressed: set = set()
         self._emergency_stop: bool = False
         self._speed_multiplier: float = 1.0
@@ -186,12 +192,16 @@ class ROS2Controller(RobotController):
         # apenas um evento por mousedown/keyup — sem republicar, cada
         # clique vira um pulso curto.
         self._pub_stop = threading.Event()
-        self._pub_thread = threading.Thread(
-            target=self._publish_loop, daemon=True, name='cmd_vel_republisher'
-        )
-        self._pub_thread.start()
-
-        print("[ROS2Controller] Nó inicializado. Publicando em /cmd_vel @ 50 Hz")
+        if self._publish_enabled:
+            self._pub_thread = threading.Thread(
+                target=self._publish_loop, daemon=True, name='cmd_vel_republisher'
+            )
+            self._pub_thread.start()
+            print("[ROS2Controller] Nó inicializado. Publicando em /cmd_vel @ 50 Hz")
+        else:
+            self._pub_thread = None
+            print("[ROS2Controller] WEB_TELEOP=off — nó vivo, SEM publicar em "
+                  "/cmd_vel (movimento via PS4/WASD; web é só visualização).")
 
     def force_stop(self) -> None:
         """Zera teclas pressionadas + último eixo de gamepad e publica Twist(0).
@@ -218,7 +228,8 @@ class ROS2Controller(RobotController):
         """
         try:
             self._pub_stop.set()
-            self._pub_thread.join(timeout=1.0)
+            if self._pub_thread is not None:
+                self._pub_thread.join(timeout=1.0)
         except Exception:
             pass
         try:
@@ -228,6 +239,10 @@ class ROS2Controller(RobotController):
             print(f"[ROS2Controller] Erro ao encerrar: {e}")
 
     def _publish(self, linear: float, angular: float) -> None:
+        # WEB_TELEOP off: no-op. Cobre tudo (force_stop no disconnect inclusive),
+        # senão o Twist(0) do force_stop voltaria a publicar na saída do twist_mux.
+        if not self._publish_enabled:
+            return
         msg = self._Twist()
         msg.linear.x = float(linear)
         msg.angular.z = float(angular)

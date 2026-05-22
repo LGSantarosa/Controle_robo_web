@@ -19,6 +19,11 @@
   // Modo ativo: 'web' ou 'gamepad'
   let controlMode = 'web';
 
+  // Controle de movimento pela web habilitado? Definido pelo servidor no
+  // evento mode_info (web_teleop). Default true só até o mode_info chegar —
+  // com a Fase 2 o servidor manda false por padrão (movimento via PS4/WASD).
+  let webTeleop = true;
+
   // Prefere polling e faz upgrade para websocket (melhor compatibilidade)
   const socket = io({ transports: ['polling', 'websocket'] });
   // Exposto para outros scripts (map.js) reutilizarem a mesma conexão
@@ -119,6 +124,49 @@
       appendLog('modo', `Alterado para: ${modeDisplay.textContent}`);
     });
   });
+
+  // --- Modo monitor (Fase 2): web sem controle de movimento ---
+  // Esconde seletor de modo, barra de velocidade e os dois painéis de controle,
+  // e mostra um aviso. NÃO toca no mapa/click-to-go/waypoints/infos.
+  const modeSelectorEl = document.querySelector('.mode-selector');
+  const speedControlEl = document.querySelector('.speed-control');
+  const monitorNoticeEl = document.getElementById('monitor-notice');
+
+  function applyTeleopVisibility(enabled) {
+    if (enabled) {
+      if (modeSelectorEl) modeSelectorEl.style.display = '';
+      if (speedControlEl) speedControlEl.style.display = '';
+      if (monitorNoticeEl) monitorNoticeEl.style.display = 'none';
+      // Restaura os painéis conforme o modo ativo
+      if (controlMode === 'web') {
+        if (webControls) webControls.style.display = '';
+        if (pressedRow) pressedRow.style.display = '';
+      } else {
+        if (gamepadControls) gamepadControls.style.display = '';
+        if (gamepadStatusRow) gamepadStatusRow.style.display = '';
+      }
+    } else {
+      if (modeSelectorEl) modeSelectorEl.style.display = 'none';
+      if (speedControlEl) speedControlEl.style.display = 'none';
+      if (webControls) webControls.style.display = 'none';
+      if (gamepadControls) gamepadControls.style.display = 'none';
+      if (pressedRow) pressedRow.style.display = 'none';
+      if (gamepadStatusRow) gamepadStatusRow.style.display = 'none';
+      if (monitorNoticeEl) monitorNoticeEl.style.display = '';
+      // Solta qualquer tecla presa antes de cortar a captura
+      pressed.clear();
+      renderPressed();
+    }
+  }
+
+  socket.on('mode_info', (data) => {
+    if (!data) return;
+    // Default true se o servidor for antigo e não mandar a chave
+    webTeleop = data.web_teleop !== false;
+    applyTeleopVisibility(webTeleop);
+  });
+  // Exposto pro gamepad.js parar de fazer poll/emit quando o web é só monitor
+  window._robotIsTeleopEnabled = () => webTeleop;
 
   socket.on('connect', () => {
     connEl.textContent = 'conectado';
@@ -225,6 +273,7 @@
     e.target && e.target.matches && e.target.matches('input,select,textarea,[contenteditable="true"]');
 
   window.addEventListener('keydown', (e) => {
+    if (!webTeleop) return;
     if (controlMode !== 'web') return;
     if (isTypingInField(e)) return;
     const code = e.code || e.key;
@@ -239,6 +288,7 @@
   }, { passive: false });
 
   window.addEventListener('keyup', (e) => {
+    if (!webTeleop) return;
     if (controlMode !== 'web') return;
     if (isTypingInField(e)) return;
     const code = e.code || e.key;
@@ -257,6 +307,7 @@
       : [button.getAttribute('data-code')].filter(Boolean);
 
     const down = () => {
+      if (!webTeleop) return;
       if (controlMode !== 'web') return;
       let changed = false;
       for (const code of codes) {

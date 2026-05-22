@@ -89,9 +89,10 @@
     activeGamepadIndex = e.gamepad.index;
     startPolling();
 
-    // Auto-switch para modo gamepad quando conecta
+    // Auto-switch para modo gamepad quando conecta (só se o web ainda dirige)
+    const teleopOn = !window._robotIsTeleopEnabled || window._robotIsTeleopEnabled();
     const gpBtn = document.getElementById('btn-mode-gamepad');
-    if (gpBtn && getMode() === 'web') {
+    if (teleopOn && gpBtn && getMode() === 'web') {
       gpBtn.click();
     }
   });
@@ -122,6 +123,9 @@
   function pollLoop() {
     pollTimer = requestAnimationFrame(pollLoop);
 
+    // Fase 2: web em modo monitor — não lê nem emite o gamepad do browser
+    // (o PS4 entra nativo no ROS via joy_node/teleop_twist_joy).
+    if (window._robotIsTeleopEnabled && !window._robotIsTeleopEnabled()) return;
     if (getMode() !== 'gamepad') return;
     if (activeGamepadIndex === null) return;
 

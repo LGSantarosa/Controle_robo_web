@@ -20,9 +20,19 @@ MAPS_DIR = os.environ.get('ROBOT_MAPS_DIR', os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'maps')
 ))
 
+# Controle de movimento pela web. Default 'off' (PLANO_HEADLESS_2026-05-22 Fase 2):
+# o movimento agora é nativo no ROS (PS4/WASD arbitrados pelo twist_mux). Com
+# 'off' os handlers de direção (key_event/gamepad_event/set_speed) viram no-op e o
+# ROS2Controller NÃO publica em /cmd_vel — que passou a ser a SAÍDA do twist_mux,
+# então republicar aqui reintroduziria o publisher concorrente do achado B20.
+# Reative com WEB_TELEOP=on (flag --web-teleop do launch.sh) p/ dirigir pelo web.
+WEB_TELEOP = os.environ.get('WEB_TELEOP', 'off').lower() == 'on'
+
 # Controlador ROS2 — publica em /cmd_vel (geometry_msgs/Twist).
 # Pré-requisito: source install/setup.bash antes de iniciar o servidor.
-controller: RobotController = ROS2Controller()
+# enable_publish=WEB_TELEOP: com teleop web off, o nó sobe (rclpy vivo) mas o
+# republicador a 50 Hz não inicia e _publish vira no-op.
+controller: RobotController = ROS2Controller(enable_publish=WEB_TELEOP)
 
 # Ponte de mapa/pose/navegação — opcional (só sobe se rclpy importou OK).
 map_bridge = None
@@ -235,6 +245,7 @@ def handle_connect():
         'mode': ROBOT_MODE,
         'has_map': map_bridge is not None,
         'has_trekking': trekking_bridge is not None,
+        'web_teleop': WEB_TELEOP,
     })
     # Reemite o último map_update cacheado — o /map do map_server é latched
     # (publicado 1x no activate), então clientes que conectam depois dessa
@@ -359,6 +370,14 @@ def handle_disconnect():
 def handle_key_event(data):
     # Recebe um evento de tecla do cliente
     # Esperado: { type: 'down'|'up', key: 'KeyW'|'ArrowUp'|..., code: 'KeyW', repeat: bool, seq?: int }
+    if not WEB_TELEOP:
+        # Movimento pela web desabilitado (Fase 2) — não chama o controller.
+        emit('ack', {
+            'ok': False,
+            'error': 'controle desabilitado — use PS4/WASD',
+            'seq': (data or {}).get('seq'),
+        }, room=request.sid)
+        return
     try:
         app.logger.debug(f"key_event from {request.remote_addr}: {data}")
         # Encaminha o evento para o controlador do robô
@@ -426,6 +445,13 @@ def handle_key_event(data):
 @socketio.on('gamepad_event')
 def handle_gamepad_event(data):
     # Recebe evento de gamepad (controle PS4/Xbox) com valores analógicos
+    if not WEB_TELEOP:
+        # Movimento pela web desabilitado (Fase 2) — o PS4 entra nativo no ROS.
+        emit('gamepad_ack', {
+            'ok': False,
+            'error': 'controle desabilitado — use PS4/WASD',
+        }, room=request.sid)
+        return
     try:
         app.logger.debug(f"gamepad_event from {request.remote_addr}: type={data.get('type')} L={data.get('linear','?')} A={data.get('angular','?')}")
         result = controller.handle_gamepad_event(data)
@@ -495,6 +521,13 @@ def handle_gamepad_event(data):
 @socketio.on('set_speed')
 def handle_set_speed(data):
     # Altera o multiplicador de velocidade do robô
+    if not WEB_TELEOP:
+        # Movimento pela web desabilitado (Fase 2) — velocidade vem do teleop_ps4.yaml.
+        emit('speed_update', {
+            'ok': False,
+            'error': 'controle desabilitado — use PS4/WASD',
+        }, room=request.sid)
+        return
     try:
         mult = float((data or {}).get('multiplier', 1.0))
         if not math.isfinite(mult):

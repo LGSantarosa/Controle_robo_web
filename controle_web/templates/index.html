@@ -20,6 +20,11 @@
         <button id="btn-mode-gamepad" class="mode-btn" data-mode="gamepad">Controle PS4</button>
       </section>
 
+      <!-- Aviso de modo monitor (Fase 2): mostrado quando web_teleop=off -->
+      <section class="monitor-notice" id="monitor-notice" style="display:none">
+        Controle manual: <strong>PS4/WASD no robô</strong> — o web é só visualização.
+      </section>
+
       <!-- Barra de velocidade (compartilhada entre os modos) -->
       <section class="speed-control">
         <div class="speed-control-row">
@@ -191,8 +196,8 @@
 
     <!-- Bibliotecas cliente Socket.IO e scripts do cliente -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="/static/js/client.js?v=6"></script>
-    <script src="/static/js/gamepad.js?v=2"></script>
+    <script src="/static/js/client.js?v=7"></script>
+    <script src="/static/js/gamepad.js?v=3"></script>
     <script src="/static/js/map.js?v=3"></script>
     <script src="/static/js/trekking.js?v=1"></script>
   </body>

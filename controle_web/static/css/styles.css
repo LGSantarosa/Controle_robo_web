@@ -8,6 +8,8 @@ h1 { margin: 0 0 12px; font-size: 28px; }
 /* Seletor de modo de controle */
 .mode-selector { margin-bottom: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .mode-selector label { font-weight: 600; font-size: 14px; }
+.monitor-notice { margin-bottom: 16px; padding: 8px 14px; border: 1px solid #374151; border-left: 3px solid #f59e0b; background: #1f2937; color: #9ca3af; border-radius: 6px; font-size: 13px; }
+.monitor-notice strong { color: #e5e7eb; }
 .mode-btn { padding: 8px 16px; border: 2px solid #374151; background: #1f2937; color: #9ca3af; border-radius: 8px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
 .mode-btn:hover { border-color: #6366f1; color: #e2e8f0; }
 .mode-btn.active { border-color: #6366f1; background: #312e81; color: #e0e7ff; }

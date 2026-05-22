@@ -26,6 +26,7 @@ ROS2_SETUP="$SCRIPT_DIR/install/setup.bash"
 NO_LIDAR=false
 LIDAR_PORT="/dev/lidar"
 MODE="teleop"                     # teleop | slam | nav2 | trekking
+WEB_TELEOP="off"                  # off = web só visualização; --web-teleop reativa
 MAP_FILE="$SCRIPT_DIR/maps/sala.yaml"
 PI_PROFILE=false
 SIM=false
@@ -42,6 +43,7 @@ for arg in "$@"; do
         --slam)            MODE="slam" ;;
         --nav2)            MODE="nav2" ;;
         --trekking)        MODE="trekking" ;;
+        --web-teleop)      WEB_TELEOP="on" ;;
         --sim)             SIM=true ;;
         --world=*)         WORLD_FILE="${arg#*=}" ;;
         --map=*)           MAP_FILE="${arg#*=}" ;;
@@ -55,8 +57,9 @@ for arg in "$@"; do
         --flash-mega)      FLASH_MEGA="force" ;;
         --no-flash-mega)   FLASH_MEGA="off" ;;
         --help|-h)
-            echo "Uso: $0 [--slam|--nav2|--trekking] [--sim] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
+            echo "Uso: $0 [--slam|--nav2|--trekking] [--sim] [--web-teleop] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
             echo ""
+            echo "  --web-teleop     reativa o controle de movimento pela web (default: off — use PS4/WASD)"
             echo "  --flash-mega     força \`pio run -t upload\` mesmo sem mudança"
             echo "  --no-flash-mega  pula o flash da MEGA sempre"
             echo "  (sem flag)       auto: flasheia só quando o hash de firmware/mega_bridge/{src,include,platformio.ini} muda"
@@ -511,6 +514,7 @@ echo ""
 
 # Passa o modo e o diretório de mapas para o app.py via env.
 export ROBOT_MODE="$MODE"
+export WEB_TELEOP="$WEB_TELEOP"
 export ROBOT_MAPS_DIR="$SCRIPT_DIR/maps"
 export ROBOT_SIM="$SIM"
 
