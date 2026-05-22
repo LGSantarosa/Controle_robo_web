@@ -4,14 +4,14 @@
 #
 # Uso:
 #   robot-up [slam|nav2|trekking|teleop] [args extras do launch.sh]
-#   robot-up                       # default: slam
+#   robot-up                       # default: teleop
 #   robot-up nav2 --map=maps/sala.yaml
 #
 # Já rodando? reanexa. Ctrl+B D pra destacar; robot-up de novo pra voltar.
 set -euo pipefail
 
 SESSION=robo
-MODE="${1:-slam}"
+MODE="${1:-teleop}"
 shift || true
 
 # Resolve o repo: segue o symlink em /usr/local/bin até bin/ no checkout.

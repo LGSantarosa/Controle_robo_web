@@ -40,6 +40,7 @@ FLASH_MEGA="auto"
 
 for arg in "$@"; do
     case $arg in
+        --teleop)          MODE="teleop" ;;
         --slam)            MODE="slam" ;;
         --nav2)            MODE="nav2" ;;
         --trekking)        MODE="trekking" ;;
@@ -57,7 +58,7 @@ for arg in "$@"; do
         --flash-mega)      FLASH_MEGA="force" ;;
         --no-flash-mega)   FLASH_MEGA="off" ;;
         --help|-h)
-            echo "Uso: $0 [--slam|--nav2|--trekking] [--sim] [--web-teleop] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
+            echo "Uso: $0 [--teleop|--slam|--nav2|--trekking] [--sim] [--web-teleop] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
             echo ""
             echo "  --web-teleop     reativa o controle de movimento pela web (default: off — use PS4/WASD)"
             echo "  --flash-mega     força \`pio run -t upload\` mesmo sem mudança"

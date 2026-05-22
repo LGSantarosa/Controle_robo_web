@@ -4,7 +4,7 @@
 #
 # Uso:
 #   robot-connect [slam|nav2|trekking|teleop] [args extras do launch.sh]
-#   robot-connect                                  # default: slam
+#   robot-connect                                  # default: teleop
 #   robot-connect nav2 --map=maps/sala.yaml
 #   ROBOT_HOST=192.168.0.50 robot-connect slam     # se o mDNS não pegar
 #
@@ -15,7 +15,7 @@ set -euo pipefail
 
 HOST="${ROBOT_HOST:-robot.local}"
 REMOTE_USER="${ROBOT_USER:-$USER}"
-MODE="${1:-slam}"
+MODE="${1:-teleop}"
 shift || true
 
 echo "→ ${REMOTE_USER}@${HOST}  (modo: ${MODE})"
