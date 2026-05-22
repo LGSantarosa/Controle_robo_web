@@ -1,0 +1,29 @@
+# Mapa do DualShock 4 → teleop_twist_joy (PLANO_HEADLESS_2026-05-22, Fase 1).
+#
+# Eixos do DS4 no Linux (driver `joy`):
+#   eixo 0 = analógico esq. X (giro)   eixo 1 = analógico esq. Y (frente/ré)
+#   L1 = botão 4 (dead-man)            R1 = botão 5 (turbo)
+#
+# Saída remapeada pra joy_vel (entrada de maior prioridade do twist_mux).
+teleop_twist_joy_node:
+  ros__parameters:
+    axis_linear:
+      x: 1
+    scale_linear:
+      x: 0.30          # m/s — alinhado com BASE_LINEAR_SPEED do projeto
+    scale_linear_turbo:
+      x: 0.50
+    axis_angular:
+      yaw: 0
+    # Angular = 6.0 rad/s (não 1.2): o chassi de 4 rodas não apoia uniformemente,
+    # as rodas patinam e comando angular baixo NÃO gira o robô — ver
+    # robot_controller.py:128-135 (BASE_ANGULAR_SPEED = 6.0). Com 1.2 o PS4
+    # provavelmente nem giraria.
+    scale_angular:
+      yaw: 6.0
+    scale_angular_turbo:
+      yaw: 6.0         # mantém o giro no turbo (senão cai pro default 1.0)
+    enable_button: 4        # L1 = dead-man (só anda enquanto segurado)
+    enable_turbo_button: 5  # R1 = turbo
+    require_enable_button: true
+    publish_stamped_twist: false

@@ -1,0 +1,29 @@
+# Arbitragem de /cmd_vel — twist_mux (PLANO_HEADLESS_2026-05-22, Fase 1).
+#
+# Quem vence quando duas fontes mandam ao mesmo tempo: a de maior priority.
+# Se uma fonte para de publicar por mais de `timeout` s, o mux a ignora e
+# passa pra próxima. Saída: cmd_vel_out (remapeado pra cmd_vel no launch),
+# consumido pelo cmd_vel_to_wheels.
+#
+#   PS4  (joy_vel, prio 100) — controle humano sempre vence; pode assumir/abortar
+#   WASD (key_vel, prio  90) — fallback de teclado via SSH
+#   Nav2/trekking (nav_vel, prio 10) — autonomia só dirige quando ninguém manual
+#
+# Resolve o achado B20 da AUDITORIA_2026-05-18 (vários publishers direto no
+# /cmd_vel). Sem locks ainda — sem botão de e-stop dedicado no protocolo.
+twist_mux:
+  ros__parameters:
+    use_sim_time: false
+    topics:
+      joystick:
+        topic: joy_vel
+        timeout: 0.5
+        priority: 100
+      keyboard:
+        topic: key_vel
+        timeout: 0.5
+        priority: 90
+      navigation:
+        topic: nav_vel
+        timeout: 0.5
+        priority: 10

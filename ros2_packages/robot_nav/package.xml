@@ -30,6 +30,10 @@
   <exec_depend>nav2_bt_navigator</exec_depend>
   <exec_depend>nav2_waypoint_follower</exec_depend>
   <exec_depend>nav2_velocity_smoother</exec_depend>
+  <exec_depend>joy</exec_depend>
+  <exec_depend>teleop_twist_joy</exec_depend>
+  <exec_depend>teleop_twist_keyboard</exec_depend>
+  <exec_depend>twist_mux</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>ldlidar_stl_ros2</exec_depend>
   <exec_depend>ros_gz_sim</exec_depend>

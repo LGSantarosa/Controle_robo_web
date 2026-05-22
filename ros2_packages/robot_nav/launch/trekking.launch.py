@@ -64,6 +64,9 @@ def generate_launch_description():
         parameters=[{
             'v_max': LaunchConfiguration('v_max'),
         }],
+        # Saída do PID vai pra nav_vel (entrada de menor prioridade do twist_mux
+        # em robot.launch.py) — assim o PS4 pode assumir por cima do autônomo.
+        remappings=[('cmd_vel', 'nav_vel')],
     )
 
     return LaunchDescription([

@@ -7,6 +7,12 @@ Sobe:
   2. mega_bridge          (USB ↔ Arduino MEGA ↔ 2 hoverboards + sensores)
   3. odom_publisher       (4 RPMs → /odom + TF odom→base_link)
   4. cmd_vel_to_wheels    (/cmd_vel → /wheel_vel_setpoints)
+  5. joy_node            (DualShock 4 em /dev/input/js0 → /joy)
+  6. teleop_twist_joy    (/joy → joy_vel, com dead-man no L1)
+  7. twist_mux           (joy_vel>key_vel>nav_vel → /cmd_vel)
+
+Requer os pacotes apt: joy, teleop_twist_joy, twist_mux (instalados pelo
+setup_pi.sh). Sem eles a launch falha — ver PLANO_HEADLESS_2026-05-22 §2.3.
 """
 
 import os
@@ -105,8 +111,49 @@ def generate_launch_description():
             'linear_scale': LaunchConfiguration('linear_scale'),
             'left_wheel_sign': LaunchConfiguration('left_wheel_sign'),
             'right_wheel_sign': LaunchConfiguration('right_wheel_sign'),
+            # Continua assinando cmd_vel — agora é a SAÍDA do twist_mux. Nada muda aqui.
             'cmd_vel_topic': 'cmd_vel',
         }],
+    )
+
+    teleop_ps4_cfg = os.path.join(pkg, 'config', 'teleop_ps4.yaml')
+    twist_mux_cfg = os.path.join(pkg, 'config', 'twist_mux.yaml')
+
+    # joy_node — lê o DualShock 4 em /dev/input/js0 e publica /joy.
+    # Se o controle não estiver conectado, o nó fica tentando abrir o device
+    # (loga aviso) sem derrubar a launch.
+    joy_node = Node(
+        package='joy',
+        executable='joy_node',
+        name='joy_node',
+        output='screen',
+        parameters=[{
+            'device_id': 0,
+            'deadzone': 0.05,
+            'autorepeat_rate': 20.0,
+        }],
+    )
+
+    # teleop_twist_joy — /joy → joy_vel (entrada de maior prioridade do mux).
+    # require_enable_button (L1) faz o dead-man: só publica enquanto segurado,
+    # então soltar o L1 deixa o mux cair pro nav_vel (Nav2/trekking assume).
+    teleop_twist_joy = Node(
+        package='teleop_twist_joy',
+        executable='teleop_node',
+        name='teleop_twist_joy_node',
+        output='screen',
+        parameters=[teleop_ps4_cfg],
+        remappings=[('cmd_vel', 'joy_vel')],
+    )
+
+    # twist_mux — arbitra joy_vel/key_vel/nav_vel → cmd_vel (resolve B20).
+    twist_mux = Node(
+        package='twist_mux',
+        executable='twist_mux',
+        name='twist_mux',
+        output='screen',
+        parameters=[twist_mux_cfg],
+        remappings=[('cmd_vel_out', 'cmd_vel')],
     )
 
     return LaunchDescription([
@@ -121,4 +168,7 @@ def generate_launch_description():
         mega_bridge,
         odom_publisher,
         cmd_vel_to_wheels,
+        joy_node,
+        teleop_twist_joy,
+        twist_mux,
     ])
