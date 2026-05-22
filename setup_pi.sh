@@ -95,10 +95,35 @@ APT_BASE=(
     "ros-${ROS_DISTRO}-nav2-amcl"
     "ros-${ROS_DISTRO}-dwb-critics"
     "ros-${ROS_DISTRO}-nav-2d-utils"
+    # Controle manual nativo (PLANO_HEADLESS_2026-05-22 Fases 1+3): joy +
+    # teleop + arbitragem. Sobem SEMPRE no robot.launch.py — sem eles a launch
+    # falha em TODOS os modos, não só quando o PS4 é usado.
+    "ros-${ROS_DISTRO}-joy"
+    "ros-${ROS_DISTRO}-teleop-twist-joy"
+    "ros-${ROS_DISTRO}-teleop-twist-keyboard"
+    "ros-${ROS_DISTRO}-twist-mux"
 )
 
 sudo apt update
 sudo apt install -y "${APT_BASE[@]}"
+
+# --- Operação headless: SSH + mDNS (robot.local) + tmux + Bluetooth (PS4) ---
+echo
+echo "=== Headless: SSH + avahi (robot.local) + tmux + bluez (PS4) ==="
+# avahi-daemon → o robô vira acessível como robot.local (mDNS), sem caçar IP.
+# bluez → pareamento do DualShock 4 (pair-ps4.sh). tmux → stack sobrevive ao SSH cair.
+sudo apt install -y bluez tmux avahi-daemon openssh-server
+sudo systemctl enable --now ssh avahi-daemon
+
+# --- Atalhos headless no PATH (robot-up / robot-key) ---
+# Symlinks pra refletir edições no repo sem reinstalar.
+for tool in robot-up robot-key; do
+    if [ -f "$REPO_DIR/bin/$tool" ]; then
+        chmod +x "$REPO_DIR/bin/$tool"
+        sudo ln -sf "$REPO_DIR/bin/$tool" "/usr/local/bin/$tool"
+        echo "  /usr/local/bin/$tool -> $REPO_DIR/bin/$tool"
+    fi
+done
 
 # --- 2/4 — Driver do LiDAR (única dep externa que ainda precisa ser clonada) ---
 echo
@@ -186,6 +211,12 @@ Próximos passos:
   Outras opções:
         ./launch.sh --slam
         ./launch.sh --nav2
+
+  Operação headless (de outro PC):
+        ./pair-ps4.sh            # parear o DualShock 4 (uma vez)
+        ssh $USER@robot.local    # acessar sem cabo (mDNS)
+        robot-up slam            # sobe a stack no tmux (sobrevive ao SSH cair)
+        robot-key                # WASD via teclado (publica em key_vel)
 
 Dicas pra Pi:
   * Mantenha cooler ativo (heatsink + fan). Sem isso entra em throttle.

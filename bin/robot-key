@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Teleop por teclado (WASD) publicando na entrada do twist_mux (key_vel, prio 90).
+# PLANO_HEADLESS_2026-05-22 §4.4. Instalado em /usr/local/bin pelo setup_pi.sh.
+#
+# Rode num terminal SSH/tmux separado. O twist_mux arbitra: o PS4 (joy_vel,
+# prio 100) vence o teclado; o teclado vence o Nav2/trekking (nav_vel, prio 10).
+#
+# Uso:  robot-key
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+REPO_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
+cd "$REPO_DIR"
+
+if [ -f install/setup.bash ]; then
+    # shellcheck disable=SC1091
+    source install/setup.bash
+fi
+
+exec ros2 run teleop_twist_keyboard teleop_twist_keyboard \
+    --ros-args -r cmd_vel:=key_vel

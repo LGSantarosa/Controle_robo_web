@@ -19,6 +19,7 @@ Interface web para controlar um robô **skid-steer de 4 rodas** com duas placas 
   - [Modo TELEOP (padrão)](#modo-teleop-padrão)
   - [Modo SLAM — mapear a sala](#modo-slam--mapear-a-sala)
   - [Modo NAV2 — navegação autônoma](#modo-nav2--navegação-autônoma)
+- [Operação headless](#operação-headless)
 - [Controles](#controles)
 - [Sensores embarcados (BNO055 + PMW3901)](#sensores-embarcados-bno055--pmw3901)
 - [Sinalização do robô (LEDs, relé, botão)](#sinalização-do-robô-leds-relé-botão)
@@ -617,7 +618,57 @@ física no robô.
 
 ---
 
+## Operação headless
+
+O PC do robô roda **sem tela/teclado**: você opera de outro PC por SSH. O
+**movimento** é controlado por **PS4 (Bluetooth, local)** ou **WASD (teclado via
+SSH)** — não mais pelo navegador, que tinha latência ruim via WiFi. O web continua
+como interface de **visualização e planejamento** (mapa SLAM, pose, click-to-go,
+waypoints, salvar mapa), mas **não dirige** (default `WEB_TELEOP=off`).
+
+Quem arbitra as fontes de `/cmd_vel` é o `twist_mux`: **PS4 (`joy_vel`, prio 100) >
+WASD (`key_vel`, prio 90) > Nav2/trekking (`nav_vel`, prio 10)**. Encostar no
+analógico do PS4 (segurando o dead-man L1) durante um Nav2 assume o controle;
+soltar devolve a navegação após o timeout de 0.5 s.
+
+### Pré-requisitos (uma vez)
+
+```bash
+./setup_pi.sh        # instala joy/teleop/twist-mux + bluez/tmux/avahi/ssh e
+                     # cria robot-up / robot-key no PATH
+./pair-ps4.sh        # pareia o DualShock 4 (trust = reconecta sozinho no boot)
+```
+
+### Dia a dia
+
+```bash
+# (liga o robô — o PS4 reconecta sozinho)
+ssh usuario@robot.local        # acesso por mDNS, sem caçar IP
+robot-up slam                  # sobe a stack no tmux (sobrevive ao SSH cair)
+                               #   robot-up nav2 --map=maps/sala.yaml
+# Ctrl+B D destaca a sessão; "robot-up" de novo reanexa.
+
+robot-key                      # (noutro terminal SSH) WASD via teclado → key_vel
+```
+
+- **Dirigir**: ligue o PS4 (botão PS) e segure **L1** (dead-man) + analógico
+  esquerdo. **R1** = turbo. Sem segurar L1 o robô não anda.
+- **Editar configs com GUI**: use **VS Code Remote-SSH** apontando pra
+  `robot.local` (mexer em `nav2_params.yaml`, launches etc.).
+- **RViz no outro PC**: mesma sub-rede e mesmo `ROS_DOMAIN_ID`. Se o RViz não
+  achar tópicos, alguns APs WiFi bloqueiam **multicast** — use um AP que passe
+  multicast ou um Fast-DDS discovery server.
+- **Reativar o controle pelo web** (ex.: testar sem o PS4): `./launch.sh --web-teleop`.
+  No **modo SIM**, dirigir hoje **exige** `--web-teleop` (o `sim.launch.py` não
+  sobe o `twist_mux`).
+
+---
+
 ## Controles
+
+> Os controles abaixo (teclado/gamepad **pelo navegador**) só funcionam com
+> `--web-teleop`. No padrão headless (`WEB_TELEOP=off`) o movimento é PS4/WASD
+> nativo no ROS — ver **[Operação headless](#operação-headless)**.
 
 ### Teclado
 

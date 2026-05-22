@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Sobe a stack do robô dentro de um tmux (sobrevive à queda do SSH).
+# PLANO_HEADLESS_2026-05-22 §4.3. Instalado em /usr/local/bin pelo setup_pi.sh.
+#
+# Uso:
+#   robot-up [slam|nav2|trekking|teleop] [args extras do launch.sh]
+#   robot-up                       # default: slam
+#   robot-up nav2 --map=maps/sala.yaml
+#
+# Já rodando? reanexa. Ctrl+B D pra destacar; robot-up de novo pra voltar.
+set -euo pipefail
+
+SESSION=robo
+MODE="${1:-slam}"
+shift || true
+
+# Resolve o repo: segue o symlink em /usr/local/bin até bin/ no checkout.
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+REPO_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
+cd "$REPO_DIR"
+
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "Sessão '$SESSION' já existe — reanexando (Ctrl+B D pra destacar)."
+    exec tmux attach -t "$SESSION"
+else
+    echo "Subindo a stack ($MODE) na sessão tmux '$SESSION'..."
+    # `; bash` mantém o painel aberto pra inspeção mesmo se o launch.sh sair.
+    exec tmux new -s "$SESSION" "./launch.sh --$MODE $*; bash"
+fi
