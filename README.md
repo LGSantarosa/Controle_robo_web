@@ -690,6 +690,22 @@ git pull
 ./setup.sh           # instala o comando robot-connect + a resolução de robot.local
 ```
 
+**Login sem senha (recomendado).** Sem isso, o `robot-connect` pede a senha do
+usuário do robô **toda vez**. Copie sua chave SSH pro robô — uma única vez:
+
+```bash
+ssh-keygen -t ed25519                 # só se você ainda não tem chave (Enter em tudo)
+ssh-copy-id usuario@robot.local       # digita a senha do robô esta única vez
+```
+
+A partir daí, `robot-connect` entra **direto, sem pedir senha**. (Troque `usuario`
+pelo que você anotou com `whoami` no robô.)
+
+> O usuário **não** é perguntado pelo `robot-connect` — ele vem do comando (padrão:
+> o seu usuário local). Se for diferente no robô, use `ROBOT_USER=... robot-connect`.
+> Na primeiríssima conexão o SSH ainda pede pra confirmar a identidade do host
+> (`Are you sure you want to continue connecting?` → responda `yes`); isso é só uma vez.
+
 ### Passo 3 — usar, do outro PC (toda vez)
 
 ```bash
