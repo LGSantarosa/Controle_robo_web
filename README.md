@@ -620,68 +620,115 @@ física no robô.
 
 ## Operação headless
 
-O PC do robô roda **sem tela/teclado**: você opera de outro PC por SSH. O
-**movimento** é controlado por **PS4 (Bluetooth, local)** ou **WASD (teclado via
-SSH)** — não mais pelo navegador, que tinha latência ruim via WiFi. O web continua
-como interface de **visualização e planejamento** (mapa SLAM, pose, click-to-go,
-waypoints, salvar mapa), mas **não dirige** (default `WEB_TELEOP=off`).
+### O que é, em uma frase
 
-Quem arbitra as fontes de `/cmd_vel` é o `twist_mux`: **PS4 (`joy_vel`, prio 100) >
-WASD (`key_vel`, prio 90) > Nav2/trekking (`nav_vel`, prio 10)**. Encostar no
-analógico do PS4 (segurando o dead-man L1) durante um Nav2 assume o controle;
-soltar devolve a navegação após o timeout de 0.5 s.
+"Headless" = o PC do robô fica **sem monitor e sem teclado**. Ele só precisa de
+**energia e WiFi**. Tudo que você faria sentado na frente dele, você passa a fazer
+**pelo terminal de outro PC**, através do SSH.
 
-### Pré-requisitos (uma vez)
+SSH não é um acesso limitado: ele te dá um **terminal de verdade dentro do robô**.
+Quando você digita um comando depois de conectar, ele **roda no robô**, não no seu
+PC — como se você tivesse o teclado e a tela do robô na sua frente, só que pela rede.
 
-Rode o setup **nas duas máquinas** — o mesmo passo deixa cada uma pronta pra ser
-robô *ou* cliente. O `setup.sh`/`setup_pi.sh` já chama o `scripts/setup_headless.sh`
-(SSH + mDNS `robot.local` + tmux + bluez + atalhos `robot-up`/`robot-key`/`robot-connect`).
+### O que você ganha no outro PC
+
+| O que | Como, do outro PC |
+|-------|-------------------|
+| Terminal completo do robô (qualquer comando, arquivos, logs) | `ssh usuario@robot.local` |
+| Subir e operar a stack (SLAM / Nav2 / trekking) | `robot-connect slam` |
+| Ver mapa/pose, click-to-go, waypoints | navegador → `http://robot.local:5000` |
+| Editar código/configs com interface gráfica | **VS Code Remote-SSH** apontando pra `robot.local` |
+| RViz | roda no **seu** PC, lendo os tópicos do robô pela rede |
+
+O **movimento** é por **PS4 (Bluetooth, local)** ou **WASD (teclado via SSH)** — não
+mais pelo navegador, que tinha latência ruim via WiFi. O web vira só
+**visualização** (default `WEB_TELEOP=off`). Quem arbitra o `/cmd_vel` é o
+`twist_mux`: **PS4 (`joy_vel`, prio 100) > WASD (`key_vel`, prio 90) >
+Nav2/trekking (`nav_vel`, prio 10)**. Encostar no analógico do PS4 (segurando o
+dead-man **L1**) durante um Nav2 assume o controle; soltar devolve a navegação após
+o timeout de 0.5 s.
+
+### Por que o primeiro acesso precisa de tela (uma vez)
+
+Tem um ovo-e-galinha: pra você entrar por SSH, o robô precisa já ter o **SSH ligado**
+e estar **achável na rede** (`robot.local`). Mas é justamente o `setup_pi.sh` (via
+`scripts/setup_headless.sh`) que **liga** o SSH e o `robot.local`. Então a
+primeiríssima vez o robô ainda não está acessível remotamente.
+
+Por isso o passo 1 abaixo usa **monitor + teclado plugados no robô — só nessa vez**.
+Depois disso, nunca mais precisa de tela.
+
+> Alternativa sem tela nenhuma: se na instalação do Ubuntu do robô você marcou
+> "OpenSSH server", o SSH já vem ligado de fábrica — aí você descobre o IP no painel
+> do roteador, faz `ssh usuario@<ip>` e roda os passos 1–4 por SSH mesmo.
+
+### Passo 1 — preparar o robô (uma vez, com monitor + teclado nele)
 
 ```bash
-# No PC do robô:
-./setup_pi.sh        # (Raspberry Pi)   ou   ./setup.sh  (notebook)
-./pair-ps4.sh        # pareia o DualShock 4 (trust = reconecta sozinho no boot)
+cd ~/Workspace/Controle_robo_web
+git pull
+./setup_pi.sh        # Raspberry Pi   (ou ./setup.sh, se o robô for um notebook)
+                     # → liga SSH, vira robot.local, instala joy/teleop/twist-mux,
+                     #   compila o workspace e cria robot-up/robot-key/robot-connect
+./pair-ps4.sh        # pareia o DualShock 4 (o "trust" faz reconectar sozinho no boot)
 
-# No outro PC (de onde você opera):
-./setup.sh           # instala o robot-connect e a resolução de robot.local
+whoami               # anote o usuário  (ex.: rbe-luis)  → é o ROBOT_USER
+hostname             # anote o nome     (ex.: robopi)    → vira robopi.local
 ```
 
-### Dia a dia — um comando
+Abra um terminal novo no robô (pra carregar o ROS) antes de testar. Depois desse
+passo, **desplugue o monitor e o teclado — não precisa mais deles.**
 
-Do **outro PC**, com o robô já ligado:
+> Se o `hostname` não for `robot`, o endereço será `<hostname>.local`. Pra usar
+> `robot.local` certinho, renomeie uma vez: `sudo hostnamectl set-hostname robot`.
+
+### Passo 2 — preparar o outro PC (uma vez)
 
 ```bash
-robot-connect slam                     # conecta por SSH + sobe a stack no tmux
-robot-connect nav2 --map=maps/sala.yaml
-# Ctrl+B depois D destaca (o robô segue rodando); robot-connect de novo reanexa.
-
-# Se o robot.local não resolver na sua rede, passe o IP:
-ROBOT_HOST=192.168.0.50 robot-connect slam
-# Usuário diferente no robô:  ROBOT_USER=pi robot-connect slam
+cd ~/Workspace/Controle_robo_web
+git pull
+./setup.sh           # instala o comando robot-connect + a resolução de robot.local
 ```
 
-É só isso pro fluxo normal. Por baixo, `robot-connect` faz
-`ssh -t robot.local "robot-up <modo>"`; o `robot-up` sobe (ou reanexa) a stack
-numa sessão tmux chamada `robo`, que **sobrevive à queda do SSH**.
+### Passo 3 — usar, do outro PC (toda vez)
 
-Se já estiver logado no robô (SSH direto), os mesmos atalhos valem lá:
+```bash
+# 1. Liga o robô (só energia). Espera ~1 min ele bootar e entrar no WiFi.
+# 2. No outro PC:
+robot-connect slam                       # conecta por SSH + sobe a stack no tmux
+#    robot-connect nav2 --map=maps/sala.yaml
+#    robot-connect trekking
+# 3. Liga o PS4 (botão PS) e segura L1 + analógico esquerdo pra dirigir. R1 = turbo.
+# 4. (Opcional) abre http://robot.local:5000 no navegador pra ver o mapa.
+```
+
+- **Destacar e deixar rodando:** `Ctrl+B` e depois `D`. O robô continua sozinho;
+  `robot-connect` de novo **reanexa** na mesma sessão (tmux chamada `robo`, que
+  **sobrevive à queda do SSH**).
+- **WASD por teclado:** noutro terminal SSH, rode `robot-key` (publica em `key_vel`).
+- Por baixo, `robot-connect` faz `ssh -t robot.local "robot-up <modo>"`.
+
+Se preferir entrar no robô na mão, os mesmos atalhos valem lá dentro:
 
 ```bash
 ssh usuario@robot.local
 robot-up slam        # sobe/reanexa a stack
-robot-key            # (noutro terminal) WASD via teclado → key_vel
+robot-key            # (noutro terminal) WASD via teclado
 ```
 
-- **Dirigir**: ligue o PS4 (botão PS) e segure **L1** (dead-man) + analógico
-  esquerdo. **R1** = turbo. Sem segurar L1 o robô não anda.
-- **Editar configs com GUI**: use **VS Code Remote-SSH** apontando pra
-  `robot.local` (mexer em `nav2_params.yaml`, launches etc.).
-- **RViz no outro PC**: mesma sub-rede e mesmo `ROS_DOMAIN_ID`. Se o RViz não
-  achar tópicos, alguns APs WiFi bloqueiam **multicast** — use um AP que passe
-  multicast ou um Fast-DDS discovery server.
+### Ajustes comuns
+
+- **`robot.local` não resolve?** Passe o IP (veja no painel do roteador):
+  `ROBOT_HOST=192.168.0.50 robot-connect slam`
+- **Usuário diferente no robô?** `ROBOT_USER=pi robot-connect slam`
+- **Editar configs com GUI:** **VS Code Remote-SSH** apontando pra `robot.local`
+  (mexer em `nav2_params.yaml`, launches etc.).
+- **RViz no outro PC:** mesma sub-rede e mesmo `ROS_DOMAIN_ID`. Se o RViz não achar
+  tópicos, alguns APs WiFi bloqueiam **multicast** — use um AP que passe multicast
+  ou um Fast-DDS discovery server.
 - **Reativar o controle pelo web** (ex.: testar sem o PS4): `./launch.sh --web-teleop`.
-  No **modo SIM**, dirigir hoje **exige** `--web-teleop` (o `sim.launch.py` não
-  sobe o `twist_mux`).
+  No **modo SIM**, dirigir hoje **exige** `--web-teleop` (o `sim.launch.py` não sobe
+  o `twist_mux`).
 
 ---
 
