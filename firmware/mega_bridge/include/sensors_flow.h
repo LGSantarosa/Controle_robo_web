@@ -8,7 +8,7 @@ class Flow {
  public:
     explicit Flow(uint8_t cs_pin) : pmw_(cs_pin) {}
     bool begin();
-    void read();
+    bool read();
     int16_t dx()      const { return dx_; }
     int16_t dy()      const { return dy_; }
     uint8_t quality() const { return quality_; }

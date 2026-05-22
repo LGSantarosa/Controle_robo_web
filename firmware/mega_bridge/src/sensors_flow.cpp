@@ -8,7 +8,7 @@ bool Flow::begin() {
     return ok_;
 }
 
-void Flow::read() {
+bool Flow::read() {
     // Se o SPI caiu (cabo solto, brown-out), tenta re-init a cada 2 s.
     // Mesmo padrão do Imu::read(); sem isso o flow morto pelo cabo soltando
     // ficava desabilitado até reboot da MEGA.
@@ -18,7 +18,7 @@ void Flow::read() {
             last_recover_ms_ = now;
             begin();
         }
-        return;
+        return false;
     }
     pmw_.readMotionCount(&dx_, &dy_);
     // FIXME(C5): quality fixa em 0 desativa a fusão flow no pose_estimator
@@ -27,6 +27,7 @@ void Flow::read() {
     // fork da lib OU leitura SPI manual. Detalhes e workaround (snap-to-cone
     // via LiDAR) documentados no README seção "Sensores embarcados".
     quality_ = 0;
+    return true;
 }
 
 }  // namespace sensors

@@ -222,8 +222,9 @@ static void txFlow() {
     const uint32_t now = millis();
     if (now - last_tx_flow < TX_FLOW_PERIOD) return;
     last_tx_flow = now;
-    if (!flow_dev.ok()) return;
-    flow_dev.read();
+    // Simétrico ao txImu: se read() falhar (sensor caído / em recovery) não
+    // publica — senão republicaria o último dx_/dy_ como se fosse novo.
+    if (!flow_dev.read()) return;
 
     int16_t dx = flow_dev.dx();
     int16_t dy = flow_dev.dy();

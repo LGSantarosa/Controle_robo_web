@@ -66,9 +66,12 @@ planner_server:
 controller_server:
   ros__parameters:
     use_sim_time: false
+    # 10 Hz (default Nav2 é 20): limita o custo do DWB na Pi. Suficiente pro
+    # nosso ambiente (obstáculos majoritariamente estáticos / lentos).
     controller_frequency: 10.0
     min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.5
+    # diff-drive tem vy=0 sempre, então o threshold em y é inócuo — default 0.001.
+    min_y_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["goal_checker"]
@@ -81,6 +84,8 @@ controller_server:
       plugin: "nav2_controller::SimpleGoalChecker"
       # Folga pra ambiente dinâmico — se uma cadeira estiver atrapalhando
       # o ponto exato, robô considera que chegou a até 40 cm / ~20° do alvo.
+      # Distinto do FollowPath.xy_goal_tolerance (0.07): este é o critério de
+      # "cheguei no goal"; o do DWB é a tolerância interna de parada na trajetória.
       xy_goal_tolerance: 0.40
       yaw_goal_tolerance: 0.35
       stateful: true
@@ -274,7 +279,9 @@ velocity_smoother:
     scale_velocities: false
     feedback: "OPEN_LOOP"
     max_velocity: [0.35, 0.0, 0.8]
-    min_velocity: [-0.15, 0.0, -0.8]
+    # Ré alinhada com o DWB (min_vel_x: -0.1) — antes -0.15 deixava o smoother
+    # permitir mais ré do que o planejador sabe gerar.
+    min_velocity: [-0.1, 0.0, -0.8]
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
     max_accel: [1.0, 0.0, 2.0]

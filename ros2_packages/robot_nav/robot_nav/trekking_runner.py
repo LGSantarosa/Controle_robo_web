@@ -139,6 +139,7 @@ class TrekkingRunner(Node):
         self.last_to_target = None # vetor (dx, dy) último → detecção de pass-by
         self.prev_heading_err = 0.0
         self.led_until = 0.0       # walltime até quando manter LED de chegada
+        self._last_led = None      # última cor publicada (dedup do _led_tick 1 Hz)
         self.last_msg = ''
 
         # --- Subs ---
@@ -239,6 +240,7 @@ class TrekkingRunner(Node):
             self._start_play()
         elif cmd == 'stop':
             self.mode = MODE_IDLE
+            self.current_idx = 0
             self._stop_robot()
             self.last_msg = 'parado'
         elif cmd == 'load_waypoints':
@@ -526,6 +528,13 @@ class TrekkingRunner(Node):
             self._set_led(0.0, 0.3, 0.5, mode=2)        # ciano rotação
 
     def _set_led(self, r, g, b, mode=0):
+        # Dedup: o _led_tick roda a 1 Hz e quase sempre repete a mesma cor.
+        # Só publica quando muda de fato (a chegada laranja, via _flash_led,
+        # registra como última cor, então o tick seguinte re-publica o modo).
+        key = (float(r), float(g), float(b), int(mode))
+        if key == self._last_led:
+            return
+        self._last_led = key
         c = ColorRGBA()
         c.r = float(r); c.g = float(g); c.b = float(b)
         c.a = float(mode)

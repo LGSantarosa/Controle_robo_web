@@ -75,6 +75,7 @@ class _Decoder:
         self._len = 0
         self._got = 0
         self._buf = bytearray(64)
+        self.dropped = 0   # frames com len inválido (> 64) descartados
 
     def feed(self, b: int):
         """Alimenta um byte. Retorna (type, payload_bytes) quando completa um frame."""
@@ -101,6 +102,7 @@ class _Decoder:
             self._len = b
             self._got = 0
             if self._len > 64:
+                self.dropped += 1
                 self._st = 0
                 return None
             self._st = 5 if self._len == 0 else 4
@@ -158,6 +160,8 @@ class MegaBridge(Node):
 
         self._tx_lock = threading.Lock()
         self._decoder = _Decoder()
+        self._dropped_logged = 0      # último valor de _decoder.dropped já logado
+        self._dropped_log_ts = 0.0    # throttle do warn de frames descartados
 
         # QoS por tipo de dado:
         # - sensor_data (BEST_EFFORT, depth=5) para IMU 50 Hz e flow 100 Hz —
@@ -306,6 +310,15 @@ class MegaBridge(Node):
         # Processa todo o backlog acumulado desde o último tick. Limite alto
         # de iterações é só rede de segurança — em prática a fila fica vazia
         # rapidamente.
+        dropped = self._decoder.dropped
+        if dropped > self._dropped_logged:
+            now = time.time()
+            if now - self._dropped_log_ts > 5.0:
+                self.get_logger().warn(
+                    f'{dropped} frames descartados (len inválido) desde o boot')
+                self._dropped_log_ts = now
+                self._dropped_logged = dropped
+
         for _ in range(64):
             try:
                 ft, payload = self._rx_queue.get_nowait()
@@ -339,11 +352,17 @@ class MegaBridge(Node):
         ):
             self._pub_rpm[(board, side)].publish(Float64(data=float(value)))
 
-        for pub, raw in ((self._pub_bat_front, batF), (self._pub_bat_rear, batR)):
+        # present = placa respondendo (não-stale), não "voltagem > 0". Assim
+        # 0 V com present=True = curto/medida real; 0 V com present=False =
+        # placa muda. faultF/faultR bit 0 = stale (ver firmware txState).
+        for pub, raw, stale in (
+            (self._pub_bat_front, batF, bool(faultF & 0x01)),
+            (self._pub_bat_rear,  batR, bool(faultR & 0x01)),
+        ):
             b = BatteryState()
             b.header.stamp = self.get_clock().now().to_msg()
             b.voltage = raw / 100.0
-            b.present = raw > 0
+            b.present = not stale
             pub.publish(b)
 
         self._pub_button.publish(Bool(data=bool(btn)))

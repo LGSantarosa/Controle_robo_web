@@ -104,10 +104,11 @@
     </inertial>
   </link>
 
-  <!-- Câmera RGB-D frontal — bate com a posição do <link name="camera_link">
-       no husky.sdf. URDF aqui só pra robot_state_publisher publicar o TF
-       estático base_link → camera_link, que o Nav2 e o map_service usam
-       pra transformar o point cloud e a imagem. -->
+  <!-- camera_link frontal — o SENSOR RGB-D foi removido do husky.sdf (M14):
+       não há mais bridge de /camera/*. Mantemos só o link visual + o TF
+       estático base_link → camera_link aqui pra um futuro upgrade de câmera
+       não precisar remexer geometria. Bate com o <link name="camera_link">
+       (visual) que continua no husky.sdf. -->
   <joint name="camera_joint" type="fixed">
     <parent link="base_link"/>
     <child link="camera_link"/>

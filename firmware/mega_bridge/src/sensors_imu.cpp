@@ -41,6 +41,16 @@ bool Imu::read() {
         return false;
     }
 
+    // BNO055 pode reportar quaternion não-unitário em transitórios (cal=0).
+    // O lado Python assume |q|=1, então normalizamos aqui. O all-zero já foi
+    // descartado acima, então n > 0 quando chegamos aqui.
+    const double n = sqrt(quat_.w() * quat_.w() + quat_.x() * quat_.x() +
+                          quat_.y() * quat_.y() + quat_.z() * quat_.z());
+    if (n > 1e-6) {
+        quat_ = imu::Quaternion(quat_.w() / n, quat_.x() / n,
+                                quat_.y() / n, quat_.z() / n);
+    }
+
     // BNO055 reporta giroscópio em °/s por padrão — convertemos pra rad/s
     // pra casar com a convenção ROS (sensor_msgs/Imu.angular_velocity).
     const auto g_deg = bno_.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);

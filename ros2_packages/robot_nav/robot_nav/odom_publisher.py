@@ -119,8 +119,11 @@ class OdomPublisher(Node):
         linear = (v_right + v_left) / 2.0
         angular = (v_right - v_left) / self.wheel_base
 
-        self.x += linear * math.cos(self.theta) * dt
-        self.y += linear * math.sin(self.theta) * dt
+        # Integra com o yaw no ponto médio do passo (theta + 0.5·ω·dt) em vez
+        # do yaw inicial — reduz erro acumulado em curvas rápidas.
+        theta_mid = self.theta + 0.5 * angular * dt
+        self.x += linear * math.cos(theta_mid) * dt
+        self.y += linear * math.sin(theta_mid) * dt
         self.theta += angular * dt
         self.theta = math.atan2(math.sin(self.theta), math.cos(self.theta))
 
