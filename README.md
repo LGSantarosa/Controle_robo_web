@@ -711,7 +711,8 @@ pelo que você anotou com `whoami` no robô.)
 ```bash
 # 1. Liga o robô (só energia). Espera ~1 min ele bootar e entrar no WiFi.
 # 2. No outro PC:
-robot-connect slam                       # conecta por SSH + sobe a stack no tmux
+robot-connect                            # sem modo = teleop (padrão): só PS4/WASD, sem mapa/nav
+robot-connect slam                       # conecta por SSH + sobe a stack no tmux (mapeamento)
 #    robot-connect nav2 --map=maps/sala.yaml
 #    robot-connect trekking
 # 3. Liga o PS4 (botão PS) e segura L1 + analógico esquerdo pra dirigir. R1 = turbo.
@@ -728,7 +729,7 @@ Se preferir entrar no robô na mão, os mesmos atalhos valem lá dentro:
 
 ```bash
 ssh usuario@robot.local
-robot-up slam        # sobe/reanexa a stack
+robot-up             # sem modo = teleop (padrão); ou: robot-up slam / nav2 / trekking
 robot-key            # (noutro terminal) WASD via teclado
 ```
 
@@ -1097,7 +1098,7 @@ tail -f controle_web/logs/lidar.log
 
 ## Limitações conhecidas
 
-- **Contenção do `/cmd_vel` em NAV2.** Tanto o teleop (Socket.IO → `/cmd_vel`) quanto o `velocity_smoother` do Nav2 publicam no mesmo tópico — última mensagem vence. Funciona como "override manual" mas não é protocolo robusto. *Futuro:* `twist_mux`.
+- **Arbitragem do `/cmd_vel` via `twist_mux`.** Resolvido (Fase 1 headless): o `twist_mux` arbitra por prioridade — PS4 (`joy_vel`, 100) > WASD (`key_vel`, 90) > Nav2/trekking (`nav_vel`, 10), timeout 0.5 s. Não há mais publishers concorrentes direto no `/cmd_vel`. *Pendente:* não há e-stop dedicado no protocolo (sem lock no mux), e o `sim.launch.py` não sobe o `twist_mux` — no SIM, dirigir exige `--web-teleop`.
 - **Drift de odometria.** O `odom_publisher` integra a média dos 4 RPMs. Mesmo com a média, drift acumula em mapeamentos longos. O `/imu/data` do BNO055 está disponível e a próxima evolução natural é rodar o `robot_localization` (EKF) fundindo wheel odom + IMU + (opcionalmente) optical flow.
 - **Ambientes muito simétricos.** Corredor longo com paredes lisas: scan-matching do SLAM não encontra features suficientes. AMCL tem o mesmo problema. *Mitigação:* mapear ambientes com móveis e variação.
 - **Sem câmera.** A versão atual do robô não tem câmera RGB-D — foi removida do hardware. O sistema funciona 100% com LiDAR. Voltar com câmera no futuro implica reintroduzir um `camera_bridge.py` e o pointcloud no `VoxelLayer`.
