@@ -1,62 +1,436 @@
 #!/bin/bash
-# Pareamento guiado do DualShock 4 (PS4) sem tela, via bluetoothctl.
+# Pareamento automatizado do controle PS4 no Linux, sem tela.
 # PLANO_HEADLESS_2026-05-22 §4.2.
 #
-# Depois de pareado+confiado, ligar o controle reconecta sozinho — o joy_node
-# (robot.launch.py) lê /dev/input/js0 e o teleop_twist_joy publica em joy_vel.
+# Por que não é trivial: o PS4 + BlueZ tem 5 pegadinhas conhecidas que afundam
+# o pareamento se não forem tratadas ANTES de chamar `bluetoothctl pair`:
+#
+#   1) ERTM ligado  → PS4 não fala ERTM, conexão HID é derrubada (sintoma:
+#                     "Connected: yes" seguido de "Connected: no" em ~1 s).
+#   2) ControllerMode dual (BR/EDR + LE) → BlueZ tenta LE no PS4 (que é só
+#                     clássico), falha e mata a conexão. Força BR/EDR-only.
+#   3) ClassicBondedOnly=true (default) → bluetoothd rejeita HID de devices
+#                     não-bonded ("Rejected !bonded"); pair conecta em BT mas
+#                     /dev/input/jsN nunca aparece. Força false.
+#   4) Agent NoInputNoOutput → pair "just works" sem link key persistente;
+#                     Bonded=no, pareamento é descartado no primeiro disconnect.
+#                     Usa KeyboardDisplay (força SSP com bonding completo).
+#   5) bluetoothctl assíncrono → heredoc fecha stdin antes do pair completar.
+#                     Usa FIFO pra manter agent vivo + one-shot pair + polling.
+#
+# Este script resolve os 5, limpa pareamento velho e espera /dev/input/js0
+# materializar de fato antes de declarar sucesso.
 #
 # Uso:
-#   ./pair-ps4.sh
-#   (coloque o DS4 em modo pareamento: segure SHARE + PS até a barra piscar rápido)
+#   ./pair-ps4.sh                # interativo (pede Enters)
+#   ./pair-ps4.sh --no-prompt    # non-interactive (uso via SSH); sudo deve estar cacheado
+#
+# Modo pareamento do PS4:
+#   - Segure PS por ~10 s até a barra APAGAR completamente.
+#   - Segure SHARE + PS por 5 s até a barra piscar RÁPIDO (2 flashes/s).
+#   - Solte; a barra continua piscando rápido sozinha.
 
 set -e
+
+# ------------------------------------------------------------------
+# Args
+# ------------------------------------------------------------------
+NO_PROMPT=0
+for arg in "$@"; do
+    case "$arg" in
+        --no-prompt) NO_PROMPT=1 ;;
+        -h|--help)
+            sed -n '2,25p' "$0" | sed 's/^# \?//'
+            exit 0 ;;
+    esac
+done
+
+_read_or_skip() {
+    # $1 = mensagem
+    if [ "$NO_PROMPT" = 1 ]; then
+        return
+    fi
+    read -r -p "$1" _
+}
+
+# Em --no-prompt o sudo precisa estar pré-cacheado (sem TTY pra prompt de senha).
+if [ "$NO_PROMPT" = 1 ] && ! sudo -n true 2>/dev/null; then
+    echo "ERRO: --no-prompt exige sudo cacheado. Rode 'sudo -v' antes (ou via SSH:"
+    echo "      ssh <user>@<host> sudo -v)."
+    exit 1
+fi
+
+# ------------------------------------------------------------------
+# 0) Pré-checagens & fixes de sistema (idempotente)
+# ------------------------------------------------------------------
 
 if ! command -v bluetoothctl >/dev/null 2>&1; then
     echo "ERRO: bluetoothctl não encontrado. Instale com: sudo apt install -y bluez"
     exit 1
 fi
 
-echo "=== Pareamento do DualShock 4 ==="
-echo "1) Segure SHARE + PS no controle até a barra de luz piscar RÁPIDO (modo pareamento)."
-read -r -p "Pronto? Enter pra começar a busca... " _
+# --- Fix 1: ERTM persistente ---
+ERTM_CONF=/etc/modprobe.d/bluetooth-disable-ertm.conf
+if [ ! -f "$ERTM_CONF" ]; then
+    echo "→ Desligando ERTM no kernel (persistente)..."
+    echo 'options bluetooth disable_ertm=Y' | sudo tee "$ERTM_CONF" >/dev/null
+fi
 
-# Liga adaptador, agente e scan por ~8 s pra listar os dispositivos.
-bluetoothctl --timeout 8 <<'EOF'
-power on
-agent on
-default-agent
-scan on
-EOF
-
-echo
-echo "2) Dispositivos encontrados (procure 'Wireless Controller'):"
-bluetoothctl devices | grep -iE "controller|wireless|dualshock|sony" || bluetoothctl devices
-
-echo
-read -r -p "3) Cole o MAC do controle (ex.: AA:BB:CC:DD:EE:FF): " MAC
-if ! [[ "$MAC" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
-    echo "ERRO: '$MAC' não parece um MAC válido."
+# Tenta aplicar runtime via sysfs (o módulo expõe esse parâmetro como writable).
+CUR_ERTM="$(cat /sys/module/bluetooth/parameters/disable_ertm 2>/dev/null || echo N)"
+if [ "$CUR_ERTM" != "Y" ]; then
+    echo Y | sudo tee /sys/module/bluetooth/parameters/disable_ertm >/dev/null 2>&1 || true
+    CUR_ERTM="$(cat /sys/module/bluetooth/parameters/disable_ertm 2>/dev/null || echo N)"
+fi
+if [ "$CUR_ERTM" != "Y" ]; then
+    echo "ERRO: ERTM continua ligado e o módulo não aceita troca em runtime."
+    echo "      Reinicie pra carregar /etc/modprobe.d/bluetooth-disable-ertm.conf:"
+    echo "        sudo reboot"
+    echo "      Depois rode ./pair-ps4.sh de novo."
     exit 1
 fi
 
-echo
-echo "Pareando $MAC ..."
-# trust = reconecta automático no boot (o pulo do gato).
-bluetoothctl <<EOF
-pair $MAC
-trust $MAC
-connect $MAC
-EOF
+# --- Fix 2: BR/EDR-only + auto-enable do adaptador ---
+MAINCONF=/etc/bluetooth/main.conf
+NEED_BT_RESTART=0
 
-echo
-echo "Conferindo /dev/input/js0 ..."
-if [ -e /dev/input/js0 ]; then
-    echo "  OK — /dev/input/js0 presente. Controle pronto."
-else
-    echo "  AVISO: /dev/input/js0 ainda não apareceu. Ligue o controle (botão PS) e"
-    echo "         confira de novo: ls /dev/input/js0"
+if ! grep -qE '^[[:space:]]*ControllerMode[[:space:]]*=[[:space:]]*bredr' "$MAINCONF"; then
+    echo "→ Forçando ControllerMode = bredr (PS4 é só clássico, BLE quebra)..."
+    sudo cp "$MAINCONF" "$MAINCONF.bak.$(date +%s)"
+    if grep -qE '^[[:space:]]*#?[[:space:]]*ControllerMode' "$MAINCONF"; then
+        sudo sed -i 's|^[[:space:]]*#\?[[:space:]]*ControllerMode[[:space:]]*=.*|ControllerMode = bredr|' "$MAINCONF"
+    else
+        # Insere no fim da seção [General]; se a seção não existir, anexa no fim.
+        if grep -q '^\[General\]' "$MAINCONF"; then
+            sudo sed -i '/^\[General\]/a ControllerMode = bredr' "$MAINCONF"
+        else
+            printf '\n[General]\nControllerMode = bredr\n' | sudo tee -a "$MAINCONF" >/dev/null
+        fi
+    fi
+    NEED_BT_RESTART=1
 fi
 
+# AutoEnable garante que o adaptador acorde "Powered: yes" no boot (headless).
+if ! grep -qE '^[[:space:]]*AutoEnable[[:space:]]*=[[:space:]]*true' "$MAINCONF"; then
+    echo "→ Habilitando AutoEnable = true (adaptador acende sozinho no boot)..."
+    if grep -qE '^[[:space:]]*#?[[:space:]]*AutoEnable' "$MAINCONF"; then
+        sudo sed -i 's|^[[:space:]]*#\?[[:space:]]*AutoEnable[[:space:]]*=.*|AutoEnable = true|' "$MAINCONF"
+    else
+        if grep -q '^\[Policy\]' "$MAINCONF"; then
+            sudo sed -i '/^\[Policy\]/a AutoEnable = true' "$MAINCONF"
+        else
+            printf '\n[Policy]\nAutoEnable = true\n' | sudo tee -a "$MAINCONF" >/dev/null
+        fi
+    fi
+    NEED_BT_RESTART=1
+fi
+
+# Sem ClassicBondedOnly=false, o bluetoothd recusa conexão HID de devices não-bonded
+# (rejected "!bonded"). Como o pair "just works" do DS4 nem sempre completa bonding,
+# isso impede o /dev/input/jsN materializar mesmo com Connected=yes.
+INPUTCONF=/etc/bluetooth/input.conf
+if [ -f "$INPUTCONF" ] && ! grep -qE '^[[:space:]]*ClassicBondedOnly[[:space:]]*=[[:space:]]*false' "$INPUTCONF"; then
+    echo "→ Setando ClassicBondedOnly = false em input.conf (HID sem bonding completo)..."
+    if grep -qE '^[[:space:]]*#?[[:space:]]*ClassicBondedOnly' "$INPUTCONF"; then
+        sudo sed -i 's|^[[:space:]]*#\?[[:space:]]*ClassicBondedOnly[[:space:]]*=.*|ClassicBondedOnly = false|' "$INPUTCONF"
+    else
+        if grep -q '^\[General\]' "$INPUTCONF"; then
+            sudo sed -i '/^\[General\]/a ClassicBondedOnly = false' "$INPUTCONF"
+        else
+            printf '\n[General]\nClassicBondedOnly = false\n' | sudo tee -a "$INPUTCONF" >/dev/null
+        fi
+    fi
+    NEED_BT_RESTART=1
+fi
+
+if [ "$NEED_BT_RESTART" = 1 ]; then
+    echo "→ Reiniciando bluetoothd pra aplicar configs..."
+    sudo systemctl restart bluetooth
+    sleep 2
+fi
+
+# --- Fix 3: rfkill destrava + adaptador ligado ---
+if rfkill list bluetooth 2>/dev/null | grep -q "Soft blocked: yes"; then
+    echo "→ Destravando bluetooth no rfkill..."
+    sudo rfkill unblock bluetooth
+    sleep 1
+fi
+
+if ! bluetoothctl show 2>/dev/null | grep -q "Powered: yes"; then
+    echo "→ Ligando adaptador BT..."
+    bluetoothctl power on >/dev/null 2>&1 || true
+    sleep 1
+fi
+
+if ! bluetoothctl show 2>/dev/null | grep -q "Powered: yes"; then
+    echo "ERRO: adaptador BT continua desligado. Diagnóstico:"
+    rfkill list bluetooth
+    bluetoothctl show | head -10
+    exit 1
+fi
+
+# --- Fix 4: drivers HID do PS4 carregados ---
+# hid_playstation é o driver moderno (kernel 5.12+); hid_sony é o fallback.
+# Sem nenhum dos dois, BT aceita o controle mas /dev/input/js0 nunca aparece.
+if ! lsmod | grep -qE '^(hid_playstation|hid_sony)'; then
+    echo "→ Carregando driver hid_playstation..."
+    sudo modprobe hid_playstation 2>/dev/null || sudo modprobe hid_sony 2>/dev/null || true
+fi
+# joydev cria o nó /dev/input/jsN a partir do HID.
+if ! lsmod | grep -q '^joydev'; then
+    sudo modprobe joydev 2>/dev/null || true
+fi
+
+echo "✓ Sistema pronto (ERTM=Y, BR/EDR-only, rfkill OK, adapter ON, HID drivers OK)"
 echo
-echo "Pronto. A partir de agora, ligar o controle (botão PS) reconecta sozinho."
-echo "Teste os eixos com:  ros2 run joy joy_enumerate_devices   (ou: jstest /dev/input/js0)"
+
+# ------------------------------------------------------------------
+# 1) Coloca o usuário em modo pareamento
+# ------------------------------------------------------------------
+
+cat <<'EOF'
+=== Pareamento do controle PS4 ===
+
+Coloque o controle em modo pareamento AGORA:
+  1) Segure PS por ~10s até a barra de luz APAGAR completamente.
+  2) Segure SHARE + PS por 5s até a barra piscar RÁPIDO (2 flashes/s).
+  3) Solte os dois botões — deve continuar piscando rápido sozinho.
+
+EOF
+_read_or_skip "Pronto? Enter pra começar... "
+
+# ------------------------------------------------------------------
+# 2) Limpa pareamento velho do MESMO controle (se houver)
+# ------------------------------------------------------------------
+
+OLD_MAC=$(bluetoothctl devices 2>/dev/null | awk '/Wireless Controller/{print $2; exit}')
+if [ -n "$OLD_MAC" ]; then
+    echo "→ Removendo pareamento antigo do PS4 ($OLD_MAC)..."
+    bluetoothctl remove "$OLD_MAC" >/dev/null 2>&1 || true
+    sleep 1
+fi
+
+# ------------------------------------------------------------------
+# 3) Mantém um bluetoothctl em background com agent KeyboardDisplay
+# ------------------------------------------------------------------
+# Por que KeyboardDisplay e não NoInputNoOutput: o pair "just works" do DS4 com
+# NoInputNoOutput não negocia link key persistente nem completa Bonded=yes; o
+# pareamento é descartado no primeiro disconnect. KeyboardDisplay força SSP com
+# bonding completo, link key é salva em /var/lib/bluetooth/.../info.
+#
+# Por que FIFO em vez de heredoc: o heredoc fecha o stdin assim que o EOF é lido,
+# matando o bluetoothctl (e o agent junto) antes do pair acontecer. O FIFO mantém
+# o stdin aberto pela duração do script.
+
+AGENT_LOG=$(mktemp)
+AGENT_FIFO=$(mktemp -u)
+mkfifo "$AGENT_FIFO"
+exec 3<>"$AGENT_FIFO"
+bluetoothctl <&3 >"$AGENT_LOG" 2>&1 &
+AGENT_PID=$!
+trap 'echo quit >&3 2>/dev/null; sleep 1; kill $AGENT_PID 2>/dev/null; exec 3>&- 2>/dev/null; rm -f "$AGENT_FIFO" "$AGENT_LOG"' EXIT
+sleep 1
+echo "agent KeyboardDisplay" >&3
+sleep 1
+echo "default-agent" >&3
+sleep 1
+
+if ! grep -qE "Agent registered|Agent is already registered" "$AGENT_LOG"; then
+    echo "AVISO: agent KeyboardDisplay falhou em registrar; tentando NoInputNoOutput..."
+    echo "agent NoInputNoOutput" >&3
+    sleep 1
+    echo "default-agent" >&3
+    sleep 1
+fi
+
+# ------------------------------------------------------------------
+# 4) Scan até achar o PS4
+# ------------------------------------------------------------------
+
+echo "→ Escaneando por até 20s (procurando 'Wireless Controller')..."
+# Scan em background; mata quando achar.
+bluetoothctl --timeout 20 scan on >/dev/null 2>&1 &
+SCAN_PID=$!
+
+PS4_MAC=""
+for i in $(seq 1 20); do
+    sleep 1
+    PS4_MAC=$(bluetoothctl devices 2>/dev/null | awk '/Wireless Controller/{print $2; exit}')
+    if [ -n "$PS4_MAC" ]; then
+        echo "✓ PS4 encontrado: $PS4_MAC"
+        break
+    fi
+done
+
+# Para o scan independente de ter achado ou não.
+kill $SCAN_PID 2>/dev/null || true
+wait $SCAN_PID 2>/dev/null || true
+bluetoothctl scan off >/dev/null 2>&1 || true
+
+if [ -z "$PS4_MAC" ]; then
+    cat <<EOF
+ERRO: PS4 não apareceu no scan em 20s.
+
+Diagnóstico:
+  - A barra de luz do controle está piscando RÁPIDO agora? (2 flashes/s)
+    Se NÃO, ele saiu do modo pareamento. Refaz SHARE+PS por 5s e roda de novo.
+  - Outro host (PS4, celular) que já pareou com esse controle está por perto?
+    O PS4 prefere o último host. Desliga/afasta antes de tentar.
+EOF
+    exit 1
+fi
+
+# ------------------------------------------------------------------
+# 5) Pair (com polling de estado, não confia no retorno)
+# ------------------------------------------------------------------
+
+echo "→ Pairing... (até 30s, espera Bonded=yes — não só Paired)"
+timeout 25 bluetoothctl pair "$PS4_MAC" 2>&1 | tail -5 || true
+
+BONDED=0
+for i in $(seq 1 30); do
+    if bluetoothctl info "$PS4_MAC" 2>/dev/null | grep -q "Bonded: yes"; then
+        BONDED=1
+        break
+    fi
+    sleep 1
+done
+
+if [ "$BONDED" != 1 ]; then
+    echo "ERRO: bonding não completou em 30s. Última info:"
+    bluetoothctl info "$PS4_MAC" 2>/dev/null | grep -E "Paired|Bonded|Trusted|Connected" || true
+    echo
+    echo "Diagnóstico:"
+    echo "  - Se Paired=yes mas Bonded=no, o agent foi NoInputNoOutput (fallback);"
+    echo "    o link key não é persistente. Tenta desligar o controle (PS 10s),"
+    echo "    refazer SHARE+PS, e rodar de novo."
+    echo "  - Agent log:"
+    cat "$AGENT_LOG" | tail -10 | sed 's/^/    /'
+    exit 1
+fi
+echo "✓ Paired + Bonded"
+
+# ------------------------------------------------------------------
+# 6) Trust (instantâneo)
+# ------------------------------------------------------------------
+
+bluetoothctl trust "$PS4_MAC" >/dev/null 2>&1
+echo "✓ Trusted"
+
+# ------------------------------------------------------------------
+# 7) Connect — geralmente já está conectado após pair com bonding
+# ------------------------------------------------------------------
+#
+# Diferença vs. NoInputNoOutput: o pair com KeyboardDisplay frequentemente já
+# deixa Connected=yes no fim do pair. Só precisa de connect explícito se a
+# stack derrubou a HID por outro motivo (ou em --no-prompt sem auto-up).
+if ! bluetoothctl info "$PS4_MAC" 2>/dev/null | grep -q "Connected: yes"; then
+    if [ "$NO_PROMPT" = 1 ]; then
+        echo "→ Tentando connect direto (modo --no-prompt)..."
+        timeout 15 bluetoothctl connect "$PS4_MAC" >/dev/null 2>&1 || true
+    else
+        cat <<'EOF'
+
+→ Pair OK! A barra de luz do controle DEVE estar apagada agora.
+
+   Pressione PS rapidamente (toque, não segura) pra LIGAR o controle.
+   A barra vai piscar e depois fixar uma cor sólida ao conectar.
+
+EOF
+        read -r -p "Apertou PS? Enter pra esperar a conexão... " _
+    fi
+fi
+
+echo "→ Aguardando conexão (até 20s)..."
+CONNECTED=0
+for i in $(seq 1 20); do
+    if bluetoothctl info "$PS4_MAC" 2>/dev/null | grep -q "Connected: yes"; then
+        CONNECTED=1
+        break
+    fi
+    # Se não auto-conectou em 5s, força um connect explícito (uma vez).
+    if [ "$i" = 6 ]; then
+        echo "  ... auto-reconnect não disparou, forçando connect..."
+        timeout 10 bluetoothctl connect "$PS4_MAC" >/dev/null 2>&1 || true
+    fi
+    sleep 1
+done
+
+if [ "$CONNECTED" != 1 ]; then
+    echo "ERRO: controle não conectou em 20s. Diagnóstico:"
+    bluetoothctl info "$PS4_MAC" 2>/dev/null | grep -E "Paired|Trusted|Connected|Blocked" || true
+    echo
+    echo "Últimas linhas do bluetoothd:"
+    sudo journalctl -u bluetooth --since "30 seconds ago" --no-pager | tail -15
+    exit 1
+fi
+echo "✓ Connected"
+
+# ------------------------------------------------------------------
+# 8) Espera /dev/input/js0 materializar (HID → joydev)
+# ------------------------------------------------------------------
+
+echo "→ Aguardando /dev/input/js0 (até 30s; tenta disconnect+reconnect aos 15s)..."
+JS_RETRY_DONE=0
+for i in $(seq 1 30); do
+    if [ -e /dev/input/js0 ]; then
+        echo "  apareceu em ${i}s"
+        break
+    fi
+    # Aos 15s: se ainda não materializou, força disconnect+reconnect (geralmente
+    # subiu HID profile na 2ª connect quando 1ª ficou em "Connected sem HID").
+    if [ "$i" = 15 ] && [ "$JS_RETRY_DONE" = 0 ]; then
+        echo "  ... 15s sem js0, tentando disconnect+reconnect pra forçar HID profile..."
+        bluetoothctl disconnect "$PS4_MAC" >/dev/null 2>&1 || true
+        sleep 2
+        timeout 10 bluetoothctl connect "$PS4_MAC" >/dev/null 2>&1 || true
+        JS_RETRY_DONE=1
+    fi
+    sleep 1
+done
+
+if [ ! -e /dev/input/js0 ]; then
+    cat <<EOF
+AVISO: BT conectou (Connected=yes, Bonded=yes), mas /dev/input/js0 não materializou.
+
+Estado do controle no BlueZ:
+$(bluetoothctl info "$PS4_MAC" 2>/dev/null | grep -E "Paired|Bonded|Trusted|Connected|UUIDs" | sed 's/^/  /')
+
+Modulos:
+$(lsmod | grep -E "^hid_playstation|^hid_sony|^joydev|^hidp" | sed 's/^/  /')
+
+Logs do bluetoothd nos ultimos 30s:
+$(sudo journalctl -u bluetooth --since "30 seconds ago" --no-pager 2>&1 | grep -iE "input|hid|rejected|playstation" | tail -8 | sed 's/^/  /')
+
+Tenta apertar PS curto agora (com BT já estabelecido, HID pode subir manualmente).
+EOF
+    exit 1
+fi
+
+# ------------------------------------------------------------------
+# 9) Sucesso
+# ------------------------------------------------------------------
+
+cat <<EOF
+
+==========================================================
+✓ Tudo certo! Controle pareado, conectado e visível como JS.
+==========================================================
+
+Status:
+$(bluetoothctl info "$PS4_MAC" | grep -E "Name|Paired|Trusted|Connected" | sed 's/^/  /')
+
+Dispositivo:
+  /dev/input/js0
+
+Auto-reconnect via PS curto: NÃO confiável neste hardware. Pra próxima conexão,
+entra em modo pareamento (PS 10s + SHARE+PS 5s) e roda este script de novo —
+como o link key é persistente, o pair sai rápido.
+
+Testes:
+  jstest /dev/input/js0                    # aperta botões → mostra mudanças
+  ros2 run joy joy_enumerate_devices       # vê o joystick no ROS
+
+Subir a stack (vai começar a publicar /joy ao mexer no analógico com L1):
+  cd ~/workspace/Controle_robo_web && ./launch.sh
+EOF

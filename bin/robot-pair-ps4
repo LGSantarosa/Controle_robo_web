@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Roda no OUTRO PC: pareia o controle PS4 no robô via SSH, num só comando.
+# Pre-req:
+#   1) Controle JÁ em modo pareamento (PS 10s pra apagar, SHARE+PS 5s pra
+#      piscar RÁPIDO, solta — barra continua piscando rápido sozinha).
+#   2) SSH passwordless configurado (ssh-copy-id) pro robô.
+#   3) Sudo cacheado no robô — o script vai rodar `ssh ... sudo -v` pra você.
+#
+# Uso:
+#   robot-pair-ps4
+#
+# Config (variáveis de ambiente, iguais às do robot-connect):
+#   ROBOT_HOST   default: tenta robot.local; fallback pra IP fixo abaixo
+#   ROBOT_USER   default: robo
+#
+# Por que existe: o pair via bluetoothctl no robô tem 5 pegadinhas (ver
+# pair-ps4.sh §cabeçalho). Esse wrapper só copia o script atualizado pra /tmp
+# do robô e roda em modo --no-prompt.
+set -euo pipefail
+
+HOST_MDNS="robot.local"
+HOST_FALLBACK_IP="192.168.18.95"
+REMOTE_USER="${ROBOT_USER:-robo}"
+
+# Resolução de host: ROBOT_HOST override > mDNS > IP fallback.
+if [ -n "${ROBOT_HOST:-}" ]; then
+    HOST="$ROBOT_HOST"
+elif timeout 2 getent hosts "$HOST_MDNS" >/dev/null 2>&1; then
+    HOST="$HOST_MDNS"
+else
+    echo "→ $HOST_MDNS não resolveu (mDNS off?). Usando IP fallback: $HOST_FALLBACK_IP"
+    HOST="$HOST_FALLBACK_IP"
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PAIR_SCRIPT="$SCRIPT_DIR/pair-ps4.sh"
+
+if [ ! -f "$PAIR_SCRIPT" ]; then
+    echo "ERRO: pair-ps4.sh não encontrado em $PAIR_SCRIPT" >&2
+    exit 1
+fi
+
+cat <<EOF
+
+=== Pareamento do PS4 em ${REMOTE_USER}@${HOST} ===
+
+Pre-checks:
+  - Controle JÁ em modo pareamento? (barra piscando RÁPIDO, 2x/s)
+  - Outros hosts que pareiam com esse controle (PC, outro robô): BT desligado?
+
+EOF
+read -r -p "Pronto? Enter pra começar (Ctrl+C cancela)... " _
+
+# SSH ControlMaster: scp + ssh compartilham a mesma conexão TCP (mais rápido).
+# Mas atenção: sudo cache é por-PTY, NÃO por-conexão. Por isso o `sudo -v` e o
+# `bash pair-ps4.sh` precisam rodar no MESMO `ssh -t` (mesmo PTY).
+SSH_CTL=$(mktemp -u /tmp/ssh-robot-pair-XXXXXX)
+SSH_OPTS=(-o ControlMaster=auto -o ControlPath="$SSH_CTL" -o ControlPersist=60)
+trap 'ssh "${SSH_OPTS[@]}" -O exit "${REMOTE_USER}@${HOST}" 2>/dev/null || true; rm -f "$SSH_CTL"' EXIT
+
+echo "→ Enviando pair-ps4.sh pra /tmp/ no robô..."
+scp "${SSH_OPTS[@]}" -q "$PAIR_SCRIPT" "${REMOTE_USER}@${HOST}:/tmp/pair-ps4.sh"
+
+echo "→ Cacheando sudo + executando pair-ps4.sh no robô (mesmo PTY)..."
+echo "  (vai pedir a senha de ${REMOTE_USER} 1x)"
+echo
+ssh "${SSH_OPTS[@]}" -t "${REMOTE_USER}@${HOST}" "sudo -v && bash /tmp/pair-ps4.sh --no-prompt"
