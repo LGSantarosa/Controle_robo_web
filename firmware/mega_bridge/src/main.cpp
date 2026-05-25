@@ -225,6 +225,11 @@ static void txFlow() {
     // Simétrico ao txImu: se read() falhar (sensor caído / em recovery) não
     // publica — senão republicaria o último dx_/dy_ como se fosse novo.
     if (!flow_dev.read()) return;
+    // Anel modulando a iluminação (STARTING/WAYPOINT + recovery) confunde o
+    // PMW3901 — ele reporta motion fantasma por mudança de contraste no chão.
+    // Suprime o frame; EKF do PC propaga só com encoders + IMU nesse intervalo
+    // (~1,15 s por waypoint, ~57 cm de dead-reckoning a 0,5 m/s — recuperável).
+    if (ring.gated()) return;
 
     int16_t dx = flow_dev.dx();
     int16_t dy = flow_dev.dy();

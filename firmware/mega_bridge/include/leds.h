@@ -37,6 +37,12 @@ class Ring {
     void setState(State s);
     State state() const { return state_; }
 
+    // True enquanto a animação atual (STARTING, WAYPOINT) está modulando a
+    // iluminação do anel — o PMW3901 vê variação de brilho/cor e reporta
+    // motion fantasma. Inclui janela de recovery do auto-gain do sensor.
+    // Use no txFlow() pra suprimir publicação durante esse intervalo.
+    bool gated() const { return gated_until_ != 0 && millis() < gated_until_; }
+
  private:
     void transition_(State s);
     void resolveAuto_();            // escolhe próximo estado automático
@@ -48,6 +54,7 @@ class Ring {
 
     bool     wish_active_ = false;
     bool     wish_error_  = false;
+    uint32_t gated_until_ = 0;  // 0 = sem gating; senão millis() de fim
 
     uint8_t  man_r_   = 0;
     uint8_t  man_g_   = 0;

@@ -2,12 +2,30 @@
 
 namespace leds {
 
+namespace {
+// Cores das animações (sem o brightness global aplicado).
+// Amarelo e verde foram escolhidos por luminância alta — o PMW3901 precisa
+// de luz refletida do chão pra rastrear; vermelho/azul puros apagariam a cena.
+constexpr CRGB COLOR_WAYPOINT = CRGB(255, 200, 0);   // amarelo
+constexpr CRGB COLOR_STARTING = CRGB(0,   220, 0);   // verde
+constexpr CRGB COLOR_BASE     = CRGB(255, 255, 255); // branco que mantém luz no chão
+
+// Tempos das animações com base branca alternada.
+constexpr uint16_t FLASH_ON_MS      = 120;
+constexpr uint16_t FLASH_OFF_MS     = 80;
+constexpr uint16_t FLASH_PERIOD_MS  = FLASH_ON_MS + FLASH_OFF_MS;  // 200
+constexpr uint8_t  FLASH_CYCLES     = 5;
+constexpr uint16_t FLASH_TOTAL_MS   = FLASH_PERIOD_MS * FLASH_CYCLES;  // 1000
+constexpr uint16_t PMW_RECOVERY_MS  = 150;  // auto-gain do sensor reassentar
+}  // namespace
+
 void Ring::begin() {
     FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds_, NUM_LEDS);
-    // 24 LEDs WS2812 a 255 = ~1.44 A no 5 V — acima do orçamento do USB da
-    // MEGA (500 mA), risco de brown-out durante o modo RUN (branco cheio).
-    // 80 dá brilho útil pro PMW3901 enxergar o chão sem estressar a fonte.
-    FastLED.setBrightness(80);
+    // Step-down dedicado de 5 V / 5 A no robô: orçamento gigante de corrente.
+    // 100 = ~40% de brilho ≈ ~580 mA no pico (anel todo branco), folga total.
+    // Ajuste em campo se PMW3901 saturar em piso claro (baixar) ou perder em
+    // piso escuro (subir até 150–180).
+    FastLED.setBrightness(100);
     FastLED.clear(true);
     transition_(State::BOOT);
 }
@@ -15,6 +33,13 @@ void Ring::begin() {
 void Ring::transition_(State s) {
     state_       = s;
     state_start_ = millis();
+    // Gateamento do PMW3901: liga quando a animação modula a iluminação,
+    // desliga quando o estado for de luz estável (RUN/IDLE/ERROR/OFF/MANUAL).
+    if (s == State::WAYPOINT || s == State::STARTING) {
+        gated_until_ = state_start_ + FLASH_TOTAL_MS + PMW_RECOVERY_MS;
+    } else {
+        gated_until_ = 0;
+    }
 }
 
 void Ring::resolveAuto_() {
@@ -107,23 +132,41 @@ void Ring::tick() {
         }
 
         case State::STARTING: {
-            // 3 piscadas verdes (200 ms on / 200 ms off) — depois branco em RUN.
-            const bool on = ((t / 200) % 2) == 0;
-            for (auto& px : leds_) px = on ? CRGB(0, 220, 0) : CRGB::Black;
-            if (t >= 1200) { transition_(State::RUN); return; }
+            // 5 ciclos com base branca alternada: LEDs pares ficam brancos
+            // (mantêm luz no chão pro PMW), ímpares piscam verde.
+            // PMW3901 fica gateado pelo gated_until_ — ver transition_().
+            const uint32_t phase = t % FLASH_PERIOD_MS;
+            const bool color_on = phase < FLASH_ON_MS;
+            for (uint8_t i = 0; i < NUM_LEDS; ++i) {
+                if (i & 1) {
+                    leds_[i] = color_on ? COLOR_STARTING : COLOR_BASE;
+                } else {
+                    leds_[i] = COLOR_BASE;
+                }
+            }
+            if (t >= FLASH_TOTAL_MS) { transition_(State::RUN); return; }
             break;
         }
 
         case State::RUN:
             // Branco cheio para iluminar o chão para o PMW3901.
-            for (auto& px : leds_) px = CRGB(255, 255, 255);
+            for (auto& px : leds_) px = COLOR_BASE;
             break;
 
         case State::WAYPOINT: {
-            // Laranja piscando por ~3 s; depois volta ao estado automático.
-            const bool on = ((t / 200) % 2) == 0;
-            for (auto& px : leds_) px = on ? CRGB(255, 80, 0) : CRGB::Black;
-            if (t >= 3000) { resolveAuto_(); return; }
+            // Mesma estrutura do STARTING, mas amarelo. Robô continua andando:
+            // a base branca preserva ~50% da iluminação e o gated_until_
+            // suprime o txFlow() pelos ~1150 ms até o auto-gain do PMW reassentar.
+            const uint32_t phase = t % FLASH_PERIOD_MS;
+            const bool color_on = phase < FLASH_ON_MS;
+            for (uint8_t i = 0; i < NUM_LEDS; ++i) {
+                if (i & 1) {
+                    leds_[i] = color_on ? COLOR_WAYPOINT : COLOR_BASE;
+                } else {
+                    leds_[i] = COLOR_BASE;
+                }
+            }
+            if (t >= FLASH_TOTAL_MS) { resolveAuto_(); return; }
             break;
         }
 
