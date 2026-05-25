@@ -21,10 +21,12 @@ constexpr uint16_t PMW_RECOVERY_MS  = 150;  // auto-gain do sensor reassentar
 
 void Ring::begin() {
     FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds_, NUM_LEDS);
-    // Step-down dedicado de 5 V / 5 A no robô: orçamento gigante de corrente.
-    // 100 = ~40% de brilho ≈ ~580 mA no pico (anel todo branco), folga total.
-    // Ajuste em campo se PMW3901 saturar em piso claro (baixar) ou perder em
-    // piso escuro (subir até 150–180).
+    // Anel alimentado pelo step-down de 5 V / 3 A compartilhado com a Pi.
+    // 100 = ~40% de brilho ≈ ~580 mA pico (anel todo branco) — Pi sob carga
+    // puxa ~1,2 A, total ~1,8 A, sobra ~1,2 A de folga no step-down.
+    // Subir além de ~150 sem step-down dedicado pode causar undervoltage na Pi.
+    // Ajuste em campo se PMW3901 saturar em piso claro (baixar para 60–80) ou
+    // perder tracking em piso escuro (subir até ~140 com cuidado).
     FastLED.setBrightness(100);
     FastLED.clear(true);
     transition_(State::BOOT);
