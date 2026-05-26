@@ -33,6 +33,14 @@ void Ring::begin() {
 }
 
 void Ring::transition_(State s) {
+    // Idempotência em estados animados: re-entrar em WAYPOINT/STARTING (PC
+    // remandando FT_LEDS após restart de nó, p.ex.) NÃO reinicia o flash nem
+    // estende o gating do PMW3901. Resetar somaria ~57 cm de dead-reckoning
+    // por reset espúrio em modo trekking. Estados estáveis (IDLE/RUN/...)
+    // podem reentrar livremente — não há temporização a preservar.
+    if (s == state_ && (s == State::WAYPOINT || s == State::STARTING)) {
+        return;
+    }
     state_       = s;
     state_start_ = millis();
     // Gateamento do PMW3901: liga quando a animação modula a iluminação,

@@ -12,9 +12,9 @@ enum class State : uint8_t {
     OFF      = 0,  // apagado
     BOOT     = 1,  // pulso branco curto durante o setup()
     IDLE     = 2,  // azul "coração batendo" (robô ligado, sem comandos do PC)
-    STARTING = 3,  // 3 piscadas verdes ao sair de IDLE pro RUN
+    STARTING = 3,  // 5 ciclos verde/branco (1 s) ao sair de IDLE pro RUN
     RUN      = 4,  // branco fixo pra iluminar o chão pro PMW3901
-    WAYPOINT = 5,  // pisca laranja ~3 s ao chegar num ponto, depois volta
+    WAYPOINT = 5,  // 5 ciclos amarelo/branco (1 s) ao chegar num ponto, depois volta
     ERROR    = 6,  // vermelho piscando, sticky até o erro sair
     MANUAL   = 7,  // override RGB+pattern legado vindo do PC
 };
