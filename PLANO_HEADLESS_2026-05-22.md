@@ -23,7 +23,7 @@ AUTÔNOMO: Nav2 / trekking ─────────────────�
 
 WEB (outro PC): mapa SLAM ao vivo · pose · click-to-go · /plan · waypoints · salvar mapa · infos
                 (SEM dirigir)
-ACESSO:  ssh robot.local + tmux + VS Code Remote-SSH + RViz (opcional)
+ACESSO:  ssh robo-desktop.local + tmux + VS Code Remote-SSH + RViz (opcional)
 ```
 
 ### Prioridades do twist_mux
@@ -258,7 +258,7 @@ sudo apt install -y \
   bluez tmux avahi-daemon openssh-server
 sudo systemctl enable --now ssh avahi-daemon
 ```
-> `avahi-daemon` → o robô vira acessível como **`robot.local`** (mDNS), sem caçar IP.
+> `avahi-daemon` → o robô vira acessível como **`robo-desktop.local`** (mDNS), sem caçar IP.
 > Os 4 pacotes ROS aqui (`joy`, `teleop-twist-joy`, `teleop-twist-keyboard`,
 > `twist-mux`) são os mesmos `exec_depend` adicionados ao `package.xml` na §2.3 —
 > **esta instalação tem que rodar antes de testar a Fase 1** (a `robot.launch.py`
@@ -300,7 +300,7 @@ fi
 Fluxo do dia a dia:
 ```
 (liga o robô — PS4 reconecta sozinho)
-ssh robot.local
+ssh robo-desktop.local
 robot-up slam            # ou nav2 --map=maps/sala.yaml
 # Ctrl+B D pra destacar; robot-up de novo pra reanexar
 ```
@@ -316,7 +316,7 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=key_
 
 ### 4.5 README (editar)
 Nova seção **"Operação headless"**:
-- `ssh robot.local` + `robot-up <modo>` + tmux (detach/attach).
+- `ssh robo-desktop.local` + `robot-up <modo>` + tmux (detach/attach).
 - **VS Code Remote-SSH** pra editar configs (`nav2_params.yaml`, launches) com GUI.
 - **RViz no outro PC**: mesma sub-rede + mesmo `ROS_DOMAIN_ID`; nota de que
   alguns APs WiFi bloqueiam **multicast** (se o RViz não achar tópicos, é isso →

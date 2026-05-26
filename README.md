@@ -153,8 +153,11 @@ Navegador (WASD / Gamepad / Clique / Waypoints)
         │  Socket.IO
         ▼
   Flask + Socket.IO (porta 5000)
-        │  /cmd_vel  (geometry_msgs/Twist)
+        │  /web_vel  (Twist, só se WEB_TELEOP=on)
         │  Action navigate_to_pose  (waypoints e click-to-go em NAV2)
+        ▼
+  twist_mux   (joy_vel > key_vel > web_vel > nav_vel)
+        │  /cmd_vel  (geometry_msgs/Twist)
         ▼
   cmd_vel_to_wheels
         │  /wheel_vel_setpoints  (wheel_msgs/WheelSpeeds)
@@ -634,25 +637,25 @@ PC — como se você tivesse o teclado e a tela do robô na sua frente, só que 
 
 | O que | Como, do outro PC |
 |-------|-------------------|
-| Terminal completo do robô (qualquer comando, arquivos, logs) | `ssh usuario@robot.local` |
+| Terminal completo do robô (qualquer comando, arquivos, logs) | `ssh usuario@robo-desktop.local` |
 | Subir e operar a stack (SLAM / Nav2 / trekking) | `robot-connect slam` |
-| Ver mapa/pose, click-to-go, waypoints | navegador → `http://robot.local:5000` |
-| Editar código/configs com interface gráfica | **VS Code Remote-SSH** apontando pra `robot.local` |
+| Ver mapa/pose, click-to-go, waypoints | navegador → `http://robo-desktop.local:5000` |
+| Editar código/configs com interface gráfica | **VS Code Remote-SSH** apontando pra `robo-desktop.local` |
 | RViz | roda no **seu** PC, lendo os tópicos do robô pela rede |
 
 O **movimento** é por **PS4 (Bluetooth, local)** ou **WASD (teclado via SSH)** — não
 mais pelo navegador, que tinha latência ruim via WiFi. O web vira só
 **visualização** (default `WEB_TELEOP=off`). Quem arbitra o `/cmd_vel` é o
 `twist_mux`: **PS4 (`joy_vel`, prio 100) > WASD (`key_vel`, prio 90) >
-Nav2/trekking (`nav_vel`, prio 10)**. Encostar no analógico do PS4 (segurando o
-dead-man **L1**) durante um Nav2 assume o controle; soltar devolve a navegação após
-o timeout de 0.5 s.
+web (`web_vel`, prio 50, só se `--web-teleop`) > Nav2/trekking (`nav_vel`,
+prio 10)**. Encostar no analógico do PS4 (segurando o dead-man **L1**) durante
+um Nav2 assume o controle; soltar devolve a navegação após o timeout de 0.5 s.
 
 ### Por que o primeiro acesso precisa de tela (uma vez)
 
 Tem um ovo-e-galinha: pra você entrar por SSH, o robô precisa já ter o **SSH ligado**
-e estar **achável na rede** (`robot.local`). Mas é justamente o `setup_pi.sh` (via
-`scripts/setup_headless.sh`) que **liga** o SSH e o `robot.local`. Então a
+e estar **achável na rede** (`robo-desktop.local`). Mas é justamente o `setup_pi.sh` (via
+`scripts/setup_headless.sh`) que **liga** o SSH e o `robo-desktop.local`. Então a
 primeiríssima vez o robô ainda não está acessível remotamente.
 
 Por isso o passo 1 abaixo usa **monitor + teclado plugados no robô — só nessa vez**.
@@ -668,8 +671,9 @@ Depois disso, nunca mais precisa de tela.
 cd ~/Workspace/Controle_robo_web
 git pull
 ./setup_pi.sh        # Raspberry Pi   (ou ./setup.sh, se o robô for um notebook)
-                     # → liga SSH, vira robot.local, instala joy/teleop/twist-mux,
-                     #   compila o workspace e cria robot-up/robot-key/robot-connect
+                     # → liga SSH, vira <hostname>.local via mDNS (avahi),
+                     #   instala joy/teleop/twist-mux, compila o workspace e
+                     #   cria robot-up/robot-key/robot-connect
 ./pair-ps4.sh        # pareia o DualShock 4 (o "trust" faz reconectar sozinho no boot)
 
 whoami               # anote o usuário  (ex.: rbe-luis)  → é o ROBOT_USER
@@ -679,15 +683,16 @@ hostname             # anote o nome     (ex.: robopi)    → vira robopi.local
 Abra um terminal novo no robô (pra carregar o ROS) antes de testar. Depois desse
 passo, **desplugue o monitor e o teclado — não precisa mais deles.**
 
-> Se o `hostname` não for `robot`, o endereço será `<hostname>.local`. Pra usar
-> `robot.local` certinho, renomeie uma vez: `sudo hostnamectl set-hostname robot`.
+> Os scripts (`robot-connect`, `robot-pair-ps4`) assumem `robo-desktop.local` por
+> padrão. Se o `hostname` do seu robô for diferente, ou passe `ROBOT_HOST=<seu-host>.local`
+> nos comandos, ou renomeie a Pi uma vez: `sudo hostnamectl set-hostname robo-desktop`.
 
 ### Passo 2 — preparar o outro PC (uma vez)
 
 ```bash
 cd ~/Workspace/Controle_robo_web
 git pull
-./setup.sh           # instala o comando robot-connect + a resolução de robot.local
+./setup.sh           # instala o comando robot-connect + a resolução de robo-desktop.local
 ```
 
 **Login sem senha (recomendado).** Sem isso, o `robot-connect` pede a senha do
@@ -695,7 +700,7 @@ usuário do robô **toda vez**. Copie sua chave SSH pro robô — uma única vez
 
 ```bash
 ssh-keygen -t ed25519                 # só se você ainda não tem chave (Enter em tudo)
-ssh-copy-id usuario@robot.local       # digita a senha do robô esta única vez
+ssh-copy-id usuario@robo-desktop.local       # digita a senha do robô esta única vez
 ```
 
 A partir daí, `robot-connect` entra **direto, sem pedir senha**. (Troque `usuario`
@@ -716,29 +721,29 @@ robot-connect slam                       # conecta por SSH + sobe a stack no tmu
 #    robot-connect nav2 --map=maps/sala.yaml
 #    robot-connect trekking
 # 3. Liga o PS4 (botão PS) e segura L1 + analógico esquerdo pra dirigir. R1 = turbo.
-# 4. (Opcional) abre http://robot.local:5000 no navegador pra ver o mapa.
+# 4. (Opcional) abre http://robo-desktop.local:5000 no navegador pra ver o mapa.
 ```
 
 - **Destacar e deixar rodando:** `Ctrl+B` e depois `D`. O robô continua sozinho;
   `robot-connect` de novo **reanexa** na mesma sessão (tmux chamada `robo`, que
   **sobrevive à queda do SSH**).
 - **WASD por teclado:** noutro terminal SSH, rode `robot-key` (publica em `key_vel`).
-- Por baixo, `robot-connect` faz `ssh -t robot.local "robot-up <modo>"`.
+- Por baixo, `robot-connect` faz `ssh -t robo-desktop.local "robot-up <modo>"`.
 
 Se preferir entrar no robô na mão, os mesmos atalhos valem lá dentro:
 
 ```bash
-ssh usuario@robot.local
+ssh usuario@robo-desktop.local
 robot-up             # sem modo = teleop (padrão); ou: robot-up slam / nav2 / trekking
 robot-key            # (noutro terminal) WASD via teclado
 ```
 
 ### Ajustes comuns
 
-- **`robot.local` não resolve?** Passe o IP (veja no painel do roteador):
+- **`robo-desktop.local` não resolve?** Passe o IP (veja no painel do roteador):
   `ROBOT_HOST=192.168.0.50 robot-connect slam`
 - **Usuário diferente no robô?** `ROBOT_USER=pi robot-connect slam`
-- **Editar configs com GUI:** **VS Code Remote-SSH** apontando pra `robot.local`
+- **Editar configs com GUI:** **VS Code Remote-SSH** apontando pra `robo-desktop.local`
   (mexer em `nav2_params.yaml`, launches etc.).
 - **RViz no outro PC:** mesma sub-rede e mesmo `ROS_DOMAIN_ID`. Se o RViz não achar
   tópicos, alguns APs WiFi bloqueiam **multicast** — use um AP que passe multicast
@@ -880,7 +885,11 @@ Tópicos consumidos:
 
 | Tópico / Action | Tipo | Produtor | Consumidor | Quando |
 |--------|------|----------|------------|--------|
-| `/cmd_vel` | `geometry_msgs/Twist` | servidor web (teleop) / `velocity_smoother` (nav2) | `cmd_vel_to_wheels` | sempre |
+| `/cmd_vel` | `geometry_msgs/Twist` | `twist_mux` (saída) | `cmd_vel_to_wheels` (real) / bridge GZ (sim) | sempre |
+| `/joy_vel` | `geometry_msgs/Twist` | `teleop_twist_joy` (PS4) | `twist_mux` (prio 100) | só real |
+| `/key_vel` | `geometry_msgs/Twist` | `bin/robot-key` (WASD via SSH) | `twist_mux` (prio 90) | só real, opcional |
+| `/web_vel` | `geometry_msgs/Twist` | `controle_web` (se `WEB_TELEOP=on`) | `twist_mux` (prio 50) | opcional |
+| `/nav_vel` | `geometry_msgs/Twist` | `velocity_smoother` (nav2) / `trekking_runner` | `twist_mux` (prio 10) | só `--nav2`/`--trekking` |
 | `/wheel_vel_setpoints` | `wheel_msgs/WheelSpeeds` | `cmd_vel_to_wheels` | `mega_bridge` (envia pras 2 placas) | sempre |
 | `/hoverboard/front/left/velocity` | `std_msgs/Float64` (RPM) | `mega_bridge` | `odom_publisher` | sempre |
 | `/hoverboard/front/right/velocity` | `std_msgs/Float64` (RPM) | `mega_bridge` | `odom_publisher` | sempre |
@@ -1008,7 +1017,7 @@ Controle_robo_web/
     ├── trekking_service.py            # TrekkingBridge — UI ↔ trekking_runner (só modo trekking)
     ├── nav_metrics.py                 # Coleta métricas do Nav2 em CSV
     ├── controllers/
-    │   └── robot_controller.py        # ROS2Controller (publica /cmd_vel)
+    │   └── robot_controller.py        # ROS2Controller (publica /web_vel se WEB_TELEOP=on)
     ├── templates/index.html
     ├── static/
     │   ├── css/styles.css
@@ -1098,7 +1107,7 @@ tail -f controle_web/logs/lidar.log
 
 ## Limitações conhecidas
 
-- **Arbitragem do `/cmd_vel` via `twist_mux`.** Resolvido (Fase 1 headless): o `twist_mux` arbitra por prioridade — PS4 (`joy_vel`, 100) > WASD (`key_vel`, 90) > Nav2/trekking (`nav_vel`, 10), timeout 0.5 s. Não há mais publishers concorrentes direto no `/cmd_vel`. *Pendente:* não há e-stop dedicado no protocolo (sem lock no mux), e o `sim.launch.py` não sobe o `twist_mux` — no SIM, dirigir exige `--web-teleop`.
+- **Arbitragem do `/cmd_vel` via `twist_mux`.** Resolvido: o `twist_mux` arbitra por prioridade — PS4 (`joy_vel`, 100) > WASD (`key_vel`, 90) > web (`web_vel`, 50, só com `WEB_TELEOP=on`) > Nav2/trekking (`nav_vel`, 10), timeout 0.5 s. Vale no real e no sim (o `sim.launch.py` também sobe o `twist_mux`). *Pendente:* não há e-stop dedicado no protocolo (sem lock no mux).
 - **Drift de odometria.** O `odom_publisher` integra a média dos 4 RPMs. Mesmo com a média, drift acumula em mapeamentos longos. O `/imu/data` do BNO055 está disponível e a próxima evolução natural é rodar o `robot_localization` (EKF) fundindo wheel odom + IMU + (opcionalmente) optical flow.
 - **Ambientes muito simétricos.** Corredor longo com paredes lisas: scan-matching do SLAM não encontra features suficientes. AMCL tem o mesmo problema. *Mitigação:* mapear ambientes com móveis e variação.
 - **Sem câmera.** A versão atual do robô não tem câmera RGB-D — foi removida do hardware. O sistema funciona 100% com LiDAR. Voltar com câmera no futuro implica reintroduzir um `camera_bridge.py` e o pointcloud no `VoxelLayer`.

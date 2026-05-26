@@ -199,10 +199,10 @@ Próximos passos:
         ./launch.sh --nav2
 
   Operação headless (de outro PC):
-        ./pair-ps4.sh            # parear o DualShock 4 (uma vez)
-        ssh $USER@robot.local    # acessar sem cabo (mDNS)
-        robot-up slam            # sobe a stack no tmux (sobrevive ao SSH cair)
-        robot-key                # WASD via teclado (publica em key_vel)
+        ./pair-ps4.sh                    # parear o DualShock 4 (uma vez)
+        ssh $USER@$(hostname).local      # acessar sem cabo (mDNS)
+        robot-up slam                    # sobe a stack no tmux (sobrevive ao SSH cair)
+        robot-key                        # WASD via teclado (publica em key_vel)
 
 Dicas pra Pi:
   * Mantenha cooler ativo (heatsink + fan). Sem isso entra em throttle.

@@ -93,7 +93,7 @@ fi
 echo
 echo "=== [4/4] Operação headless (acesso/operação de outro PC) ==="
 # Deixa esta máquina pronta pra ser robô (anuncia .local, SSH, tmux) E/OU
-# cliente (resolve robot.local, comando robot-connect). PLANO_HEADLESS §4.
+# cliente (resolve robo-desktop.local, comando robot-connect). PLANO_HEADLESS §4.
 REPO_DIR="$REPO_DIR" bash "$REPO_DIR/scripts/setup_headless.sh"
 
 echo
@@ -105,7 +105,7 @@ echo
 echo "Operar o robô a partir DESTE PC (robô já ligado e configurado):"
 echo "  robot-connect slam            # conecta por SSH + sobe a stack no tmux"
 echo "  robot-connect nav2 --map=maps/sala.yaml"
-echo "  (se robot.local não resolver:  ROBOT_HOST=<ip> robot-connect slam)"
+echo "  (se robo-desktop.local não resolver:  ROBOT_HOST=<ip> robot-connect slam)"
 echo
 echo "Para hardware real:"
 echo "  1) Flashear MEGA:  cd $REPO_DIR/firmware/mega_bridge && pio run -t upload"
