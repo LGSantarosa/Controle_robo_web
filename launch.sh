@@ -254,24 +254,28 @@ if [ "$SIM" = false ] && [ "$FLASH_MEGA" != "off" ]; then
             -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.ini" \) 2>/dev/null \
             | sort | xargs sha1sum 2>/dev/null | sha1sum | awk '{print $1}')
         NEED_FLASH=false
+        FLASH_REASON=""
         if [ "$FLASH_MEGA" = "force" ]; then
             NEED_FLASH=true
-            echo "[MEGA] --flash-mega: forçando upload."
+            FLASH_REASON="--flash-mega: forçando upload"
         elif [ -z "$FW_HASH" ]; then
             echo "[MEGA] não consegui calcular hash de $FW_DIR — pulando flash."
         elif [ ! -f "$FW_STAMP" ] || [ "$(cat "$FW_STAMP" 2>/dev/null)" != "$FW_HASH" ]; then
             NEED_FLASH=true
-            echo "[MEGA] firmware mudou — flasheando..."
+            FLASH_REASON="firmware mudou"
         fi
 
+        # Flash é best-effort: se MEGA não está plugada ou pio não existe,
+        # avisa e segue (não aborta o launch). Só `pio run` falhando vira fatal,
+        # porque aí a MEGA está lá mas o upload travou — sintoma de hardware.
         if [ "$NEED_FLASH" = true ]; then
-            if ! command -v pio >/dev/null 2>&1; then
-                echo "ERRO: 'pio' não encontrado. Instale PlatformIO ou use --no-flash-mega."
-                exit 1
-            fi
             if [ ! -e /dev/mega ]; then
-                echo "AVISO: /dev/mega ausente — pulando flash da MEGA."
+                echo "[MEGA] $FLASH_REASON, mas /dev/mega ausente — pulando flash."
+            elif ! command -v pio >/dev/null 2>&1; then
+                echo "[MEGA] $FLASH_REASON, mas 'pio' não encontrado — pulando flash."
+                echo "       Pra flashear: instale PlatformIO; pra silenciar este aviso: use --no-flash-mega."
             else
+                echo "[MEGA] $FLASH_REASON — flasheando..."
                 (cd "$FW_DIR" && pio run -t upload)
                 FW_RC=$?
                 if [ $FW_RC -eq 0 ]; then
