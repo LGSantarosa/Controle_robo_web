@@ -2,7 +2,7 @@
 # Pareamento automatizado do controle PS4 no Linux, sem tela.
 # PLANO_HEADLESS_2026-05-22 §4.2.
 #
-# Por que não é trivial: o PS4 + BlueZ tem 5 pegadinhas conhecidas que afundam
+# Por que não é trivial: o PS4 + BlueZ tem 6 pegadinhas conhecidas que afundam
 # o pareamento se não forem tratadas ANTES de chamar `bluetoothctl pair`:
 #
 #   1) ERTM ligado  → PS4 não fala ERTM, conexão HID é derrubada (sintoma:
@@ -12,13 +12,18 @@
 #   3) ClassicBondedOnly=true (default) → bluetoothd rejeita HID de devices
 #                     não-bonded ("Rejected !bonded"); pair conecta em BT mas
 #                     /dev/input/jsN nunca aparece. Força false.
-#   4) Agent NoInputNoOutput → pair "just works" sem link key persistente;
+#   4) HID drivers ausentes → BT conecta mas sem hid_playstation/hid_sony +
+#                     joydev, /dev/input/jsN nunca materializa. Modprobe antes
+#                     do pair garante que o nó apareça quando HID profile subir.
+#   5) Agent NoInputNoOutput → pair "just works" sem link key persistente;
 #                     Bonded=no, pareamento é descartado no primeiro disconnect.
 #                     Usa KeyboardDisplay (força SSP com bonding completo).
-#   5) bluetoothctl assíncrono → heredoc fecha stdin antes do pair completar.
+#   6) bluetoothctl assíncrono → heredoc fecha stdin antes do pair completar.
 #                     Usa FIFO pra manter agent vivo + one-shot pair + polling.
 #
-# Este script resolve os 5, limpa pareamento velho e espera /dev/input/js0
+# Fixes 1, 2, 3 vivem em scripts/_bluez_fixes.sh (compartilhados com
+# setup_headless.sh). Os outros 3 são lógicos do pareamento e ficam aqui.
+# Este script resolve os 6, limpa pareamento velho e espera /dev/input/js0
 # materializar de fato antes de declarar sucesso.
 #
 # Uso:
@@ -69,20 +74,15 @@ if ! command -v bluetoothctl >/dev/null 2>&1; then
     exit 1
 fi
 
-# --- Fix 1: ERTM persistente ---
-ERTM_CONF=/etc/modprobe.d/bluetooth-disable-ertm.conf
-if [ ! -f "$ERTM_CONF" ]; then
-    echo "→ Desligando ERTM no kernel (persistente)..."
-    echo 'options bluetooth disable_ertm=Y' | sudo tee "$ERTM_CONF" >/dev/null
-fi
+# --- Fixes persistentes do BlueZ (compartilhados com scripts/setup_headless.sh) ---
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_bluez_fixes.sh
+source "$SELF_DIR/scripts/_bluez_fixes.sh"
+bluez_apply_persistent_fixes
 
-# Tenta aplicar runtime via sysfs (o módulo expõe esse parâmetro como writable).
-CUR_ERTM="$(cat /sys/module/bluetooth/parameters/disable_ertm 2>/dev/null || echo N)"
-if [ "$CUR_ERTM" != "Y" ]; then
-    echo Y | sudo tee /sys/module/bluetooth/parameters/disable_ertm >/dev/null 2>&1 || true
-    CUR_ERTM="$(cat /sys/module/bluetooth/parameters/disable_ertm 2>/dev/null || echo N)"
-fi
-if [ "$CUR_ERTM" != "Y" ]; then
+# Runtime do ERTM: o config persistente só vale após reload do módulo. Tenta
+# trocar via sysfs; se kernel ignorar, exige reboot.
+if ! bluez_apply_ertm_runtime; then
     echo "ERRO: ERTM continua ligado e o módulo não aceita troca em runtime."
     echo "      Reinicie pra carregar /etc/modprobe.d/bluetooth-disable-ertm.conf:"
     echo "        sudo reboot"
@@ -90,71 +90,15 @@ if [ "$CUR_ERTM" != "Y" ]; then
     exit 1
 fi
 
-# --- Fix 2: BR/EDR-only + auto-enable do adaptador ---
-MAINCONF=/etc/bluetooth/main.conf
-NEED_BT_RESTART=0
-
-if ! grep -qE '^[[:space:]]*ControllerMode[[:space:]]*=[[:space:]]*bredr' "$MAINCONF"; then
-    echo "→ Forçando ControllerMode = bredr (PS4 é só clássico, BLE quebra)..."
-    sudo cp "$MAINCONF" "$MAINCONF.bak.$(date +%s)"
-    if grep -qE '^[[:space:]]*#?[[:space:]]*ControllerMode' "$MAINCONF"; then
-        sudo sed -i 's|^[[:space:]]*#\?[[:space:]]*ControllerMode[[:space:]]*=.*|ControllerMode = bredr|' "$MAINCONF"
-    else
-        # Insere no fim da seção [General]; se a seção não existir, anexa no fim.
-        if grep -q '^\[General\]' "$MAINCONF"; then
-            sudo sed -i '/^\[General\]/a ControllerMode = bredr' "$MAINCONF"
-        else
-            printf '\n[General]\nControllerMode = bredr\n' | sudo tee -a "$MAINCONF" >/dev/null
-        fi
-    fi
-    NEED_BT_RESTART=1
-fi
-
-# AutoEnable garante que o adaptador acorde "Powered: yes" no boot (headless).
-if ! grep -qE '^[[:space:]]*AutoEnable[[:space:]]*=[[:space:]]*true' "$MAINCONF"; then
-    echo "→ Habilitando AutoEnable = true (adaptador acende sozinho no boot)..."
-    if grep -qE '^[[:space:]]*#?[[:space:]]*AutoEnable' "$MAINCONF"; then
-        sudo sed -i 's|^[[:space:]]*#\?[[:space:]]*AutoEnable[[:space:]]*=.*|AutoEnable = true|' "$MAINCONF"
-    else
-        if grep -q '^\[Policy\]' "$MAINCONF"; then
-            sudo sed -i '/^\[Policy\]/a AutoEnable = true' "$MAINCONF"
-        else
-            printf '\n[Policy]\nAutoEnable = true\n' | sudo tee -a "$MAINCONF" >/dev/null
-        fi
-    fi
-    NEED_BT_RESTART=1
-fi
-
-# Sem ClassicBondedOnly=false, o bluetoothd recusa conexão HID de devices não-bonded
-# (rejected "!bonded"). Como o pair "just works" do DS4 nem sempre completa bonding,
-# isso impede o /dev/input/jsN materializar mesmo com Connected=yes.
-INPUTCONF=/etc/bluetooth/input.conf
-if [ -f "$INPUTCONF" ] && ! grep -qE '^[[:space:]]*ClassicBondedOnly[[:space:]]*=[[:space:]]*false' "$INPUTCONF"; then
-    echo "→ Setando ClassicBondedOnly = false em input.conf (HID sem bonding completo)..."
-    if grep -qE '^[[:space:]]*#?[[:space:]]*ClassicBondedOnly' "$INPUTCONF"; then
-        sudo sed -i 's|^[[:space:]]*#\?[[:space:]]*ClassicBondedOnly[[:space:]]*=.*|ClassicBondedOnly = false|' "$INPUTCONF"
-    else
-        if grep -q '^\[General\]' "$INPUTCONF"; then
-            sudo sed -i '/^\[General\]/a ClassicBondedOnly = false' "$INPUTCONF"
-        else
-            printf '\n[General]\nClassicBondedOnly = false\n' | sudo tee -a "$INPUTCONF" >/dev/null
-        fi
-    fi
-    NEED_BT_RESTART=1
-fi
-
-if [ "$NEED_BT_RESTART" = 1 ]; then
+if [ "$BLUEZ_NEED_RESTART" = 1 ]; then
     echo "→ Reiniciando bluetoothd pra aplicar configs..."
     sudo systemctl restart bluetooth
     sleep 2
 fi
 
-# --- Fix 3: rfkill destrava + adaptador ligado ---
-if rfkill list bluetooth 2>/dev/null | grep -q "Soft blocked: yes"; then
-    echo "→ Destravando bluetooth no rfkill..."
-    sudo rfkill unblock bluetooth
-    sleep 1
-fi
+# Destrava rfkill e garante adaptador ligado.
+bluez_unblock_rfkill
+sleep 1
 
 if ! bluetoothctl show 2>/dev/null | grep -q "Powered: yes"; then
     echo "→ Ligando adaptador BT..."
@@ -203,7 +147,17 @@ _read_or_skip "Pronto? Enter pra começar... "
 # 2) Limpa pareamento velho do MESMO controle (se houver)
 # ------------------------------------------------------------------
 
-OLD_MAC=$(bluetoothctl devices 2>/dev/null | awk '/Wireless Controller/{print $2; exit}')
+# Filtra por Modalias=usb:v054C* (vendor Sony) pra não apagar Xbox/PS5/genéricos
+# que também chamam "Wireless Controller". Se nenhum bater, deixa quieto.
+OLD_MAC=""
+while read -r mac; do
+    [ -z "$mac" ] && continue
+    if bluetoothctl info "$mac" 2>/dev/null | grep -qE "Modalias: usb:v054C|Manufacturer: Sony"; then
+        OLD_MAC="$mac"
+        break
+    fi
+done < <(bluetoothctl devices 2>/dev/null | awk '/Wireless Controller/{print $2}')
+
 if [ -n "$OLD_MAC" ]; then
     echo "→ Removendo pareamento antigo do PS4 ($OLD_MAC)..."
     bluetoothctl remove "$OLD_MAC" >/dev/null 2>&1 || true
@@ -432,5 +386,5 @@ Testes:
   ros2 run joy joy_enumerate_devices       # vê o joystick no ROS
 
 Subir a stack (vai começar a publicar /joy ao mexer no analógico com L1):
-  cd ~/workspace/Controle_robo_web && ./launch.sh
+  cd ~/Workspace/Controle_robo_web && ./launch.sh
 EOF

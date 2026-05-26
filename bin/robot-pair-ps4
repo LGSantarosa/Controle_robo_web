@@ -10,15 +10,15 @@
 #   robot-pair-ps4
 #
 # Config (variáveis de ambiente, iguais às do robot-connect):
-#   ROBOT_HOST   default: tenta robot.local; fallback pra IP fixo abaixo
+#   ROBOT_HOST   default: tenta robo-desktop.local; fallback pra IP fixo abaixo
 #   ROBOT_USER   default: robo
 #
-# Por que existe: o pair via bluetoothctl no robô tem 5 pegadinhas (ver
-# pair-ps4.sh §cabeçalho). Esse wrapper só copia o script atualizado pra /tmp
-# do robô e roda em modo --no-prompt.
+# Por que existe: o pair via bluetoothctl no robô tem 6 pegadinhas (ver
+# pair-ps4.sh §cabeçalho). Esse wrapper acha o repo no robô (via symlink em
+# /usr/local/bin/robot-up) e roda ./pair-ps4.sh --no-prompt lá dentro.
 set -euo pipefail
 
-HOST_MDNS="robot.local"
+HOST_MDNS="robo-desktop.local"
 HOST_FALLBACK_IP="192.168.18.95"
 REMOTE_USER="${ROBOT_USER:-robo}"
 
@@ -32,14 +32,6 @@ else
     HOST="$HOST_FALLBACK_IP"
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PAIR_SCRIPT="$SCRIPT_DIR/pair-ps4.sh"
-
-if [ ! -f "$PAIR_SCRIPT" ]; then
-    echo "ERRO: pair-ps4.sh não encontrado em $PAIR_SCRIPT" >&2
-    exit 1
-fi
-
 cat <<EOF
 
 === Pareamento do PS4 em ${REMOTE_USER}@${HOST} ===
@@ -51,17 +43,28 @@ Pre-checks:
 EOF
 read -r -p "Pronto? Enter pra começar (Ctrl+C cancela)... " _
 
-# SSH ControlMaster: scp + ssh compartilham a mesma conexão TCP (mais rápido).
-# Mas atenção: sudo cache é por-PTY, NÃO por-conexão. Por isso o `sudo -v` e o
-# `bash pair-ps4.sh` precisam rodar no MESMO `ssh -t` (mesmo PTY).
-SSH_CTL=$(mktemp -u /tmp/ssh-robot-pair-XXXXXX)
-SSH_OPTS=(-o ControlMaster=auto -o ControlPath="$SSH_CTL" -o ControlPersist=60)
-trap 'ssh "${SSH_OPTS[@]}" -O exit "${REMOTE_USER}@${HOST}" 2>/dev/null || true; rm -f "$SSH_CTL"' EXIT
+# Resolve o checkout do repo no robô seguindo o symlink que o setup_headless.sh
+# instalou em /usr/local/bin/robot-up. pair-ps4.sh sourceia scripts/_bluez_fixes.sh
+# por path relativo — precisa rodar de dentro do repo, não copiado pra /tmp/.
+echo "→ Localizando o repo no robô (via symlink em /usr/local/bin/robot-up)..."
+REMOTE_REPO=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "${REMOTE_USER}@${HOST}" \
+    'dirname "$(dirname "$(readlink -f /usr/local/bin/robot-up 2>/dev/null)")"' 2>/dev/null || true)
 
-echo "→ Enviando pair-ps4.sh pra /tmp/ no robô..."
-scp "${SSH_OPTS[@]}" -q "$PAIR_SCRIPT" "${REMOTE_USER}@${HOST}:/tmp/pair-ps4.sh"
+if [ -z "$REMOTE_REPO" ] || ! ssh -o BatchMode=yes "${REMOTE_USER}@${HOST}" \
+        "test -f '$REMOTE_REPO/pair-ps4.sh' && test -f '$REMOTE_REPO/scripts/_bluez_fixes.sh'" 2>/dev/null; then
+    cat >&2 <<EOF
+ERRO: não encontrei o repo no robô ou pair-ps4.sh/scripts/_bluez_fixes.sh ausentes.
+  Rode no robô antes:
+    cd ~/Workspace/Controle_robo_web && git pull && ./setup_pi.sh
+EOF
+    exit 1
+fi
+echo "  repo: ${REMOTE_USER}@${HOST}:${REMOTE_REPO}"
 
 echo "→ Cacheando sudo + executando pair-ps4.sh no robô (mesmo PTY)..."
 echo "  (vai pedir a senha de ${REMOTE_USER} 1x)"
 echo
-ssh "${SSH_OPTS[@]}" -t "${REMOTE_USER}@${HOST}" "sudo -v && bash /tmp/pair-ps4.sh --no-prompt"
+# sudo cache é por-PTY, então `sudo -v` e o `bash pair-ps4.sh` precisam estar
+# no mesmo `ssh -t` (mesmo PTY).
+ssh -t "${REMOTE_USER}@${HOST}" \
+    "sudo -v && cd '$REMOTE_REPO' && bash pair-ps4.sh --no-prompt"
