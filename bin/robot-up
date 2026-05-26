@@ -19,8 +19,20 @@ SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 REPO_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
 cd "$REPO_DIR"
 
+if [ ! -f "$REPO_DIR/launch.sh" ]; then
+    echo "ERRO: launch.sh não encontrado em $REPO_DIR" >&2
+    echo "      O symlink em /usr/local/bin/ pode estar apontando pra um repo movido." >&2
+    exit 1
+fi
+
 if tmux has-session -t "$SESSION" 2>/dev/null; then
-    echo "Sessão '$SESSION' já existe — reanexando (Ctrl+B D pra destacar)."
+    # Reanexa, mas avisa se o launch.sh já saiu (painel ficou só com bash).
+    if ! pgrep -af "[l]aunch\.sh" >/dev/null 2>&1; then
+        echo "AVISO: sessão '$SESSION' viva mas launch.sh não está rodando."
+        echo "       Saia (Ctrl+D) e rode 'tmux kill-session -t $SESSION && robot-up $MODE' pra recomeçar."
+    else
+        echo "Sessão '$SESSION' já existe — reanexando (Ctrl+B D pra destacar)."
+    fi
     exec tmux attach -t "$SESSION"
 else
     echo "Subindo a stack ($MODE) na sessão tmux '$SESSION'..."

@@ -9,20 +9,37 @@
 #   ROBOT_HOST=192.168.0.50 robot-connect slam     # se o mDNS não pegar
 #
 # Config (variáveis de ambiente):
-#   ROBOT_HOST   host/IP do robô   (default: robot.local)
-#   ROBOT_USER   usuário no robô   (default: o seu usuário local)
+#   ROBOT_HOST   host/IP do robô   (default: robo-desktop.local)
+#   ROBOT_USER   usuário no robô   (default: robo)
 set -euo pipefail
 
-HOST="${ROBOT_HOST:-robot.local}"
-REMOTE_USER="${ROBOT_USER:-$USER}"
+HOST="${ROBOT_HOST:-robo-desktop.local}"
+REMOTE_USER="${ROBOT_USER:-robo}"
 MODE="${1:-teleop}"
 shift || true
 
 echo "→ ${REMOTE_USER}@${HOST}  (modo: ${MODE})"
 echo "  Ctrl+B depois D destaca a sessão (robô segue rodando); rode de novo pra voltar."
 
+# Pré-check: SSH responde? Sem isso, falhas de mDNS/chave dão erro genérico.
+if ! ssh -o BatchMode=yes -o ConnectTimeout=3 \
+       "${REMOTE_USER}@${HOST}" true 2>/dev/null; then
+    cat >&2 <<EOF
+ERRO: não consegui conectar em ${REMOTE_USER}@${HOST} (timeout 3 s).
+  • mDNS não resolve?    ROBOT_HOST=<ip-do-robô> robot-connect ${MODE}
+  • Chave SSH não copiada?  ssh-copy-id ${REMOTE_USER}@${HOST}
+  • Usuário diferente?   ROBOT_USER=<seu-user> robot-connect ${MODE}
+EOF
+    exit 1
+fi
+
+# Preserva quoting dos args (paths com espaço viram um único token).
+remote_cmd="robot-up $(printf '%q ' "$MODE" "$@")"
+
 # -t: aloca TTY pro tmux remoto.
-# ServerAlive*: derruba a conexão limpa se o WiFi cair, sem travar o terminal.
+# ServerAlive*: 15 s × 6 = 90 s de tolerância antes de derrubar SSH (handoffs
+# de WiFi/AP de 30-60 s não matam a sessão tmux remota).
 exec ssh -t \
-    -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
-    "${REMOTE_USER}@${HOST}" "robot-up ${MODE} $*"
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=6 \
+    -o TCPKeepAlive=yes \
+    "${REMOTE_USER}@${HOST}" "$remote_cmd"

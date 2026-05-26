@@ -12,9 +12,21 @@ SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 REPO_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
 cd "$REPO_DIR"
 
+# SSH não-interativo não lê o ~/.bashrc → ROS pode não estar sourceado.
+# Tenta o workspace primeiro; senão cai pra distro base (/opt/ros/*/setup.bash).
 if [ -f install/setup.bash ]; then
     # shellcheck disable=SC1091
     source install/setup.bash
+else
+    for d in /opt/ros/*/setup.bash; do
+        # shellcheck disable=SC1090
+        [ -f "$d" ] && source "$d" && break
+    done
+fi
+
+if ! command -v ros2 >/dev/null 2>&1; then
+    echo "ERRO: 'ros2' não encontrado. Source /opt/ros/<distro>/setup.bash ou rode ./start.sh pra compilar o workspace." >&2
+    exit 1
 fi
 
 exec ros2 run teleop_twist_keyboard teleop_twist_keyboard \
