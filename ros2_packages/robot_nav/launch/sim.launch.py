@@ -4,8 +4,10 @@ Substitui robot.launch.py/lidar.launch.py/hoverboard no modo --sim.
 O Gazebo cuida de:
   - Publicar /scan (LiDAR GPU da SDF)
   - Publicar /odom e TF odom→base_link (plugin DiffDrive)
-  - Consumir /cmd_vel do servidor web
+  - Consumir /cmd_vel (saída do twist_mux)
 
+O twist_mux roda aqui também (consistente com robot.launch.py): no SIM não
+tem PS4 nem robot-key, então só web_vel (prio 50) e nav_vel (prio 10) entram.
 O robot_state_publisher ainda roda porque a URDF fornece os TFs estáticos
 (base_link → base_laser, rodas) que o slam_toolbox e o Nav2 usam.
 """
@@ -106,6 +108,20 @@ def generate_launch_description():
         output='screen',
     )
 
+    # --- twist_mux: arbitra web_vel + nav_vel → /cmd_vel (consumido pelo bridge GZ).
+    # Sem isso, web e Nav2 publicariam direto em /cmd_vel competindo. No SIM o
+    # mux fica com 2 entradas (joy_vel/key_vel não têm publisher), o que é OK —
+    # twist_mux tolera topics sem publisher.
+    twist_mux_cfg = os.path.join(pkg_robot_nav, 'config', 'twist_mux.yaml')
+    twist_mux = Node(
+        package='twist_mux',
+        executable='twist_mux',
+        name='twist_mux',
+        output='screen',
+        parameters=[twist_mux_cfg, {'use_sim_time': True}],
+        remappings=[('cmd_vel_out', 'cmd_vel')],
+    )
+
     return LaunchDescription([
         world_arg,
         robot_sdf_arg,
@@ -116,4 +132,5 @@ def generate_launch_description():
         bridge,
         spawn_robot,
         rsp,
+        twist_mux,
     ])

@@ -7,9 +7,14 @@ Sobe:
   2. mega_bridge          (USB ↔ Arduino MEGA ↔ 2 hoverboards + sensores)
   3. odom_publisher       (4 RPMs → /odom + TF odom→base_link)
   4. cmd_vel_to_wheels    (/cmd_vel → /wheel_vel_setpoints)
-  5. joy_node            (DualShock 4 em /dev/input/js0 → /joy)
+  5. joy_node            (PS4 em /dev/input/js0 → /joy)
   6. teleop_twist_joy    (/joy → joy_vel, com dead-man no L1)
-  7. twist_mux           (joy_vel>key_vel>nav_vel → /cmd_vel)
+  7. twist_mux           (joy_vel > key_vel > web_vel > nav_vel → /cmd_vel)
+
+Publishers do twist_mux que NÃO sobem aqui (rodam à parte):
+  - key_vel: bin/robot-key em terminal SSH separado (WASD via teclado)
+  - web_vel: controle_web/app.py quando WEB_TELEOP=on
+  - nav_vel: nav2.launch.py (velocity_smoother) ou trekking.launch.py
 
 Requer os pacotes apt: joy, teleop_twist_joy, twist_mux (instalados pelo
 setup_pi.sh). Sem eles a launch falha — ver PLANO_HEADLESS_2026-05-22 §2.3.
@@ -119,14 +124,15 @@ def generate_launch_description():
     teleop_ps4_cfg = os.path.join(pkg, 'config', 'teleop_ps4.yaml')
     twist_mux_cfg = os.path.join(pkg, 'config', 'twist_mux.yaml')
 
-    # joy_node — lê o DualShock 4 em /dev/input/js0 e publica /joy.
+    # joy_node — lê o PS4 em /dev/input/js0 e publica /joy.
     # Se o controle não estiver conectado, o nó fica tentando abrir o device
-    # (loga aviso) sem derrubar a launch.
+    # (loga aviso); manda o stderr pro log file pra não poluir o terminal
+    # principal a cada ~1 s.
     joy_node = Node(
         package='joy',
         executable='joy_node',
         name='joy_node',
-        output='screen',
+        output={'stdout': 'screen', 'stderr': 'log'},
         parameters=[{
             'device_id': 0,
             'deadzone': 0.05,
@@ -146,7 +152,7 @@ def generate_launch_description():
         remappings=[('cmd_vel', 'joy_vel')],
     )
 
-    # twist_mux — arbitra joy_vel/key_vel/nav_vel → cmd_vel (resolve B20).
+    # twist_mux — arbitra joy_vel/key_vel/web_vel/nav_vel → cmd_vel (resolve B20).
     twist_mux = Node(
         package='twist_mux',
         executable='twist_mux',

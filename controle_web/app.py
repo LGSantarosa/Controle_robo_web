@@ -23,12 +23,12 @@ MAPS_DIR = os.environ.get('ROBOT_MAPS_DIR', os.path.abspath(
 # Controle de movimento pela web. Default 'off' (PLANO_HEADLESS_2026-05-22 Fase 2):
 # o movimento agora é nativo no ROS (PS4/WASD arbitrados pelo twist_mux). Com
 # 'off' os handlers de direção (key_event/gamepad_event/set_speed) viram no-op e o
-# ROS2Controller NÃO publica em /cmd_vel — que passou a ser a SAÍDA do twist_mux,
-# então republicar aqui reintroduziria o publisher concorrente do achado B20.
+# ROS2Controller NÃO publica em /web_vel — defesa em profundidade contra um
+# bug futuro que reintroduzisse publish() sem checagem (achado B20 anterior).
 # Reative com WEB_TELEOP=on (flag --web-teleop do launch.sh) p/ dirigir pelo web.
 WEB_TELEOP = os.environ.get('WEB_TELEOP', 'off').lower() == 'on'
 
-# Controlador ROS2 — publica em /cmd_vel (geometry_msgs/Twist).
+# Controlador ROS2 — publica em /web_vel (geometry_msgs/Twist, mux prio 50).
 # Pré-requisito: source install/setup.bash antes de iniciar o servidor.
 # enable_publish=WEB_TELEOP: com teleop web off, o nó sobe (rclpy vivo) mas o
 # republicador a 50 Hz não inicia e _publish vira no-op.
@@ -357,7 +357,7 @@ def handle_save_map(data):
 @socketio.on('disconnect')
 def handle_disconnect():
     # Evento de desconexão de um cliente Socket.IO. Força stop pra não
-    # deixar o republicador a 50 Hz mandando o último cmd_vel enquanto
+    # deixar o republicador a 50 Hz mandando o último web_vel enquanto
     # ninguém está conectado (cliente que cai com tecla segurada).
     app.logger.info(f"Client disconnected: addr={request.remote_addr} sid={request.sid}")
     try:

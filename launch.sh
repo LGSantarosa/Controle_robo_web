@@ -2,7 +2,7 @@
 # Launcher completo: hoverboard driver + LiDAR + servidor web.
 #
 # Modos:
-#   ./launch.sh                                   # TELEOP (padrão) — web manual
+#   ./launch.sh                                   # TELEOP (padrão) — sem autônomo, dirigir via PS4/WASD
 #   ./launch.sh --slam                            # SLAM — mapeia o ambiente em tempo real
 #   ./launch.sh --nav2                            # NAV2 — navegação autônoma (mapa padrão)
 #   ./launch.sh --nav2 --map=/caminho/sala.yaml   # NAV2 — mapa específico
@@ -11,6 +11,10 @@
 #   ./launch.sh --sim --slam                      # SIM + SLAM (mapeia a sala no Gazebo)
 #   ./launch.sh --sim --nav2                      # SIM + NAV2 (navega com mapa salvo)
 #   ./launch.sh --sim --world=worlds/sala.sdf     # SIM com mundo customizado
+#
+# Web teleop:
+#   ./launch.sh --web-teleop                      # reativa o controle pelo browser (mux prio 50);
+#                                                 # default é só visualização (movimento via PS4/WASD)
 #
 # Outras flags:
 #   --no-lidar             desabilita o LiDAR (só modo real)
@@ -93,6 +97,13 @@ fi
 if [ "$SIM" = false ] && [ "$MODE" != "teleop" ] && [ "$NO_LIDAR" = true ]; then
     echo "ERRO: modo $MODE precisa do LiDAR. Remova --no-lidar."
     exit 1
+fi
+
+# SIM + TELEOP sem --web-teleop = sem nenhum publisher de movimento. Avisa.
+if [ "$SIM" = true ] && [ "$MODE" = "teleop" ] && [ "$WEB_TELEOP" = "off" ]; then
+    echo "[AVISO] --sim --teleop sem --web-teleop: nenhum publisher de movimento será iniciado"
+    echo "        no SIM (não tem PS4/WASD nativos lá). Adicione --web-teleop pra dirigir pelo browser,"
+    echo "        ou use --sim --slam/--nav2/--trekking pra ter um publisher autônomo."
 fi
 
 # Em NAV2 o arquivo de mapa precisa existir antes de subir.

@@ -103,8 +103,13 @@
     if (activeGamepadIndex === e.gamepad.index) {
       activeGamepadIndex = null;
       stopPolling();
-      // Envia stop ao desconectar
-      socket.emit('gamepad_event', { type: 'axis', linear: 0, angular: 0 });
+      // Envia stop ao desconectar — só se web ainda dirige (WEB_TELEOP=on).
+      // Em modo monitor o handler do servidor rejeita esse emit; não emitir
+      // mantém a invariante "web monitor nunca publica movimento".
+      const teleopOn = !window._robotIsTeleopEnabled || window._robotIsTeleopEnabled();
+      if (teleopOn) {
+        socket.emit('gamepad_event', { type: 'axis', linear: 0, angular: 0 });
+      }
     }
   });
 

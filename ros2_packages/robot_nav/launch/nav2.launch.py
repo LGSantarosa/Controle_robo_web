@@ -91,10 +91,9 @@ def generate_launch_description():
             name='velocity_smoother', output='screen',
             parameters=[params_file, sim_time_param],
             # Saída do Nav2 vai pra nav_vel (entrada de menor prioridade do
-            # twist_mux em robot.launch.py), não direto pro cmd_vel — assim o
-            # PS4 (joy_vel) pode assumir por cima da navegação.
-            # ATENÇÃO sim: o sim.launch.py não sobe o twist_mux, então no sim
-            # ninguém arbitra nav_vel→cmd_vel — ver PLANO_HEADLESS_2026-05-22 §2.4.
+            # twist_mux em robot.launch.py E em sim.launch.py), não direto pro
+            # cmd_vel — assim o PS4 (joy_vel) e o web (web_vel) podem assumir
+            # por cima da navegação.
             remappings=[('cmd_vel', 'cmd_vel_nav'), ('cmd_vel_smoothed', 'nav_vel')],
         ),
         Node(

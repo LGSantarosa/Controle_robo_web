@@ -105,11 +105,12 @@ class EchoController(RobotController):
 
 class ROS2Controller(RobotController):
     """
-    Controlador real que publica cmd_vel via ROS2 para integração com Nav2.
+    Controlador real que publica em /web_vel via ROS2 para integração com Nav2.
 
-    Tópico de saída: /cmd_vel (geometry_msgs/Twist)
-    O nó cmd_vel_to_wheels consome /cmd_vel e publica em
-    /wheel_vel_setpoints, que o mega_bridge encaminha às placas hoverboard.
+    Tópico de saída: /web_vel (geometry_msgs/Twist) — entrada de priority 50 do
+    twist_mux. O mux arbitra com joy_vel (PS4, prio 100), key_vel (WASD, 90) e
+    nav_vel (Nav2/trekking, 10). Saída do mux: /cmd_vel, consumido pelo
+    cmd_vel_to_wheels.
 
     Velocidades em unidades SI:
         BASE_LINEAR_SPEED  = velocidade linear base (m/s)
@@ -159,8 +160,8 @@ class ROS2Controller(RobotController):
         # enable_publish=False (WEB_TELEOP off, PLANO_HEADLESS_2026-05-22 Fase 2):
         # o nó sobe (rclpy/publisher vivos pra não complicar o ciclo de vida do
         # rclpy compartilhado com as bridges), mas o republicador a 50 Hz NÃO
-        # inicia e _publish vira no-op — assim nada compete com a saída do
-        # twist_mux no /cmd_vel (achado B20). force_stop também fica no-op.
+        # inicia e _publish vira no-op. Saída agora é /web_vel (mux prio 50),
+        # então mesmo se vazasse não competiria com a saída do mux em /cmd_vel.
         self._publish_enabled: bool = enable_publish
         self.pressed: set = set()
         self._emergency_stop: bool = False
@@ -182,7 +183,7 @@ class ROS2Controller(RobotController):
 
         self._publisher = self._node.create_publisher(
             Twist,
-            '/cmd_vel',
+            '/web_vel',
             qos_profile=10,
         )
 
@@ -197,17 +198,17 @@ class ROS2Controller(RobotController):
                 target=self._publish_loop, daemon=True, name='cmd_vel_republisher'
             )
             self._pub_thread.start()
-            print("[ROS2Controller] Nó inicializado. Publicando em /cmd_vel @ 50 Hz")
+            print("[ROS2Controller] Nó inicializado. Publicando em /web_vel @ 50 Hz (mux prio 50)")
         else:
             self._pub_thread = None
             print("[ROS2Controller] WEB_TELEOP=off — nó vivo, SEM publicar em "
-                  "/cmd_vel (movimento via PS4/WASD; web é só visualização).")
+                  "/web_vel (movimento via PS4/WASD; web é só visualização).")
 
     def force_stop(self) -> None:
         """Zera teclas pressionadas + último eixo de gamepad e publica Twist(0).
 
         Chamado quando um cliente Socket.IO cai com tecla segurada: sem isso
-        o republicador a 50 Hz continua mandando o último /cmd_vel até o
+        o republicador a 50 Hz continua mandando o último /web_vel até o
         cliente reconectar (ou o watchdog do firmware estourar 500 ms).
         """
         try:
@@ -250,7 +251,7 @@ class ROS2Controller(RobotController):
         # Log só quando o valor muda — senão a republicação a 50 Hz polui o stdout.
         rounded = (round(linear, 3), round(angular, 3))
         if rounded != self._last_printed:
-            print(f"[ROS2Controller] cmd_vel → linear={linear:+.3f} m/s  angular={angular:+.3f} rad/s")
+            print(f"[ROS2Controller] web_vel → linear={linear:+.3f} m/s  angular={angular:+.3f} rad/s")
             self._last_printed = rounded
 
     def _publish_loop(self) -> None:

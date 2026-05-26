@@ -5,8 +5,9 @@
 # passa pra próxima. Saída: cmd_vel_out (remapeado pra cmd_vel no launch),
 # consumido pelo cmd_vel_to_wheels.
 #
-#   PS4  (joy_vel, prio 100) — controle humano sempre vence; pode assumir/abortar
-#   WASD (key_vel, prio  90) — fallback de teclado via SSH
+#   PS4  (joy_vel, prio 100) — controle humano direto; sempre vence
+#   WASD (key_vel, prio  90) — publicado por bin/robot-key em terminal SSH separado
+#   web  (web_vel, prio  50) — só se WEB_TELEOP=on (controle_web/app.py)
 #   Nav2/trekking (nav_vel, prio 10) — autonomia só dirige quando ninguém manual
 #
 # Resolve o achado B20 da AUDITORIA_2026-05-18 (vários publishers direto no
@@ -16,14 +17,18 @@ twist_mux:
     use_sim_time: false
     topics:
       joystick:
-        topic: joy_vel
+        topic: joy_vel       # publicado por teleop_twist_joy (robot.launch.py)
         timeout: 0.5
         priority: 100
       keyboard:
-        topic: key_vel
+        topic: key_vel       # publicado por bin/robot-key (SSH separado)
         timeout: 0.5
         priority: 90
+      web:
+        topic: web_vel       # publicado pelo controle_web quando WEB_TELEOP=on
+        timeout: 0.5
+        priority: 50
       navigation:
-        topic: nav_vel
+        topic: nav_vel       # publicado por velocity_smoother / trekking_runner
         timeout: 0.5
         priority: 10
