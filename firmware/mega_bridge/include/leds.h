@@ -4,9 +4,7 @@
 namespace leds {
 
 constexpr uint8_t DATA_PIN = 6;
-// TEMP DIAG 2026-05-27: reduzido de 24 → 3 pra isolar problema do anel
-// (LEDs 1–3 acendem, 4+ escuros). Reverter pra 24 quando o anel for trocado/reparado.
-constexpr uint8_t NUM_LEDS = 3;
+constexpr uint8_t NUM_LEDS = 24;
 
 // Estados do anel — o firmware decide sozinho na maior parte do tempo;
 // o PC pode forçar via FT_LEDS (ver protocol.h).
