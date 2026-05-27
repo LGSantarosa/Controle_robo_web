@@ -15,6 +15,11 @@
 twist_mux:
   ros__parameters:
     use_sim_time: false
+    # No Jazzy o twist_mux default mudou pra geometry_msgs/TwistStamped. Nosso
+    # teleop_twist_joy publica Twist (publish_stamped_twist: false no
+    # teleop_ps4.yaml) e o cmd_vel_to_wheels subscreve Twist. Sem isso aqui o
+    # DDS rejeita por type hash e /cmd_vel sai do mux mas ninguém consome.
+    use_stamped: false
     topics:
       joystick:
         topic: joy_vel       # publicado por teleop_twist_joy (robot.launch.py)
