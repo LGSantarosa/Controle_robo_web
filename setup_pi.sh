@@ -181,6 +181,19 @@ if ! groups "$USER" | grep -q dialout; then
     echo "  IMPORTANTE: faça logout/login pra o grupo entrar em vigor."
 fi
 
+# --- Permissão no input (gamepad PS4 via /dev/input/eventN) ---
+# joy_node do ROS 2 Jazzy é SDL2-based e lê /dev/input/eventN (evdev), não
+# /dev/input/js0. Em Ubuntu o eventN é crw-rw---- root:input — sem grupo
+# `input` o joy_node fica vivo mas open() falha silenciosamente e /joy
+# nunca publica (o usuário pareia o PS4, vê js0 nascer, e mesmo assim o
+# robô não anda).
+if ! groups "$USER" | grep -q '\binput\b'; then
+    echo
+    echo "Adicionando $USER ao grupo input (gamepad evdev sem sudo)..."
+    sudo usermod -aG input "$USER"
+    echo "  IMPORTANTE: faça logout/login pra o grupo entrar em vigor."
+fi
+
 cat <<EOF
 
 === Pronto! ===
