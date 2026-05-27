@@ -301,7 +301,9 @@ if [ "$SIM" = false ] && [ "$FLASH_MEGA" != "off" ]; then
 fi
 
 # --- Libera porta 5000 se já estiver em uso ---
-PORT_PID=$(ss -tlnp 2>/dev/null | awk '/:5000 /{match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}')
+# grep+cut em vez de awk match(re,arr) porque o 3-arg match() é só gawk —
+# em Pi/Ubuntu o /usr/bin/awk é mawk, e o match(...,arr) ali dá "syntax error".
+PORT_PID=$(ss -tlnp 2>/dev/null | grep -E ':5000 ' | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
 if [ -n "$PORT_PID" ]; then
     echo "Porta 5000 em uso pelo PID $PORT_PID — encerrando antes de subir..."
     kill -9 "$PORT_PID" 2>/dev/null
