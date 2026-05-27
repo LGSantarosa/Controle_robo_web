@@ -3,7 +3,10 @@
 
 namespace leds {
 
-constexpr uint8_t DATA_PIN = 6;
+// TEMP DIAG 2026-05-27: movido de 6 → 5 pra testar se pino 6 da MEGA esta'
+// queimado (anel responde com lixo aleatorio mesmo com loop rodando estavel).
+// Reverter pra 6 se a troca de pino nao resolver.
+constexpr uint8_t DATA_PIN = 5;
 constexpr uint8_t NUM_LEDS = 24;
 
 // Estados do anel — o firmware decide sozinho na maior parte do tempo;
