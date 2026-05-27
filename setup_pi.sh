@@ -11,7 +11,7 @@
 #   https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html
 #
 # Uso:
-#   cd ~/Controle_robo_web
+#   cd ~/Workspace/Controle_robo_web
 #   ./setup_pi.sh
 #   sudo ./setup_udev.sh           # depois — fixa /dev/mega e /dev/lidar
 #   ./launch.sh --trekking         # ou --slam / --nav2

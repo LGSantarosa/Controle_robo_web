@@ -19,17 +19,22 @@
 set -euo pipefail
 
 HOST_MDNS="robo-desktop.local"
-HOST_FALLBACK_IP="192.168.18.95"
 REMOTE_USER="${ROBOT_USER:-robo}"
 
-# Resolução de host: ROBOT_HOST override > mDNS > IP fallback.
+# Resolução de host: ROBOT_HOST override > mDNS. Sem fallback IP fixo: cada
+# rede tem o seu, e um IP hardcoded "funciona em casa, falha em qualquer
+# outro lugar". Mesma política do bin/robot-connect:14-16.
 if [ -n "${ROBOT_HOST:-}" ]; then
     HOST="$ROBOT_HOST"
 elif timeout 2 getent hosts "$HOST_MDNS" >/dev/null 2>&1; then
     HOST="$HOST_MDNS"
 else
-    echo "→ $HOST_MDNS não resolveu (mDNS off?). Usando IP fallback: $HOST_FALLBACK_IP"
-    HOST="$HOST_FALLBACK_IP"
+    cat >&2 <<EOF
+ERRO: $HOST_MDNS não resolveu via mDNS.
+  Passe o IP explicitamente:  ROBOT_HOST=<ip-do-robô> robot-pair-ps4
+  (veja no painel do roteador, ou rode 'hostname -I' no robô).
+EOF
+    exit 1
 fi
 
 cat <<EOF

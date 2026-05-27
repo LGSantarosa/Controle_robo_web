@@ -32,7 +32,20 @@ WEB_TELEOP = os.environ.get('WEB_TELEOP', 'off').lower() == 'on'
 # Pré-requisito: source install/setup.bash antes de iniciar o servidor.
 # enable_publish=WEB_TELEOP: com teleop web off, o nó sobe (rclpy vivo) mas o
 # republicador a 50 Hz não inicia e _publish vira no-op.
-controller: RobotController = ROS2Controller(enable_publish=WEB_TELEOP)
+#
+# Fallback pro EchoController quando rclpy não está disponível (usuário
+# rodando app.py sem source install/setup.bash) — preserva a UI viva pra
+# desenvolvimento web; launch.sh sempre sourceia, então caminho feliz é igual.
+try:
+    controller: RobotController = ROS2Controller(enable_publish=WEB_TELEOP)
+except Exception as _e_ctrl:
+    logging.getLogger(__name__).warning(
+        f"[app] ROS2Controller falhou ({_e_ctrl}); caindo para EchoController. "
+        f"Comandos vão só logar — source install/setup.bash antes do app.py "
+        f"pra ter publicação real."
+    )
+    from controllers.robot_controller import EchoController
+    controller = EchoController()
 
 # Ponte de mapa/pose/navegação — opcional (só sobe se rclpy importou OK).
 map_bridge = None

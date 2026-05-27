@@ -51,13 +51,13 @@ ros2 --help   # deve listar os comandos
 ### 2. Clonar este repositório
 
 ```bash
-git clone <url-do-repo> ~/Controle_robo_web
+git clone <url-do-repo> ~/Workspace/Controle_robo_web
 ```
 
 ### 3. Rodar o setup automatizado
 
 ```bash
-cd ~/Controle_robo_web
+cd ~/Workspace/Controle_robo_web
 ./setup.sh
 ```
 
@@ -83,7 +83,7 @@ O firmware C++ da MEGA fica em `firmware/mega_bridge/` (projeto PlatformIO).
 
 ```bash
 # Compile e flasheia com a MEGA plugada via USB:
-cd ~/Controle_robo_web/firmware/mega_bridge
+cd ~/Workspace/Controle_robo_web/firmware/mega_bridge
 pio run -t upload
 ```
 
@@ -102,7 +102,7 @@ Pule este passo se só vai usar `--sim`.
 ### 5. (Só hardware real) Fixar portas USB
 
 ```bash
-sudo ~/Controle_robo_web/setup_udev.sh
+sudo ~/Workspace/Controle_robo_web/setup_udev.sh
 ```
 
 Cria `/dev/mega` (Arduino MEGA) e `/dev/lidar` (FHL-LD20), baseados na porta USB física.
@@ -110,7 +110,7 @@ Cria `/dev/mega` (Arduino MEGA) e `/dev/lidar` (FHL-LD20), baseados na porta USB
 ### 6. Primeira execução — teste rápido no sim
 
 ```bash
-cd ~/Controle_robo_web
+cd ~/Workspace/Controle_robo_web
 ./launch.sh --sim
 ```
 
@@ -352,7 +352,7 @@ echo "source $HOME/Workspace/Controle_robo_web/install/setup.bash" >> ~/.bashrc
 A Arduino MEGA e o LiDAR podem cair em ordem variável no boot (`/dev/ttyUSB0` ↔ `/dev/ttyACM0` etc). Os symlinks fixam por porta física:
 
 ```bash
-sudo ~/Controle_robo_web/setup_udev.sh
+sudo ~/Workspace/Controle_robo_web/setup_udev.sh
 ```
 
 O script:
@@ -412,7 +412,7 @@ Mnemônica: **TX da MEGA sempre no fio verde, RX da MEGA sempre no fio azul.** S
 # PlatformIO já vem instalado pelo setup.sh / setup_pi.sh (pip install --user
 # platformio). Se faltar:  pip install --user platformio
 
-cd ~/Controle_robo_web/firmware/mega_bridge
+cd ~/Workspace/Controle_robo_web/firmware/mega_bridge
 pio run                          # compila
 pio run -t upload                # compila e flasheia (com MEGA conectada)
 pio device monitor -b 230400     # monitor serial pra debug
@@ -421,7 +421,7 @@ pio device monitor -b 230400     # monitor serial pra debug
 **Validar transmissão MEGA ↔ placa sem subir ROS2:**
 
 ```bash
-python3 ~/Controle_robo_web/firmware/mega_bridge/tools/test_mega.py --front-only
+python3 ~/Workspace/Controle_robo_web/firmware/mega_bridge/tools/test_mega.py --front-only
 ```
 
 O script abre `/dev/mega`, manda frames `0xAA 0x55` (mesmo protocolo do `mega_bridge.py`), lê o feedback `STATE` e relata se a placa está respondendo, qual a tensão da bateria, e se os RPMs subiram ao enviar comando. `--front-only` evita comandar a placa de trás se ela não estiver conectada. Veja `--help` para mais opções.
@@ -431,7 +431,7 @@ Cada arquivo `.cpp/.h` é comentado no diretório. O `platformio.ini` lista as b
 ### 4. Dependências Python
 
 ```bash
-cd ~/Controle_robo_web/controle_web
+cd ~/Workspace/Controle_robo_web/controle_web
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -451,7 +451,7 @@ Quando o destino é uma **Raspberry Pi 4/5 arm64** (Ubuntu 24.04 + Jazzy), use o
 - adiciona o usuário em `dialout` pra abrir USB sem `sudo`.
 
 ```bash
-cd ~/Controle_robo_web
+cd ~/Workspace/Controle_robo_web
 
 ./setup_pi.sh                  # instala tudo (base + Nav2 + slam_toolbox)
 
@@ -476,7 +476,7 @@ hostname -I    # para descobrir o IP da máquina e acessar pela rede
 Dirigir manualmente. Nenhuma camada extra de segurança é ativada — cuidado com obstáculos.
 
 ```bash
-cd ~/Controle_robo_web
+cd ~/Workspace/Controle_robo_web
 ./launch.sh
 ```
 
@@ -1129,7 +1129,7 @@ ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null
 
 # 2) udev rule criada?
 cat /etc/udev/rules.d/99-robot-usb.rules
-sudo ~/Controle_robo_web/setup_udev.sh
+sudo ~/Workspace/Controle_robo_web/setup_udev.sh
 
 # 3) Permissões:
 sudo usermod -aG dialout $USER  # logout/login depois
@@ -1224,7 +1224,7 @@ ros2 run tf2_tools view_frames
 pio --version
 
 # 2) Libs externas baixaram? (deve ter feito automaticamente)
-cd ~/Controle_robo_web/firmware/mega_bridge
+cd ~/Workspace/Controle_robo_web/firmware/mega_bridge
 pio pkg install
 
 # 3) MEGA conectada para upload?

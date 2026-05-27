@@ -6,7 +6,7 @@
 # (https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html).
 #
 # Uso:
-#   cd ~/Controle_robo_web
+#   cd ~/Workspace/Controle_robo_web
 #   ./setup.sh
 #
 # Para hardware real, rode depois: sudo ./setup_udev.sh

@@ -66,7 +66,8 @@ static void handlePcFrame(uint8_t type, uint8_t len, const uint8_t* p) {
         }
         case protocol::FT_LEDS: {
             // len=1: id de estado (ver enum leds::State).
-            //        5 (WAYPOINT) usa triggerWaypoint pra ter auto-timeout de 3 s.
+            //        5 (WAYPOINT) usa triggerWaypoint pra ter auto-timeout de ~1 s
+            //                     (5 ciclos × 200 ms; ver leds.cpp FLASH_TOTAL_MS).
             //        0xFF sai do override manual e volta ao automático.
             // len=4: RGB + pattern (modo manual, compat com ROS2 antigo).
             if (len == 1) {

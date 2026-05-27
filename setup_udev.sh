@@ -184,7 +184,7 @@ echo "Criando $RULES_FILE ..."
 # dispositivos com o mesmo VID:PID.
 # Gerado por setup_udev.sh em $(date).
 #
-# Para regenerar: sudo ~/Controle_robo_web/setup_udev.sh
+# Para regenerar: sudo ~/Workspace/Controle_robo_web/setup_udev.sh
 
 # Arduino MEGA 2560 — ponte 2 placas hoverboard + sensores
 # porta USB física: $MEGA_PATH
@@ -224,7 +224,5 @@ echo ""
 echo "IMPORTANTE: Esses symlinks dependem da porta USB FÍSICA."
 echo "Se trocar o cabo de entrada USB, rode este script novamente."
 echo ""
-echo "Próximo passo — recompile o workspace ROS2:"
-echo "  cd ~/Workspace/Controle_robo_web"
-echo "  colcon build --base-paths ros2_packages --symlink-install --packages-select robot_nav wheel_msgs"
-echo "  source install/setup.bash"
+echo "Próximo passo: ./launch.sh (rebuild incremental automático)."
+echo "Pra recompilar tudo do zero (raro), apague o install/ e rode ./setup_pi.sh ou ./setup.sh."

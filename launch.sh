@@ -190,11 +190,8 @@ if ! python3 -c "import serial" 2>/dev/null; then
     sudo apt install -y python3-serial
 fi
 
-# --- Aviso de /dev/mega (modo real) ---
-if [ "$SIM" = false ] && [ ! -e /dev/mega ]; then
-    echo "AVISO: /dev/mega não encontrado."
-    echo "       Plugue a Arduino MEGA e rode: sudo $SCRIPT_DIR/setup_udev.sh"
-fi
+# Aviso de /dev/mega vinha aqui antes — virou redundante porque o bloco real
+# (linha ~408, antes de robot.launch.py) já loga o mesmo. Mantemos só um aviso.
 
 # --- Bootstrap do venv com dependências Python ---
 VENV_DIR="$SCRIPT_DIR/controle_web/.venv"
@@ -222,24 +219,34 @@ if [ ! -f "$REQ_STAMP" ] || [ "$(cat "$REQ_STAMP" 2>/dev/null)" != "$REQ_HASH" ]
 fi
 
 # --- Limpa órfãos de execuções anteriores (nós ROS2 e app.py) ---
-pkill -9 -f "robot_nav/odom_publisher"      2>/dev/null
-pkill -9 -f "robot_nav/cmd_vel_to_wheels"   2>/dev/null
-pkill -9 -f "robot_nav/mega_bridge"         2>/dev/null
-pkill -9 -f "robot_nav/pose_estimator"      2>/dev/null
-pkill -9 -f "robot_nav/cone_detector"       2>/dev/null
-pkill -9 -f "robot_nav/trekking_runner"     2>/dev/null
-pkill -9 -f "robot_state_publisher"         2>/dev/null
-pkill -9 -f "ldlidar_stl_ros2_node"         2>/dev/null
-pkill -9 -f "async_slam_toolbox_node"       2>/dev/null
-pkill -9 -f "nav2_map_server"               2>/dev/null
-pkill -9 -f "nav2_amcl"                     2>/dev/null
-pkill -9 -f "nav2_planner"                  2>/dev/null
-pkill -9 -f "nav2_controller"               2>/dev/null
-pkill -9 -f "nav2_behaviors"                2>/dev/null
-pkill -9 -f "nav2_bt_navigator"             2>/dev/null
-pkill -9 -f "nav2_velocity_smoother"        2>/dev/null
-pkill -9 -f "nav2_lifecycle_manager"        2>/dev/null
-pkill -9 -f "nav2_waypoint_follower"        2>/dev/null
+# Mesma lista usada no cleanup() ao final — uma fonte só pra evitar drift
+# quando adicionar/remover um nó (M5 da AUDITORIA_2026-05-27).
+KNOWN_NODE_PATTERNS=(
+    "robot_nav/odom_publisher"
+    "robot_nav/cmd_vel_to_wheels"
+    "robot_nav/mega_bridge"
+    "robot_nav/pose_estimator"
+    "robot_nav/cone_detector"
+    "robot_nav/trekking_runner"
+    "robot_state_publisher"
+    "ldlidar_stl_ros2_node"
+    "async_slam_toolbox_node"
+    "nav2_map_server"
+    "nav2_amcl"
+    "nav2_planner"
+    "nav2_controller"
+    "nav2_behaviors"
+    "nav2_bt_navigator"
+    "nav2_velocity_smoother"
+    "nav2_lifecycle_manager"
+    "nav2_waypoint_follower"
+)
+kill_known_nodes() {
+    for pat in "${KNOWN_NODE_PATTERNS[@]}"; do
+        pkill -9 -f "$pat" 2>/dev/null
+    done
+}
+kill_known_nodes
 
 # --- [opcional] Flash da MEGA (firmware/mega_bridge) ---
 # Default: auto. Hash de src/, include/ e platformio.ini define quando
@@ -341,25 +348,10 @@ cleanup() {
             kill -9 "$desc" 2>/dev/null
         done
     done
-    # Rede de segurança: mata qualquer nó do robot_nav órfão que reste
-    pkill -9 -f "robot_nav/odom_publisher"      2>/dev/null
-    pkill -9 -f "robot_nav/cmd_vel_to_wheels"   2>/dev/null
-    pkill -9 -f "robot_nav/mega_bridge"         2>/dev/null
-    pkill -9 -f "robot_nav/pose_estimator"      2>/dev/null
-    pkill -9 -f "robot_nav/cone_detector"       2>/dev/null
-    pkill -9 -f "robot_nav/trekking_runner"     2>/dev/null
-    pkill -9 -f "robot_state_publisher"         2>/dev/null
-    pkill -9 -f "ldlidar_stl_ros2_node"         2>/dev/null
-    pkill -9 -f "async_slam_toolbox_node"       2>/dev/null
-    pkill -9 -f "nav2_map_server"               2>/dev/null
-    pkill -9 -f "nav2_amcl"                     2>/dev/null
-    pkill -9 -f "nav2_planner"                  2>/dev/null
-    pkill -9 -f "nav2_controller"               2>/dev/null
-    pkill -9 -f "nav2_behaviors"                2>/dev/null
-    pkill -9 -f "nav2_bt_navigator"             2>/dev/null
-    pkill -9 -f "nav2_velocity_smoother"        2>/dev/null
-    pkill -9 -f "nav2_lifecycle_manager"        2>/dev/null
-    pkill -9 -f "nav2_waypoint_follower"        2>/dev/null
+    # Rede de segurança: mata qualquer nó conhecido órfão (mesma lista do top).
+    kill_known_nodes
+    # SIM-only: Gazebo + ros_gz_bridge não estão em KNOWN_NODE_PATTERNS porque
+    # só sobem em --sim e o launch.sh não usa pkill deles antes do start.
     pkill -9 -f "ruby.*gz sim"                  2>/dev/null
     pkill -9 -f "gz sim"                        2>/dev/null
     pkill -9 -f "parameter_bridge"              2>/dev/null

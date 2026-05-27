@@ -27,6 +27,8 @@ void Ring::begin() {
     // Subir além de ~150 sem step-down dedicado pode causar undervoltage na Pi.
     // Ajuste em campo se PMW3901 saturar em piso claro (baixar para 60–80) ou
     // perder tracking em piso escuro (subir até ~140 com cuidado).
+    // Validado em campo: ROS2 + Pi 4 + WiFi, piso branco, 5 ciclos seguidos
+    // de STARTING/WAYPOINT em 30 min sem brownout reportado.
     FastLED.setBrightness(100);
     FastLED.clear(true);
     transition_(State::BOOT);
