@@ -6,7 +6,7 @@
 //   Serial2 ↔ placa hoverboard TRÁS    (controla RL+RR, SerialCommand 0xABCD)
 //   I2C ↔ BNO055 IMU
 //   SPI ↔ PMW3901 optical flow (CS = pino 10)
-//   pino 6  → DIN do anel WS2812
+//   pino 6  → DIN do anel WS2812 (ANEL DESATIVADO — firmware não dirige mais)
 //   pino 7  → relé da luz
 //   pino 8  → LED de sinalização do marco
 //   pino 9  → botão de partida (pull-up interno)
@@ -226,11 +226,8 @@ static void txFlow() {
     // Simétrico ao txImu: se read() falhar (sensor caído / em recovery) não
     // publica — senão republicaria o último dx_/dy_ como se fosse novo.
     if (!flow_dev.read()) return;
-    // Anel modulando a iluminação (STARTING/WAYPOINT + recovery) confunde o
-    // PMW3901 — ele reporta motion fantasma por mudança de contraste no chão.
-    // Suprime o frame; EKF do PC propaga só com encoders + IMU nesse intervalo
-    // (~1,15 s por waypoint, ~57 cm de dead-reckoning a 0,5 m/s — recuperável).
-    if (ring.gated()) return;
+    // Anel desativado (iluminação agora é fita fixa de LEDs na 12V): sem gating.
+    // O PMW3901 vê luz constante, então não há mais motion fantasma a suprimir.
 
     int16_t dx = flow_dev.dx();
     int16_t dy = flow_dev.dy();
@@ -249,8 +246,6 @@ void setup() {
 
     io_signals::begin();
 
-    ring.begin();   // entra em BOOT (pulso branco curto)
-
     Wire.begin();
     Wire.setClock(400000);
     imu_dev.begin();
@@ -263,10 +258,9 @@ void setup() {
 }
 
 void loop() {
-    // pumpPcSerial drena o buffer do USB (64 B). Com PC_BAUD=230400 +
-    // FastLED.show() bloqueante (~750 µs por 24 LEDs) + I²C do BNO055, em
-    // pico chega a >64 B entre ticks — drenar uma vez só perde bytes.
-    // Chamadas extras no meio mantêm o buffer com folga sem custo perceptível.
+    // pumpPcSerial drena o buffer do USB (64 B). Com PC_BAUD=230400 + I²C do
+    // BNO055 bloqueando o loop, em pico chega a >64 B entre ticks — drenar uma
+    // vez só perde bytes. Chamadas extras no meio mantêm o buffer com folga.
     pumpPcSerial();
     pumpHoverboardFeedback();
     txHoverboard();
@@ -275,12 +269,4 @@ void loop() {
     txImu();
     pumpPcSerial();
     txFlow();
-
-    const bool active = (last_setpoint != 0) &&
-                        (millis() - last_setpoint < SETPOINT_TIMEOUT_MS);
-    ring.setActive(active);
-    // Lê imu_dev.ok() direto — assim acompanha mudanças runtime (recovery
-    // automático em sensors_imu.cpp), em vez do snapshot do setup().
-    ring.setError(!imu_dev.ok());
-    ring.tick();
 }
