@@ -265,6 +265,8 @@ do trekking nunca dependeu deste feedback; quem mais ganha é o `/odom` (SLAM/Na
 - **Git:** push do dev pro GitHub precisa da credencial do usuário (ambiente do
   Claude não tem). Depois do push, sincronizar a Pi (`git reset --hard origin/main`;
   a Pi tem o `mega_bridge.py` via scp, idêntico ao commit).
-- **Tuning (opcional):** o `BASE_ANGULAR_SPEED=6.0` no `robot_controller.py` foi
-  inflado "porque o robô não girava no eixo". Agora que o giro/odom estão certos,
-  revisar se 6.0 ainda faz sentido ou se dá pra baixar.
+- **`BASE_ANGULAR_SPEED=6.0` é problema SEPARADO (não confundir):** o robô não
+  gira bem em velocidade baixa porque **não tem suspensão** → as 4 rodas não
+  apoiam uniforme e falta fricção confiável (rodas aliviadas patinam). É físico
+  (tração), NÃO tem relação com o bug de direção/feedback corrigido aqui.
+  Comentário explícito adicionado no `robot_controller.py`. Sem ação de software.

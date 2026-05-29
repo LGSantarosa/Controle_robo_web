@@ -126,12 +126,17 @@ class ROS2Controller(RobotController):
     # Normal (1.0x) = 0.3 m/s / 6.0 rad/s.
     # Boost (□ 2.0x) = 0.6 m/s / 12 rad/s (cliparia em ±1000 no wheel cmd).
     #
-    # Angular ficou em 6.0 rad/s: o chassi não apoia as 4 rodas
-    # uniformemente no chão, então as rodas com pouca carga patinam e
-    # comando baixo não move o robô em torno do eixo. Com 6.0 rad/s o
-    # comando bate ~±600 (60% PWM) — suficiente pra vencer o atrito
-    # das rodas carregadas sem boost. Boost satura mas é proposital
-    # (giro rápido pra correção fina).
+    # Angular ficou em 6.0 rad/s por um problema FÍSICO, NÃO de controle:
+    # o robô NÃO TEM SUSPENSÃO, então as 4 rodas não apoiam uniformemente no
+    # chão e falta fricção suficiente/confiável — em velocidade baixa o robô
+    # não roda direito no eixo (as rodas aliviadas patinam). Com 6.0 rad/s o
+    # comando bate ~±600 (60% PWM) e vence o atrito das rodas carregadas.
+    # Boost satura mas é proposital (giro rápido pra correção fina).
+    #
+    # IMPORTANTE: isto NÃO tem relação com o bug de direção da placa traseira
+    # (cabos L/R trocados) corrigido em 2026-05-30 (commit 7115b09 / mega_bridge
+    # _fb_map). Aquele era de feedback/odometria; este é tração por falta de
+    # suspensão. Não confundir os dois ao mexer aqui.
     BASE_LINEAR_SPEED: float = 0.3   # m/s
     BASE_ANGULAR_SPEED: float = 6.0  # rad/s
 
