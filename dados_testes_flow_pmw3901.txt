@@ -1,0 +1,95 @@
+TESTES — Sensor de fluxo óptico PMW3901 (29/05)
+
+Tópico medido: /optical_flow   ->   x = dx,  y = dy,  z = qualidade (SQUAL)
+Taxa de leitura: ~74 a 100 Hz
+Valor de movimento real esperado: poucas dezenas de "counts"
+Lixo (corrupção): valores saturados, da ordem de +-16000 a +-32768
+
+
+------------------------------------------------------------------
+VERIFICAÇÃO DA LEITURA DE QUALIDADE (SQUAL) — robô parado
+------------------------------------------------------------------
+Antes: z (qualidade) = 0 fixo (hardcoded)
+Depois (robô parado, sob carga total): z = 124 a 127
+Peso do flow na fusão: subiu de ~0,02 (com z=0) para ~0,89 (com z~125)
+
+
+------------------------------------------------------------------
+ISOLAMENTO DA CAUSA — 4 fases (uma variável por vez)
+------------------------------------------------------------------
+
+FASE A — carga total de comunicação + empurrão à mão, motores DESLIGADOS
+  amostras: 1488 (~18 s)
+  x (lateral):  -1 a 1
+  y (frente):  -11 a 9
+  z (SQUAL):   115 a 142
+  amostras com lixo (>=16000): 0
+  -> LIMPO
+
+FASE B-1 — motores girando, rodas no ar, robô parado
+  amostras: 731 (~8,4 s)
+  x:  -1 a 1
+  y:  -1 a 2   (correto: sem translação real, rodas no ar)
+  z (SQUAL): 110 a 128   (nenhuma amostra abaixo de 100)
+  amostras com lixo (>=16000): 0
+  -> LIMPO
+
+FASE B-2 — dirigindo em linha reta na velocidade máxima
+  amostras: 1033 (~14 s)
+  x:  -1 a 1
+  y: -16 a 16
+  z (SQUAL): 119 a 142
+  amostras com lixo (>=16000): 0
+  -> LIMPO
+
+FASE B-3 — fazendo curva / girando no lugar na velocidade máxima
+  amostras: 1200
+  x: -32768 a 31879     <- SATURADO (lixo)
+  y: -32766 a 32319     <- SATURADO (lixo)
+  z (SQUAL):  0 a 255
+  amostras com lixo: |x|>=16000: 23 ; |y|>=16000: 33  (54 de 1200, ~4,5%)
+  SQUAL nas amostras de lixo:   média 112  (ALTO -> sensor NÃO perdeu a imagem)
+  SQUAL nas amostras limpas:    média 122
+  Byte de SQUAL corrompido:  z=0: 127 ;  z=255 (0xFF): 72 ;  z>168 (impossível): 113
+  -> LEITURA CORROMPIDA
+
+  Conclusão: corrupção elétrica (EMI dos motores na comunicação SPI), só em
+  manobra. dx/dy saturam E o byte de qualidade volta corrompido (0x00 / 0xFF /
+  acima de 168) = corrupção de transporte, não o sensor perdendo a imagem.
+
+
+------------------------------------------------------------------
+MAPEAMENTO DOS EIXOS (dirigindo reto e medindo o sinal)
+------------------------------------------------------------------
+Avanço (timido, robô mal andou): n=648, média dy = +0,57  (inconclusivo, 445 zeros)
+Ré (firme):     n=651, média dy = +7,44   (dy>0: 300 ; dy<0: 6) ; lixo: 0
+Avanço (firme): n=605, média dy = -5,03   (dy<0: 237 ; dy>0: 5) ; lixo: 0
+  -> Frente = eixo dy NEGATIVO ; dx ~ 0
+  -> Configuração aplicada: flow_swap_xy = True ; flow_x_sign = -1
+
+
+------------------------------------------------------------------
+RECONFIRMAÇÃO APÓS A CORREÇÃO (filtro no firmware) — mesma manobra da Fase B-3
+------------------------------------------------------------------
+Filtro: descarta a amostra se |dx| ou |dy| > 2000, ou se SQUAL > 168.
+
+  amostras: 850
+  x: -1224 a 1927       (sem saturação)
+  y:  -256 a 1904       (sem saturação)
+  z (SQUAL): 0 a 165    (tudo dentro da faixa válida, <=168)
+  lixo que vazou para a fusão: |x|>=16000: 0 ; |y|>=16000: 0 ; z=255: 0 ; z>168: 0
+  z=0 (qualidade baixa legítima, fusão despesa): 45
+  -> ZERO leituras corrompidas passaram
+
+
+------------------------------------------------------------------
+RESUMO
+------------------------------------------------------------------
+Fase A  (carga SPI, motor off, mão) ............ LIMPO
+Fase B-1 (motor girando, rodas no ar) .......... LIMPO
+Fase B-2 (reto, máximo) ........................ LIMPO
+Fase B-3 (curva/giro, máximo) .................. LIXO  -> causa: EMI do motor no SPI
+Fase B-3 após o filtro ......................... LIMPO (zero lixo vazando)
+
+Pendente: correção em hardware (trocar o conversor de nível do SPI por um mais
+robusto + aterramento) para resolver o ruído na origem.
