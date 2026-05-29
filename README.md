@@ -170,7 +170,7 @@ Navegador (WASD / Gamepad / Clique / Waypoints)
         │  Serial2 ───► placa hoverboard TRÁS    (RL + RR)
         │  I²C    ───► BNO055   (IMU 9-DOF)
         │  SPI    ───► PMW3901  (optical flow)
-        │  pinos  ───► WS2812 / relé / LED / botão
+        │  pinos  ───► relé / LED de marco / botão  (anel WS2812 comentado — A1)
 
   Sensores publicados pela MEGA via mega_bridge:
     /hoverboard/{front,rear}/{left,right}/velocity  (RPM por roda)
@@ -387,7 +387,7 @@ O firmware C++ fica em `firmware/mega_bridge/` (projeto PlatformIO). Ele:
 | I²C | 20 (SDA), 21 (SCL) | BNO055 |
 | SPI | 50 (MISO), 51 (MOSI), 52 (SCK) | PMW3901 (via conversor 5↔3.3 V) |
 | CS do PMW3901 | 10 | PMW3901 |
-| DIN WS2812 | 6 (com resistor 470 Ω) | Anel RGB |
+| DIN WS2812 | 6 (com resistor 470 Ω) | Anel RGB — **comentado**, fora do build (AUDITORIA_2026-05-29 A1) |
 | Relé da luz | 7 | Módulo relé |
 | LED de sinalização do marco | 8 | LED externo |
 | Botão de partida | 9 (pull-up interno) | Botão até GND |
@@ -540,11 +540,12 @@ O que sobe a mais (3 nós Python leves, ~10% CPU total):
 
 **Fluxo de uso pela UI web:**
 
-1. Aperte **● Gravar** (entra em RECORD). O anel de LED fica verde piscando.
+1. Aperte **● Gravar** (entra em RECORD). O estado do modo aparece na UI web.
 2. Dirija manualmente (WASD/gamepad) até o primeiro cone. Aperte **+ Ponto**
    (ou o botão físico de partida na MEGA — pino 9) → grava posição **+ cone
    detectado naquele momento** (posição mundial + bearing relativo ao yaw
-   gravado). Anel verde flash = ok; amarelo = cone não visto.
+   gravado). A UI mostra "wp N + cone" ou "cone não visto".
+   *(O feedback de LED RGB está desativado — anel comentado, A1.)*
 3. Repita para todos os cones da rota.
 4. Volte manualmente até a origem.
 5. Aperte **▶ Play** → percorre todos os waypoints. Em cada um:
@@ -553,8 +554,8 @@ O que sobe a mais (3 nós Python leves, ~10% CPU total):
      esperada **E** com bearing relativo compatível com o gravado. Casando:
      **snap** — alvo corrigido = `cone_observado + (waypoint − cone_gravado)`.
      Isso zera o drift de odometria *naquele waypoint*.
-   - Ao chegar (< 25 cm ou pass-by detectado), flash laranja de 600 ms no
-     anel WS2812 e avança pro próximo.
+   - Ao chegar (< 25 cm ou pass-by detectado), avança pro próximo (a UI
+     registra a chegada; feedback de LED desativado — A1).
 6. **💾 Salvar rota** grava em `maps/routes/trekking/<nome>.json`.
 
 **Por que 3 sensores?**
@@ -863,8 +864,8 @@ A MEGA também controla periféricos de interface humana:
 
 | Periférico | Pino | Tópico ROS | Como usar |
 |-----------|------|------------|-----------|
-| Anel WS2812 (16–24 LEDs) | 6 (DIN com resistor 470 Ω) | `/leds/color` (`std_msgs/ColorRGBA`) | Publica `r,g,b` ∈ [0,1] e `a` como modo (0=fixo, 1=pisca, 2=rotação). Útil pra sinalizar chegada num waypoint ou estado do robô. |
-| Relé da luz | 7 | `/light/cmd` (`std_msgs/Bool`) | `true` liga, `false` desliga. *Nota: pode ser removido no futuro — o anel WS2812 já cobre o caso de mudar de cor ao chegar num ponto.* |
+| Anel WS2812 (16–24 LEDs) | 6 (DIN com resistor 470 Ω) | `/leds/color` (`std_msgs/ColorRGBA`) | **COMENTADO (AUDITORIA_2026-05-29 A1):** o driver `leds.cpp` está fora do build e a MEGA ignora o frame `FT_LEDS`. O tópico ainda existe no `mega_bridge` mas é no-op até o anel ser reativado. |
+| Relé da luz | 7 | `/light/cmd` (`std_msgs/Bool`) | `true` liga, `false` desliga. |
 | LED do marco | 8 | (controlado junto com o relé, byte 2 do frame `RELAY`) | Indicador externo de status. |
 | Botão de partida | 9 (pull-up interno) | `/start_button` (`std_msgs/Bool`) | `true` enquanto pressionado. Pode ser usado pra habilitar movimentação manualmente no robô (deadman) ou iniciar uma rota de waypoints sem precisar do browser. |
 
@@ -948,7 +949,7 @@ Tópicos consumidos:
 | `/battery/front` | `sensor_msgs/BatteryState` | `mega_bridge` | (monitoramento) | sempre |
 | `/battery/rear` | `sensor_msgs/BatteryState` | `mega_bridge` | (monitoramento) | sempre |
 | `/start_button` | `std_msgs/Bool` | `mega_bridge` | (futuro: deadman/start de rota) | sempre |
-| `/leds/color` | `std_msgs/ColorRGBA` | (cliente, futuro) | `mega_bridge` → MEGA | sempre |
+| `/leds/color` | `std_msgs/ColorRGBA` | `trekking_runner` (no-op) | `mega_bridge` → MEGA | sempre (anel comentado — A1) |
 | `/light/cmd` | `std_msgs/Bool` | (cliente, futuro) | `mega_bridge` → MEGA | sempre |
 | `/scan` | `sensor_msgs/LaserScan` | LiDAR driver | `slam_toolbox` / `amcl` / `voxel_layer` | sempre |
 | `/odom` | `nav_msgs/Odometry` | `odom_publisher` | `slam_toolbox` / `amcl` / `nav_metrics` | sempre |
@@ -1028,7 +1029,7 @@ Controle_robo_web/
 │       │   ├── hoverboard.h           # SerialCommand 0xABCD + parser de SerialFeedback
 │       │   ├── sensors_imu.h          # Wrapper do BNO055
 │       │   ├── sensors_flow.h         # Wrapper do PMW3901
-│       │   ├── leds.h                 # Anel WS2812 (FastLED)
+│       │   ├── leds.h                 # Anel WS2812 (FastLED) — COMENTADO, fora do build (A1)
 │       │   └── io_signals.h           # Relé, LED, botão
 │       └── src/                       # Implementações + main.cpp
 ├── maps/                              # Mapas e rotas (gitignored)
@@ -1220,8 +1221,9 @@ Ou para inverter o **comando** (não só o feedback), edite `cmd_vel_to_wheels.p
 
 ```bash
 # 1) BNO055 detectado?
-#    Conecte ao monitor serial da MEGA (pio device monitor) — no setup() o
-#    anel WS2812 fica vermelho se o BNO055 não responder no I²C.
+#    Conecte ao monitor serial da MEGA (pio device monitor). Se o BNO055 não
+#    responder no I²C, a MEGA não publica /imu/data e /system/health mostra
+#    imu_ok=false. (O indicador antigo via anel WS2812 vermelho foi desativado — A1.)
 
 # 2) Endereço I²C correto (BNO055_ADDRESS_A = 0x28)?
 #    Se o pino ADR estiver puxado para HIGH no módulo, é 0x29 — ajuste em

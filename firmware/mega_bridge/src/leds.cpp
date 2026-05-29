@@ -1,3 +1,7 @@
+// ANEL WS2812 COMENTADO — ver AUDITORIA_2026-05-29 A1.
+// Arquivo mantido no repo mas FORA do build (build_src_filter exclui leds.cpp
+// no platformio.ini). Não é compilado nem linkado; preservado pra eventual
+// revival do feedback visual. Pra reativar, ver as instruções em main.cpp.
 #include "leds.h"
 
 namespace leds {

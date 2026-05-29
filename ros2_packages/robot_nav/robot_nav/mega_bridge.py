@@ -7,7 +7,8 @@ placa). Agora a MEGA agrega:
   - 2 placas de hoverboard (frontal Serial1, traseira Serial2)
   - BNO055 IMU (I²C)
   - PMW3901 optical flow (SPI)
-  - anel WS2812, relé da luz, LED de marco, botão de partida
+  - relé da luz, LED de marco, botão de partida
+  - (anel WS2812 comentado no firmware — ver AUDITORIA_2026-05-29 A1)
 
 Protocolo (frames) — ver firmware/mega_bridge/include/protocol.h.
 
@@ -22,7 +23,7 @@ Tópicos publicados:
 
 Tópicos consumidos:
   /wheel_vel_setpoints                     (wheel_msgs/WheelSpeeds, mesmo formato do cmd_vel_to_wheels)
-  /leds/color                              (std_msgs/ColorRGBA)
+  /leds/color                              (std_msgs/ColorRGBA)  NO-OP: anel comentado no firmware (A1); frame FT_LEDS é ignorado pela MEGA
   /light/cmd                               (std_msgs/Bool)    relé da luz
   /light/marker                            (std_msgs/Bool)    LED de marco
 """

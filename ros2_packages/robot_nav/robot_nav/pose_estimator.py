@@ -178,6 +178,11 @@ class PoseEstimator(Node):
     def _on_flow(self, msg: Vector3Stamped):
         # dx, dy são contagens acumuladas desde a última mensagem.
         # Velocidade = dist / dt entre mensagens consecutivas.
+        # O dt é medido por chegada (não pelo stamp do firmware), o que só é
+        # correto se a cadência do flow for regular. O firmware garante isso
+        # (AUDITORIA_2026-05-29 A2): amostra rejeitada por EMI é publicada NULA
+        # (quality=0 → α≈0 aqui) em vez de suprimida, então não abre buraco no
+        # dt e a amostra boa seguinte não fica subestimada.
         now = self.get_clock().now()
         dx = msg.vector.x
         dy = msg.vector.y

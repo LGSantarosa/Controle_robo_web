@@ -1,11 +1,14 @@
 #pragma once
+// ANEL WS2812 COMENTADO — ver AUDITORIA_2026-05-29 A1.
+// Este header e o leds.cpp NÃO entram no build (build_src_filter exclui
+// leds.cpp; main.cpp não inclui mais este arquivo). Mantidos no repo pra
+// eventual revival. A iluminação do chão pro PMW3901 hoje é fita fixa na 12 V.
+// Histórico do diag de pino: DATA_PIN foi de 6 → 5 em 2026-05-27 testando se o
+// pino 6 da MEGA estava queimado; investigação encerrada com o anel abandonado.
 #include <FastLED.h>
 
 namespace leds {
 
-// TEMP DIAG 2026-05-27: movido de 6 → 5 pra testar se pino 6 da MEGA esta'
-// queimado (anel responde com lixo aleatorio mesmo com loop rodando estavel).
-// Reverter pra 6 se a troca de pino nao resolver.
 constexpr uint8_t DATA_PIN = 5;
 constexpr uint8_t NUM_LEDS = 24;
 

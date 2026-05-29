@@ -6,7 +6,10 @@
 //   Serial2 ↔ placa hoverboard TRÁS    (controla RL+RR, SerialCommand 0xABCD)
 //   I2C ↔ BNO055 IMU
 //   SPI ↔ PMW3901 optical flow (CS = pino 10)
-//   pino 6  → DIN do anel WS2812 (ANEL DESATIVADO — firmware não dirige mais)
+//   (anel WS2812 COMENTADO — ver AUDITORIA_2026-05-29 A1. O driver vive em
+//    leds.cpp/leds.h mas está FORA do build via build_src_filter no
+//    platformio.ini, e os usos abaixo estão comentados. Iluminação do chão
+//    pro PMW3901 agora é fita fixa de LEDs na 12 V — não controlada por SW.)
 //   pino 7  → relé da luz
 //   pino 8  → LED de sinalização do marco
 //   pino 9  → botão de partida (pull-up interno)
@@ -20,7 +23,7 @@
 #include "hoverboard.h"
 #include "sensors_imu.h"
 #include "sensors_flow.h"
-#include "leds.h"
+// #include "leds.h"   // anel WS2812 comentado — ver AUDITORIA_2026-05-29 A1
 #include "io_signals.h"
 
 constexpr uint32_t PC_BAUD               = 230400;
@@ -38,7 +41,7 @@ hoverboard::FeedbackParser fb_rear;
 
 sensors::Imu   imu_dev;
 sensors::Flow  flow_dev{PMW_CS};
-leds::Ring     ring;
+// leds::Ring     ring;   // anel WS2812 comentado — ver AUDITORIA_2026-05-29 A1
 
 struct Setpoint { int16_t steer; int16_t speed; };
 static Setpoint sp_front      = {0, 0};
@@ -64,26 +67,24 @@ static void handlePcFrame(uint8_t type, uint8_t len, const uint8_t* p) {
             last_setpoint = millis();
             break;
         }
-        case protocol::FT_LEDS: {
-            // len=1: id de estado (ver enum leds::State).
-            //        5 (WAYPOINT) usa triggerWaypoint pra ter auto-timeout de ~1 s
-            //                     (5 ciclos × 200 ms; ver leds.cpp FLASH_TOTAL_MS).
-            //        0xFF sai do override manual e volta ao automático.
-            // len=4: RGB + pattern (modo manual, compat com ROS2 antigo).
-            if (len == 1) {
-                const uint8_t id = p[0];
-                if (id == 0xFF) {
-                    ring.clearManual();
-                } else if (id == (uint8_t)leds::State::WAYPOINT) {
-                    ring.triggerWaypoint();
-                } else {
-                    ring.setState(static_cast<leds::State>(id));
-                }
-            } else if (len == 4) {
-                ring.setManual(p[0], p[1], p[2], p[3]);
-            }
-            break;
-        }
+        // case protocol::FT_LEDS:  — anel WS2812 COMENTADO (AUDITORIA_2026-05-29 A1).
+        //   O mega_bridge ainda pode publicar /leds/color → FT_LEDS; o frame é
+        //   silenciosamente ignorado aqui (cai no default) até o anel ser
+        //   reativado. Pra reativar: descomentar este case + o include/objeto
+        //   `ring` acima, o ring.begin()/tick() no setup()/loop(), e religar a
+        //   dep FastLED + remover leds.cpp do build_src_filter no platformio.ini.
+        //
+        //   len=1: id de estado (ver enum leds::State); 5=WAYPOINT, 0xFF=auto.
+        //   len=4: RGB + pattern (modo manual).
+        //   if (len == 1) {
+        //       const uint8_t id = p[0];
+        //       if (id == 0xFF)                             ring.clearManual();
+        //       else if (id == (uint8_t)leds::State::WAYPOINT) ring.triggerWaypoint();
+        //       else                                        ring.setState(static_cast<leds::State>(id));
+        //   } else if (len == 4) {
+        //       ring.setManual(p[0], p[1], p[2], p[3]);
+        //   }
+        //   break;
         case protocol::FT_RELAY: {
             if (len != 2) return;
             io_signals::setRelay(p[0] != 0);
@@ -223,19 +224,34 @@ static void txFlow() {
     const uint32_t now = millis();
     if (now - last_tx_flow < TX_FLOW_PERIOD) return;
     last_tx_flow = now;
-    // Simétrico ao txImu: se read() falhar (sensor caído / em recovery) não
-    // publica — senão republicaria o último dx_/dy_ como se fosse novo.
-    if (!flow_dev.read()) return;
-    // Anel desativado (iluminação agora é fita fixa de LEDs na 12V): sem gating.
-    // O PMW3901 vê luz constante, então não há mais motion fantasma a suprimir.
 
-    int16_t dx = flow_dev.dx();
-    int16_t dy = flow_dev.dy();
+    const bool valid = flow_dev.read();
+    // Sensor caído / em recovery (ok()==false): não publica. O pose_estimator
+    // marca o flow como stale via flow_timeout e cai pras rodas.
+    if (!flow_dev.ok()) return;
+
+    // AUDITORIA_2026-05-29 A2: amostra rejeitada por EMI do motor (valid==false,
+    // mas o sensor está VIVO) é publicada como NULA (dx=dy=0, quality=0) em vez
+    // de suprimida. Suprimir abria um buraco na cadência: o PMW3901 zera o
+    // acumulador a cada leitura, então a próxima amostra BOA carregava só ~10 ms
+    // de counts enquanto o pose_estimator media dt pelo intervalo entre
+    // mensagens recebidas (~20 ms) → velocidade subestimada ~2x justo na manobra.
+    // Os counts rejeitados são lixo (não dá pra acumulá-los), mas publicar nulo
+    // mantém ~100 Hz: a janela ruim entra na fusão com quality=0 (α≈0 → usa
+    // rodas) e a amostra boa seguinte fica com dt correto.
+    // Anel desativado (iluminação é fita fixa na 12V): sem gating de flash.
+    int16_t dx = 0, dy = 0;
+    uint8_t q  = 0;
+    if (valid) {
+        dx = flow_dev.dx();
+        dy = flow_dev.dy();
+        q  = flow_dev.quality();
+    }
+
     uint8_t buf[5];
     memcpy(buf + 0, &dx, 2);
     memcpy(buf + 2, &dy, 2);
-    buf[4] = flow_dev.quality();
-
+    buf[4] = q;
     protocol::writeFrame(Serial, protocol::FT_FLOW, buf, sizeof(buf));
 }
 

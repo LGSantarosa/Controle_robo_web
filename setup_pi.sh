@@ -120,8 +120,14 @@ LIDAR_DIR="$REPO_DIR/ros2_packages/ldlidar_stl_ros2"
 if [ -d "$LIDAR_DIR" ]; then
     echo "  ldlidar_stl_ros2 já clonado"
 else
-    git clone https://github.com/ldrobotSensorTeam/ldlidar_stl_ros2.git "$LIDAR_DIR"
+    # AUDITORIA_2026-05-27 M4: clone raso do master. Se o upstream rebatear e o
+    # patch do pthread.h quebrar, o hash registrado abaixo aponta o que mudou.
+    # TODO: trocar 'master' por um commit fixo assim que um master sabidamente
+    # bom for validado em campo (reprodutibilidade 100%).
+    git clone --depth 1 --branch master \
+        https://github.com/ldrobotSensorTeam/ldlidar_stl_ros2.git "$LIDAR_DIR"
 fi
+echo "  driver LiDAR @ $(git -C "$LIDAR_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')"
 
 # Patch: no ARM (raspi) o <mutex> não puxa <pthread.h> transitivamente,
 # então log_module.cpp não compila ("pthread_mutex_lock was not declared").
@@ -131,13 +137,26 @@ if [ -f "$LOG_MODULE" ] && ! grep -q "^#include <pthread.h>" "$LOG_MODULE"; then
     echo "  patch aplicado: #include <pthread.h> em log_module.cpp"
 fi
 
-# --- 3/4 — colcon build (paralelismo limitado pra não estourar RAM) ---
+# --- 3/4 — colcon build (paralelismo adaptado à RAM disponível) ---
 echo
-echo "=== [3/4] colcon build (use 2 workers — Pi 4 4GB não aguenta 4 paralelos) ==="
+# AUDITORIA_2026-05-27 M6: paralelismo por RAM disponível, não hardcoded em 2.
+# Pi 4 (4 GB) aguenta 2; Pi 5 (8 GB) faz 4 com folga (~25 min → ~12 min).
+# `nproc` não serve (Pi 4/5 têm 4 cores) — o gargalo é RAM. Override manual:
+#   PI_BUILD_PARALLEL=4 ./setup_pi.sh
+if [ -n "${PI_BUILD_PARALLEL:-}" ]; then
+    PAR="$PI_BUILD_PARALLEL"
+else
+    FREE_MB="$(awk '/^MemAvailable:/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+    if   [ "$FREE_MB" -ge 6000 ]; then PAR=4
+    elif [ "$FREE_MB" -ge 3000 ]; then PAR=2
+    else                               PAR=1
+    fi
+fi
+echo "=== [3/4] colcon build ($PAR workers — RAM disponível ${FREE_MB:-?} MB) ==="
 cd "$WS_DIR"
 # MAKEFLAGS pra Pi: limita também o paralelismo interno dos pacotes C++ (LiDAR driver).
-export MAKEFLAGS="-j2"
-colcon build --base-paths ros2_packages --symlink-install --executor sequential --parallel-workers 2
+export MAKEFLAGS="-j$PAR"
+colcon build --base-paths ros2_packages --symlink-install --executor sequential --parallel-workers "$PAR"
 
 # --- PlatformIO (firmware MEGA) ---
 echo

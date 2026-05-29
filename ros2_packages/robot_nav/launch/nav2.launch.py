@@ -49,46 +49,53 @@ def generate_launch_description():
 
     sim_time_param = {'use_sim_time': use_sim_time}
 
+    # AUDITORIA_2026-05-27 M3: nós internos do Nav2 só em 'log'. Com 'screen' o
+    # terminal do launch.sh vira fluxo contínuo de [controller_server] [INFO] a
+    # cada tick. Os logs continuam em ~/.ros/log/<ts>/<node>-N-*.log (e em
+    # controle_web/logs/nav2.log via redirect do launch.sh). O lifecycle_manager
+    # fica em 'screen' — é o único que sinaliza visualmente "Nav2 ativou".
+    nav_output = 'log'
+
     nodes = [
         Node(
             package='nav2_map_server', executable='map_server', name='map_server',
-            output='screen',
+            output=nav_output,
             parameters=[params_file, sim_time_param, {'yaml_filename': map_yaml}],
         ),
         Node(
             package='nav2_amcl', executable='amcl', name='amcl',
-            output='screen', parameters=[params_file, sim_time_param],
+            output=nav_output, parameters=[params_file, sim_time_param],
         ),
         Node(
             package='nav2_controller', executable='controller_server',
-            name='controller_server', output='screen',
+            name='controller_server', output=nav_output,
             parameters=[params_file, sim_time_param],
             remappings=[('cmd_vel', 'cmd_vel_nav')],
         ),
         Node(
             package='nav2_planner', executable='planner_server',
-            name='planner_server', output='screen',
+            name='planner_server', output=nav_output,
             parameters=[params_file, sim_time_param],
         ),
         Node(
             package='nav2_behaviors', executable='behavior_server',
-            name='behavior_server', output='screen',
+            name='behavior_server', output=nav_output,
             parameters=[params_file, sim_time_param],
             remappings=[('cmd_vel', 'cmd_vel_nav')],
         ),
         Node(
             package='nav2_bt_navigator', executable='bt_navigator',
-            name='bt_navigator', output='screen',
+            name='bt_navigator', output=nav_output,
             parameters=[params_file, sim_time_param],
         ),
         Node(
             package='nav2_waypoint_follower', executable='waypoint_follower',
-            name='waypoint_follower', output='screen',
+            name='waypoint_follower', output=nav_output,
             parameters=[params_file, sim_time_param],
         ),
         Node(
             package='nav2_velocity_smoother', executable='velocity_smoother',
-            name='velocity_smoother', output='screen',
+            name='velocity_smoother', output=nav_output,
             parameters=[params_file, sim_time_param],
             # Saída do Nav2 vai pra nav_vel (entrada de menor prioridade do
             # twist_mux em robot.launch.py E em sim.launch.py), não direto pro
