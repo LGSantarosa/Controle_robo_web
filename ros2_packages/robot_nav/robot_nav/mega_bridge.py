@@ -144,6 +144,27 @@ class MegaBridge(Node):
         # esse hardware.
         self.declare_parameter('rear_invert_speed', False)
         self.declare_parameter('rear_invert_steer', False)
+        # Normalização do FEEDBACK das rodas para o referencial do robô
+        # ("frente = +", topico bate com o lado fisico). Mapeamento medido em
+        # bancada 2026-05-30 (rodas no ar) com comando reto e giro, cruzado com
+        # observacao VISUAL:
+        #   - FRENTE: roda direita le invertida (espelho L/R do hoverboard).
+        #     pub front/left = +rawFL ; pub front/right = -rawFR.
+        #   - TRAS: os cabos L/R da placa traseira estao TROCADOS (confirmado:
+        #     no giro a frente e a tras batiam, mas o feedback da tras saia
+        #     invertido). Entao o canal "RL" carrega a roda fisica da direita e
+        #     vice-versa -> pub rear/left = +rawRR ; pub rear/right = -rawRL.
+        # Andando reto o swap e' invisivel (RL==RR), por isso a 1a versao (so
+        # sinal por roda, sem swap) acertava reto mas CANCELAVA o angular no
+        # giro: v_left=(FL+RL)/2 e v_right=(FR+RR)/2 zeravam. Ver
+        # AUDITORIA_2026-05-29b (A1) + execucao 2026-05-30 no fim do doc.
+        # mapa: topico publicado -> (campo do struct STATE, sinal)
+        self._fb_map = {
+            ('front', 'left'):  ('FL',  1.0),
+            ('front', 'right'): ('FR', -1.0),
+            ('rear',  'left'):  ('RR',  1.0),   # cabos L/R trocados na tras
+            ('rear',  'right'): ('RL', -1.0),
+        }
 
         self._port = self.get_parameter('port').value
         self._baud = int(self.get_parameter('baud').value)
@@ -345,13 +366,14 @@ class MegaBridge(Node):
         btn = p[14]
         sensor_flags = p[15]
 
-        for (board, side), value in (
-            (('front', 'left'),  rpm_FL),
-            (('front', 'right'), rpm_FR),
-            (('rear',  'left'),  rpm_RL),
-            (('rear',  'right'), rpm_RR),
-        ):
-            self._pub_rpm[(board, side)].publish(Float64(data=float(value)))
+        # Normaliza o feedback pro referencial do robô (frente = +) com o
+        # mapa _fb_map (sinal por roda + swap L/R na traseira). Sem isto a odom
+        # cancela: andando reto (só sinal) OU no giro (sem o swap). Ver __init__.
+        raw = {'FL': rpm_FL, 'FR': rpm_FR, 'RL': rpm_RL, 'RR': rpm_RR}
+        for (board, side), (src, sign) in self._fb_map.items():
+            self._pub_rpm[(board, side)].publish(
+                Float64(data=float(raw[src]) * sign)
+            )
 
         # present = placa respondendo (não-stale), não "voltagem > 0". Assim
         # 0 V com present=True = curto/medida real; 0 V com present=False =
