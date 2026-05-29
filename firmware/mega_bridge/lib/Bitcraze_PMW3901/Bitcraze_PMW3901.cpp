@@ -20,16 +20,19 @@
  * SOFTWARE.
  */
 
-/* FORK LOCAL — Bitcraze PMW3901 v1.2.0 com 1 alteração (Santarosa, 2026-05-21).
+/* FORK LOCAL — Bitcraze PMW3901 v1.2.0 com 2 alterações (Santarosa, 2026-05).
  *
- * As 3 chamadas SPISettings foram trocadas de (4000000, SPI_MODE3) para
- * (125000, SPI_MODE0). Motivo: o level shifter desta placa (MOSFET, tipo I2C)
- * não passa SPI a 4 MHz/MODE3 — begin() sempre falhava (lia 0xFF). A 125 kHz
- * (piso do SPI HW do ATmega2560 = 16MHz/128) em MODE0 o init e a leitura de
- * movimento funcionam de forma estável. 125 kHz é folgado p/ o FLOW a 100 Hz.
- * Se um dia trocar o shifter por um push-pull rápido (74AHCT125/74LVC245),
- * reverter p/ 4000000/SPI_MODE3 e usar a lib upstream sem fork.
- * Ver memória project_pmw3901_shifter.
+ * (1) 2026-05-21: as 3 chamadas SPISettings foram trocadas de (4000000,
+ * SPI_MODE3) para (125000, SPI_MODE0). Motivo: o level shifter desta placa
+ * (MOSFET, tipo I2C) não passa SPI a 4 MHz/MODE3 — begin() sempre falhava (lia
+ * 0xFF). A 125 kHz (piso do SPI HW do ATmega2560 = 16MHz/128) em MODE0 o init e
+ * a leitura de movimento funcionam de forma estável. 125 kHz é folgado p/ o
+ * FLOW a 100 Hz. Se um dia trocar o shifter por um push-pull rápido
+ * (74AHCT125/74LVC245), reverter p/ 4000000/SPI_MODE3 e usar a lib upstream sem
+ * fork. Ver memória project_pmw3901_shifter.
+ *
+ * (2) 2026-05-29: adicionado readSqual() (reg 0x07). A lib upstream não expõe o
+ * SQUAL; o pose_estimator precisa dele pra pesar o flow na fusão (C5).
  */
 
 #include "Bitcraze_PMW3901.h"
@@ -85,6 +88,17 @@ void Bitcraze_PMW3901::readMotionCount(int16_t *deltaX, int16_t *deltaY)
   registerRead(0x02);
   *deltaX = ((int16_t)registerRead(0x04) << 8) | registerRead(0x03);
   *deltaY = ((int16_t)registerRead(0x06) << 8) | registerRead(0x05);
+}
+
+uint8_t Bitcraze_PMW3901::readSqual()
+{
+  // SQUAL (Surface QUALity), reg 0x07: nº de features que o sensor rastreia no
+  // quadro atual (~feature_count × 2). Maior = mais textura "vista", leitura de
+  // movimento mais confiável. 0 = sensor sem trava na superfície (escuro, liso,
+  // fora de foco). O pose_estimator usa isso pra pesar o flow na fusão.
+  // ADIÇÃO DO FORK (2026-05-29): a lib upstream não expõe o SQUAL. Chamar logo
+  // após readMotionCount() — o burst de movimento (reg 0x02) já latcheou o quadro.
+  return registerRead(0x07);
 }
 
 void Bitcraze_PMW3901::enableFrameBuffer()

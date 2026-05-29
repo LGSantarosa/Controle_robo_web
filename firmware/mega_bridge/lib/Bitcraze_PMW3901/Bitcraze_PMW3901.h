@@ -34,6 +34,7 @@ public:
   boolean begin(void);
 
   void readMotionCount(int16_t *deltaX, int16_t *deltaY);
+  uint8_t readSqual();  // SQUAL (surface quality), reg 0x07 — adição do fork local
   void enableFrameBuffer();
   void readFrameBuffer(char *FBuffer);
 

@@ -89,8 +89,11 @@ void loop() {
 
     int16_t dx = 0, dy = 0;
     flow.readMotionCount(&dx, &dy);
+    uint8_t squal = flow.readSqual();   // baseline limpo p/ comparar com o mega_bridge
     Serial.print(F("ID=0x49  dx="));
     Serial.print(dx);
     Serial.print(F("  dy="));
-    Serial.println(dy);
+    Serial.print(dy);
+    Serial.print(F("  squal="));
+    Serial.println(squal);
 }
