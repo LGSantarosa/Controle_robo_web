@@ -43,6 +43,14 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'flow_height': LaunchConfiguration('flow_height'),
+            # Mapeamento PMW3901 → body frame, calibrado no robô 2026-05-29
+            # (dirigindo reto firme): frente = dy NEGATIVO do sensor, dx≈0.
+            #   swap_xy=True   → frente entra pelo eixo dy (não dx)
+            #   flow_x_sign=-1 → frente (dy<0) vira +vx (pra frente positivo)
+            # flow_y_sign fica no default (+1): eixo lateral = dx do sensor, não
+            # calibrável num skid-steer (não translada de lado).
+            'flow_swap_xy': True,
+            'flow_x_sign': -1.0,
         }],
     )
 
