@@ -568,7 +568,7 @@ O que sobe a mais (3 nós Python leves, ~10% CPU total):
 | Parâmetro | Onde | Default | Observação |
 |-----------|------|---------|------------|
 | `flow_height` | `pose_estimator` | `0.12` m | Altura do PMW3901 ao chão. Crítico — m/contagem = `h · tan(rad/pix)`. |
-| `flow_x_sign`, `flow_y_sign`, `flow_swap_xy` | `pose_estimator` | `1, 1, false` | Conforme a orientação física do sensor. Dirija pra frente — `vx_body` deve crescer. |
+| `flow_x_sign`, `flow_y_sign`, `flow_swap_xy` | `pose_estimator` | `1, 1, false` (node) — **`trekking.launch.py` aplica `-1, 1, True`** | Calibrado no robô 2026-05-29: frente = `dy` negativo do sensor, então `swap_xy=True` + `x_sign=-1`. Ver "Calibração e diagnóstico do flow" abaixo. |
 | `lidar_offset_x` | `cone_detector` | `0.10` m | Conforme o URDF (`base_link → base_laser`). |
 | `v_max` | `trekking_runner` | `0.35` m/s | Subir gradualmente até o limite seguro do ambiente. |
 | `arrival_tolerance` | `trekking_runner` | `0.25` m | Quão perto do ponto conta como chegada. |
@@ -589,22 +589,70 @@ ros2 launch robot_nav trekking.launch.py v_max:=0.8 flow_height:=0.13
 - PMW3901 em grama alta vai oscilar `quality` — a fusão cuida disso, mas em
   terreno muito ruim a integração fica pior. O cone como landmark salva.
 
-> **TODO de calibração pendente — fusão flow está efetivamente DESLIGADA.**
->
-> 1. **`quality` do PMW3901 hardcoded em 0** (`firmware/mega_bridge/src/sensors_flow.cpp:15`).
->    O `pose_estimator` decide quando confiar no flow via
->    `alpha = sigmoid((quality - q_mid)/q_slope)` — com quality sempre 0,
->    o alpha colapsa pra ~0 e o flow nunca entra na fusão. Resultado: o
->    trekking funciona só com rodas + IMU, perdendo o sentido de ter
->    PMW3901 no chassi. Fix exige ler o registrador `0x07` (SQUAL) do
->    PMW3901 — o lib Bitcraze não expõe esse getter, precisa de fork ou
->    leitura SPI manual.
-Até esse item ser fechado, o ground-truth de pose durante o trekking
-depende exclusivamente do snap-to-cone via LiDAR. A altura do PMW3901
-ao chão está alinhada em **0.12 m** entre URDF (`flow_z=0.035` sobre
-`base_link`, que fica a `wheel_radius=0.085` do chão) e o default
-`flow_height` em `trekking.launch.py` — calibração fina conforme medida
-física no robô.
+### Calibração e diagnóstico do flow (PMW3901) — sessão 2026-05-29
+
+O flow agora está **na fusão** (antes estava efetivamente desligado). O que foi
+feito, em ordem:
+
+**1. SQUAL real (C5).** Antes o `quality` saía hardcoded em 0. Como o
+`pose_estimator` pesa o flow por `alpha = sigmoid((quality - q_mid)/q_slope)`
+(`q_mid=80`, `q_slope=20`), com quality=0 o alpha colapsava em ~0,02 e o flow
+nunca entrava na fusão — perdia o sentido de ter o sensor no chassi. O fork local
+do driver Bitcraze ganhou `readSqual()` (registrador `0x07`) e o
+`sensors_flow.cpp` passou a publicar o SQUAL real (~125 em chão bom → alpha≈0,89).
+Agora o flow corrige o slip das rodas.
+
+**2. Mapa dos eixos.** Dirigindo reto firme e medindo o `/optical_flow`:
+**frente = `dy` NEGATIVO** do sensor, `dx`≈0. Aplicado no `pose_estimator`
+(`trekking.launch.py`): `flow_swap_xy=True`, `flow_x_sign=-1`. (`flow_y_sign`
+fica no default: num skid-steer o robô não translada de lado, então o eixo
+lateral não é calibrável por translação.)
+
+**3. Causa raiz do lixo ±32768 + mitigação.** Em algumas condições o
+`/optical_flow` dava lixo saturado (±16000..32768). Isolado empiricamente em
+4 fases (rodando o `mega_bridge` e variando uma coisa por vez):
+
+| Teste | Condição | Resultado |
+|-------|----------|-----------|
+| A | carga SPI cheia + empurrão na mão (motor OFF) | limpo, SQUAL ~125 |
+| B-1 | motores girando, rodas no ar (robô parado) | limpo, SQUAL ~120 |
+| B-2 | dirigindo **reto** no máximo, no chão | limpo, SQUAL ~130 |
+| B-3 | **curva / giro no lugar** no máximo | **LIXO** ±32768 (~4,5% das amostras) |
+
+→ A corrupção é **EMI/ruído elétrico dos motores no barramento SPI, só em
+manobra**. Girar no lugar = rodas em sentidos opostos = as 2 placas hoverboard
+puxando corrente máxima em oposição → pico de chaveamento / ground bounce, e o
+**level shifter MOSFET marginal** (tipo I²C) não segura a integridade do sinal.
+Reto = lados equilibrados = limpo. Assinatura decisiva: dx/dy saturam **e** o
+byte de SQUAL volta `0x00`/`0xFF`/`>168` (corrupção de *transporte*, não o sensor
+perdendo a imagem — nas amostras de lixo o SQUAL fica ALTO, ~112; vibração
+tankaria o SQUAL pra ~0).
+
+Mitigação em firmware (`sensors_flow.cpp::read()`): descarta a amostra (não
+publica) se `|dx|` ou `|dy| > 2000` (movimento real é ~10 counts/amostra a 1 m/s,
+folga enorme) ou `SQUAL > 168` (acima disso o byte está corrompido). A 100 Hz,
+descartar os ~5–15% corrompidos na manobra não fura o `flow_timeout` (0,5 s).
+Reconfirmado no robô: **zero ±32768 vazando**.
+
+**Fix de hardware (pendente — o fix real):** trocar o shifter MOSFET por um
+push-pull rápido (74AHCT125 / 74LVC245) + aterramento estrela / decoupling perto
+do sensor / ferrite nos cabos de motor / SPI curto. Resolve a corrupção na origem
+(e permitiria voltar pra 4 MHz/MODE3 com a lib upstream, sem fork). Até lá, a
+mitigação de firmware segura.
+
+**Por que a curva ainda vai ficar mais precisa com IMU + encoders.** Manobra é
+justamente quando o flow mais descarta amostra (corrupção por EMI), então a
+estimativa de **rotação não deve depender do flow**. É o papel do **BNO055
+(yaw absoluto)** somado aos **encoders das 4 rodas**: sabendo *qual roda está
+girando e pra que lado*, o `pose_estimator` reconstrói a rotação do robô por
+odometria diferencial e funde com o yaw do IMU. Divisão de trabalho da fusão:
+o **flow** cobre a translação (`vx`) em linha reta, onde é limpo e preciso;
+**IMU + encoders** cobrem a curva, onde o flow não confia. Com as três fontes,
+a pose em manobra fica bem mais precisa do que com qualquer uma isolada.
+
+A altura do PMW3901 ao chão está alinhada em **0.12 m** entre URDF (`flow_z=0.035`
+sobre `base_link`, que fica a `wheel_radius=0.085` do chão) e o default
+`flow_height` em `trekking.launch.py` — calibração fina conforme medida física.
 
 ### Outras flags
 
