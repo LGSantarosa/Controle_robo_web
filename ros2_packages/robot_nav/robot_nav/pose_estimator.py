@@ -12,7 +12,7 @@ Saídas:
   /trekking/odom   nav_msgs/Odometry          (com twist no body frame)
   /trekking/slip   std_msgs/Float32           (módulo da divergência roda↔flow, m/s)
 
-NÃO publica TF (`odom→base_link` continua sendo do odom_publisher). O
+Publica /odom + TF (`odom→base_link`) — é o nó único de odometria agora. O
 trekking_runner e o cone_detector consomem /trekking/pose direto — sem TF
 no caminho crítico.
 
@@ -29,7 +29,10 @@ import math
 import threading
 
 import rclpy
-from geometry_msgs.msg import PoseStamped, Vector3Stamped
+from geometry_msgs.msg import PoseStamped, TransformStamped, Vector3Stamped
+from tf2_ros import TransformBroadcaster
+
+from .fused_odom import FusedOdom, flow_alpha
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
@@ -88,6 +91,7 @@ class PoseEstimator(Node):
         self.declare_parameter('publish_rate', 50.0)
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
+        self.declare_parameter('imu_timeout', 0.3)   # s — IMU a 50 Hz; >0.3 = ausente
 
         self.wheel_radius   = float(self.get_parameter('wheel_radius').value)
         self.wheel_base     = float(self.get_parameter('wheel_base').value)
@@ -113,14 +117,16 @@ class PoseEstimator(Node):
         rate                = float(self.get_parameter('publish_rate').value)
         self.odom_frame     = self.get_parameter('odom_frame').value
         self.base_frame     = self.get_parameter('base_frame').value
+        self.imu_timeout    = float(self.get_parameter('imu_timeout').value)
 
         # --- Estado ---
         self._lock = threading.Lock()
-        self.x = 0.0
-        self.y = 0.0
-        self.yaw = 0.0
-        self.yaw_rate = 0.0          # do BNO055 (rad/s)
-        self.have_yaw = False
+        # A pose (x, y, yaw) vive no núcleo puro FusedOdom.
+        self._fused = FusedOdom(self.wheel_base)
+        # Última leitura da IMU (None = nunca chegou).
+        self._imu_yaw = 0.0
+        self._imu_yaw_rate = 0.0
+        self._last_imu_wall = None    # rclpy.time.Time
 
         # Velocidades nas rodas (m/s, lado)
         self.v_fl = 0.0; self.v_fr = 0.0
@@ -166,6 +172,11 @@ class PoseEstimator(Node):
         self.pub_slip = self.create_publisher(Float32, 'trekking/slip', 10)
         self.pub_health = self.create_publisher(String, 'trekking/health', 10)
 
+        # /odom + TF odom->base_link: o que SLAM/AMCL/Nav2 consomem. Este nó é o
+        # ÚNICO dono desse TF agora (odom_publisher saiu dos launches).
+        self.pub_odom_std = self.create_publisher(Odometry, 'odom', 10)
+        self.tf_broadcaster = TransformBroadcaster(self)
+
         self.create_timer(1.0 / rate, self._tick)
 
         self.get_logger().info(
@@ -176,12 +187,12 @@ class PoseEstimator(Node):
     # ------------------------------------------------------------------
     def _on_imu(self, msg: Imu):
         with self._lock:
-            self.yaw = _quat_to_yaw(
+            self._imu_yaw = _quat_to_yaw(
                 msg.orientation.x, msg.orientation.y,
                 msg.orientation.z, msg.orientation.w,
             )
-            self.yaw_rate = msg.angular_velocity.z
-            self.have_yaw = True
+            self._imu_yaw_rate = msg.angular_velocity.z
+            self._last_imu_wall = self.get_clock().now()
 
     def _on_flow(self, msg: Vector3Stamped):
         # dx, dy são contagens acumuladas desde a última mensagem.
@@ -223,11 +234,12 @@ class PoseEstimator(Node):
         dy = float(msg.vector.y)
         with self._lock:
             nx, ny, ok = apply_pose_fix(
-                self.x, self.y, dx, dy, self.pose_fix_gain, self.pose_fix_max,
+                self._fused.x, self._fused.y, dx, dy,
+                self.pose_fix_gain, self.pose_fix_max,
             )
             if ok:
-                self.x = nx
-                self.y = ny
+                self._fused.x = nx
+                self._fused.y = ny
         if ok:
             self.get_logger().info(
                 f'pose_fix aplicado: Δ=({dx:+.2f}, {dy:+.2f}) m '
@@ -258,38 +270,41 @@ class PoseEstimator(Node):
             return
 
         with self._lock:
-            if not self.have_yaw:
-                return
+            # Freshness da IMU
+            if self._last_imu_wall is None:
+                imu_age = float('inf')
+            else:
+                imu_age = (now - self._last_imu_wall).nanoseconds / 1e9
+            imu_fresh = imu_age <= self.imu_timeout
 
-            # Velocidade das rodas no body frame
-            v_left  = (self.v_fl + self.v_rl) / 2.0
-            v_right = (self.v_fr + self.v_rr) / 2.0
-            vx_wheel = (v_left + v_right) / 2.0
-            self.v_wheel_body = vx_wheel
-
-            # Idade do flow — peso vai a 0 se ficou velho demais
+            # Idade + peso do flow
             flow_age = float('inf')
             if self._last_flow_wall is not None:
                 flow_age = (now - self._last_flow_wall).nanoseconds / 1e9
-
-            if flow_age > self.flow_timeout:
-                alpha = 0.0
-                flow_vx = 0.0
-                flow_vy = 0.0
-                flow_stale = True
-            else:
-                alpha = _sigmoid((self.flow_quality - self.q_mid) / max(self.q_slope, 1e-3))
-                flow_vx = self.flow_vx
-                flow_vy = self.flow_vy
-                flow_stale = False
+            alpha = flow_alpha(self.flow_quality, self.q_mid, self.q_slope,
+                               flow_age, self.flow_timeout)
+            flow_stale = flow_age > self.flow_timeout
+            flow_vx = 0.0 if flow_stale else self.flow_vx
+            flow_vy = 0.0 if flow_stale else self.flow_vy
 
             self._last_alpha = alpha
             self._last_flow_age = flow_age
 
-            vx_body = alpha * flow_vx + (1.0 - alpha) * vx_wheel
-            vy_body = alpha * flow_vy                # roda contribui 0 em vy
+            # Passo de fusão (núcleo puro)
+            res = self._fused.step(
+                dt,
+                self.v_fl, self.v_fr, self.v_rl, self.v_rr,
+                imu_fresh, self._imu_yaw, self._imu_yaw_rate,
+                flow_vx, flow_vy, alpha,
+            )
 
-            # Detecta slip (só log/publish, não corrige aqui)
+            # Cache pra slip / twist
+            vx_wheel = (self.v_fl + self.v_rl + self.v_fr + self.v_rr) / 4.0
+            self.v_wheel_body = vx_wheel
+            self.vx_body = res.vx_body
+            self.vy_body = res.vy_body
+
+            # Detecta slip (só log/publish)
             slip = vx_wheel - flow_vx if alpha > 0.1 else 0.0
             if alpha > 0.3 and abs(slip) > self.slip_threshold:
                 self.get_logger().warn(
@@ -298,22 +313,15 @@ class PoseEstimator(Node):
                     throttle_duration_sec=1.0,
                 )
 
-            # Integra no mundo
-            cy = math.cos(self.yaw); sy = math.sin(self.yaw)
-            self.x += (vx_body * cy - vy_body * sy) * dt
-            self.y += (vx_body * sy + vy_body * cy) * dt
-
-            self.vx_body = vx_body
-            self.vy_body = vy_body
-
-            yaw = self.yaw
-            yaw_rate = self.yaw_rate
-            x = self.x; y = self.y
+            x = res.x
+            y = res.y
+            yaw = res.yaw
+            yaw_rate = res.yaw_rate
+            yaw_source = res.yaw_source
             slip_out = slip
             quality_out = self.flow_quality
 
         # ----- diagnóstico do flow -----
-        # Edge "ficou stale": loga uma vez. Edge "voltou": loga info.
         if flow_stale and not self._flow_was_stale:
             self.get_logger().warn(
                 f'flow stale (age={flow_age:.2f} s > {self.flow_timeout:.2f} s) — '
@@ -324,8 +332,6 @@ class PoseEstimator(Node):
             self.get_logger().info('flow voltou')
         self._flow_was_stale = flow_stale
 
-        # alpha persistentemente baixo (>2 s seguidos) → flow ativo mas inútil.
-        # Sinaliza diferente de "stale" pra UI poder mostrar mensagem específica.
         if alpha < 0.05:
             if self._alpha_low_since is None:
                 self._alpha_low_since = now
@@ -345,6 +351,7 @@ class PoseEstimator(Node):
         qz = math.sin(yaw / 2.0)
         qw = math.cos(yaw / 2.0)
 
+        # /trekking/pose (frame odom)
         ps = PoseStamped()
         ps.header.stamp = stamp
         ps.header.frame_id = self.odom_frame
@@ -354,6 +361,7 @@ class PoseEstimator(Node):
         ps.pose.orientation.w = qw
         self.pub_pose.publish(ps)
 
+        # /trekking/odom (twist no body frame)
         od = Odometry()
         od.header.stamp = stamp
         od.header.frame_id = self.odom_frame
@@ -367,14 +375,47 @@ class PoseEstimator(Node):
         od.twist.twist.angular.z = yaw_rate
         self.pub_odom.publish(od)
 
+        # /odom padrão (consumido por SLAM/AMCL/Nav2) + covariâncias
+        od_std = Odometry()
+        od_std.header.stamp = stamp
+        od_std.header.frame_id = self.odom_frame
+        od_std.child_frame_id = self.base_frame
+        od_std.pose.pose.position.x = x
+        od_std.pose.pose.position.y = y
+        od_std.pose.pose.orientation.z = qz
+        od_std.pose.pose.orientation.w = qw
+        od_std.twist.twist.linear.x = self.vx_body
+        od_std.twist.twist.linear.y = self.vy_body
+        od_std.twist.twist.angular.z = yaw_rate
+        od_std.pose.covariance[0] = 0.05
+        od_std.pose.covariance[7] = 0.05
+        # yaw menos confiável no fallback de roda → AMCL/Nav confiam menos
+        od_std.pose.covariance[35] = 0.10 if yaw_source == 'imu' else 0.5
+        od_std.twist.covariance[0] = 0.01
+        od_std.twist.covariance[35] = 0.05
+        self.pub_odom_std.publish(od_std)
+
+        # TF odom -> base_link
+        tf = TransformStamped()
+        tf.header.stamp = stamp
+        tf.header.frame_id = self.odom_frame
+        tf.child_frame_id = self.base_frame
+        tf.transform.translation.x = x
+        tf.transform.translation.y = y
+        tf.transform.translation.z = 0.0
+        tf.transform.rotation.z = qz
+        tf.transform.rotation.w = qw
+        self.tf_broadcaster.sendTransform(tf)
+
         self.pub_slip.publish(Float32(data=float(slip_out)))
 
-        # /trekking/health: estado da fusão (UI exibe ícones).
+        # /trekking/health
         health = {
             'flow_stale': bool(flow_stale),
             'flow_age':   round(flow_age, 3) if flow_age != float('inf') else None,
             'alpha':      round(alpha, 3),
             'quality':    int(quality_out),
+            'yaw_source': yaw_source,
         }
         self.pub_health.publish(String(data=json.dumps(health, sort_keys=True)))
 
