@@ -34,9 +34,25 @@ O **flow (PMW3901) não mede rotação** — um sensor óptico apontado pro chã
 translação (dx, dy), não giro. As únicas fontes de yaw são **IMU** (boa, imune a
 derrapagem) ou **diferença de rodas** (ruim no skid-steer).
 
-Consequência: sem IMU, o flow melhora a deriva de **translação**, mas a **curva**
-continua dependendo do yaw de roda. A IMU é o conserto real da parede fantasma. Sem
-ela, o único lever sobre o giro é calibrar o `wheel_base` efetivo.
+Consequência para o **odom** (TF `odom→base_link`): sem IMU, o flow melhora a deriva de
+**translação**, mas a **curva** continua dependendo do yaw de roda. A IMU é o conserto
+real do yaw do odom. Sem ela, o único lever sobre o yaw do odom é calibrar o
+`wheel_base` efetivo.
+
+### Mas o LiDAR também dá yaw — dentro do slam_toolbox
+
+Há uma segunda via, independente do odom: o **scan matching** do slam_toolbox casa o
+scan novo com o mapa/scan anterior e daí extrai movimento, **inclusive rotação**.
+Observado em bancada: deslocamentos pequenos do LiDAR são acompanhados quase
+perfeitamente no mapa. O odom é apenas o *palpite inicial* que semeia esse casamento.
+A parede fantasma surge quando o palpite de yaw de roda vem muito errado na curva
+(semente ruim) ou quando o gate `minimum_travel_heading` (default ≈ 0.5 rad ≈ 28°)
+pula scans durante o giro.
+
+Caveat: yaw por LiDAR é **dependente do ambiente** — ótimo indoor (paredes = features),
+fraco em campo aberto (sem referência), justamente onde o trekking opera. A IMU não
+tem essa fraqueza. Por isso aproveitamos o LiDAR para o **mapeamento** (afinar o
+slam_toolbox), mas ele não substitui a IMU no odom para Nav/trekking ao ar livre.
 
 ## Objetivo
 
@@ -51,6 +67,10 @@ consumido por SLAM, AMCL e Nav2 em todos os modos reais.
 - Não mexer no `sim.launch.py` (no Gazebo o plugin DiffDrive já dá odom/TF).
 - Não separar agora a camada trekking (cone pose_fix / `/trekking/*`) do núcleo de
   odometria — fica como cleanup futuro anotado, não neste escopo.
+- **Não adicionar o nó de odometria por LiDAR (rf2o/laser_scan_matcher) nesta entrega**
+  — fica como **fase 2** (ver seção própria). Gatilho: se, após a afinação do
+  slam_toolbox e a fusão IMU/flow, o **Nav2/AMCL** ainda precisar de yaw confiável sem
+  IMU. Custo evitado por ora: dependência nova na Pi, CPU, e fragilidade em campo aberto.
 
 ## Decisões resolvidas
 
@@ -105,6 +125,29 @@ hoje (sem IMU desde o boot) não há transição — usa o fallback de roda o te
 - `trekking.launch.py`: não sobe mais o `pose_estimator` à parte (já está na base).
 - `sim.launch.py`: sem mudança.
 
+## Afinação do slam_toolbox (parte do escopo — conserta o mapa)
+
+Ataca diretamente a parede fantasma no mapeamento, fazendo o slam_toolbox confiar no
+próprio scan matching em vez de na semente de yaw de roda. Em `slam.launch.py`:
+
+- **Baixar os gates de travel**: `minimum_travel_heading` 0.5 → ~0.1–0.15 rad e
+  `minimum_travel_distance` 0.5 → ~0.1–0.2 m. Processa scan em incrementos pequenos
+  na curva → o erro de yaw por passo fica pequeno → o matcher (Ceres) converge bem
+  mesmo com semente de roda ruim. É o lever dominante.
+- Manter `use_scan_matching: true`; se necessário, aumentar `scan_buffer_size` e
+  revisar os params de busca correlativa.
+
+Valores são pontos de partida, refinados no teste de mapeamento (hands-on). Custo: um
+pouco mais de CPU na Pi (mais scans processados) — aceitável.
+
+## Fase 2 (fora deste escopo): nó de odometria por LiDAR
+
+Se após a afinação acima + fusão IMU/flow o Nav2/AMCL ainda precisar de yaw confiável
+sem IMU: adicionar `rf2o_laser_odometry` (ou `scan_tools`/`laser_scan_matcher`) como
+fonte de yaw na fusão, prioridade **IMU > LiDAR-odom > roda**, com watchdog/gate de
+qualidade pra cair pra roda quando os features somem (campo aberto). Requer buildar a
+dependência na Pi e medir o custo de CPU. Não implementar agora.
+
 ## Calibração do wheel_base efetivo (hands-on, etapa separada pós-código)
 
 Procedimento, com o robô se movendo (anunciar e aguardar "pode" antes):
@@ -132,5 +175,8 @@ Rodar `colcon test` + os 9 testes já existentes antes de fechar.
   simples). Mitigação: o caso degenerado é exatamente a lógica antiga; testes cobrem.
 - **Mistura da camada trekking no nó geral** (cone pose_fix sempre carregado). Inócuo
   fora do trekking (`/trekking/pose_fix` nunca publicado). Anotado como cleanup futuro.
-- **Curva NÃO melhora hoje sem IMU além do ganho da calibração** — expectativa já
-  alinhada com o usuário; a IMU é o conserto definitivo do giro.
+- **Distinguir mapa de odom sem IMU**: o **mapa** melhora na curva hoje (afinação do
+  slam_toolbox + scan matching, indoor). Já o **yaw do odom** (Nav2/AMCL, e qualquer
+  ambiente pobre em features) só melhora com a calibração do `wheel_base` até a IMU
+  voltar — a IMU é o conserto definitivo e geral do giro. Expectativa alinhada com o
+  usuário.
