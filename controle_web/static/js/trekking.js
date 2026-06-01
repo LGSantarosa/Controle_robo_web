@@ -25,6 +25,9 @@
   const btnLoad     = document.getElementById('trek-btn-load');
   const routeName   = document.getElementById('trek-route-name');
   const routeSelect = document.getElementById('trek-route-select');
+  const btnClearCone = document.getElementById('trek-btn-clear-cone');
+
+  let selectedWp = null;             // índice do waypoint selecionado p/ editar cone
 
   let state = null;                  // último /trekking/state recebido
   const trail = [];                  // últimas N poses do robô (decay)
@@ -125,6 +128,24 @@
       ctx.lineWidth = 2.5;
       ctx.beginPath(); ctx.arc(view.tx(cx), view.ty(cy), 9, 0, 2*Math.PI); ctx.stroke();
     }
+    // Clutter descartado pela unicidade — X magenta
+    ctx.strokeStyle = '#d946ef';
+    ctx.lineWidth = 1.5;
+    (state.anchor_clutter || []).forEach(c => {
+      const px = view.tx(c[0]), py = view.ty(c[1]);
+      ctx.beginPath();
+      ctx.moveTo(px-5, py-5); ctx.lineTo(px+5, py+5);
+      ctx.moveTo(px+5, py-5); ctx.lineTo(px-5, py+5);
+      ctx.stroke();
+    });
+    // Âncora de pose (o que ele usa de referência) — anel verde-limão grosso
+    if (state.anchor) {
+      ctx.strokeStyle = '#a3e635';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(view.tx(state.anchor[0]), view.ty(state.anchor[1]), 11, 0, 2*Math.PI);
+      ctx.stroke();
+    }
   }
 
   function drawWaypoints(view) {
@@ -153,6 +174,12 @@
       ctx.font = 'bold 10px monospace';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(String(idx), px, py);
+      // Waypoint selecionado p/ edição de cone — anel ciano
+      if (idx === selectedWp) {
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(px, py, 12, 0, 2*Math.PI); ctx.stroke();
+      }
       // Setinha do bearing pro cone
       if (wp.has_cone) {
         const cpx = view.tx(wp.cone_x), cpy = view.ty(wp.cone_y);
@@ -205,12 +232,18 @@
       wpCountEl.textContent = `${state.current_idx}/${state.total}`;
     }
     coneCountEl.textContent = String((state.cones || []).length);
-    snapEl.textContent = state.locked_cone ? '✓ cone trancado' : '';
+    let snap = state.locked_cone ? '✓ cone trancado' : '';
+    if (state.anchor_status && state.anchor_status !== 'idle') {
+      const cf = state.anchor_confirm || [0, 0];
+      snap += (snap ? ' | ' : '') + `âncora: ${state.anchor_status} ${cf[0]}/${cf[1]}`;
+    }
+    snapEl.textContent = snap;
     // habilita/desabilita botões pelo modo
     btnPlay.disabled    = state.mode === 'play' || (state.total || 0) === 0;
     btnStop.disabled    = state.mode === 'idle';
     btnRecord.classList.toggle('active', state.mode === 'record');
     btnSavePt.disabled  = state.mode === 'play';
+    btnClearCone.disabled = state.mode === 'play';
   }
 
   // ----------------- inputs -----------------
@@ -222,6 +255,60 @@
   btnSavePt.addEventListener('click', () => cmd('save_point'));
   btnPlay  .addEventListener('click', () => cmd('play'));
   btnStop  .addEventListener('click', () => cmd('stop'));
+
+  // ----- edição de cone na gravação (clica wp, depois clica cone) -----
+  function canvasCoords(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      mx: (e.clientX - rect.left) * (canvas.width / rect.width),
+      my: (e.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  }
+  canvas.addEventListener('click', (e) => {
+    if (!state || state.mode === 'play') return;   // só fora do PLAY
+    const {mx, my} = canvasCoords(e);
+    const view = computeView();
+    const HIT = 12;
+    // 1) clicou perto de um waypoint? seleciona
+    const wps = state.waypoints || [];
+    let bestWp = -1, bestWpD = HIT;
+    wps.forEach((wp, idx) => {
+      const d = Math.hypot(view.tx(wp.x) - mx, view.ty(wp.y) - my);
+      if (d < bestWpD) { bestWpD = d; bestWp = idx; }
+    });
+    if (bestWp >= 0) {
+      selectedWp = bestWp;
+      statusEl.textContent = `wp${selectedWp} selecionado — clique num cone p/ vincular`;
+      render();
+      return;
+    }
+    // 2) wp selecionado + clicou perto de uma detecção de cone? vincula
+    if (selectedWp !== null) {
+      const cones = state.cones || [];
+      let bestC = -1, bestCD = HIT;
+      cones.forEach((c, i) => {
+        const d = Math.hypot(view.tx(c[0]) - mx, view.ty(c[1]) - my);
+        if (d < bestCD) { bestCD = d; bestC = i; }
+      });
+      if (bestC >= 0) {
+        const c = cones[bestC];
+        cmd('set_cone', {idx: selectedWp, cone_x: c[0], cone_y: c[1]});
+        statusEl.textContent = `wp${selectedWp}: cone vinculado`;
+      } else {
+        selectedWp = null;
+        statusEl.textContent = 'seleção cancelada';
+        render();
+      }
+    }
+  });
+  btnClearCone.addEventListener('click', () => {
+    if (selectedWp === null) {
+      statusEl.textContent = 'selecione um waypoint primeiro';
+      return;
+    }
+    cmd('set_cone', {idx: selectedWp, clear: true});
+    statusEl.textContent = `wp${selectedWp}: cone removido`;
+  });
 
   btnSave.addEventListener('click', () => {
     const name = (routeName.value || 'rota').trim();
@@ -253,6 +340,7 @@
       // Limpa trail quando volta pra IDLE sem waypoints — sinaliza "novo
       // ensaio". Sem isso o trail acumula entre sessões e suja o canvas.
       if (state.mode === 'idle' && (state.total || 0) === 0) {
+        selectedWp = null;
         trail.length = 0;
         trailLastX = null;
         trailLastY = null;
