@@ -96,8 +96,9 @@ perto de nenhum cone gravado.
    - **Estabilidade temporal:** o candidato precisa casar na **mesma posição**
      (dentro de `cone_stable_eps`) por `cone_confirm_frames` ciclos seguidos. Cone
      parado confirma; objeto se movendo reseta o contador → nunca confirma.
-   - **Unicidade:** se houver **mais de um** candidato dentro de `cone_unique_radius`
-     da posição esperada → ambíguo (cone + obstáculo, ou dois cones) → **não** corrige.
+   - **Unicidade:** se houver **mais de um** candidato dentro do raio de unicidade
+     (`max(cone_unique_radius, cone_match_radius)`, ver §4.4) da posição esperada →
+     ambíguo (cone + obstáculo, ou dois cones) → **não** corrige.
 4. Confirmado e único: `delta = (wp.cone_x − cone_obs.x, wp.cone_y − cone_obs.y)` →
    publica `pose_fix`. Só **uma vez por cone travado** (não fica empurrando repetido).
 5. `pose_estimator._on_pose_fix`:
@@ -117,10 +118,16 @@ chegar onde os waypoints foram gravados).
 |----|-----------|---------|--------|
 | trekking_runner | `cone_confirm_frames` | 4 (~0,13 s @30 Hz) | ciclos estáveis p/ confirmar |
 | trekking_runner | `cone_stable_eps` | 0,10 m | tolerância de "mesma posição" entre ciclos |
-| trekking_runner | `cone_unique_radius` | 0,50 m | se >1 candidato aqui → ambíguo |
+| trekking_runner | `cone_unique_radius` | 0,50 m | se >1 candidato aqui → ambíguo (ver nota) |
 | trekking_runner | `enable_cone_pose_fix` | true | liga/desliga a correção de pose |
 | pose_estimator | `pose_fix_gain` | 0,5 | fração do delta aplicada (suaviza) |
 | pose_estimator | `pose_fix_max` | 0,6 m | acima disso, rejeita (cone errado) |
+
+**Nota (unicidade):** a contagem de candidatos usa
+`max(cone_unique_radius, cone_match_radius)`, nunca um raio menor que a região de onde o
+match sai. Se `cone_unique_radius < cone_match_radius`, um cone casado entre os dois raios
+ficaria de fora da contagem e a trava de unicidade teria uma brecha. Com `max(...)` o cone
+casado está sempre incluído. Com os defaults (0,50 < 0,60) o raio efetivo é 0,60 m.
 
 A observabilidade e o `set_cone` **não** adicionam parâmetros.
 
