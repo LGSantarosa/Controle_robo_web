@@ -37,6 +37,7 @@ from std_msgs.msg import Float32, Float64, String
 
 
 from .utils import quat_to_yaw as _quat_to_yaw  # noqa: F401
+from .cone_pose_fix import apply_pose_fix
 
 
 def _sigmoid(x: float) -> float:
@@ -79,6 +80,10 @@ class PoseEstimator(Node):
         # --- Detecção de slip ---
         self.declare_parameter('slip_threshold', 0.15)  # m/s
 
+        # --- Correção de pose por cone-âncora (trekking_runner publica pose_fix) ---
+        self.declare_parameter('pose_fix_gain', 0.5)   # fração do delta aplicada
+        self.declare_parameter('pose_fix_max', 0.6)    # m — acima disso, rejeita
+
         # --- Saída ---
         self.declare_parameter('publish_rate', 50.0)
         self.declare_parameter('odom_frame', 'odom')
@@ -103,6 +108,8 @@ class PoseEstimator(Node):
         self.flow_timeout   = float(self.get_parameter('flow_timeout').value)
 
         self.slip_threshold = float(self.get_parameter('slip_threshold').value)
+        self.pose_fix_gain  = float(self.get_parameter('pose_fix_gain').value)
+        self.pose_fix_max   = float(self.get_parameter('pose_fix_max').value)
         rate                = float(self.get_parameter('publish_rate').value)
         self.odom_frame     = self.get_parameter('odom_frame').value
         self.base_frame     = self.get_parameter('base_frame').value
@@ -143,6 +150,7 @@ class PoseEstimator(Node):
         # --- Subscribers ---
         self.create_subscription(Imu, 'imu/data', self._on_imu, 20)
         self.create_subscription(Vector3Stamped, 'optical_flow', self._on_flow, 20)
+        self.create_subscription(Vector3Stamped, 'trekking/pose_fix', self._on_pose_fix, 10)
         self.create_subscription(Float64, 'hoverboard/front/left/velocity',
                                  lambda m: self._set_wheel('fl', m), 10)
         self.create_subscription(Float64, 'hoverboard/front/right/velocity',
@@ -207,6 +215,29 @@ class PoseEstimator(Node):
             self.flow_vx = d_body_x / dt
             self.flow_vy = d_body_y / dt
             self.flow_quality = quality
+
+    def _on_pose_fix(self, msg: Vector3Stamped):
+        # Empurra x/y pela deriva medida no cone-âncora. Rejeita teleportes
+        # (associação suspeita) e aplica suave. Yaw nunca é tocado (só IMU).
+        dx = float(msg.vector.x)
+        dy = float(msg.vector.y)
+        with self._lock:
+            nx, ny, ok = apply_pose_fix(
+                self.x, self.y, dx, dy, self.pose_fix_gain, self.pose_fix_max,
+            )
+            if ok:
+                self.x = nx
+                self.y = ny
+        if ok:
+            self.get_logger().info(
+                f'pose_fix aplicado: Δ=({dx:+.2f}, {dy:+.2f}) m '
+                f'(ganho {self.pose_fix_gain:.2f})'
+            )
+        else:
+            self.get_logger().warn(
+                f'pose_fix REJEITADO: |Δ|={math.hypot(dx, dy):.2f} m '
+                f'> {self.pose_fix_max:.2f} m — associação de cone suspeita'
+            )
 
     def _set_wheel(self, which: str, msg: Float64):
         sign = self.left_sign if which in ('fl', 'rl') else self.right_sign
