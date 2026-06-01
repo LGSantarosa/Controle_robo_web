@@ -408,7 +408,7 @@ else
     ROBOT_PID=$!
     echo "      PID: $ROBOT_PID  |  Log: $ROBOT_LOG"
 
-    wait_for_topic /odom 15 || echo "  AVISO: odom_publisher ainda não publicou /odom — seguindo."
+    wait_for_topic /odom 15 || echo "  AVISO: pose_estimator ainda não publicou /odom — seguindo."
 
     # --- [3] LiDAR LD06 + detector de obstáculos ---
     if [ "$NO_LIDAR" = false ]; then
@@ -467,7 +467,7 @@ case "$MODE" in
         wait_for_topic /global_costmap/costmap 30 || echo "  AVISO: Nav2 ainda não publicou /global_costmap/costmap — seguindo."
         ;;
     trekking)
-        echo "[3/4] Modo TREKKING — subindo pose_estimator + cone_detector + trekking_runner..."
+        echo "[3/4] Modo TREKKING — subindo cone_detector + trekking_runner (pose_estimator já vem do robot.launch)..."
         NAV2_LOG="$LOG_DIR/trekking.log"
         ros2 launch robot_nav trekking.launch.py > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
