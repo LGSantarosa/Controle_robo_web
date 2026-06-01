@@ -5,7 +5,8 @@ Robot base launch.
 Sobe:
   1. robot_state_publisher (URDF/TF)
   2. mega_bridge          (USB ↔ Arduino MEGA ↔ 2 hoverboards + sensores)
-  3. odom_publisher       (4 RPMs → /odom + TF odom→base_link)
+  3. pose_estimator       (funde 4 RPMs + IMU + flow → /odom + TF odom→base_link,
+                           com degradação graciosa; também publica /trekking/*)
   4. cmd_vel_to_wheels    (/cmd_vel → /wheel_vel_setpoints)
   5. joy_node            (PS4 em /dev/input/js0 → /joy)
   6. teleop_twist_joy    (/joy → joy_vel, com dead-man no L1)
@@ -48,11 +49,11 @@ def generate_launch_description():
     )
     left_wheel_sign_arg = DeclareLaunchArgument(
         'left_wheel_sign', default_value='1.0',
-        description='Polaridade do lado esquerdo (-1.0 inverte). Aplicado em cmd_vel_to_wheels E odom_publisher.'
+        description='Polaridade do lado esquerdo (-1.0 inverte). Aplicado em cmd_vel_to_wheels E pose_estimator.'
     )
     right_wheel_sign_arg = DeclareLaunchArgument(
         'right_wheel_sign', default_value='1.0',
-        description='Polaridade do lado direito (-1.0 inverte). Aplicado em cmd_vel_to_wheels E odom_publisher.'
+        description='Polaridade do lado direito (-1.0 inverte). Aplicado em cmd_vel_to_wheels E pose_estimator.'
     )
     mega_port_arg = DeclareLaunchArgument(
         'mega_port', default_value='/dev/mega',
@@ -95,16 +96,27 @@ def generate_launch_description():
         }],
     )
 
-    odom_publisher = Node(
+    pose_estimator = Node(
         package='robot_nav',
-        executable='odom_publisher',
-        name='odom_publisher',
+        executable='pose_estimator',
+        name='pose_estimator',
         output='screen',
         parameters=[{
             'wheel_radius': LaunchConfiguration('wheel_radius'),
+            # wheel_base aqui é a bitola EFETIVA (calibrada no skid-steer) usada
+            # pra estimar o yaw de roda quando não há IMU. Default geométrico até
+            # calibrar (ver plano, Task 5).
             'wheel_base': LaunchConfiguration('wheel_base'),
             'left_wheel_sign': LaunchConfiguration('left_wheel_sign'),
             'right_wheel_sign': LaunchConfiguration('right_wheel_sign'),
+            # Janela de freshness da IMU: sem /imu/data nesse tempo → cai pro
+            # yaw de roda (degradação graciosa).
+            'imu_timeout': 0.3,
+            # Calibração do PMW3901 → body frame (movida do trekking.launch.py:
+            # frente entra por dy negativo do sensor). Vale pra TODOS os modos
+            # agora que a fusão é a odometria base.
+            'flow_swap_xy': True,
+            'flow_x_sign': -1.0,
         }],
     )
 
@@ -174,7 +186,7 @@ def generate_launch_description():
         mega_baud_arg,
         robot_state_publisher,
         mega_bridge,
-        odom_publisher,
+        pose_estimator,
         cmd_vel_to_wheels,
         joy_node,
         teleop_twist_joy,
