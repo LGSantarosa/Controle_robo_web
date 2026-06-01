@@ -8,13 +8,14 @@ Funde 3 fontes em (x, y, yaw) no frame `odom`:
   - Encoders (4 RPMs)         → velocidade no corpo, fallback quando o flow é ruim
 
 Saídas:
+  /odom            nav_msgs/Odometry          (frame: odom→base_link) + TF
   /trekking/pose   geometry_msgs/PoseStamped  (frame: odom)
   /trekking/odom   nav_msgs/Odometry          (com twist no body frame)
   /trekking/slip   std_msgs/Float32           (módulo da divergência roda↔flow, m/s)
 
-Publica /odom + TF (`odom→base_link`) — é o nó único de odometria agora. O
-trekking_runner e o cone_detector consomem /trekking/pose direto — sem TF
-no caminho crítico.
+É o nó único de odometria agora: /odom + TF `odom→base_link` alimentam SLAM/
+AMCL/Nav2. O trekking_runner e o cone_detector consomem /trekking/pose direto
+— sem TF no caminho crítico.
 
 Fusão:
   vx_body = α·vx_flow + (1-α)·vx_roda
@@ -43,12 +44,24 @@ from .utils import quat_to_yaw as _quat_to_yaw  # noqa: F401
 from .cone_pose_fix import apply_pose_fix
 
 
-def _sigmoid(x: float) -> float:
-    if x >= 0:
-        z = math.exp(-x)
-        return 1.0 / (1.0 + z)
-    z = math.exp(x)
-    return z / (1.0 + z)
+def _build_odom(stamp, odom_frame, base_frame, x, y, qz, qw, vx, vy, yaw_rate):
+    """Monta um nav_msgs/Odometry 2D (sem covariâncias — quem precisa seta depois).
+
+    Fonte única pros dois publishers (/trekking/odom e /odom): evita atualizar um
+    bloco e esquecer o outro.
+    """
+    od = Odometry()
+    od.header.stamp = stamp
+    od.header.frame_id = odom_frame
+    od.child_frame_id = base_frame
+    od.pose.pose.position.x = x
+    od.pose.pose.position.y = y
+    od.pose.pose.orientation.z = qz
+    od.pose.pose.orientation.w = qw
+    od.twist.twist.linear.x = vx
+    od.twist.twist.linear.y = vy
+    od.twist.twist.angular.z = yaw_rate
+    return od
 
 
 class PoseEstimator(Node):
@@ -318,6 +331,8 @@ class PoseEstimator(Node):
             yaw = res.yaw
             yaw_rate = res.yaw_rate
             yaw_source = res.yaw_source
+            vx_out = res.vx_body
+            vy_out = res.vy_body
             slip_out = slip
             quality_out = self.flow_quality
 
@@ -362,37 +377,20 @@ class PoseEstimator(Node):
         self.pub_pose.publish(ps)
 
         # /trekking/odom (twist no body frame)
-        od = Odometry()
-        od.header.stamp = stamp
-        od.header.frame_id = self.odom_frame
-        od.child_frame_id = self.base_frame
-        od.pose.pose.position.x = x
-        od.pose.pose.position.y = y
-        od.pose.pose.orientation.z = qz
-        od.pose.pose.orientation.w = qw
-        od.twist.twist.linear.x = self.vx_body
-        od.twist.twist.linear.y = self.vy_body
-        od.twist.twist.angular.z = yaw_rate
+        od = _build_odom(stamp, self.odom_frame, self.base_frame,
+                         x, y, qz, qw, vx_out, vy_out, yaw_rate)
         self.pub_odom.publish(od)
 
         # /odom padrão (consumido por SLAM/AMCL/Nav2) + covariâncias
-        od_std = Odometry()
-        od_std.header.stamp = stamp
-        od_std.header.frame_id = self.odom_frame
-        od_std.child_frame_id = self.base_frame
-        od_std.pose.pose.position.x = x
-        od_std.pose.pose.position.y = y
-        od_std.pose.pose.orientation.z = qz
-        od_std.pose.pose.orientation.w = qw
-        od_std.twist.twist.linear.x = self.vx_body
-        od_std.twist.twist.linear.y = self.vy_body
-        od_std.twist.twist.angular.z = yaw_rate
-        od_std.pose.covariance[0] = 0.05
-        od_std.pose.covariance[7] = 0.05
+        od_std = _build_odom(stamp, self.odom_frame, self.base_frame,
+                             x, y, qz, qw, vx_out, vy_out, yaw_rate)
+        od_std.pose.covariance[0] = 0.05    # var(x)
+        od_std.pose.covariance[7] = 0.05    # var(y)
         # yaw menos confiável no fallback de roda → AMCL/Nav confiam menos
         od_std.pose.covariance[35] = 0.10 if yaw_source == 'imu' else 0.5
-        od_std.twist.covariance[0] = 0.01
-        od_std.twist.covariance[35] = 0.05
+        od_std.twist.covariance[0] = 0.01   # var(vx)
+        od_std.twist.covariance[7] = 0.05   # var(vy) — flow publica vy não-nulo
+        od_std.twist.covariance[35] = 0.05  # var(vyaw)
         self.pub_odom_std.publish(od_std)
 
         # TF odom -> base_link
