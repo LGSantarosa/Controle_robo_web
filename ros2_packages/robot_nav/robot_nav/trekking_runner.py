@@ -48,7 +48,7 @@ MODE_PLAY   = 'play'
 
 
 from .utils import quat_to_yaw as _quat_to_yaw, wrap_pi as _wrap_pi
-from .cone_pose_fix import ConeFixConfirmer, cone_fix_delta
+from .cone_pose_fix import ConeFixConfirmer, cone_fix_delta, cone_bearing
 
 
 def _yaw_to_quat(yaw):
@@ -284,6 +284,8 @@ class TrekkingRunner(Node):
             self.waypoints = []
             self.current_idx = 0
             self.last_msg = 'lista limpa'
+        elif cmd == 'set_cone':
+            self._set_wp_cone(data)
         else:
             self.get_logger().warn(f'cmd desconhecido: {cmd}')
 
@@ -320,6 +322,44 @@ class TrekkingRunner(Node):
             'cone_bearing': float(w.get('cone_bearing', 0.0)),
             'has_cone':     bool(w.get('has_cone', False)),
         }
+
+    def _set_wp_cone(self, data: dict):
+        # Corrige/limpa o cone preso a um waypoint (só faz sentido fora do PLAY;
+        # a UI esconde o controle no PLAY). Mexe em self.waypoints sem lock extra,
+        # igual a load_waypoints/_save_point (serializado pelo executor).
+        try:
+            idx = int(data.get('idx', -1))
+        except (TypeError, ValueError):
+            self.last_msg = 'set_cone: idx inválido'
+            return
+        if not (0 <= idx < len(self.waypoints)):
+            self.last_msg = f'set_cone: idx {idx} fora da faixa'
+            return
+        wp = self.waypoints[idx]
+        # Se estamos dirigindo justo este waypoint, invalida o snap travado pra
+        # o cone novo (ou a ausência dele) valer já, não só no próximo waypoint.
+        if self.mode == MODE_PLAY and idx == self.current_idx:
+            self.locked_cone = None
+        if data.get('clear'):
+            wp['has_cone'] = False
+            wp['cone_x'] = 0.0
+            wp['cone_y'] = 0.0
+            wp['cone_bearing'] = 0.0
+            self.last_msg = f'wp{idx}: cone removido'
+            return
+        try:
+            cx = float(data['cone_x'])
+            cy = float(data['cone_y'])
+        except (KeyError, TypeError, ValueError):
+            self.last_msg = 'set_cone: cone_x/cone_y inválidos'
+            return
+        wp['cone_x'] = cx
+        wp['cone_y'] = cy
+        wp['has_cone'] = True
+        # bearing relativo à pose GRAVADA do waypoint (igual à gravação) — sem
+        # isso o gate angular do PLAY furaria após a troca.
+        wp['cone_bearing'] = cone_bearing(wp['x'], wp['y'], wp['yaw'], cx, cy)
+        self.last_msg = f'wp{idx}: cone → ({cx:.2f}, {cy:.2f})'
 
     def _save_point(self):
         x, y, yaw, have_pose, cones = self._state_snapshot()
