@@ -575,11 +575,12 @@ def handle_client_hello(payload):
 # pra cá, senão app aceita comandos que o runner ignora silenciosamente.
 _TREKKING_CMDS = {
     'reset', 'record', 'save_point', 'play', 'stop',
-    'load_waypoints', 'clear',
+    'load_waypoints', 'clear', 'set_cone',
 }
 # Apenas estes kwargs passam para o runner — rejeita o resto pra não acabar
 # como vetor de injeção (`os.system` numa lib futura, etc.).
-_TREKKING_KWARGS = {'waypoints', 'v_max', 'kp_heading', 'kd_heading'}
+_TREKKING_KWARGS = {'waypoints', 'v_max', 'kp_heading', 'kd_heading',
+                    'idx', 'cone_x', 'cone_y', 'clear'}
 
 @socketio.on('trekking_cmd')
 def handle_trekking_cmd(data):
