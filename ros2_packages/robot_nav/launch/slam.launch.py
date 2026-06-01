@@ -47,6 +47,14 @@ def generate_launch_description():
             'map_update_interval': 1.0,
             'use_lifecycle_manager': True,
             'transform_timeout': 0.5,
+            # Afinação contra "parede fantasma" na curva: processa scan em
+            # incrementos pequenos pra o matcher (Ceres) convergir mesmo com a
+            # semente de yaw de roda ruim — em vez de esperar 0.5 rad (~28°) e
+            # confiar no odom no meio do giro. Ver spec 2026-06-01-odometria-fundida.
+            'use_scan_matching': True,
+            'minimum_travel_distance': 0.15,
+            'minimum_travel_heading': 0.12,
+            'scan_buffer_size': 20,
         }]
     )
 
