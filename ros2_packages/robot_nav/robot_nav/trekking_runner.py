@@ -37,7 +37,7 @@ import threading
 import time
 
 import rclpy
-from geometry_msgs.msg import Pose, PoseArray, PoseStamped, Twist
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped, Twist, Vector3Stamped
 from rclpy.node import Node
 from std_msgs.msg import Bool, ColorRGBA, String
 
@@ -48,6 +48,7 @@ MODE_PLAY   = 'play'
 
 
 from .utils import quat_to_yaw as _quat_to_yaw, wrap_pi as _wrap_pi
+from .cone_pose_fix import ConeFixConfirmer, cone_fix_delta
 
 
 def _yaw_to_quat(yaw):
@@ -81,6 +82,12 @@ class TrekkingRunner(Node):
         self.declare_parameter('cone_match_radius',  0.6)    # m — distância máx do esperado
         self.declare_parameter('cone_bearing_tol_deg', 60.0) # ° — janela angular relativa
 
+        # --- Correção persistente de pose por cone-âncora (aditiva ao snap) ---
+        self.declare_parameter('enable_cone_pose_fix', True)
+        self.declare_parameter('cone_confirm_frames', 4)     # ciclos estáveis p/ confirmar
+        self.declare_parameter('cone_stable_eps', 0.10)      # m — "mesma posição" entre ciclos
+        self.declare_parameter('cone_unique_radius', 0.50)   # m — se >1 candidato aqui → ambíguo
+
         # --- LEDs ---
         self.declare_parameter('led_arrival_ms', 600)
         self.declare_parameter('publish_state_hz', 10.0)
@@ -103,6 +110,10 @@ class TrekkingRunner(Node):
         self.led_ms  = int(self.get_parameter('led_arrival_ms').value)
         self.state_dt= 1.0 / float(self.get_parameter('publish_state_hz').value)
         self.ctrl_dt = 1.0 / float(self.get_parameter('control_hz').value)
+        self.enable_cone_pose_fix = bool(self.get_parameter('enable_cone_pose_fix').value)
+        self.cone_confirm_frames  = int(self.get_parameter('cone_confirm_frames').value)
+        self.cone_stable_eps      = float(self.get_parameter('cone_stable_eps').value)
+        self.cone_unique_radius   = float(self.get_parameter('cone_unique_radius').value)
 
         # --- Estado do robô ---
         # _state_lock protege x/y/yaw/have_pose/cones — escritos pelos callbacks
@@ -136,6 +147,13 @@ class TrekkingRunner(Node):
         self.waypoints = []
         self.current_idx = 0
         self.locked_cone = None    # (x, y) — cone "trancado" pra esse waypoint, ou None
+        # Correção de pose: confirmador + trava 1x-por-cone + telemetria read-only.
+        self._confirmer = ConeFixConfirmer(self.cone_confirm_frames, self.cone_stable_eps)
+        self._cone_fix_done = False
+        self._anchor = None            # (x,y) detecção usada como referência, ou None
+        self._anchor_status = 'idle'   # idle | confirming | ambiguous | fixed
+        self._anchor_clutter = []      # [(x,y), ...] candidatos descartados perto do esperado
+        self._anchor_confirm = 0       # progresso do confirmador
         self.last_to_target = None # vetor (dx, dy) último → detecção de pass-by
         self.prev_heading_err = 0.0
         self.led_until = 0.0       # walltime até quando manter LED de chegada
@@ -154,6 +172,7 @@ class TrekkingRunner(Node):
         self.pub_state  = self.create_publisher(String, 'trekking/state', 10)
         self.pub_wps    = self.create_publisher(PoseArray, 'trekking/waypoints', 10)
         self.pub_target = self.create_publisher(PoseStamped, 'trekking/target', 10)
+        self.pub_pose_fix = self.create_publisher(Vector3Stamped, 'trekking/pose_fix', 10)
 
         self.create_timer(self.ctrl_dt, self._control_tick)
         self.create_timer(self.state_dt, self._state_tick)
@@ -281,6 +300,7 @@ class TrekkingRunner(Node):
         self.current_idx = 0
         self.mode = MODE_IDLE
         self.locked_cone = None
+        self._reset_cone_fix()
         self._stop_robot()
         x, y, yaw, have_pose, _ = self._state_snapshot()
         if have_pose:
@@ -358,9 +378,18 @@ class TrekkingRunner(Node):
         self.mode = MODE_PLAY
         self.current_idx = 0
         self.locked_cone = None
+        self._reset_cone_fix()
         self.last_to_target = None
         self.prev_heading_err = 0.0
         self.last_msg = f'PLAY {len(self.waypoints)} waypoints'
+
+    def _reset_cone_fix(self):
+        self._cone_fix_done = False
+        self._confirmer.reset()
+        self._anchor = None
+        self._anchor_status = 'idle'
+        self._anchor_clutter = []
+        self._anchor_confirm = 0
 
     # ------------------------------------------------------------------
     # Loop de controle (30 Hz)
@@ -397,6 +426,11 @@ class TrekkingRunner(Node):
                 target_x = self.locked_cone[0] + ox
                 target_y = self.locked_cone[1] + oy
 
+        # 1b) Correção PERSISTENTE de pose por cone-âncora (aditiva: não mexe no
+        # alvo acima). Gates conservadores no _confirmer; na dúvida não corrige.
+        if self.enable_cone_pose_fix and wp['has_cone'] and not self._cone_fix_done:
+            self._maybe_publish_pose_fix(wp, x, y, yaw, cones)
+
         dx = target_x - x
         dy = target_y - y
         dist = math.hypot(dx, dy)
@@ -413,6 +447,7 @@ class TrekkingRunner(Node):
             self._on_arrival(self.current_idx)
             self.current_idx += 1
             self.locked_cone = None
+            self._reset_cone_fix()
             self.last_to_target = None
             self.prev_heading_err = 0.0
             return
@@ -477,6 +512,48 @@ class TrekkingRunner(Node):
                 best = (cx, cy)
         return best
 
+    def _candidates(self, wp: dict, cones):
+        # Detecções dentro do raio de unicidade ao redor da posição esperada do
+        # cone gravado. Usa max(unique, match) p/ NUNCA ficar menor que a região
+        # de onde o match sai (senão a trava de unicidade teria uma brecha).
+        r = max(self.cone_unique_radius, self.r_match)
+        out = []
+        for cx, cy, _w in cones:
+            if math.hypot(cx - wp['cone_x'], cy - wp['cone_y']) <= r:
+                out.append((cx, cy))
+        return out
+
+    def _maybe_publish_pose_fix(self, wp: dict, x, y, yaw, cones):
+        # Confirmação ANTES de corrigir a pose — independente do snap do alvo.
+        match = self._find_matching_cone(wp, x, y, yaw, cones)
+        cands = self._candidates(wp, cones)
+        n_cand = len(cands)
+        confirmed = self._confirmer.update(match, n_cand)
+        # telemetria do que ele está usando de referência (read-only p/ UI)
+        if match is None:
+            self._anchor = None
+            self._anchor_status = 'idle'
+            self._anchor_clutter = []
+            self._anchor_confirm = 0
+        else:
+            self._anchor = match
+            self._anchor_status = 'ambiguous' if n_cand > 1 else 'confirming'
+            self._anchor_clutter = [c for c in cands if c != match]
+        self._anchor_confirm = self._confirmer.count
+        if not confirmed:
+            return
+        # Confirmado e único: delta = cone_gravado - cone_observado.
+        dx, dy = cone_fix_delta((wp['cone_x'], wp['cone_y']), match)
+        v = Vector3Stamped()
+        v.header.stamp = self.get_clock().now().to_msg()
+        v.header.frame_id = 'odom'
+        v.vector.x = float(dx)
+        v.vector.y = float(dy)
+        self.pub_pose_fix.publish(v)
+        self._cone_fix_done = True   # só uma vez por cone travado
+        self._anchor_status = 'fixed'
+        self.last_msg = f'pose_fix wp{self.current_idx}: Δ=({dx:+.2f}, {dy:+.2f})'
+
     def _on_arrival(self, idx: int):
         self._flash_led(1.0, 0.4, 0.0, mode=1, hold_ms=self.led_ms)  # laranja pisca
         self.last_msg = f'chegou wp{idx}'
@@ -497,6 +574,10 @@ class TrekkingRunner(Node):
             'total': len(self.waypoints),
             'locked_cone': list(self.locked_cone) if self.locked_cone else None,
             'cones': [[c[0], c[1], c[2]] for c in cones],
+            'anchor': list(self._anchor) if self._anchor else None,
+            'anchor_status': self._anchor_status,
+            'anchor_clutter': [list(c) for c in self._anchor_clutter],
+            'anchor_confirm': [self._anchor_confirm, self.cone_confirm_frames],
             'msg': self.last_msg,
             'ts': time.time(),
         }
