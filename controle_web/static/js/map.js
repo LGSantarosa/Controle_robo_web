@@ -30,6 +30,8 @@
   let wpActiveIdx = 0;     // índice do waypoint atual
   let wpDrag     = null;   // {worldX, worldY, canvasX, canvasY} durante drag de orientação
   let wpMouseDown = null;  // posição do mousedown para detectar drag vs click
+  let setPoseMode = false; // armado: próximo click-arrasta define a pose real (relocaliza)
+  let setPoseDrag = null;  // {canvasX, canvasY, curX, curY, world} durante o drag
 
   // Espera o socket de client.js existir. client.js cria `window.robotSocket`.
   function waitForSocket(cb) {
@@ -45,6 +47,7 @@
   const btnWpStop   = document.getElementById('btn-wp-stop');
   const btnWpSave   = document.getElementById('btn-wp-save');
   const btnWpLoad   = document.getElementById('btn-wp-load');
+  const btnSetPose  = document.getElementById('btn-set-pose');
   const wpRouteSelect = document.getElementById('wp-route-select');
   const wpLoopChk   = document.getElementById('wp-loop');
   const wpStatusEl  = document.getElementById('wp-status');
@@ -59,6 +62,17 @@
     if (clickHint) clickHint.textContent = on
       ? 'clique = waypoint | clique+arraste = define direção'
       : (currentMode === 'nav2' ? '(clique no mapa para enviar o robô até o ponto)' : '');
+  }
+
+  function setSetPoseMode(on) {
+    setPoseMode = on;
+    if (on) setWpMode(false);   // exclusivos
+    if (btnSetPose) btnSetPose.classList.toggle('active', on);
+    canvas.style.cursor = on ? 'crosshair' : 'default';
+    if (clickHint) clickHint.textContent = on
+      ? 'Definir pose: clique onde o robô está e arraste pra direção'
+      : (currentMode === 'nav2' ? '(clique no mapa para enviar o robô até o ponto)'
+         : (currentMode === 'slam' ? '(mapeando em tempo real)' : ''));
   }
 
   function updateWpButtons() {
@@ -85,6 +99,8 @@
         panel.style.display = 'none';
       }
       if (wpToolbar) wpToolbar.style.display = currentMode === 'nav2' ? '' : 'none';
+      if (btnSetPose) btnSetPose.style.display =
+        (currentMode === 'slam' || currentMode === 'nav2') ? '' : 'none';
     });
 
     socket.on('map_update', (data) => {
@@ -158,6 +174,12 @@
 
     // --- Botões de waypoints ---
     if (btnWpMode) btnWpMode.addEventListener('click', () => setWpMode(!wpMode));
+    if (btnSetPose) btnSetPose.addEventListener('click', () => setSetPoseMode(!setPoseMode));
+    socket.on('set_pose_ack', (data) => {
+      if (statusEl) statusEl.textContent = data.ok
+        ? `pose aplicada: (${data.x.toFixed(2)}, ${data.y.toFixed(2)})`
+        : `falha ao definir pose: ${data.error}`;
+    });
 
     if (btnWpClear) btnWpClear.addEventListener('click', () => {
       waypoints = [];
@@ -269,10 +291,15 @@
     const DRAG_THRESHOLD = 8; // pixels para considerar drag
 
     canvas.addEventListener('mousedown', (ev) => {
-      if (!mapInfo || !mapImage || currentMode !== 'nav2') return;
+      if (!mapInfo || !mapImage) return;
+      if (currentMode !== 'nav2' && !setPoseMode) return;
       const { cx, cy } = eventToCanvasPx(ev);
       const world = canvasToWorld(cx, cy);
       if (!world) return;
+      if (setPoseMode) {
+        setPoseDrag = { canvasX: cx, canvasY: cy, curX: cx, curY: cy, world };
+        return;
+      }
       wpMouseDown = { cx, cy, world };
       if (wpMode) {
         wpDrag = { worldX: world.x, worldY: world.y, canvasX: cx, canvasY: cy, curX: cx, curY: cy };
@@ -280,6 +307,13 @@
     });
 
     canvas.addEventListener('mousemove', (ev) => {
+      if (setPoseMode && setPoseDrag) {
+        const p = eventToCanvasPx(ev);
+        setPoseDrag.curX = p.cx;
+        setPoseDrag.curY = p.cy;
+        render();
+        return;
+      }
       if (!wpDrag || !wpMode) return;
       const { cx, cy } = eventToCanvasPx(ev);
       wpDrag.curX = cx;
@@ -288,8 +322,23 @@
     });
 
     canvas.addEventListener('mouseup', (ev) => {
-      if (!mapInfo || !mapImage || currentMode !== 'nav2') return;
+      if (!mapInfo || !mapImage) return;
+      if (currentMode !== 'nav2' && !setPoseMode) return;
       const { cx, cy } = eventToCanvasPx(ev);
+
+      if (setPoseMode && setPoseDrag) {
+        const ddx = cx - setPoseDrag.canvasX;
+        const ddy = cy - setPoseDrag.canvasY;
+        const dragged = Math.sqrt(ddx * ddx + ddy * ddy) > DRAG_THRESHOLD;
+        const yaw = dragged ? Math.atan2(-ddy, ddx) : 0.0;
+        const w = setPoseDrag.world;
+        socket.emit('set_pose', { x: w.x, y: w.y, yaw });
+        if (statusEl) statusEl.textContent = `pose definida: (${w.x.toFixed(2)}, ${w.y.toFixed(2)})`;
+        setPoseDrag = null;
+        setSetPoseMode(false);
+        render();
+        return;
+      }
 
       if (wpMode && wpMouseDown) {
         const dx = cx - wpMouseDown.cx;
@@ -331,6 +380,26 @@
       wpDrag = null;
       wpMouseDown = null;
     });
+
+    // Touch → encaminha pros mesmos handlers de mouse (preventDefault evita rolar a página)
+    canvas.addEventListener('touchstart', (ev) => {
+      if (ev.touches.length !== 1) return;
+      ev.preventDefault();
+      canvas.dispatchEvent(new MouseEvent('mousedown', {
+        clientX: ev.touches[0].clientX, clientY: ev.touches[0].clientY }));
+    }, { passive: false });
+    canvas.addEventListener('touchmove', (ev) => {
+      if (ev.touches.length !== 1) return;
+      ev.preventDefault();
+      canvas.dispatchEvent(new MouseEvent('mousemove', {
+        clientX: ev.touches[0].clientX, clientY: ev.touches[0].clientY }));
+    }, { passive: false });
+    canvas.addEventListener('touchend', (ev) => {
+      ev.preventDefault();
+      const t = ev.changedTouches[0];
+      if (t) canvas.dispatchEvent(new MouseEvent('mouseup', {
+        clientX: t.clientX, clientY: t.clientY }));
+    }, { passive: false });
   });
 
   // --- Helpers de transformação canvas ↔ mundo ---
@@ -517,6 +586,32 @@
       ctx.fillStyle = 'rgba(250,204,21,0.3)';
       ctx.fill();
       ctx.strokeStyle = '#facc15';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    // Preview de "Definir pose" durante o drag (magenta)
+    if (setPoseDrag) {
+      const c = { x: setPoseDrag.canvasX, y: setPoseDrag.canvasY };
+      const dx = setPoseDrag.curX - c.x;
+      const dy = setPoseDrag.curY - c.y;
+      if (Math.sqrt(dx * dx + dy * dy) > 4) {
+        ctx.save();
+        ctx.translate(c.x, c.y);
+        ctx.rotate(Math.atan2(dy, dx));
+        ctx.strokeStyle = '#e879f9';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(Math.sqrt(dx * dx + dy * dy), 0);
+        ctx.stroke();
+        ctx.restore();
+      }
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 8, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(232,121,249,0.35)';
+      ctx.fill();
+      ctx.strokeStyle = '#e879f9';
       ctx.lineWidth = 2;
       ctx.stroke();
     }
