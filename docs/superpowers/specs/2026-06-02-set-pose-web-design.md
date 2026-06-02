@@ -44,6 +44,17 @@ do estado B.
   quando armado o click-drag vira "set pose".
 - Reusa a conversão pixel→coordenada de mapa já usada pra goal/waypoints. Heading =
   `atan2(dy, dx)` do ponto inicial ao final, em coordenadas de mapa.
+- **Precisão do toque (mobile):** hoje o clique no celular cai "torto" — sintoma
+  clássico de descasamento entre a resolução interna do `<canvas>`
+  (`canvas.width/height`) e o tamanho exibido por CSS (`rect.width/height`). O
+  set-pose exige precisão (posição + heading via drag), então parte do escopo é um
+  helper **único** `eventToMapCoords(evt)` que: pega `clientX/clientY` (de
+  `evt` ou `evt.touches[0]` — funciona pra mouse E touch), subtrai
+  `canvas.getBoundingClientRect()`, **escala por `canvas.width/rect.width` e
+  `canvas.height/rect.height`**, e só então aplica o transform px→mapa. Suporta
+  `touchstart/touchmove/touchend` (com `preventDefault` pra não rolar a página no
+  drag). O goal e os waypoints passam a usar o MESMO helper → o "torto" some neles
+  também (melhoria pontual no código que estamos tocando).
 - No `mouseup` arma e emite `socket.emit('set_pose', {x, y, yaw})` (x,y em metros no
   frame `map`; yaw em rad). Mostra o ack.
 - Botão só visível/ativo quando `currentMode ∈ {slam, nav2}` (o `mode_info` já
@@ -79,6 +90,9 @@ click+arrasta (armado) ─► socketio 'set_pose' {x, y, yaw}
   a pose ficar errada, usar "Definir pose" pra recolocá-lo; confirmar que a pose
   `map→base_link` salta pro lugar e o slam **segue mapeando coerente** dali (sem
   rasgar o mapa já feito). Repetir o sanity no `--nav2` (AMCL converge pra pose dada).
+- **Toque no celular:** validar **no celular** que o ponto cai onde o dedo encosta
+  (set-pose, goal e waypoint) — antes e depois do `eventToMapCoords`, pra confirmar
+  que o "torto" sumiu.
 
 ## Fora de escopo
 
