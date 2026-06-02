@@ -145,6 +145,11 @@ class MapBridge:
         self._goal_pub = self._node.create_publisher(
             PoseStamped, '/goal_pose', 10
         )
+        # Relocalização manual: /initialpose é consumido pelo slam_toolbox
+        # (re-ancora map→odom) e pelo AMCL (re-semeia partículas).
+        self._initialpose_pub = self._node.create_publisher(
+            PoseWithCovarianceStamped, '/initialpose', 10
+        )
 
         # TF map→base_link para rastrear o robô no mapa.
         self._tf_buffer = Buffer()
@@ -577,6 +582,18 @@ class MapBridge:
         msg.pose.orientation.w = qw
         self._goal_pub.publish(msg)
         log.info(f"[MapBridge] /goal_pose → ({x:.2f}, {y:.2f}, yaw={yaw:.2f})")
+        return {'ok': True, 'x': x, 'y': y, 'yaw': yaw}
+
+    def set_pose(self, x: float, y: float, yaw: float = 0.0) -> dict:
+        """Relocaliza: publica PoseWithCovarianceStamped em /initialpose.
+
+        slam_toolbox (slam) re-ancora map→odom; AMCL (nav2) re-semeia as
+        partículas. Frame 'map'.
+        """
+        stamp = self._node.get_clock().now().to_msg()
+        msg = build_initialpose(x, y, yaw, stamp)
+        self._initialpose_pub.publish(msg)
+        log.info(f"[MapBridge] /initialpose → ({x:.2f}, {y:.2f}, yaw={yaw:.2f})")
         return {'ok': True, 'x': x, 'y': y, 'yaw': yaw}
 
     def save_map(self, name: str) -> dict:
