@@ -270,9 +270,7 @@
 
     canvas.addEventListener('mousedown', (ev) => {
       if (!mapInfo || !mapImage || currentMode !== 'nav2') return;
-      const rect = canvas.getBoundingClientRect();
-      const cx = ev.clientX - rect.left;
-      const cy = ev.clientY - rect.top;
+      const { cx, cy } = eventToCanvasPx(ev);
       const world = canvasToWorld(cx, cy);
       if (!world) return;
       wpMouseDown = { cx, cy, world };
@@ -283,17 +281,15 @@
 
     canvas.addEventListener('mousemove', (ev) => {
       if (!wpDrag || !wpMode) return;
-      const rect = canvas.getBoundingClientRect();
-      wpDrag.curX = ev.clientX - rect.left;
-      wpDrag.curY = ev.clientY - rect.top;
+      const { cx, cy } = eventToCanvasPx(ev);
+      wpDrag.curX = cx;
+      wpDrag.curY = cy;
       render();
     });
 
     canvas.addEventListener('mouseup', (ev) => {
       if (!mapInfo || !mapImage || currentMode !== 'nav2') return;
-      const rect = canvas.getBoundingClientRect();
-      const cx = ev.clientX - rect.left;
-      const cy = ev.clientY - rect.top;
+      const { cx, cy } = eventToCanvasPx(ev);
 
       if (wpMode && wpMouseDown) {
         const dx = cx - wpMouseDown.cx;
@@ -338,6 +334,22 @@
   });
 
   // --- Helpers de transformação canvas ↔ mundo ---
+  // Coordenada do evento → pixel INTERNO do canvas. Corrige o "torto" no mobile:
+  // o canvas é exibido por CSS em tamanho != canvas.width/height, então é preciso
+  // escalar. Funciona pra mouse E touch (MouseEvent sintético do touch também).
+  function eventToCanvasPx(ev) {
+    const rect = canvas.getBoundingClientRect();
+    const src = (ev.touches && ev.touches[0]) ? ev.touches[0]
+              : (ev.changedTouches && ev.changedTouches[0]) ? ev.changedTouches[0]
+              : ev;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      cx: (src.clientX - rect.left) * scaleX,
+      cy: (src.clientY - rect.top) * scaleY,
+    };
+  }
+
   // O mapa é desenhado ajustado ao canvas (preserva aspect ratio).
   function getDrawRect() {
     if (!mapImage) return null;
