@@ -42,7 +42,7 @@ def generate_launch_description():
             'mode': 'mapping',
             'resolution': 0.05,
             'max_laser_range': 12.0,
-            'minimum_time_interval': 0.2,
+            'minimum_time_interval': 0.1,   # era 0.2 — processa ~10 Hz (taxa do LD06) no giro
             'transform_publish_period': 0.05,
             'map_update_interval': 1.0,
             'use_lifecycle_manager': True,
@@ -53,8 +53,15 @@ def generate_launch_description():
             # confiar no odom no meio do giro. Ver spec 2026-06-01-odometria-fundida.
             'use_scan_matching': True,
             'minimum_travel_distance': 0.15,
-            'minimum_travel_heading': 0.12,
+            'minimum_travel_heading': 0.10,   # era 0.12 — mais scans no giro (passo menor → erro de seed menor)
             'scan_buffer_size': 20,
+            # Robô SEM IMU: o seed de yaw vem só da roda e é torto no giro do
+            # skid-steer. Deixa o scan matcher do slam recuperar o match mesmo com
+            # seed ruim, em vez de se perder. Ver spec 2026-06-02-slam-recupera-prior-giro.
+            'use_response_expansion': True,         # match fraco → expande a janela de busca até achar (CPU só quando precisa)
+            'coarse_search_angle_offset': 0.6,      # ±~34° (era ±~20° default) — cobre seed de yaw torto no spin
+            'minimum_angle_penalty': 0.7,           # era 0.9 default — penaliza menos correção angular grande vs seed ruim
+            'correlation_search_space_dimension': 0.6,  # era 0.5 default — folga de busca linear
         }]
     )
 
