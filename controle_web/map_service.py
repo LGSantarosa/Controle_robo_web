@@ -34,7 +34,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid, Path
 from std_srvs.srv import Empty
@@ -77,6 +77,31 @@ def _quat_to_yaw(qx: float, qy: float, qz: float, qw: float) -> float:
 def _yaw_to_quat(yaw: float) -> tuple:
     """Converte yaw em quaternion (x, y, z, w)."""
     return (0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0))
+
+
+def build_initialpose(x, y, yaw, stamp):
+    """Monta PoseWithCovarianceStamped (frame 'map') pra /initialpose.
+
+    Covariância diagonal moderada: confiante mas não absoluta — no AMCL é a
+    dispersão inicial das partículas; no slam_toolbox é quase ignorada (seta
+    a pose direto).
+    """
+    msg = PoseWithCovarianceStamped()
+    msg.header.frame_id = 'map'
+    msg.header.stamp = stamp
+    msg.pose.pose.position.x = float(x)
+    msg.pose.pose.position.y = float(y)
+    qx, qy, qz, qw = _yaw_to_quat(float(yaw))
+    msg.pose.pose.orientation.x = qx
+    msg.pose.pose.orientation.y = qy
+    msg.pose.pose.orientation.z = qz
+    msg.pose.pose.orientation.w = qw
+    cov = [0.0] * 36
+    cov[0] = 0.25      # var(x)  m²
+    cov[7] = 0.25      # var(y)  m²
+    cov[35] = 0.0685   # var(yaw) rad² (~15° 1σ)
+    msg.pose.covariance = cov
+    return msg
 
 
 class MapBridge:
