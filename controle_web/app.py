@@ -292,6 +292,25 @@ def handle_nav_goal(data):
         emit('nav_goal_ack', {'ok': False, 'error': str(e)})
 
 
+@socketio.on('set_pose')
+def handle_set_pose(data):
+    """Cliente definiu a pose real no mapa: publica /initialpose (relocaliza)."""
+    if map_bridge is None:
+        emit('set_pose_ack', {'ok': False, 'error': 'mapa indisponível neste modo'})
+        return
+    if ROBOT_MODE not in ('slam', 'nav2'):
+        emit('set_pose_ack', {'ok': False, 'error': 'definir pose só vale em SLAM ou NAV2'})
+        return
+    try:
+        x, y = _validate_xy(data.get('x'), data.get('y'))
+        yaw = _validate_yaw(data.get('yaw', 0.0))
+        result = map_bridge.set_pose(x, y, yaw)
+        app.logger.info(f"set_pose from {request.remote_addr}: ({x:.2f}, {y:.2f}, {yaw:.2f})")
+        emit('set_pose_ack', result)
+    except Exception as e:
+        emit('set_pose_ack', {'ok': False, 'error': str(e)})
+
+
 @socketio.on('start_waypoints')
 def handle_start_waypoints(data):
     if map_bridge is None:
