@@ -41,6 +41,7 @@ from std_msgs.msg import Float32, Float64, String
 
 
 from .utils import quat_to_yaw as _quat_to_yaw  # noqa: F401
+from .utils import wrap_pi
 from .cone_pose_fix import apply_pose_fix
 
 
@@ -170,6 +171,10 @@ class PoseEstimator(Node):
         self.create_subscription(Imu, 'imu/data', self._on_imu, 20)
         self.create_subscription(Vector3Stamped, 'optical_flow', self._on_flow, 20)
         self.create_subscription(Vector3Stamped, 'trekking/pose_fix', self._on_pose_fix, 10)
+        # Correção manual de DIREÇÃO (yaw). data = delta em rad a aplicar no
+        # ponteiro. Usado pela web no SLAM (robô sem IMU): gira o yaw integrado
+        # da roda e deixa o scan-matcher do slam re-convergir — sem tocar o mapa.
+        self.create_subscription(Float64, 'trekking/yaw_fix', self._on_yaw_fix, 10)
         self.create_subscription(Float64, 'hoverboard/front/left/velocity',
                                  lambda m: self._set_wheel('fl', m), 10)
         self.create_subscription(Float64, 'hoverboard/front/right/velocity',
@@ -263,6 +268,19 @@ class PoseEstimator(Node):
                 f'pose_fix REJEITADO: |Δ|={math.hypot(dx, dy):.2f} m '
                 f'> {self.pose_fix_max:.2f} m — associação de cone suspeita'
             )
+
+    def _on_yaw_fix(self, msg: Float64):
+        # Gira o ponteiro de direção por `delta` rad. Sem IMU, o yaw é integrado
+        # da roda (FusedOdom) e deriva no giro — setá-lo aqui gruda (os passos
+        # seguintes integram a partir do novo valor). Com IMU fresca o yaw é
+        # sobrescrito pela IMU no _tick, então isto só tem efeito sem IMU.
+        delta = float(msg.data)
+        with self._lock:
+            self._fused.yaw = wrap_pi(self._fused.yaw + delta)
+            new_yaw = self._fused.yaw
+        self.get_logger().info(
+            f'yaw_fix: ponteiro girado {delta:+.3f} rad → yaw(odom)={new_yaw:+.3f}'
+        )
 
     def _set_wheel(self, which: str, msg: Float64):
         sign = self.left_sign if which in ('fl', 'rl') else self.right_sign

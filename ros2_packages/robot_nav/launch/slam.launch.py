@@ -40,13 +40,6 @@ def generate_launch_description():
             'base_frame': 'base_link',
             'scan_topic': '/scan',
             'mode': 'mapping',
-            # Habilita os interactive markers do pose-graph. SEM isto, o
-            # slam_toolbox ignora o feedback de "mover nó" mesmo com o toggle
-            # de runtime ligado — a relocalização manual pela web (MapBridge.
-            # _set_pose_slam → /slam_toolbox/feedback + manual_loop_closure)
-            # vira no-op. O marker só aparece quando o modo é ativado em runtime
-            # (toggle_interactive_mode), então mapear normal não muda nada.
-            'enable_interactive_mode': True,
             'resolution': 0.05,
             'max_laser_range': 12.0,
             'minimum_time_interval': 0.1,   # era 0.2 — processa ~10 Hz (taxa do LD06) no giro
