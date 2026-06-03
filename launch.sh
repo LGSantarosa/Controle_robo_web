@@ -383,6 +383,13 @@ wait_for_topic() {
     return 1
 }
 
+# /scan publicando DE FATO (não só listado no discovery)? O LD06 cria o tópico
+# logo no start e só ~3s depois morre ("abnormal"), então a presença na lista
+# não basta — confirma dado fluindo via `topic hz`.
+lidar_scan_healthy() {
+    timeout 6 ros2 topic hz /scan 2>/dev/null | grep -q "average rate"
+}
+
 if [ "$SIM" = true ]; then
     # --- [SIM] Gazebo Harmonic + robô diff-drive + bridges ROS↔GZ ---
     echo "[1/4] Modo SIM — subindo Gazebo com mundo: $WORLD_FILE"
@@ -415,12 +422,34 @@ else
         if [ -e "$LIDAR_PORT" ]; then
             echo "[2/4] Iniciando LiDAR LD06 em $LIDAR_PORT..."
             LIDAR_LOG="$LOG_DIR/lidar.log"
-            ros2 launch robot_nav lidar.launch.py lidar_port:="$LIDAR_PORT" > "$LIDAR_LOG" 2>&1 &
-            LIDAR_PID=$!
-            echo "      PID: $LIDAR_PID  |  Log: $LIDAR_LOG"
-            wait_for_topic /scan 10 || echo "  AVISO: LiDAR ainda não publicou /scan — seguindo."
-
-
+            # O LD06 quase nunca sobe de primeira: ~3s após o start solta
+            # "ldlidar communication is abnormal" e o nó morre (exit 1). Antes
+            # disso era preciso matar o launch e subir de novo na mão toda vez.
+            # Aqui tentamos sozinhos: lança, espera passar da janela de morte
+            # (~3s), e se o nó caiu / não publica /scan, mata, deixa a serial
+            # assentar e relança — até LIDAR_TRIES vezes.
+            LIDAR_TRIES=5
+            lidar_ok=false
+            for ((try = 1; try <= LIDAR_TRIES; try++)); do
+                echo "      tentativa $try/$LIDAR_TRIES..."
+                ros2 launch robot_nav lidar.launch.py lidar_port:="$LIDAR_PORT" > "$LIDAR_LOG" 2>&1 &
+                LIDAR_PID=$!
+                # Passa da janela do "abnormal" antes de julgar se vingou.
+                sleep 5
+                if pgrep -f ldlidar_stl_ros2_node >/dev/null 2>&1 \
+                   && wait_for_topic /scan 5 && lidar_scan_healthy; then
+                    lidar_ok=true
+                    echo "      LiDAR OK — /scan publicando (PID $LIDAR_PID, tentativa $try)."
+                    break
+                fi
+                echo "      LiDAR caiu / não publicou /scan — matando e repetindo."
+                kill_tree "$LIDAR_PID"
+                LIDAR_PID=""
+                sleep 2   # deixa a porta serial assentar antes de reabrir
+            done
+            if [ "$lidar_ok" = false ]; then
+                echo "  AVISO: LiDAR não subiu após $LIDAR_TRIES tentativas — seguindo sem /scan."
+            fi
         else
             echo "[2/4] AVISO: Porta do LiDAR $LIDAR_PORT não encontrada. Pulando LiDAR."
             echo "      Para especificar outra porta: ./launch.sh --lidar-port=/dev/ttyUSB2"
