@@ -215,7 +215,6 @@ class MapBridge:
         self._toggle_interactive_srv = None
         self._loop_closure_srv = None
         self._get_markers_srv = None
-        self._interactive_enabled = False
         if mode == 'slam' and ToggleInteractive is not None:
             self._slam_feedback_pub = self._node.create_publisher(
                 InteractiveMarkerFeedback, '/slam_toolbox/feedback', 10
@@ -691,47 +690,57 @@ class MapBridge:
             time.sleep(0.05)
         return future.result() if future.done() else None
 
-    def _set_pose_slam(self, x: float, y: float, yaw: float) -> dict:
-        """Relocaliza no slam_toolbox (mapeamento) via interactive markers.
+    def _latest_slam_node(self, attempts: int = 4):
+        """Nome do marker do nó mais recente (= pose atual), ou None.
 
-        1) garante o modo interativo ligado (markers passam a existir);
-        2) acha o nó mais recente (= pose atual) via get_interactive_markers;
-        3) publica feedback MOUSE_UP movendo esse nó para (x, y, yaw);
-        4) chama manual_loop_closure → CorrectPoses() aplica/re-otimiza.
+        Pergunta ao get_interactive_markers; tenta algumas vezes porque o
+        slam_toolbox publica os markers de forma assíncrona após o toggle.
         """
-        if ToggleInteractive is None:
-            return {'ok': False, 'error': 'slam_toolbox indisponível no ambiente'}
-
-        # 1. liga o modo interativo (uma vez) — sem ele não há markers.
-        if not self._interactive_enabled:
-            if self._call_service_sync(
-                self._toggle_interactive_srv, ToggleInteractive.Request()
-            ) is None:
-                return {'ok': False, 'error': 'toggle_interactive_mode indisponível'}
-            self._interactive_enabled = True
-            time.sleep(1.0)  # deixa o slam_toolbox montar os markers
-
-        # 2. nó mais recente do pose-graph (tenta por alguns segundos).
-        name = None
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
+        for _ in range(attempts):
             resp = self._call_service_sync(
                 self._get_markers_srv, GetInteractiveMarkers.Request()
             )
             if resp is not None:
                 name = latest_marker_name([m.name for m in resp.markers])
-            if name is not None:
-                break
+                if name is not None:
+                    return name
             time.sleep(0.3)
+        return None
+
+    def _set_pose_slam(self, x: float, y: float, yaw: float) -> dict:
+        """Relocaliza no slam_toolbox (mapeamento) via interactive markers.
+
+        1) acha o nó mais recente (= pose atual) via get_interactive_markers;
+           se não houver markers, liga o modo interativo e tenta de novo
+           (auto-corretivo: não depende de um flag que pode dessincronizar do
+           estado real do slam_toolbox — o toggle só alterna, não "seta");
+        2) publica feedback MOUSE_UP movendo esse nó para (x, y, yaw);
+        3) chama manual_loop_closure → CorrectPoses() aplica/re-otimiza.
+        """
+        if ToggleInteractive is None:
+            return {'ok': False, 'error': 'slam_toolbox indisponível no ambiente'}
+
+        # 1. nó atual. Se vier vazio, o modo interativo provavelmente está
+        # desligado — liga (toggle) e tenta de novo. Markers presentes já
+        # significam interativo ligado, então não tocamos no toggle (evita
+        # desligar por engano).
+        name = self._latest_slam_node()
+        if name is None:
+            if self._call_service_sync(
+                self._toggle_interactive_srv, ToggleInteractive.Request()
+            ) is None:
+                return {'ok': False, 'error': 'toggle_interactive_mode indisponível'}
+            time.sleep(1.0)  # deixa o slam_toolbox montar os markers
+            name = self._latest_slam_node()
         if name is None:
             return {'ok': False, 'error': 'sem nós no pose-graph (mapa ainda vazio?)'}
 
-        # 3. move o nó: feedback MOUSE_UP com a pose nova.
+        # 2. move o nó: feedback MOUSE_UP com a pose nova.
         stamp = self._node.get_clock().now().to_msg()
         self._slam_feedback_pub.publish(
             build_interactive_feedback(x, y, yaw, name, stamp)
         )
-        # 4. aplica/re-otimiza o grafo com o nó movido.
+        # 3. aplica/re-otimiza o grafo com o nó movido.
         self._call_service_sync(self._loop_closure_srv, LoopClosure.Request())
         log.info(
             f"[MapBridge] slam set_pose: nó {name} → "
