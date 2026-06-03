@@ -39,6 +39,15 @@ from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid, Path
 from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformException, TransformListener
+from visualization_msgs.msg import InteractiveMarkerFeedback
+from visualization_msgs.srv import GetInteractiveMarkers
+
+# slam_toolbox só está no ambiente quando o pacote está instalado (Pi/dev com
+# ROS). Os modos teleop/nav2 não dependem dele — import tolerante.
+try:
+    from slam_toolbox.srv import LoopClosure, ToggleInteractive
+except ImportError:  # pragma: no cover
+    LoopClosure = ToggleInteractive = None
 
 
 log = logging.getLogger(__name__)
@@ -104,6 +113,50 @@ def build_initialpose(x, y, yaw, stamp):
     return msg
 
 
+def build_interactive_feedback(x, y, yaw, marker_name, stamp, frame='map'):
+    """Monta o InteractiveMarkerFeedback que relocaliza no slam_toolbox.
+
+    O slam_toolbox (loop_closure_assistant::processInteractiveFeedback) trata
+    o evento MOUSE_UP: lê x,y de `mouse_point` (precisa de mouse_point_valid)
+    e o yaw de `pose.orientation`, registrando o nó `marker_name` como movido.
+    A re-otimização só acontece quando o serviço manual_loop_closure é chamado.
+    """
+    msg = InteractiveMarkerFeedback()
+    msg.header.frame_id = frame
+    msg.header.stamp = stamp
+    msg.marker_name = str(marker_name)
+    msg.event_type = InteractiveMarkerFeedback.MOUSE_UP
+    msg.pose.position.x = float(x)
+    msg.pose.position.y = float(y)
+    qx, qy, qz, qw = _yaw_to_quat(float(yaw))
+    msg.pose.orientation.x = qx
+    msg.pose.orientation.y = qy
+    msg.pose.orientation.z = qz
+    msg.pose.orientation.w = qw
+    msg.mouse_point.x = float(x)
+    msg.mouse_point.y = float(y)
+    msg.mouse_point_valid = True
+    return msg
+
+
+def latest_marker_name(names):
+    """Escolhe o marker do nó mais recente (= pose atual) entre `names`.
+
+    Os markers do slam_toolbox são nomeados pelo id do nó do pose-graph; o
+    maior id é o nó mais recente. Comparação numérica (não lexical: '10' > '2')
+    e nomes não-inteiros são ignorados. Retorna None se não houver nenhum.
+    """
+    best_name, best_val = None, None
+    for n in names:
+        try:
+            v = int(n)
+        except (TypeError, ValueError):
+            continue
+        if best_val is None or v > best_val:
+            best_name, best_val = str(n), v
+    return best_name
+
+
 class MapBridge:
     """Gerencia todos os tópicos ROS2 relacionados a mapa/navegação."""
 
@@ -145,11 +198,37 @@ class MapBridge:
         self._goal_pub = self._node.create_publisher(
             PoseStamped, '/goal_pose', 10
         )
-        # Relocalização manual: /initialpose é consumido pelo slam_toolbox
-        # (re-ancora map→odom) e pelo AMCL (re-semeia partículas).
+        # Relocalização manual no NAV2: /initialpose é consumido pelo AMCL
+        # (re-semeia as partículas). OBS: o slam_toolbox em MAPEAMENTO NÃO
+        # escuta /initialpose — o caminho do SLAM é via interactive markers
+        # (abaixo), não por aqui.
         self._initialpose_pub = self._node.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', 10
         )
+
+        # Relocalização manual no SLAM: liga o modo interativo do slam_toolbox,
+        # move o nó mais recente do pose-graph (= pose atual) publicando um
+        # InteractiveMarkerFeedback(MOUSE_UP) em /slam_toolbox/feedback e
+        # re-otimiza o grafo via o serviço manual_loop_closure. Markers são
+        # lidos sob demanda pelo serviço get_interactive_markers.
+        self._slam_feedback_pub = None
+        self._toggle_interactive_srv = None
+        self._loop_closure_srv = None
+        self._get_markers_srv = None
+        self._interactive_enabled = False
+        if mode == 'slam' and ToggleInteractive is not None:
+            self._slam_feedback_pub = self._node.create_publisher(
+                InteractiveMarkerFeedback, '/slam_toolbox/feedback', 10
+            )
+            self._toggle_interactive_srv = self._node.create_client(
+                ToggleInteractive, '/slam_toolbox/toggle_interactive_mode'
+            )
+            self._loop_closure_srv = self._node.create_client(
+                LoopClosure, '/slam_toolbox/manual_loop_closure'
+            )
+            self._get_markers_srv = self._node.create_client(
+                GetInteractiveMarkers, '/slam_toolbox/get_interactive_markers'
+            )
 
         # TF map→base_link para rastrear o robô no mapa.
         self._tf_buffer = Buffer()
@@ -585,16 +664,80 @@ class MapBridge:
         return {'ok': True, 'x': x, 'y': y, 'yaw': yaw}
 
     def set_pose(self, x: float, y: float, yaw: float = 0.0) -> dict:
-        """Relocaliza: publica PoseWithCovarianceStamped em /initialpose.
+        """Relocaliza o robô no mapa (frame 'map'). Caminho conforme o modo:
 
-        slam_toolbox (slam) re-ancora map→odom; AMCL (nav2) re-semeia as
-        partículas. Frame 'map'.
+        * nav2  → publica PoseWithCovarianceStamped em /initialpose; o AMCL
+          re-semeia as partículas em torno da pose.
+        * slam  → move o nó atual do pose-graph do slam_toolbox via interactive
+          markers + manual_loop_closure (ver _set_pose_slam), porque em
+          mapeamento o slam_toolbox NÃO escuta /initialpose.
         """
+        if self._mode == 'slam':
+            return self._set_pose_slam(x, y, yaw)
         stamp = self._node.get_clock().now().to_msg()
         msg = build_initialpose(x, y, yaw, stamp)
         self._initialpose_pub.publish(msg)
         log.info(f"[MapBridge] /initialpose → ({x:.2f}, {y:.2f}, yaw={yaw:.2f})")
         return {'ok': True, 'x': x, 'y': y, 'yaw': yaw}
+
+    def _call_service_sync(self, client, request, timeout: float = 3.0):
+        """Chama um serviço e espera a resposta. Seguro fora da thread do
+        executor (o _spin_loop roda em paralelo e completa o future)."""
+        if client is None or not client.wait_for_service(timeout_sec=2.0):
+            return None
+        future = client.call_async(request)
+        deadline = time.monotonic() + timeout
+        while not future.done() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return future.result() if future.done() else None
+
+    def _set_pose_slam(self, x: float, y: float, yaw: float) -> dict:
+        """Relocaliza no slam_toolbox (mapeamento) via interactive markers.
+
+        1) garante o modo interativo ligado (markers passam a existir);
+        2) acha o nó mais recente (= pose atual) via get_interactive_markers;
+        3) publica feedback MOUSE_UP movendo esse nó para (x, y, yaw);
+        4) chama manual_loop_closure → CorrectPoses() aplica/re-otimiza.
+        """
+        if ToggleInteractive is None:
+            return {'ok': False, 'error': 'slam_toolbox indisponível no ambiente'}
+
+        # 1. liga o modo interativo (uma vez) — sem ele não há markers.
+        if not self._interactive_enabled:
+            if self._call_service_sync(
+                self._toggle_interactive_srv, ToggleInteractive.Request()
+            ) is None:
+                return {'ok': False, 'error': 'toggle_interactive_mode indisponível'}
+            self._interactive_enabled = True
+            time.sleep(1.0)  # deixa o slam_toolbox montar os markers
+
+        # 2. nó mais recente do pose-graph (tenta por alguns segundos).
+        name = None
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            resp = self._call_service_sync(
+                self._get_markers_srv, GetInteractiveMarkers.Request()
+            )
+            if resp is not None:
+                name = latest_marker_name([m.name for m in resp.markers])
+            if name is not None:
+                break
+            time.sleep(0.3)
+        if name is None:
+            return {'ok': False, 'error': 'sem nós no pose-graph (mapa ainda vazio?)'}
+
+        # 3. move o nó: feedback MOUSE_UP com a pose nova.
+        stamp = self._node.get_clock().now().to_msg()
+        self._slam_feedback_pub.publish(
+            build_interactive_feedback(x, y, yaw, name, stamp)
+        )
+        # 4. aplica/re-otimiza o grafo com o nó movido.
+        self._call_service_sync(self._loop_closure_srv, LoopClosure.Request())
+        log.info(
+            f"[MapBridge] slam set_pose: nó {name} → "
+            f"({x:.2f}, {y:.2f}, yaw={yaw:.2f})"
+        )
+        return {'ok': True, 'x': x, 'y': y, 'yaw': yaw, 'node': name}
 
     def save_map(self, name: str) -> dict:
         """Salva o mapa atual em disco via map_saver_cli."""
