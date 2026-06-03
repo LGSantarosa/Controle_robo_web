@@ -101,14 +101,20 @@ controller_server:
       max_vel_x: 0.35
       min_vel_y: 0.0
       max_vel_y: 0.0
-      max_vel_theta: 0.8
+      # Subido 0.8 → 2.5 (2026-06-03): robô skid-steer 4 rodas custa MUITO pra
+      # girar no lugar; 0.8 rad/s dava só ~±80 unid/roda, longe de vencer o
+      # atrito. ATENÇÃO: subir isto sozinho NÃO resolveu nos testes (mesmo a
+      # ~1.5 rad/s não girou) — ver docs/NAV2_GIRO_2026-06-03.md (provável fix
+      # = RotationShimController, ou causa mecânica). O velocity_smoother
+      # também foi subido (senão corta em 0.8).
+      max_vel_theta: 2.5
       min_speed_xy: 0.0
       max_speed_xy: 0.35
       min_speed_theta: 0.0
       acc_lim_x: 1.0
-      acc_lim_theta: 2.0
+      acc_lim_theta: 3.5
       decel_lim_x: -1.0
-      decel_lim_theta: -2.0
+      decel_lim_theta: -3.5
       # PI: 20 → 12 samples por eixo. CPU do DWB cai linearmente, e o resultado
       # é idêntico em rota livre (a granularidade fina só importa em manobra
       # apertada — e mesmo aí 12×12=144 trajetórias é mais que suficiente).
@@ -270,13 +276,15 @@ velocity_smoother:
     smoothing_frequency: 15.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.35, 0.0, 0.8]
+    # theta 0.8 → 2.5 (casa com FollowPath.max_vel_theta; senão o smoother
+    # corta o giro do controller em 0.8). Ver docs/NAV2_GIRO_2026-06-03.md.
+    max_velocity: [0.35, 0.0, 2.5]
     # Ré alinhada com o DWB (min_vel_x: -0.1) — antes -0.15 deixava o smoother
     # permitir mais ré do que o planejador sabe gerar.
-    min_velocity: [-0.1, 0.0, -0.8]
+    min_velocity: [-0.1, 0.0, -2.5]
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
-    max_accel: [1.0, 0.0, 2.0]
-    max_decel: [-1.0, 0.0, -2.0]
+    max_accel: [1.0, 0.0, 3.5]
+    max_decel: [-1.0, 0.0, -3.5]
     odom_topic: "odom"
     odom_duration: 0.1
