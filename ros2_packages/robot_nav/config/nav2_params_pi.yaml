@@ -113,6 +113,14 @@ controller_server:
       max_angular_accel: 10.0
       rotate_to_goal_heading: true        # também gira p/ encarar o yaw final do goal
       simulate_ahead_time: 1.0
+      # CRÍTICO (2026-06-03): false. Com closed_loop=true (default) o shim rampa o
+      # giro a partir da velocidade angular MEDIDA pela odom — e como ±100 (1.0
+      # rad/s, = max_angular_accel·dt) não vence o atrito estático, o robô não
+      # gira, a odom lê ~0, e ele re-comanda só 1.0 eternamente (trava em ±100, NÃO
+      # sobe pros 6.0). Medido na bancada: nav2 ±100 travado vs manual ±600 gira.
+      # false = rampa pela última velocidade COMANDADA (1→2→…→6.0), estoura o
+      # atrito e chega nos ±600 como o manual.
+      closed_loop: false
       # ---- DWBLocalPlanner (primary_controller, params herdados deste bloco) ----
       debug_trajectory_details: false
       min_vel_x: -0.1
