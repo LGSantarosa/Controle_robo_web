@@ -102,7 +102,11 @@ controller_server:
       # LUGAR (forte) até alinhar e SÓ ENTÃO entrega pro DWB seguir o caminho.
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "dwb_core::DWBLocalPlanner"
-      angular_dist_threshold: 0.524   # 30° — acima disso, gira no lugar antes
+      # 0.30 rad ≈ 17° (era 30°): o shim alinha MAIS perto antes de soltar pro DWB,
+      # senão sobra até 30° de yaw que o DWB não fecha (deadzone) e ele erra o
+      # ponto. Piso prático ~17° pq a 6.0 rad/s @10 Hz cada ciclo gira ~34° (giro
+      # grosso) — abaixo disso ele passa do alvo e o shim pode ficar oscilando.
+      angular_dist_threshold: 0.30    # ≈17° — acima disso, gira no lugar antes
       forward_sampling_distance: 0.5      # ponto do caminho p/ medir o heading-alvo
       # 6.0 rad/s CASA com o manual (teleop_ps4.yaml scale_angular=6.0,
       # BASE_ANGULAR_SPEED=6.0). Este chassi 4 rodas só vence a patinagem a ~6.0:
