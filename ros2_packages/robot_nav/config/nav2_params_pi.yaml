@@ -81,7 +81,7 @@ controller_server:
     min_x_velocity_threshold: 0.001
     # diff-drive tem vy=0 sempre, então o threshold em y é inócuo — default 0.001.
     min_y_velocity_threshold: 0.001
-    min_theta_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.3
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["goal_checker"]
     controller_plugins: ["FollowPath"]
@@ -127,9 +127,9 @@ controller_server:
       max_speed_xy: 0.35
       min_speed_theta: 0.0
       acc_lim_x: 1.0
-      acc_lim_theta: 7.0
+      acc_lim_theta: 15.0
       decel_lim_x: -1.0
-      decel_lim_theta: -7.0
+      decel_lim_theta: -15.0
       # PI: 20 → 12 samples por eixo. CPU do DWB cai linearmente, e o resultado
       # é idêntico em rota livre (a granularidade fina só importa em manobra
       # apertada — e mesmo aí 12×12=144 trajetórias é mais que suficiente).
@@ -151,13 +151,13 @@ controller_server:
       stateful: true
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 0.15
-      PathAlign.scale: 32.0
+      PathAlign.scale: 8.0
       PathAlign.forward_point_distance: 0.1
-      GoalAlign.scale: 32.0
+      GoalAlign.scale: 6.0
       GoalAlign.forward_point_distance: 0.15
-      PathDist.scale: 32.0
-      GoalDist.scale: 24.0
-      RotateToGoal.scale: 32.0
+      PathDist.scale: 12.0
+      GoalDist.scale: 8.0
+      RotateToGoal.scale: 64.0
       RotateToGoal.slowing_factor: 2.0
       RotateToGoal.lookahead_time: -1.0
       Oscillation.scale: 0.1
@@ -279,9 +279,9 @@ behavior_server:
     # Alinhado com AMCL/DWB em 0.5 — ver comentário em AMCL.
     transform_tolerance: 0.5
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.8
-    min_rotational_vel: 0.2
-    rotational_acc_lim: 2.0
+    max_rotational_vel: 6.0
+    min_rotational_vel: 1.0
+    rotational_acc_lim: 10.0
 
 velocity_smoother:
   ros__parameters:
@@ -293,13 +293,13 @@ velocity_smoother:
     feedback: "OPEN_LOOP"
     # theta 0.8 → 2.5 (casa com FollowPath.max_vel_theta; senão o smoother
     # corta o giro do controller em 0.8). Ver docs/NAV2_GIRO_2026-06-03.md.
-    max_velocity: [0.35, 0.0, 2.5]
+    max_velocity: [0.35, 0.0, 6.0]
     # Ré alinhada com o DWB (min_vel_x: -0.1) — antes -0.15 deixava o smoother
     # permitir mais ré do que o planejador sabe gerar.
-    min_velocity: [-0.1, 0.0, -2.5]
+    min_velocity: [-0.1, 0.0, -6.0]
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
-    max_accel: [1.0, 0.0, 3.5]
-    max_decel: [-1.0, 0.0, -3.5]
+    max_accel: [1.0, 0.0, 7.0]
+    max_decel: [-1.0, 0.0, -7.0]
     odom_topic: "odom"
     odom_duration: 0.1
