@@ -212,8 +212,13 @@ local_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.5
-        inflation_radius: 0.25
+        # inflation_radius DEVE cobrir o raio circunscrito do robô (footprint
+        # 0.5×0.5 → 0.25·√2 ≈ 0.354 m) + margem, senão planner/controller passam
+        # rente às paredes e a quina raspa/bate. 0.45 = circunscrito + ~10 cm.
+        # cost_scaling menor (2.5) = gradiente mais suave → rota prefere o MEIO
+        # do corredor em vez de colar no obstáculo. (era 0.25 / 3.5.)
+        cost_scaling_factor: 2.5
+        inflation_radius: 0.45
       # PI: false → só publica diffs. Reduz bandwidth pro web bridge.
       always_send_full_costmap: false
 
@@ -246,8 +251,13 @@ global_costmap:
         map_subscribe_transient_local: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.5
-        inflation_radius: 0.25
+        # inflation_radius DEVE cobrir o raio circunscrito do robô (footprint
+        # 0.5×0.5 → 0.25·√2 ≈ 0.354 m) + margem, senão planner/controller passam
+        # rente às paredes e a quina raspa/bate. 0.45 = circunscrito + ~10 cm.
+        # cost_scaling menor (2.5) = gradiente mais suave → rota prefere o MEIO
+        # do corredor em vez de colar no obstáculo. (era 0.25 / 3.5.)
+        cost_scaling_factor: 2.5
+        inflation_radius: 0.45
       # PI: false — diffs em vez do mapa inteiro.
       always_send_full_costmap: false
 
