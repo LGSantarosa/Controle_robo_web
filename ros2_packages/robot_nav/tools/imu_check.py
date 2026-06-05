@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Monitor de bancada IMU/odom — valida sinais da MPU6050 antes de SLAM/nav2.
+
+Throwaway. Rodar com ROS sourced:  python3 /tmp/imu_check.py
+
+Lê:
+  /odom      → x, y, yaw (acumulado, JÁ com imu_yaw_sign aplicado), vyaw
+  /imu/data  → gz BRUTO do sensor (sem correção de sinal — pra ver o cru)
+
+Como ler:
+  - PARADO:        gz_bruto ~ 0 (±pequeno) e vyaw ~ 0  → bias do giro OK
+  - FRENTE:        x sobe, yaw ~constante
+  - GIRA P/ ESQ.:  yaw SOBE e vyaw POSITIVO  (se descer, troque imu_yaw_sign)
+  - GIRA 90° real: yaw muda ~90°  (valida a MAGNITUDE — o bug do nav2/slam)
+"""
+import math
+
+import rclpy
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from sensor_msgs.msg import Imu
+
+
+def yaw_deg(z, w):
+    return math.degrees(2.0 * math.atan2(z, w))
+
+
+class Mon(Node):
+    def __init__(self):
+        super().__init__('imu_check')
+        self.x = self.y = self.yaw = self.vyaw = 0.0
+        self.gz_raw = 0.0
+        self.got_odom = self.got_imu = False
+        self.create_subscription(Odometry, '/odom', self.on_odom, 10)
+        self.create_subscription(Imu, '/imu/data', self.on_imu, 20)
+        self.create_timer(0.2, self.tick)   # 5 Hz, legível a olho
+
+    def on_odom(self, m):
+        q = m.pose.pose.orientation
+        self.x = m.pose.pose.position.x
+        self.y = m.pose.pose.position.y
+        self.yaw = yaw_deg(q.z, q.w)
+        self.vyaw = math.degrees(m.twist.twist.angular.z)
+        self.got_odom = True
+
+    def on_imu(self, m):
+        self.gz_raw = math.degrees(m.angular_velocity.z)
+        self.got_imu = True
+
+    def tick(self):
+        odom = 'ok ' if self.got_odom else 'SEM /odom'
+        imu = 'ok ' if self.got_imu else 'SEM /imu/data'
+        print(f"[odom:{odom} imu:{imu}] "
+              f"x={self.x:+.3f}m y={self.y:+.3f}m | yaw={self.yaw:+7.1f}deg "
+              f"vyaw(odom)={self.vyaw:+7.1f}deg/s | gz_bruto(/imu)={self.gz_raw:+7.1f}deg/s",
+              flush=True)
+
+
+def main():
+    rclpy.init()
+    n = Mon()
+    try:
+        rclpy.spin(n)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        n.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == '__main__':
+    main()

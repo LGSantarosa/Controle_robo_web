@@ -55,6 +55,12 @@ def generate_launch_description():
         'right_wheel_sign', default_value='1.0',
         description='Polaridade do lado direito (-1.0 inverte). Aplicado em cmd_vel_to_wheels E pose_estimator.'
     )
+    imu_yaw_sign_arg = DeclareLaunchArgument(
+        'imu_yaw_sign', default_value='-1.0',
+        description='Sinal da taxa de yaw da MPU6050. -1.0 = montada de ponta-cabeca '
+                    '(Z pra baixo, default). Trocar p/ 1.0 se o giro vier invertido '
+                    'na bancada — sem reflashear a MEGA.'
+    )
     mega_port_arg = DeclareLaunchArgument(
         'mega_port', default_value='/dev/mega',
         description='Porta serial USB da Arduino MEGA'
@@ -112,6 +118,9 @@ def generate_launch_description():
             # Janela de freshness da IMU: sem /imu/data nesse tempo → cai pro
             # yaw de roda (degradação graciosa).
             'imu_timeout': 0.3,
+            # Sinal do yaw da MPU6050 (montagem de ponta-cabeça → -1.0). Override
+            # de bancada via `imu_yaw_sign:=1.0` se o giro vier invertido.
+            'imu_yaw_sign': LaunchConfiguration('imu_yaw_sign'),
             # Calibração do PMW3901 → body frame (movida do trekking.launch.py:
             # frente entra por dy negativo do sensor). Vale pra TODOS os modos
             # agora que a fusão é a odometria base.
@@ -182,6 +191,7 @@ def generate_launch_description():
         linear_scale_arg,
         left_wheel_sign_arg,
         right_wheel_sign_arg,
+        imu_yaw_sign_arg,
         mega_port_arg,
         mega_baud_arg,
         robot_state_publisher,
