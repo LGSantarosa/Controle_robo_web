@@ -277,7 +277,7 @@ Dois caminhos:
 - `<model name="ground_plane">` estático — senão o robô despenca
 - Todos os objetos com `<collision>` — senão o LiDAR trespassa
 
-O `worlds/empty.sdf` serve como template pronto. O repositório também inclui `worlds/educacao_criativa.sdf` (cena do projeto Educação Criativa, com cones e obstáculos).
+O `worlds/empty.sdf` serve como template pronto.
 
 ### Rodando no modo SIM
 
@@ -1037,7 +1037,6 @@ Controle_robo_web/
 │   └── routes/<nome>.json
 ├── worlds/                            # Mundos do Gazebo
 │   ├── empty.sdf                      # Sala 6×6 m vazia (padrão)
-│   ├── educacao_criativa.sdf          # Cena do projeto Educação Criativa (cones/obstáculos)
 │   └── meshes/                        # Meshes auxiliares
 ├── ros2_packages/                    # Workspace colcon (--base-paths ros2_packages)
 │   ├── wheel_msgs/                    # Mensagens custom das rodas (vendored, .git preservado)
