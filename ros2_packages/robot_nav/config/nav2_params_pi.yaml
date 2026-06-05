@@ -128,7 +128,10 @@ controller_server:
       # ---- DWBLocalPlanner (primary_controller, params herdados deste bloco) ----
       debug_trajectory_details: false
       min_vel_x: -0.1
-      max_vel_x: 0.35
+      # MEDROSO (2026-06-05): 0.35 → 0.25 m/s. Velocidade menor = mais tempo de
+      # reação e frenagem mais curta. O requisito é "nunca bater" (pode ser um
+      # humano) — abrimos mão de um pouco de velocidade por margem de segurança.
+      max_vel_x: 0.25
       min_vel_y: 0.0
       max_vel_y: 0.0
       # 2.5 → 6.0: idem ao shim — o chassi precisa de ~6.0 p/ rotacionar de fato.
@@ -136,7 +139,7 @@ controller_server:
       # foi subido p/ 6.0, senão corta aqui).
       max_vel_theta: 6.0
       min_speed_xy: 0.0
-      max_speed_xy: 0.35
+      max_speed_xy: 0.25
       min_speed_theta: 0.0
       acc_lim_x: 1.0
       acc_lim_theta: 10.0
@@ -206,6 +209,11 @@ local_costmap:
           # LiDAR-only: todos os pontos vêm na altura do laser (~0.21 m).
           # Antes era -0.05 (filtro de chão da câmera RGB-D removida).
           min_obstacle_height: 0.0
+          # MEDROSO (2026-06-05): persiste a observação por 1 s. Perna fina de
+          # cadeira devolve só 1–2 feixes e PISCA — sem isso o raytrace de
+          # clearing apaga a marca no scan seguinte (feixe passa no vão entre as
+          # pernas) e o planner traça rota POR CIMA. Com 1 s a marca segura.
+          observation_persistence: 1.0
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
           obstacle_max_range: 2.5
@@ -244,6 +252,9 @@ global_costmap:
           clearing: true
           marking: true
           data_type: "LaserScan"
+          # MEDROSO (2026-06-05): persiste 1 s — idem ao local. Segura a perna
+          # fina no costmap global pra o planner NÃO traçar rota por cima dela.
+          observation_persistence: 1.0
           raytrace_max_range: 3.0
           obstacle_max_range: 2.5
       static_layer:
@@ -315,7 +326,9 @@ velocity_smoother:
     feedback: "OPEN_LOOP"
     # theta 0.8 → 2.5 (casa com FollowPath.max_vel_theta; senão o smoother
     # corta o giro do controller em 0.8). Ver docs/NAV2_GIRO_2026-06-03.md.
-    max_velocity: [0.35, 0.0, 6.0]
+    # MEDROSO (2026-06-05): linear 0.35 → 0.25 (casa com DWB max_vel_x). Angular
+    # fica em 6.0 (necessário p/ vencer a patinagem do giro). Ver memória.
+    max_velocity: [0.25, 0.0, 6.0]
     # Ré alinhada com o DWB (min_vel_x: -0.1) — antes -0.15 deixava o smoother
     # permitir mais ré do que o planejador sabe gerar.
     min_velocity: [-0.1, 0.0, -6.0]
@@ -325,3 +338,58 @@ velocity_smoother:
     max_decel: [-1.0, 0.0, -10.0]
     odom_topic: "odom"
     odom_duration: 0.1
+
+# Collision Monitor (MEDROSO 2026-06-05) — reflexo de segurança de última linha.
+# Lê o /scan CRU (independe de pose/costmap/planner) e freia o cmd_vel ANTES
+# de chegar nos motores. É o que garante "nunca bater": mesmo que o costmap
+# tenha perdido a perna fina da cadeira, se QUALQUER ponto do laser entra na
+# zona, ele para. Fica no pipeline ENTRE o velocity_smoother e o twist_mux:
+#   controller -> cmd_vel_nav -> smoother -> nav_vel_raw -> [collision_monitor]
+#                 -> nav_vel -> twist_mux(prio 10) -> cmd_vel -> rodas
+# Como só filtra o ramo nav_vel, o PS4/web (prioridade maior no mux) seguem
+# mandando por cima — o humano no controle continua soberano.
+collision_monitor:
+  ros__parameters:
+    use_sim_time: false
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "nav_vel_raw"
+    cmd_vel_out_topic: "nav_vel"
+    state_topic: "collision_monitor_state"
+    transform_tolerance: 0.5
+    # Scan do LD06 é ~10 Hz; 1 s = 10 scans de tolerância antes de considerar
+    # o sensor "mudo". base_shift_correction reposiciona os pontos pelo TF
+    # odom->base_link entre o instante do scan e agora (corrige o movimento).
+    source_timeout: 1.0
+    base_shift_correction: True
+    stop_pub_timeout: 2.0
+    polygons: ["PolygonSlow", "PolygonStop"]
+    # Zona de DESACELERAÇÃO: ~40 cm além da borda do robô. Entrou algo aqui,
+    # cai pra 30% da velocidade -> aproximação mansa, mais tempo de reagir.
+    PolygonSlow:
+      type: "polygon"
+      points: "[[0.65, 0.45], [0.65, -0.45], [-0.45, -0.45], [-0.45, 0.45]]"
+      action_type: "slowdown"
+      slowdown_ratio: 0.3
+      # min_points BAIXO (2) de propósito: perna fina de cadeira a ~1 m devolve
+      # só 1–2 feixes. 2 pontos já dispara. Falso-positivo aqui só desacelera
+      # (seguro). Um humano devolve muitos pontos, sempre pega.
+      min_points: 2
+      visualize: True
+      polygon_pub_topic: "polygon_slowdown"
+      enabled: True
+    # Zona de PARADA: ~12 cm além da borda do robô (footprint ±0.25). Qualquer
+    # coisa aqui -> para. Margem antes do contato real.
+    PolygonStop:
+      type: "polygon"
+      points: "[[0.37, 0.32], [0.37, -0.32], [-0.35, -0.32], [-0.35, 0.32]]"
+      action_type: "stop"
+      min_points: 2
+      visualize: True
+      polygon_pub_topic: "polygon_stop"
+      enabled: True
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      topic: "scan"
+      enabled: True

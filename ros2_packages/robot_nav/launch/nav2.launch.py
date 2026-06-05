@@ -45,6 +45,8 @@ def generate_launch_description():
         'bt_navigator',
         'waypoint_follower',
         'velocity_smoother',
+        # Reflexo de segurança — ativa por último (depende da saída do smoother).
+        'collision_monitor',
     ]
 
     sim_time_param = {'use_sim_time': use_sim_time}
@@ -97,11 +99,19 @@ def generate_launch_description():
             package='nav2_velocity_smoother', executable='velocity_smoother',
             name='velocity_smoother', output=nav_output,
             parameters=[params_file, sim_time_param],
-            # Saída do Nav2 vai pra nav_vel (entrada de menor prioridade do
-            # twist_mux em robot.launch.py E em sim.launch.py), não direto pro
-            # cmd_vel — assim o PS4 (joy_vel) e o web (web_vel) podem assumir
-            # por cima da navegação.
-            remappings=[('cmd_vel', 'cmd_vel_nav'), ('cmd_vel_smoothed', 'nav_vel')],
+            # Saída do smoother vai pra nav_vel_raw, que entra no collision_monitor
+            # (reflexo de segurança). O collision_monitor é quem publica nav_vel
+            # (entrada de menor prioridade do twist_mux em robot.launch.py E em
+            # sim.launch.py) — assim o PS4 (joy_vel) e o web (web_vel) podem
+            # assumir por cima da navegação.
+            remappings=[('cmd_vel', 'cmd_vel_nav'), ('cmd_vel_smoothed', 'nav_vel_raw')],
+        ),
+        # Collision Monitor: lê /scan cru e freia nav_vel_raw -> nav_vel ANTES do
+        # twist_mux. Topicos in/out definidos no YAML (cmd_vel_in/out_topic).
+        Node(
+            package='nav2_collision_monitor', executable='collision_monitor',
+            name='collision_monitor', output=nav_output,
+            parameters=[params_file, sim_time_param],
         ),
         Node(
             package='nav2_lifecycle_manager', executable='lifecycle_manager',
