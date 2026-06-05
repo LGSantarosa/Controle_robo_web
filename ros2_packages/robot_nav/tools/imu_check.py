@@ -18,6 +18,8 @@ import math
 import rclpy
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 
 
@@ -32,7 +34,8 @@ class Mon(Node):
         self.gz_raw = 0.0
         self.got_odom = self.got_imu = False
         self.create_subscription(Odometry, '/odom', self.on_odom, 10)
-        self.create_subscription(Imu, '/imu/data', self.on_imu, 20)
+        # /imu/data é BEST_EFFORT (sensor_data) — casar QoS ou nada chega.
+        self.create_subscription(Imu, '/imu/data', self.on_imu, qos_profile_sensor_data)
         self.create_timer(0.2, self.tick)   # 5 Hz, legível a olho
 
     def on_odom(self, m):
@@ -61,7 +64,7 @@ def main():
     n = Mon()
     try:
         rclpy.spin(n)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         n.destroy_node()
