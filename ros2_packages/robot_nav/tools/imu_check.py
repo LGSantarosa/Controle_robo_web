@@ -32,6 +32,8 @@ class Mon(Node):
         super().__init__('imu_check')
         self.x = self.y = self.yaw = self.vyaw = 0.0
         self.gz_raw = 0.0
+        self.acc = 0.0          # yaw acumulado (desenrolado), graus
+        self._last_yaw = 0.0
         self.got_odom = self.got_imu = False
         self.create_subscription(Odometry, '/odom', self.on_odom, 10)
         # /imu/data é BEST_EFFORT (sensor_data) — casar QoS ou nada chega.
@@ -42,7 +44,16 @@ class Mon(Node):
         q = m.pose.pose.orientation
         self.x = m.pose.pose.position.x
         self.y = m.pose.pose.position.y
-        self.yaw = yaw_deg(q.z, q.w)
+        cur = yaw_deg(q.z, q.w)
+        if self.got_odom:
+            d = cur - self._last_yaw          # desenrola o salto de ±180
+            if d > 180.0:
+                d -= 360.0
+            elif d < -180.0:
+                d += 360.0
+            self.acc += d
+        self._last_yaw = cur
+        self.yaw = cur
         self.vyaw = math.degrees(m.twist.twist.angular.z)
         self.got_odom = True
 
@@ -55,6 +66,7 @@ class Mon(Node):
         imu = 'ok ' if self.got_imu else 'SEM /imu/data'
         print(f"[odom:{odom} imu:{imu}] "
               f"x={self.x:+.3f}m y={self.y:+.3f}m | yaw={self.yaw:+7.1f}deg "
+              f"acc={self.acc:+8.1f}deg | "
               f"vyaw(odom)={self.vyaw:+7.1f}deg/s | gz_bruto(/imu)={self.gz_raw:+7.1f}deg/s",
               flush=True)
 
