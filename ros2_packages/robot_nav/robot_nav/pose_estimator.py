@@ -36,6 +36,7 @@ from tf2_ros import TransformBroadcaster
 from .fused_odom import FusedOdom, flow_alpha
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Float32, Float64, String
 
@@ -174,8 +175,11 @@ class PoseEstimator(Node):
         self._last_flow_age = float('inf')
 
         # --- Subscribers ---
-        self.create_subscription(Imu, 'imu/data', self._on_imu, 20)
-        self.create_subscription(Vector3Stamped, 'optical_flow', self._on_flow, 20)
+        # IMU e flow são publicados pelo mega_bridge como BEST_EFFORT
+        # (qos_profile_sensor_data). Assinar com QoS default (RELIABLE) é
+        # INCOMPATÍVEL → nenhuma mensagem chega. Casar o profile sensor_data.
+        self.create_subscription(Imu, 'imu/data', self._on_imu, qos_profile_sensor_data)
+        self.create_subscription(Vector3Stamped, 'optical_flow', self._on_flow, qos_profile_sensor_data)
         self.create_subscription(Vector3Stamped, 'trekking/pose_fix', self._on_pose_fix, 10)
         # Correção manual de DIREÇÃO (yaw). data = delta em rad a aplicar no
         # ponteiro. Usado pela web no SLAM (robô sem IMU): gira o yaw integrado
