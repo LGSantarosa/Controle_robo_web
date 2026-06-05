@@ -5,7 +5,7 @@ Ponte ROS2 ↔ Arduino MEGA 2560.
 Substitui o `ros2-hoverboard-driver` antigo (que falava direto com uma única
 placa). Agora a MEGA agrega:
   - 2 placas de hoverboard (frontal Serial1, traseira Serial2)
-  - BNO055 IMU (I²C)
+  - MPU6050 IMU (I²C, 6 eixos: giro + accel; sem yaw absoluto)
   - PMW3901 optical flow (SPI)
   - relé da luz, LED de marco, botão de partida
   - (anel WS2812 comentado no firmware — ver AUDITORIA_2026-05-29 A1)
@@ -404,26 +404,27 @@ class MegaBridge(Node):
             self._pub_health.publish(String(data=as_json))
 
     def _handle_imu(self, p: bytes):
-        # 20 bytes: quat w,x,y,z (Q14); gyro x,y,z (rad/s ×1000); accel x,y,z (m/s²×1000)
-        if len(p) != 20:
+        # 12 bytes: gyro x,y,z (rad/s ×1000); accel x,y,z (m/s² ×1000).
+        # MPU6050 (6 eixos): SEM orientação absoluta (não tem magnetômetro). O
+        # yaw é integrado da taxa do giro no pose_estimator, que também corrige
+        # a montagem de ponta-cabeça (Z pra baixo). Frame BRUTO do sensor.
+        if len(p) != 12:
             return
-        qw, qx, qy, qz, gx, gy, gz, ax, ay, az = struct.unpack('<hhhhhhhhhh', p)
+        gx, gy, gz, ax, ay, az = struct.unpack('<hhhhhh', p)
         msg = Imu()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self._imu_frame
-        msg.orientation.w = qw / 16384.0
-        msg.orientation.x = qx / 16384.0
-        msg.orientation.y = qy / 16384.0
-        msg.orientation.z = qz / 16384.0
         msg.angular_velocity.x = gx / 1000.0
         msg.angular_velocity.y = gy / 1000.0
         msg.angular_velocity.z = gz / 1000.0
         msg.linear_acceleration.x = ax / 1000.0
         msg.linear_acceleration.y = ay / 1000.0
         msg.linear_acceleration.z = az / 1000.0
-        # Covariâncias: setamos a diagonal com valores razoáveis pro BNO055 calibrado.
-        msg.orientation_covariance = [0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.01]
-        msg.angular_velocity_covariance = [0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001]
+        # Sem orientação absoluta: convenção sensor_msgs/Imu é marcar
+        # orientation_covariance[0] = -1 (consumidores devem ignorar orientation).
+        msg.orientation_covariance = [-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        # MPU6050 é mais ruidoso que o BNO055 → diagonal um pouco maior.
+        msg.angular_velocity_covariance = [0.0025, 0.0, 0.0, 0.0, 0.0025, 0.0, 0.0, 0.0, 0.0025]
         msg.linear_acceleration_covariance = [0.05, 0.0, 0.0, 0.0, 0.05, 0.0, 0.0, 0.0, 0.05]
         self._pub_imu.publish(msg)
 

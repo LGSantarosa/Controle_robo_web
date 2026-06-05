@@ -4,7 +4,7 @@
 //   USB (PC) ↔ Serial       (protocolo agregado, frames 0xAA 0x55, 230400 baud)
 //   Serial1 ↔ placa hoverboard FRENTE  (controla FL+FR, SerialCommand 0xABCD)
 //   Serial2 ↔ placa hoverboard TRÁS    (controla RL+RR, SerialCommand 0xABCD)
-//   I2C ↔ BNO055 IMU
+//   I2C ↔ MPU6050 IMU (6 eixos: giro + accel; SEM yaw absoluto)
 //   SPI ↔ PMW3901 optical flow (CS = pino 10)
 //   (anel WS2812 COMENTADO — ver AUDITORIA_2026-05-29 A1. O driver vive em
 //    leds.cpp/leds.h mas está FORA do build via build_src_filter no
@@ -169,14 +169,6 @@ static void txState() {
     protocol::writeFrame(Serial, protocol::FT_STATE, buf, sizeof(buf));
 }
 
-static int16_t f_to_q14(double v) {
-    // Quaternion unitário tem |q| ≤ 1; clamp em ±1.0 preserva 1 bit extra
-    // de precisão (lround usa 16384.0 = Q14 sobre [-2, 2] no firmware antigo).
-    if (v >  0.99994) v =  0.99994;
-    if (v < -1.00000) v = -1.00000;
-    return (int16_t)lround(v * 16384.0);
-}
-
 static int16_t f_to_milli(double v) {
     if (v >  32.0) v =  32.0;
     if (v < -32.0) v = -32.0;
@@ -190,32 +182,23 @@ static void txImu() {
     if (!imu_dev.ok())   return;
     if (!imu_dev.read()) return;
 
-    const auto& q = imu_dev.quat();
-    const auto& g = imu_dev.gyro();
-    const auto& a = imu_dev.accel();
+    // MPU6050 (6 eixos): só giro (rad/s) + accel (m/s²), frame BRUTO do sensor.
+    // Sem quaternion — não há orientação absoluta. O yaw é integrado da taxa do
+    // giro no pose_estimator (que também corrige a montagem de ponta-cabeça).
+    int16_t gx = f_to_milli(imu_dev.gx());
+    int16_t gy = f_to_milli(imu_dev.gy());
+    int16_t gz = f_to_milli(imu_dev.gz());
+    int16_t ax = f_to_milli(imu_dev.ax());
+    int16_t ay = f_to_milli(imu_dev.ay());
+    int16_t az = f_to_milli(imu_dev.az());
 
-    int16_t qw = f_to_q14(q.w());
-    int16_t qx = f_to_q14(q.x());
-    int16_t qy = f_to_q14(q.y());
-    int16_t qz = f_to_q14(q.z());
-    int16_t gx = f_to_milli(g.x());
-    int16_t gy = f_to_milli(g.y());
-    int16_t gz = f_to_milli(g.z());
-    int16_t ax = f_to_milli(a.x());
-    int16_t ay = f_to_milli(a.y());
-    int16_t az = f_to_milli(a.z());
-
-    uint8_t buf[20];
-    memcpy(buf + 0,  &qw, 2);
-    memcpy(buf + 2,  &qx, 2);
-    memcpy(buf + 4,  &qy, 2);
-    memcpy(buf + 6,  &qz, 2);
-    memcpy(buf + 8,  &gx, 2);
-    memcpy(buf + 10, &gy, 2);
-    memcpy(buf + 12, &gz, 2);
-    memcpy(buf + 14, &ax, 2);
-    memcpy(buf + 16, &ay, 2);
-    memcpy(buf + 18, &az, 2);
+    uint8_t buf[12];
+    memcpy(buf + 0,  &gx, 2);
+    memcpy(buf + 2,  &gy, 2);
+    memcpy(buf + 4,  &gz, 2);
+    memcpy(buf + 6,  &ax, 2);
+    memcpy(buf + 8,  &ay, 2);
+    memcpy(buf + 10, &az, 2);
 
     protocol::writeFrame(Serial, protocol::FT_IMU, buf, sizeof(buf));
 }
@@ -275,7 +258,7 @@ void setup() {
 
 void loop() {
     // pumpPcSerial drena o buffer do USB (64 B). Com PC_BAUD=230400 + I²C do
-    // BNO055 bloqueando o loop, em pico chega a >64 B entre ticks — drenar uma
+    // MPU6050 bloqueando o loop, em pico chega a >64 B entre ticks — drenar uma
     // vez só perde bytes. Chamadas extras no meio mantêm o buffer com folga.
     pumpPcSerial();
     pumpHoverboardFeedback();

@@ -2,13 +2,15 @@
 """Núcleo PURO da odometria fundida (rodas + IMU + flow) com degradação graciosa.
 
 Sem dependência de rclpy — testável isoladamente (estilo cone_pose_fix.py). O nó
-`pose_estimator` alimenta este núcleo com velocidades de roda, yaw/freshness da IMU,
+`pose_estimator` alimenta este núcleo com velocidades de roda, taxa/freshness da IMU,
 velocidade do flow + peso α, e dt; e publica o resultado (/odom + TF + /trekking/*).
 
-Seleção de yaw (degradação graciosa):
-  - IMU fresca  → yaw absoluto da IMU.
-  - IMU ausente → integra yaw do diferencial de roda (ponto-médio), igual ao
-                  odom_publisher antigo. É o caso degenerado.
+Seleção da TAXA de yaw (degradação graciosa):
+  - IMU = MPU6050 (6 eixos): NÃO há yaw absoluto, só taxa do giro. O yaw é
+    sempre INTEGRADO (ponto-médio); a IMU só troca a FONTE da taxa:
+      - IMU fresca  → taxa do giro (vence a derrapagem do skid-steer no giro).
+      - IMU ausente → taxa do diferencial de roda, igual ao odom_publisher
+                      antigo. É o caso degenerado.
 Translação:
   - vx_body = α·vx_flow + (1-α)·vx_roda ; vy_body = α·vy_flow (roda cega à lateral).
 """
@@ -73,24 +75,24 @@ class FusedOdom:
         self.yaw = 0.0
 
     def step(self, dt, v_fl, v_fr, v_rl, v_rr,
-             imu_fresh, imu_yaw, imu_yaw_rate,
+             imu_fresh, imu_yaw_rate,
              flow_vx, flow_vy, alpha):
         vx_wheel, wheel_angular = wheel_twist(v_fl, v_fr, v_rl, v_rr, self.wheel_base)
 
-        # --- seleção de yaw com degradação graciosa ---
+        # --- seleção da TAXA de yaw com degradação graciosa ---
+        # MPU6050 não dá yaw absoluto: integramos sempre a partir do yaw atual
+        # (ponto-médio, igual ao odom_publisher). A IMU só troca a fonte da taxa
+        # (giro × derrapagem da roda); como é sempre integração relativa, uma
+        # correção manual de direção (yaw_fix) agora persiste mesmo com IMU.
         if imu_fresh:
-            # IMU fresca: yaw absoluto. integ_yaw = o próprio yaw da IMU.
-            self.yaw = imu_yaw
-            integ_yaw = imu_yaw
             yaw_rate = imu_yaw_rate
             yaw_source = 'imu'
         else:
-            # Fallback de roda: integra no ponto-médio (igual odom_publisher), depois
-            # avança o yaw. Snap parte do último yaw conhecido (decisão B do spec).
-            integ_yaw = wrap_pi(self.yaw + 0.5 * wheel_angular * dt)
-            self.yaw = wrap_pi(self.yaw + wheel_angular * dt)
             yaw_rate = wheel_angular
             yaw_source = 'wheel'
+
+        integ_yaw = wrap_pi(self.yaw + 0.5 * yaw_rate * dt)
+        self.yaw = wrap_pi(self.yaw + yaw_rate * dt)
 
         # --- translação fundida ---
         vx_body, vy_body = fuse_translation(vx_wheel, flow_vx, flow_vy, alpha)

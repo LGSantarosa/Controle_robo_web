@@ -1,29 +1,57 @@
 #include "sensors_imu.h"
 
-#include <new>  // placement new usado em tryInit_(); não depender da ordem de include
-
 namespace sensors {
 
 bool Imu::tryInit_(uint8_t addr) {
-    // Reconstroi o objeto Adafruit_BNO055 com o endereço alvo. `placement
-    // new` evita alocação dinâmica (a MEGA não tem heap pra esbanjar).
-    bno_.~Adafruit_BNO055();
-    new (&bno_) Adafruit_BNO055(55, addr, &Wire);
-    if (!bno_.begin()) return false;
-    delay(10);
-    bno_.setExtCrystalUse(true);
+    if (!mpu_.begin(addr, &Wire)) return false;
     addr_ = addr;
+    // ±500°/s cobre o giro do skid-steer (~344°/s no nav2) com folga.
+    mpu_.setGyroRange(MPU6050_RANGE_500_DEG);
+    mpu_.setAccelerometerRange(MPU6050_RANGE_4_G);
+    // DLPF 94 Hz: corta ruído de motor/vibração sem atrasar demais o giro
+    // (amostramos IMU a 50 Hz no main).
+    mpu_.setFilterBandwidth(MPU6050_BAND_94_HZ);
     return true;
 }
 
 bool Imu::begin() {
-    // Tenta o endereço default 0x28; se falhar, tenta 0x29 (jumper ADR).
-    ok_ = tryInit_(BNO055_ADDRESS_A) || tryInit_(BNO055_ADDRESS_B);
+    // Endereço default 0x68; se falhar, tenta 0x69 (jumper AD0).
+    ok_ = tryInit_(0x68) || tryInit_(0x69);
+    if (ok_ && !calibrated_) {
+        calibrateGyro_();
+        calibrated_ = true;
+    }
     return ok_;
 }
 
+void Imu::calibrateGyro_() {
+    // Média do giro com o robô PARADO no boot → bias de zero. O MPU6050 tem
+    // offset de giro relevante; sem subtrair, o yaw integrado deriva visível.
+    // Roda SÓ uma vez (flag calibrated_ no begin): recovery de barramento em
+    // runtime NÃO recalibra, pra nunca capturar bias com o robô em movimento.
+    const int N = 200;
+    float sx = 0, sy = 0, sz = 0;
+    int got = 0;
+    sensors_event_t a, g, t;
+    for (int i = 0; i < N; ++i) {
+        if (mpu_.getEvent(&a, &g, &t)) {
+            sx += g.gyro.x;
+            sy += g.gyro.y;
+            sz += g.gyro.z;
+            ++got;
+        }
+        delay(3);
+    }
+    if (got > 0) {
+        bx_ = sx / got;
+        by_ = sy / got;
+        bz_ = sz / got;
+    }
+}
+
 bool Imu::read() {
-    // Se o I²C caiu (cabo solto / brown-out), tenta re-init a cada 2 s.
+    // Se o I²C caiu (cabo solto / brown-out), tenta re-init a cada 2 s. O bias
+    // estimado no boot é preservado (mesmo chip), então não recalibra.
     if (!ok_) {
         const uint32_t now = millis();
         if (now - last_recover_ms_ > 2000) {
@@ -32,34 +60,23 @@ bool Imu::read() {
         }
         return false;
     }
-    quat_ = bno_.getQuat();
 
-    // Sanity check: quaternion todo zerado normalmente sinaliza barramento
-    // morto. Mesma resposta: marca como caído e deixa recover periódico tentar.
-    if (quat_.w() == 0.0 && quat_.x() == 0.0 && quat_.y() == 0.0 && quat_.z() == 0.0) {
+    sensors_event_t a, g, t;
+    if (!mpu_.getEvent(&a, &g, &t)) {
+        // Leitura falhou: barramento provavelmente morto. Marca caído e deixa
+        // o recover periódico tentar de novo.
         ok_ = false;
         return false;
     }
 
-    // BNO055 pode reportar quaternion não-unitário em transitórios (cal=0).
-    // O lado Python assume |q|=1, então normalizamos aqui. O all-zero já foi
-    // descartado acima, então n > 0 quando chegamos aqui.
-    const double n = sqrt(quat_.w() * quat_.w() + quat_.x() * quat_.x() +
-                          quat_.y() * quat_.y() + quat_.z() * quat_.z());
-    if (n > 1e-6) {
-        quat_ = imu::Quaternion(quat_.w() / n, quat_.x() / n,
-                                quat_.y() / n, quat_.z() / n);
-    }
-
-    // BNO055 reporta giroscópio em °/s por padrão — convertemos pra rad/s
-    // pra casar com a convenção ROS (sensor_msgs/Imu.angular_velocity).
-    const auto g_deg = bno_.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
-    gyro_  = imu::Vector<3>(
-        g_deg.x() * (PI / 180.0),
-        g_deg.y() * (PI / 180.0),
-        g_deg.z() * (PI / 180.0));
-
-    accel_ = bno_.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+    // getEvent já entrega giro em rad/s e accel em m/s² (convenção ROS). Só
+    // subtraímos o bias do giro estimado no boot.
+    gx_ = g.gyro.x - bx_;
+    gy_ = g.gyro.y - by_;
+    gz_ = g.gyro.z - bz_;
+    ax_ = a.acceleration.x;
+    ay_ = a.acceleration.y;
+    az_ = a.acceleration.z;
     return true;
 }
 

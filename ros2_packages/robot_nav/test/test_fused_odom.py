@@ -56,32 +56,34 @@ def test_no_imu_uses_wheel_yaw():
     # Sem IMU, girando: yaw integra do diferencial de roda
     fo = FusedOdom(wheel_base=0.5)
     r = fo.step(dt=0.1, v_fl=-0.5, v_fr=0.5, v_rl=-0.5, v_rr=0.5,
-                imu_fresh=False, imu_yaw=0.0, imu_yaw_rate=0.0,
+                imu_fresh=False, imu_yaw_rate=0.0,
                 flow_vx=0.0, flow_vy=0.0, alpha=0.0)
     assert r.yaw_source == 'wheel'
     assert r.yaw == pytest.approx(2.0 * 0.1)  # omega=2 rad/s * dt
     assert r.yaw_rate == pytest.approx(2.0)
 
 
-def test_imu_fresh_uses_imu_yaw_ignoring_wheels():
-    # Com IMU fresca, o yaw é o absoluto da IMU mesmo com rodas girando
+def test_imu_fresh_integrates_gyro_rate_ignoring_wheels():
+    # MPU6050: com IMU fresca, o yaw INTEGRA a taxa do giro (não o diferencial
+    # de roda), mesmo com as rodas girando a outra velocidade.
     fo = FusedOdom(wheel_base=0.5)
     r = fo.step(dt=0.1, v_fl=-0.5, v_fr=0.5, v_rl=-0.5, v_rr=0.5,
-                imu_fresh=True, imu_yaw=0.7, imu_yaw_rate=0.3,
+                imu_fresh=True, imu_yaw_rate=0.3,
                 flow_vx=0.0, flow_vy=0.0, alpha=0.0)
     assert r.yaw_source == 'imu'
-    assert r.yaw == pytest.approx(0.7)
+    assert r.yaw == pytest.approx(0.3 * 0.1)  # integra taxa do giro, não a roda
     assert r.yaw_rate == pytest.approx(0.3)
 
 
-def test_imu_dropout_snaps_to_wheel_from_last_yaw():
-    # IMU presente (yaw=1.0), depois cai → integra do último yaw, sem voltar a 0
+def test_imu_dropout_continues_wheel_from_last_yaw():
+    # Yaw acumulado pelo giro (10 rad/s * 0.1 = 1.0), IMU cai → integra do
+    # diferencial de roda a partir do último yaw, sem voltar a 0.
     fo = FusedOdom(wheel_base=0.5)
     fo.step(dt=0.1, v_fl=0.0, v_fr=0.0, v_rl=0.0, v_rr=0.0,
-            imu_fresh=True, imu_yaw=1.0, imu_yaw_rate=0.0,
+            imu_fresh=True, imu_yaw_rate=10.0,
             flow_vx=0.0, flow_vy=0.0, alpha=0.0)
     r = fo.step(dt=0.1, v_fl=-0.5, v_fr=0.5, v_rl=-0.5, v_rr=0.5,
-                imu_fresh=False, imu_yaw=0.0, imu_yaw_rate=0.0,
+                imu_fresh=False, imu_yaw_rate=0.0,
                 flow_vx=0.0, flow_vy=0.0, alpha=0.0)
     assert r.yaw_source == 'wheel'
     assert r.yaw == pytest.approx(1.0 + 2.0 * 0.1)  # continua de 1.0
@@ -95,7 +97,7 @@ def test_degenerate_matches_wheel_only_odom():
     v_fr = v_rr = 1.0
     dt = 0.1
     r = fo.step(dt=dt, v_fl=v_fl, v_fr=v_fr, v_rl=v_rl, v_rr=v_rr,
-                imu_fresh=False, imu_yaw=0.0, imu_yaw_rate=0.0,
+                imu_fresh=False, imu_yaw_rate=0.0,
                 flow_vx=0.0, flow_vy=0.0, alpha=0.0)
     # Espelha odom_publisher: linear=(vr+vl)/2, angular=(vr-vl)/wb, ponto-médio
     v_left = (v_fl + v_rl) / 2.0

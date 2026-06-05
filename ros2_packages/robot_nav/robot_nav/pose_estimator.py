@@ -3,7 +3,7 @@
 Estimador de pose pro modo TREKKING.
 
 Funde 3 fontes em (x, y, yaw) no frame `odom`:
-  - BNO055 (/imu/data)        → yaw absoluto (quaternion fundido)
+  - MPU6050 (/imu/data)       → taxa de yaw (giro); yaw INTEGRADO, sem absoluto
   - PMW3901 (/optical_flow)   → velocidade no chão em (vx, vy) corpo
   - Encoders (4 RPMs)         → velocidade no corpo, fallback quando o flow é ruim
 
@@ -106,6 +106,11 @@ class PoseEstimator(Node):
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('imu_timeout', 0.3)   # s — IMU a 50 Hz; >0.3 = ausente
+        # Sinal da taxa de yaw da IMU (gyro Z). A MPU6050 está montada DE
+        # PONTA-CABEÇA (Z aponta pra baixo) → giro vem invertido, default -1.0.
+        # Se na bancada o robô girar pro lado errado no odom, troque pra +1.0
+        # (não precisa reflashear a MEGA). Ver project_imu_mpu6050_mounting.
+        self.declare_parameter('imu_yaw_sign', -1.0)
 
         self.wheel_radius   = float(self.get_parameter('wheel_radius').value)
         self.wheel_base     = float(self.get_parameter('wheel_base').value)
@@ -132,13 +137,14 @@ class PoseEstimator(Node):
         self.odom_frame     = self.get_parameter('odom_frame').value
         self.base_frame     = self.get_parameter('base_frame').value
         self.imu_timeout    = float(self.get_parameter('imu_timeout').value)
+        self.imu_yaw_sign   = float(self.get_parameter('imu_yaw_sign').value)
 
         # --- Estado ---
         self._lock = threading.Lock()
         # A pose (x, y, yaw) vive no núcleo puro FusedOdom.
         self._fused = FusedOdom(self.wheel_base)
-        # Última leitura da IMU (None = nunca chegou).
-        self._imu_yaw = 0.0
+        # Última leitura da IMU (None = nunca chegou). MPU6050 só dá taxa de
+        # yaw (gyro Z); não há yaw absoluto.
         self._imu_yaw_rate = 0.0
         self._last_imu_wall = None    # rclpy.time.Time
 
@@ -205,11 +211,11 @@ class PoseEstimator(Node):
     # ------------------------------------------------------------------
     def _on_imu(self, msg: Imu):
         with self._lock:
-            self._imu_yaw = _quat_to_yaw(
-                msg.orientation.x, msg.orientation.y,
-                msg.orientation.z, msg.orientation.w,
-            )
-            self._imu_yaw_rate = msg.angular_velocity.z
+            # MPU6050 (6 eixos): sem orientação absoluta (não tem magnetômetro).
+            # Usamos só a taxa de yaw do giro (z); imu_yaw_sign corrige a
+            # montagem de ponta-cabeça (Z pra baixo → sinal invertido). O yaw é
+            # integrado no FusedOdom. Ver project_imu_mpu6050_mounting.
+            self._imu_yaw_rate = msg.angular_velocity.z * self.imu_yaw_sign
             self._last_imu_wall = self.get_clock().now()
 
     def _on_flow(self, msg: Vector3Stamped):
@@ -270,10 +276,11 @@ class PoseEstimator(Node):
             )
 
     def _on_yaw_fix(self, msg: Float64):
-        # Gira o ponteiro de direção por `delta` rad. Sem IMU, o yaw é integrado
-        # da roda (FusedOdom) e deriva no giro — setá-lo aqui gruda (os passos
-        # seguintes integram a partir do novo valor). Com IMU fresca o yaw é
-        # sobrescrito pela IMU no _tick, então isto só tem efeito sem IMU.
+        # Gira o ponteiro de direção por `delta` rad. O yaw é sempre integrado
+        # (FusedOdom) — tanto da roda quanto do giro da MPU6050 (taxa, não
+        # absoluto) — então setá-lo aqui GRUDA: os passos seguintes integram a
+        # partir do novo valor, com ou sem IMU. (Com o BNO055 antigo, o yaw
+        # absoluto sobrescrevia isto a cada tick; não é mais o caso.)
         delta = float(msg.data)
         with self._lock:
             self._fused.yaw = wrap_pi(self._fused.yaw + delta)
@@ -325,7 +332,7 @@ class PoseEstimator(Node):
             res = self._fused.step(
                 dt,
                 self.v_fl, self.v_fr, self.v_rl, self.v_rr,
-                imu_fresh, self._imu_yaw, self._imu_yaw_rate,
+                imu_fresh, self._imu_yaw_rate,
                 flow_vx, flow_vy, alpha,
             )
 
