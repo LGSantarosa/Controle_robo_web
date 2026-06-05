@@ -61,6 +61,13 @@ def generate_launch_description():
                     '(Z pra baixo, default). Trocar p/ 1.0 se o giro vier invertido '
                     'na bancada — sem reflashear a MEGA.'
     )
+    use_flow_arg = DeclareLaunchArgument(
+        'use_flow', default_value='false',
+        description='Funde o optical flow (PMW3901) na translação. OFF por padrao: '
+                    'o sensor cospe lixo por EMI do motor ao dirigir e infla a pose '
+                    '(ver project_pmw3901_emi_motor). Religar com use_flow:=true quando '
+                    'o HW do shifter for corrigido.'
+    )
     mega_port_arg = DeclareLaunchArgument(
         'mega_port', default_value='/dev/mega',
         description='Porta serial USB da Arduino MEGA'
@@ -121,6 +128,8 @@ def generate_launch_description():
             # Sinal do yaw da MPU6050 (montagem de ponta-cabeça → -1.0). Override
             # de bancada via `imu_yaw_sign:=1.0` se o giro vier invertido.
             'imu_yaw_sign': LaunchConfiguration('imu_yaw_sign'),
+            # Flow OFF por padrão (EMI do PMW3901 infla a pose ao dirigir).
+            'use_flow': LaunchConfiguration('use_flow'),
             # Calibração do PMW3901 → body frame (movida do trekking.launch.py:
             # frente entra por dy negativo do sensor). Vale pra TODOS os modos
             # agora que a fusão é a odometria base.
@@ -192,6 +201,7 @@ def generate_launch_description():
         left_wheel_sign_arg,
         right_wheel_sign_arg,
         imu_yaw_sign_arg,
+        use_flow_arg,
         mega_port_arg,
         mega_baud_arg,
         robot_state_publisher,

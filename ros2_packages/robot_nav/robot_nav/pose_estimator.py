@@ -94,6 +94,12 @@ class PoseEstimator(Node):
         self.declare_parameter('flow_quality_slope', 20.0)
         # Watchdog do flow: se passar tempo demais sem mensagem, peso vai a zero
         self.declare_parameter('flow_timeout', 0.5)
+        # Liga/desliga a CONTRIBUIÇÃO do flow na fusão de translação. O PMW3901
+        # cospe lixo por EMI do motor ao dirigir (ver project_pmw3901_emi_motor);
+        # com use_flow=False o α é forçado a 0 → translação = só roda (+ IMU no
+        # yaw). Mantém o nó assinando /optical_flow (diagnóstico) sem deixá-lo
+        # corromper a pose. Religar quando o HW do shifter for corrigido.
+        self.declare_parameter('use_flow', True)
 
         # --- Detecção de slip ---
         self.declare_parameter('slip_threshold', 0.15)  # m/s
@@ -130,6 +136,7 @@ class PoseEstimator(Node):
         self.q_mid          = float(self.get_parameter('flow_quality_mid').value)
         self.q_slope        = float(self.get_parameter('flow_quality_slope').value)
         self.flow_timeout   = float(self.get_parameter('flow_timeout').value)
+        self.use_flow       = bool(self.get_parameter('use_flow').value)
 
         self.slip_threshold = float(self.get_parameter('slip_threshold').value)
         self.pose_fix_gain  = float(self.get_parameter('pose_fix_gain').value)
@@ -325,6 +332,9 @@ class PoseEstimator(Node):
                 flow_age = (now - self._last_flow_wall).nanoseconds / 1e9
             alpha = flow_alpha(self.flow_quality, self.q_mid, self.q_slope,
                                flow_age, self.flow_timeout)
+            # Flow desligado (EMI do PMW3901): zera o peso → translação só de roda.
+            if not self.use_flow:
+                alpha = 0.0
             flow_stale = flow_age > self.flow_timeout
             flow_vx = 0.0 if flow_stale else self.flow_vx
             flow_vy = 0.0 if flow_stale else self.flow_vy
