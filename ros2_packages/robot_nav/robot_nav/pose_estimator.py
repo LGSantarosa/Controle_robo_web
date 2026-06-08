@@ -79,11 +79,17 @@ class PoseEstimator(Node):
         self.declare_parameter('right_wheel_sign', 1.0)
 
         # --- PMW3901 ---
-        # FoV 42°, matriz 35×35 → rad/pix ≈ 0.021. m/contagem = h · tan(rad/pix).
-        # Altura nominal do sensor ao chão (centro do robô): 12 cm.
+        # Escala: m/contagem = flow_height · tan(rad_per_count). O rad_per_count é
+        # CALIBRADO empiricamente — NÃO derivado de FoV/Npix. O modelo antigo
+        # "1 count = 1 pixel" (h·tan(42°/35)) dava 2,51 mm/count e errava a escala
+        # por ~12,8× porque o PMW3901 interpola subpixel (~445 counts no FoV, não
+        # 35). Calibração 2026-06-08: dois cursos medidos de 2,00 m no chão →
+        # Σdy=-10107 (0,198 mm/count) e Σdy=-10248 (0,195 mm/count), 0 lixo,
+        # SQUAL~130 → m/count ≈ 0,196 mm @ h=0,12 m → rad_per_count ≈ 1,63e-3.
+        # rad_per_count independe da altura (propriedade da óptica); m/count
+        # escala linear com flow_height, então remontou mais alto → só ajustar h.
         self.declare_parameter('flow_height', 0.12)
-        self.declare_parameter('flow_fov_deg', 42.0)
-        self.declare_parameter('flow_pixels', 35)
+        self.declare_parameter('flow_rad_per_count', 0.00163)
         # Eixos do PMW3901 vs body frame do robô. Default: x_sensor = forward,
         # y_sensor = lateral à esquerda. Ajustar via launch se montar girado.
         self.declare_parameter('flow_x_sign', 1.0)
@@ -125,11 +131,9 @@ class PoseEstimator(Node):
         self.left_sign      = float(self.get_parameter('left_wheel_sign').value)
         self.right_sign     = float(self.get_parameter('right_wheel_sign').value)
 
-        self.flow_height    = float(self.get_parameter('flow_height').value)
-        fov_rad             = math.radians(float(self.get_parameter('flow_fov_deg').value))
-        n_pix               = int(self.get_parameter('flow_pixels').value)
-        rad_per_pix         = fov_rad / max(1, n_pix)
-        self.m_per_count    = self.flow_height * math.tan(rad_per_pix)
+        self.flow_height        = float(self.get_parameter('flow_height').value)
+        self.flow_rad_per_count = float(self.get_parameter('flow_rad_per_count').value)
+        self.m_per_count        = self.flow_height * math.tan(self.flow_rad_per_count)
         self.flow_x_sign    = float(self.get_parameter('flow_x_sign').value)
         self.flow_y_sign    = float(self.get_parameter('flow_y_sign').value)
         self.flow_swap_xy   = bool(self.get_parameter('flow_swap_xy').value)
