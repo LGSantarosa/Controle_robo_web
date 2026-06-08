@@ -33,7 +33,7 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, TransformStamped, Vector3Stamped
 from tf2_ros import TransformBroadcaster
 
-from .fused_odom import FusedOdom, flow_alpha
+from .fused_odom import FusedOdom, flow_alpha, flow_yaw_gate
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -103,6 +103,12 @@ class PoseEstimator(Node):
         self.declare_parameter('flow_quality_slope', 20.0)
         # Watchdog do flow: se passar tempo demais sem mensagem, peso vai a zero
         self.declare_parameter('flow_timeout', 0.5)
+        # Gate por taxa de giro (rad/s): em rotação rápida o PMW3901 lê ω×r como
+        # translação falsa (sensor fora do centro de giro) → o α é zerado. Passa
+        # inteiro abaixo de _lo, ignora acima de _hi. Usa o ω limpo da IMU.
+        # 0.4 rad/s ≈ 23°/s (curva mansa, flow vale); 1.2 ≈ 69°/s (giro, corta).
+        self.declare_parameter('flow_yaw_gate_lo', 0.4)
+        self.declare_parameter('flow_yaw_gate_hi', 1.2)
         # Liga/desliga a CONTRIBUIÇÃO do flow na fusão de translação. O PMW3901
         # cospe lixo por EMI do motor ao dirigir (ver project_pmw3901_emi_motor);
         # com use_flow=False o α é forçado a 0 → translação = só roda (+ IMU no
@@ -143,6 +149,8 @@ class PoseEstimator(Node):
         self.q_mid          = float(self.get_parameter('flow_quality_mid').value)
         self.q_slope        = float(self.get_parameter('flow_quality_slope').value)
         self.flow_timeout   = float(self.get_parameter('flow_timeout').value)
+        self.flow_yaw_gate_lo = float(self.get_parameter('flow_yaw_gate_lo').value)
+        self.flow_yaw_gate_hi = float(self.get_parameter('flow_yaw_gate_hi').value)
         self.use_flow       = bool(self.get_parameter('use_flow').value)
 
         self.slip_threshold = float(self.get_parameter('slip_threshold').value)
@@ -342,6 +350,10 @@ class PoseEstimator(Node):
             # Flow desligado (EMI do PMW3901): zera o peso → translação só de roda.
             if not self.use_flow:
                 alpha = 0.0
+            # Gate por giro: em rotação rápida o flow lê ω×r como translação
+            # falsa → corta o peso usando o ω limpo da IMU. Ver flow_yaw_gate.
+            alpha *= flow_yaw_gate(self._imu_yaw_rate,
+                                   self.flow_yaw_gate_lo, self.flow_yaw_gate_hi)
             flow_stale = flow_age > self.flow_timeout
             flow_vx = 0.0 if flow_stale else self.flow_vx
             flow_vy = 0.0 if flow_stale else self.flow_vy

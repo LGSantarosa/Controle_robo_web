@@ -5,9 +5,28 @@ import pytest
 from robot_nav.fused_odom import (
     FusedOdom,
     flow_alpha,
+    flow_yaw_gate,
     fuse_translation,
     wheel_twist,
 )
+
+
+def test_flow_yaw_gate_full_when_slow():
+    # parado ou curva mansa → flow passa inteiro
+    assert flow_yaw_gate(0.0, 0.4, 1.2) == 1.0
+    assert flow_yaw_gate(0.3, 0.4, 1.2) == 1.0
+    assert flow_yaw_gate(-0.3, 0.4, 1.2) == 1.0   # simétrico no sinal
+
+
+def test_flow_yaw_gate_zero_when_fast():
+    # giro rápido (qualquer sinal) → flow ignorado
+    assert flow_yaw_gate(2.0, 0.4, 1.2) == 0.0
+    assert flow_yaw_gate(-1.5, 0.4, 1.2) == 0.0
+
+
+def test_flow_yaw_gate_linear_ramp():
+    # no meio da banda, rampa linear
+    assert flow_yaw_gate(0.8, 0.4, 1.2) == pytest.approx(0.5)
 
 
 def test_wheel_twist_straight():

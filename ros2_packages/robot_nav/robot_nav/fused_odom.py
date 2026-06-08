@@ -47,6 +47,23 @@ def flow_alpha(quality, q_mid, q_slope, flow_age, flow_timeout):
     return e / (1.0 + e)
 
 
+def flow_yaw_gate(yaw_rate, gate_lo, gate_hi):
+    """Fator ∈ [0,1] que ZERA o flow em rotação rápida.
+
+    Em giro, o PMW3901 (montado fora do centro de rotação) lê ω×r_sensor como
+    TRANSLAÇÃO falsa — durante um spin chega a injetar ~0,5 m de deriva lateral
+    (medido na bancada 2026-06-08). A IMU dá o ω limpo (~99%), então usamos
+    |yaw_rate| pra cortar: passa inteiro abaixo de gate_lo, ignora acima de
+    gate_hi, rampa linear no meio (sem degrau → sem flicker no α).
+    """
+    w = abs(yaw_rate)
+    if w <= gate_lo:
+        return 1.0
+    if w >= gate_hi:
+        return 0.0
+    return (gate_hi - w) / (gate_hi - gate_lo)
+
+
 def fuse_translation(vx_wheel, flow_vx, flow_vy, alpha):
     """vx/vy no body frame: funde flow (peso α) e roda (vx); roda contribui 0 em vy."""
     vx_body = alpha * flow_vx + (1.0 - alpha) * vx_wheel
