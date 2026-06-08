@@ -33,7 +33,9 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, TransformStamped, Vector3Stamped
 from tf2_ros import TransformBroadcaster
 
-from .fused_odom import FusedOdom, flow_alpha, flow_tick_velocity, flow_yaw_gate
+from .fused_odom import (
+    FusedOdom, flow_alpha, flow_plausible, flow_tick_velocity, flow_yaw_gate,
+)
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -115,6 +117,12 @@ class PoseEstimator(Node):
         # yaw). Mantém o nó assinando /optical_flow (diagnóstico) sem deixá-lo
         # corromper a pose. Religar quando o HW do shifter for corrigido.
         self.declare_parameter('use_flow', True)
+        # Gate de plausibilidade: EMI do motor faz o PMW3901 cuspir velocidades
+        # impossíveis (medido -10,6 m/s parado) com quality ALTA — o gate de
+        # qualidade não pega. Acima de flow_v_max (m/s) a amostra é descartada
+        # (α→0 no tick, cai pra roda+IMU). 0.8 ≈ 2,3× a v_max do chassi (0,35),
+        # então nunca corta movimento real, só lixo. Ver project_pmw3901_emi_motor.
+        self.declare_parameter('flow_v_max', 0.8)
 
         # --- Detecção de slip ---
         self.declare_parameter('slip_threshold', 0.15)  # m/s
@@ -152,6 +160,7 @@ class PoseEstimator(Node):
         self.flow_yaw_gate_lo = float(self.get_parameter('flow_yaw_gate_lo').value)
         self.flow_yaw_gate_hi = float(self.get_parameter('flow_yaw_gate_hi').value)
         self.use_flow       = bool(self.get_parameter('use_flow').value)
+        self.flow_v_max     = float(self.get_parameter('flow_v_max').value)
 
         self.slip_threshold = float(self.get_parameter('slip_threshold').value)
         self.pose_fix_gain  = float(self.get_parameter('pose_fix_gain').value)
@@ -351,6 +360,16 @@ class PoseEstimator(Node):
                 self._flow_dx_accum, self._flow_dy_accum, dt)
             self._flow_dx_accum = 0.0
             self._flow_dy_accum = 0.0
+            # Gate de plausibilidade: pico de EMI (velocidade impossível com
+            # quality alta) → descarta o flow neste tick (só roda+IMU), pra não
+            # teleportar a pose e perder a localização na manobra.
+            if not flow_plausible(flow_vx_tick, flow_vy_tick, self.flow_v_max):
+                alpha = 0.0
+                self.get_logger().warn(
+                    f'flow IMPLAUSÍVEL (vx={flow_vx_tick:+.1f}, vy={flow_vy_tick:+.1f} '
+                    f'm/s > {self.flow_v_max:.1f}) — EMI, descartado neste tick',
+                    throttle_duration_sec=2.0,
+                )
             flow_stale = flow_age > self.flow_timeout
             flow_vx = 0.0 if flow_stale else flow_vx_tick
             flow_vy = 0.0 if flow_stale else flow_vy_tick

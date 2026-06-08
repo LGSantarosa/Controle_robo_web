@@ -5,6 +5,7 @@ import pytest
 from robot_nav.fused_odom import (
     FusedOdom,
     flow_alpha,
+    flow_plausible,
     flow_tick_velocity,
     flow_yaw_gate,
     fuse_translation,
@@ -58,6 +59,17 @@ def test_flow_alpha_half_at_qmid():
     a = flow_alpha(80.0, q_mid=80.0, q_slope=20.0,
                    flow_age=0.05, flow_timeout=0.5)
     assert a == pytest.approx(0.5)
+
+
+def test_flow_plausible_rejects_emi_garbage():
+    # EMI do motor faz o PMW3901 cuspir velocidades impossiveis com quality ALTA
+    # (medido na bancada: flow=-10.6 m/s e +2.27 m/s com as rodas paradas). O gate
+    # de qualidade nao pega; o de plausibilidade fisica sim.
+    assert flow_plausible(0.30, 0.05, v_max=0.8) is True     # andar normal passa
+    assert flow_plausible(-0.8, 0.0, v_max=0.8) is True      # no limite passa
+    assert flow_plausible(-10.61, 0.0, v_max=0.8) is False   # lixo de EMI
+    assert flow_plausible(0.0, 2.27, v_max=0.8) is False     # lixo lateral
+    assert flow_plausible(0.0, 0.0, v_max=0.8) is True       # parado passa
 
 
 def test_flow_tick_velocity_basic():

@@ -128,10 +128,10 @@ controller_server:
       # ---- DWBLocalPlanner (primary_controller, params herdados deste bloco) ----
       debug_trajectory_details: false
       min_vel_x: -0.1
-      # MEDROSO (2026-06-05): 0.35 → 0.25 m/s. Velocidade menor = mais tempo de
-      # reação e frenagem mais curta. O requisito é "nunca bater" (pode ser um
-      # humano) — abrimos mão de um pouco de velocidade por margem de segurança.
-      max_vel_x: 0.25
+      # 2026-06-08: revertido 0.25 → 0.35 (estava medroso/devagar). A segurança
+      # agora fica só no collision_monitor enfraquecido (reflexo de última hora),
+      # não em cortar velocidade no controlador.
+      max_vel_x: 0.35
       min_vel_y: 0.0
       max_vel_y: 0.0
       # 2.5 → 6.0: idem ao shim — o chassi precisa de ~6.0 p/ rotacionar de fato.
@@ -139,7 +139,7 @@ controller_server:
       # foi subido p/ 6.0, senão corta aqui).
       max_vel_theta: 6.0
       min_speed_xy: 0.0
-      max_speed_xy: 0.25
+      max_speed_xy: 0.35
       min_speed_theta: 0.0
       acc_lim_x: 1.0
       acc_lim_theta: 10.0
@@ -209,24 +209,22 @@ local_costmap:
           # LiDAR-only: todos os pontos vêm na altura do laser (~0.21 m).
           # Antes era -0.05 (filtro de chão da câmera RGB-D removida).
           min_obstacle_height: 0.0
-          # MEDROSO (2026-06-05): persiste a observação por 1 s. Perna fina de
-          # cadeira devolve só 1–2 feixes e PISCA — sem isso o raytrace de
-          # clearing apaga a marca no scan seguinte (feixe passa no vão entre as
-          # pernas) e o planner traça rota POR CIMA. Com 1 s a marca segura.
-          observation_persistence: 1.0
+          # 2026-06-08: revertido 1.0 → 0.0 (estava medroso — segurava obstáculo
+          # fantasma por 1 s e bloqueava a rota). Trade-off: perna fina de cadeira
+          # pode piscar no costmap; aceitável pra não travar a navegação.
+          observation_persistence: 0.0
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
           obstacle_max_range: 2.5
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # inflation_radius DEVE cobrir o raio circunscrito do robô (footprint
-        # 0.5×0.5 → 0.25·√2 ≈ 0.354 m) + margem, senão planner/controller passam
-        # rente às paredes e a quina raspa/bate. 0.45 = circunscrito + ~10 cm.
-        # cost_scaling menor (2.5) = gradiente mais suave → rota prefere o MEIO
-        # do corredor em vez de colar no obstáculo. (era 0.25 / 3.5.)
-        cost_scaling_factor: 2.5
-        inflation_radius: 0.45
+        # 2026-06-08: revertido p/ 0.25 / 3.5 (estava 0.45 / 2.5 = medroso —
+        # inflava demais e tornava ponto perto de parede inalcançável → o planner
+        # falhava "Failed to create plan" e o robô desistia). Risco de raspar a
+        # quina volta; aceitável pra não travar a navegação.
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.25
       # PI: false → só publica diffs. Reduz bandwidth pro web bridge.
       always_send_full_costmap: false
 
@@ -252,9 +250,8 @@ global_costmap:
           clearing: true
           marking: true
           data_type: "LaserScan"
-          # MEDROSO (2026-06-05): persiste 1 s — idem ao local. Segura a perna
-          # fina no costmap global pra o planner NÃO traçar rota por cima dela.
-          observation_persistence: 1.0
+          # 2026-06-08: revertido 1.0 → 0.0 (idem ao local — estava medroso).
+          observation_persistence: 0.0
           raytrace_max_range: 3.0
           obstacle_max_range: 2.5
       static_layer:
@@ -262,13 +259,12 @@ global_costmap:
         map_subscribe_transient_local: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # inflation_radius DEVE cobrir o raio circunscrito do robô (footprint
-        # 0.5×0.5 → 0.25·√2 ≈ 0.354 m) + margem, senão planner/controller passam
-        # rente às paredes e a quina raspa/bate. 0.45 = circunscrito + ~10 cm.
-        # cost_scaling menor (2.5) = gradiente mais suave → rota prefere o MEIO
-        # do corredor em vez de colar no obstáculo. (era 0.25 / 3.5.)
-        cost_scaling_factor: 2.5
-        inflation_radius: 0.45
+        # 2026-06-08: revertido p/ 0.25 / 3.5 (estava 0.45 / 2.5 = medroso —
+        # inflava demais e tornava ponto perto de parede inalcançável → o planner
+        # falhava "Failed to create plan" e o robô desistia). Risco de raspar a
+        # quina volta; aceitável pra não travar a navegação.
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.25
       # PI: false — diffs em vez do mapa inteiro.
       always_send_full_costmap: false
 
@@ -333,9 +329,9 @@ velocity_smoother:
     feedback: "OPEN_LOOP"
     # theta 0.8 → 2.5 (casa com FollowPath.max_vel_theta; senão o smoother
     # corta o giro do controller em 0.8). Ver docs/NAV2_GIRO_2026-06-03.md.
-    # MEDROSO (2026-06-05): linear 0.35 → 0.25 (casa com DWB max_vel_x). Angular
-    # fica em 6.0 (necessário p/ vencer a patinagem do giro). Ver memória.
-    max_velocity: [0.25, 0.0, 6.0]
+    # 2026-06-08: linear revertido 0.25 → 0.35 (casa com DWB max_vel_x; estava
+    # medroso). Angular 6.0 (necessário p/ vencer a patinagem do giro).
+    max_velocity: [0.35, 0.0, 6.0]
     # Ré alinhada com o DWB (min_vel_x: -0.1) — antes -0.15 deixava o smoother
     # permitir mais ré do que o planejador sabe gerar.
     min_velocity: [-0.1, 0.0, -6.0]
@@ -370,7 +366,10 @@ collision_monitor:
     source_timeout: 1.0
     base_shift_correction: True
     stop_pub_timeout: 2.0
-    polygons: ["PolygonSlow", "PolygonStop"]
+    # 2026-06-08: ENFRAQUECIDO a pedido. Só PolygonStop (a PolygonSlow rastejava
+    # a 30% perto de tudo = medroso). Agora é só um reflexo de parada de última
+    # hora, apertado e com min_points alto pra não disparar por ruído do LiDAR.
+    polygons: ["PolygonStop"]
     # Zona de DESACELERAÇÃO: ~40 cm além da borda do robô. Entrou algo aqui,
     # cai pra 30% da velocidade -> aproximação mansa, mais tempo de reagir.
     PolygonSlow:
@@ -389,9 +388,11 @@ collision_monitor:
     # coisa aqui -> para. Margem antes do contato real.
     PolygonStop:
       type: "polygon"
-      points: "[[0.37, 0.32], [0.37, -0.32], [-0.35, -0.32], [-0.35, 0.32]]"
+      # 2026-06-08: apertado (~7 cm além do footprint ±0.25, era ~12) e min_points
+      # 2 → 5: só para por objeto sólido bem próximo, não por 2 feixes de ruído.
+      points: "[[0.32, 0.30], [0.32, -0.30], [-0.32, -0.30], [-0.32, 0.30]]"
       action_type: "stop"
-      min_points: 2
+      min_points: 5
       visualize: True
       polygon_pub_topic: "polygon_stop"
       enabled: True

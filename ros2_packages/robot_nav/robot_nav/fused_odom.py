@@ -67,6 +67,21 @@ def flow_yaw_gate(yaw_rate, gate_lo, gate_hi):
     return (gate_hi - w) / (gate_hi - gate_lo)
 
 
+def flow_plausible(flow_vx, flow_vy, v_max):
+    """True se a velocidade do flow é fisicamente plausível (|v| ≤ v_max em cada
+    eixo).
+
+    O PMW3901 cospe lixo por EMI do motor na MANOBRA (giro no lugar, acel/freia):
+    medido na bancada flow=-10,6 m/s e +2,27 m/s com as rodas PARADAS, e com
+    quality ALTA (130-160) — o gate de qualidade (flow_alpha) NÃO pega. Como o
+    chassi não passa de ~0,35 m/s, qualquer leitura muito acima disso é EMI.
+    Descartar o flow nesse tick (cai pra roda+IMU) evita que o pico teleporte a
+    pose e perca a localização. Band-aid até o HW do shifter ser trocado
+    (ver project_pmw3901_emi_motor).
+    """
+    return abs(flow_vx) <= v_max and abs(flow_vy) <= v_max
+
+
 def flow_tick_velocity(accum_dx, accum_dy, dt):
     """Velocidade do flow no tick a partir do deslocamento ACUMULADO desde o
     último tick (m), dividido pelo dt do TICK.
