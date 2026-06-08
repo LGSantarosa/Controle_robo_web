@@ -72,7 +72,9 @@ class PoseEstimator(Node):
         super().__init__('pose_estimator')
 
         # --- Geometria das rodas (espelha odom_publisher) ---
-        self.declare_parameter('wheel_radius', 0.085)
+        # wheel_radius CALIBRADO 2026-06-08: 3 cursos retos de 2,00 m davam
+        # +3,7% longo com 0,085 (lia 2,04-2,12 m) → 0,082 centra em ~0%.
+        self.declare_parameter('wheel_radius', 0.082)
         self.declare_parameter('wheel_base', 0.50)
         self.declare_parameter('rpm_to_rads', 2.0 * math.pi / 60.0)
         self.declare_parameter('left_wheel_sign', 1.0)
@@ -83,13 +85,14 @@ class PoseEstimator(Node):
         # CALIBRADO empiricamente — NÃO derivado de FoV/Npix. O modelo antigo
         # "1 count = 1 pixel" (h·tan(42°/35)) dava 2,51 mm/count e errava a escala
         # por ~12,8× porque o PMW3901 interpola subpixel (~445 counts no FoV, não
-        # 35). Calibração 2026-06-08: dois cursos medidos de 2,00 m no chão →
-        # Σdy=-10107 (0,198 mm/count) e Σdy=-10248 (0,195 mm/count), 0 lixo,
-        # SQUAL~130 → m/count ≈ 0,196 mm @ h=0,12 m → rad_per_count ≈ 1,63e-3.
+        # 35). Calibração 2026-06-08: 5 cursos medidos de 2,00 m no chão →
+        # Σ|dy| = 10107/10248/9734/10084/9698 counts (média 9974), 0 lixo,
+        # SQUAL~130 → m/count ≈ 0,200 mm @ h=0,12 m → rad_per_count ≈ 1,67e-3.
+        # Espalhamento ~±5% é o ruído natural do óptico (entra na fusão como tal).
         # rad_per_count independe da altura (propriedade da óptica); m/count
         # escala linear com flow_height, então remontou mais alto → só ajustar h.
         self.declare_parameter('flow_height', 0.12)
-        self.declare_parameter('flow_rad_per_count', 0.00163)
+        self.declare_parameter('flow_rad_per_count', 0.00167)
         # Eixos do PMW3901 vs body frame do robô. Default: x_sensor = forward,
         # y_sensor = lateral à esquerda. Ajustar via launch se montar girado.
         self.declare_parameter('flow_x_sign', 1.0)

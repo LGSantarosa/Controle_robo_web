@@ -36,8 +36,8 @@ def generate_launch_description():
     urdf_file = os.path.join(pkg, 'urdf', 'robot.urdf.xacro')
 
     wheel_radius_arg = DeclareLaunchArgument(
-        'wheel_radius', default_value='0.085',
-        description='Raio das rodas em metros'
+        'wheel_radius', default_value='0.082',
+        description='Raio das rodas em metros (calibrado 2026-06-08: 0.085 dava +3.7% longo)'
     )
     wheel_base_arg = DeclareLaunchArgument(
         'wheel_base', default_value='0.50',
