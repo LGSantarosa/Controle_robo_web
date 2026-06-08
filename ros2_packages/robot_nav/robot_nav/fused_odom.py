@@ -50,9 +50,12 @@ def flow_alpha(quality, q_mid, q_slope, flow_age, flow_timeout):
 def flow_yaw_gate(yaw_rate, gate_lo, gate_hi):
     """Fator ∈ [0,1] que ZERA o flow em rotação rápida.
 
-    Em giro, o PMW3901 (montado fora do centro de rotação) lê ω×r_sensor como
-    TRANSLAÇÃO falsa — durante um spin chega a injetar ~0,5 m de deriva lateral
-    (medido na bancada 2026-06-08). A IMU dá o ω limpo (~99%), então usamos
+    O sensor está no CENTRO do robô (não é erro de ω×r). Em giro o PMW3901, que
+    é um sensor de TRANSLAÇÃO, vê a textura do chão GIRANDO sob ele — não uma
+    translação limpa — e o casamento de imagem cospe dx/dy espúrio. Soma-se a
+    derrapagem do skid-steer (o robô não pivota perfeito, translada um pouco DE
+    VERDADE), indistinguível do artefato. Num spin chega a ~0,5 m de deriva
+    lateral no flow (medido 2026-06-08). A IMU dá o ω limpo (~99%), então usamos
     |yaw_rate| pra cortar: passa inteiro abaixo de gate_lo, ignora acima de
     gate_hi, rampa linear no meio (sem degrau → sem flicker no α).
     """

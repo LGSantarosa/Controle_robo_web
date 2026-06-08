@@ -103,9 +103,9 @@ class PoseEstimator(Node):
         self.declare_parameter('flow_quality_slope', 20.0)
         # Watchdog do flow: se passar tempo demais sem mensagem, peso vai a zero
         self.declare_parameter('flow_timeout', 0.5)
-        # Gate por taxa de giro (rad/s): em rotação rápida o PMW3901 lê ω×r como
-        # translação falsa (sensor fora do centro de giro) → o α é zerado. Passa
-        # inteiro abaixo de _lo, ignora acima de _hi. Usa o ω limpo da IMU.
+        # Gate por taxa de giro (rad/s): em rotação rápida o PMW3901 (no centro)
+        # vê o chão girando → dx/dy espúrio, + derrapagem real do spin → o α é
+        # zerado. Passa inteiro abaixo de _lo, ignora acima de _hi. ω limpo da IMU.
         # 0.4 rad/s ≈ 23°/s (curva mansa, flow vale); 1.2 ≈ 69°/s (giro, corta).
         self.declare_parameter('flow_yaw_gate_lo', 0.4)
         self.declare_parameter('flow_yaw_gate_hi', 1.2)
@@ -350,8 +350,8 @@ class PoseEstimator(Node):
             # Flow desligado (EMI do PMW3901): zera o peso → translação só de roda.
             if not self.use_flow:
                 alpha = 0.0
-            # Gate por giro: em rotação rápida o flow lê ω×r como translação
-            # falsa → corta o peso usando o ω limpo da IMU. Ver flow_yaw_gate.
+            # Gate por giro: em rotação rápida o flow vê o chão girando (dx/dy
+            # espúrio) + derrapagem do spin → corta o peso com o ω limpo da IMU.
             alpha *= flow_yaw_gate(self._imu_yaw_rate,
                                    self.flow_yaw_gate_lo, self.flow_yaw_gate_hi)
             flow_stale = flow_age > self.flow_timeout
