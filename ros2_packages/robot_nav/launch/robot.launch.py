@@ -62,11 +62,12 @@ def generate_launch_description():
                     'na bancada — sem reflashear a MEGA.'
     )
     use_flow_arg = DeclareLaunchArgument(
-        'use_flow', default_value='false',
-        description='Funde o optical flow (PMW3901) na translação. OFF por padrao: '
-                    'o sensor cospe lixo por EMI do motor ao dirigir e infla a pose '
-                    '(ver project_pmw3901_emi_motor). Religar com use_flow:=true quando '
-                    'o HW do shifter for corrigido.'
+        'use_flow', default_value='true',
+        description='Funde o optical flow (PMW3901) na translacao. ON por padrao '
+                    'desde 2026-06-08: escala calibrada (0.200mm/count), EMI nao '
+                    'vaza (mitigacao do firmware, lixo=0 girando) e a translacao '
+                    'falsa no giro e cortada pelo flow_yaw_gate. use_flow:=false '
+                    'desliga (so roda+IMU).'
     )
     mega_port_arg = DeclareLaunchArgument(
         'mega_port', default_value='/dev/mega',
