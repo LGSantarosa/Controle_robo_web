@@ -371,10 +371,12 @@ collision_monitor:
     source_timeout: 1.0
     base_shift_correction: True
     stop_pub_timeout: 2.0
-    # 2026-06-08: ENFRAQUECIDO a pedido. Só PolygonStop (a PolygonSlow rastejava
-    # a 30% perto de tudo = medroso). Agora é só um reflexo de parada de última
-    # hora, apertado e com min_points alto pra não disparar por ruído do LiDAR.
-    polygons: ["PolygonStop"]
+    # 2026-06-08 — RESTAURADO FORTE depois que o robô ATROPELOU uma pessoa. O
+    # enfraquecimento (só PolygonStop apertada, sem slowdown, min_points 5) tirou
+    # a distância de frenagem: chegava a 0,35 m/s e batia. SEGURANÇA não é medroso
+    # — agilidade vem do controlador, não de capar o reflexo. As duas zonas voltam:
+    # desacelera longe, para com margem. min_points BAIXO (pega gente/perna fina).
+    polygons: ["PolygonSlow", "PolygonStop"]
     # Zona de DESACELERAÇÃO: ~40 cm além da borda do robô. Entrou algo aqui,
     # cai pra 30% da velocidade -> aproximação mansa, mais tempo de reagir.
     PolygonSlow:
@@ -393,11 +395,13 @@ collision_monitor:
     # coisa aqui -> para. Margem antes do contato real.
     PolygonStop:
       type: "polygon"
-      # 2026-06-08: apertado (~7 cm além do footprint ±0.25, era ~12) e min_points
-      # 2 → 5: só para por objeto sólido bem próximo, não por 2 feixes de ruído.
-      points: "[[0.32, 0.30], [0.32, -0.30], [-0.32, -0.30], [-0.32, 0.30]]"
+      # 2026-06-08: RESTAURADO + AUMENTADO p/ ~20 cm além do footprint ±0.25 (era
+      # 12, eu tinha apertado errado p/ 7 e ele bateu). min_points 5 → 2: 2 feixes
+      # já param (perna de gente/cadeira). Margem grande = para ANTES do contato,
+      # ainda mais combinado com a PolygonSlow desacelerando na aproximação.
+      points: "[[0.45, 0.38], [0.45, -0.38], [-0.40, -0.38], [-0.40, 0.38]]"
       action_type: "stop"
-      min_points: 5
+      min_points: 2
       visualize: True
       polygon_pub_topic: "polygon_stop"
       enabled: True
