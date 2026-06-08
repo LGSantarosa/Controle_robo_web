@@ -33,7 +33,7 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, TransformStamped, Vector3Stamped
 from tf2_ros import TransformBroadcaster
 
-from .fused_odom import FusedOdom, flow_alpha, flow_yaw_gate
+from .fused_odom import FusedOdom, flow_alpha, flow_tick_velocity, flow_yaw_gate
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -175,9 +175,12 @@ class PoseEstimator(Node):
         self.v_fl = 0.0; self.v_fr = 0.0
         self.v_rl = 0.0; self.v_rr = 0.0
 
-        # Velocidade body-frame do flow (m/s)
-        self.flow_vx = 0.0
-        self.flow_vy = 0.0
+        # Deslocamento body-frame do flow ACUMULADO desde o último tick (m). O
+        # tick converte em velocidade (accum/dt_tick) — ver flow_tick_velocity:
+        # NÃO se calcula velocidade pelo intervalo de chegada (rajada inflava a
+        # pose ~2×). Drenado a cada tick.
+        self._flow_dx_accum = 0.0
+        self._flow_dy_accum = 0.0
         self.flow_quality = 0.0
         self._last_flow_stamp = None  # rclpy.time.Time
         self._last_flow_wall = None   # tempo de chegada
@@ -245,36 +248,24 @@ class PoseEstimator(Node):
             self._last_imu_wall = self.get_clock().now()
 
     def _on_flow(self, msg: Vector3Stamped):
-        # dx, dy são contagens acumuladas desde a última mensagem.
-        # Velocidade = dist / dt entre mensagens consecutivas.
-        # O dt é medido por chegada (não pelo stamp do firmware), o que só é
-        # correto se a cadência do flow for regular. O firmware garante isso
-        # (AUDITORIA_2026-05-29 A2): amostra rejeitada por EMI é publicada NULA
-        # (quality=0 → α≈0 aqui) em vez de suprimida, então não abre buraco no
-        # dt e a amostra boa seguinte não fica subestimada.
+        # dx, dy são contagens acumuladas desde a última mensagem. Convertemos em
+        # DESLOCAMENTO (metros) e ACUMULAMOS — o tick fecha em velocidade dividindo
+        # pelo dt do tick. NÃO calculamos velocidade pelo intervalo de chegada:
+        # o PMW3901 chega em rajada e d/dt_chegada segurado/re-integrado dobrava a
+        # pose (ver flow_tick_velocity). Amostra EMI vem NULA (quality=0 → α≈0;
+        # AUDITORIA_2026-05-29 A2), então só soma ~0 no acumulador, sem furo.
         now = self.get_clock().now()
         dx = msg.vector.x
         dy = msg.vector.y
         quality = msg.vector.z
 
         with self._lock:
-            if self._last_flow_wall is None:
-                self._last_flow_wall = now
-                self.flow_quality = quality
-                return
-            dt = (now - self._last_flow_wall).nanoseconds / 1e9
-            self._last_flow_wall = now
-            if dt <= 1e-4:
-                return
-
+            self._last_flow_wall = now    # mantém p/ freshness/timeout no tick
             # Converte contagens → metros e aplica sinais/swap
             if self.flow_swap_xy:
                 dx, dy = dy, dx
-            d_body_x = dx * self.flow_x_sign * self.m_per_count
-            d_body_y = dy * self.flow_y_sign * self.m_per_count
-
-            self.flow_vx = d_body_x / dt
-            self.flow_vy = d_body_y / dt
+            self._flow_dx_accum += dx * self.flow_x_sign * self.m_per_count
+            self._flow_dy_accum += dy * self.flow_y_sign * self.m_per_count
             self.flow_quality = quality
 
     def _on_pose_fix(self, msg: Vector3Stamped):
@@ -354,9 +345,15 @@ class PoseEstimator(Node):
             # espúrio) + derrapagem do spin → corta o peso com o ω limpo da IMU.
             alpha *= flow_yaw_gate(self._imu_yaw_rate,
                                    self.flow_yaw_gate_lo, self.flow_yaw_gate_hi)
+            # Deslocamento acumulado desde o último tick → velocidade pela janela
+            # do TICK (não pelo intervalo de chegada). Drena o acumulador.
+            flow_vx_tick, flow_vy_tick = flow_tick_velocity(
+                self._flow_dx_accum, self._flow_dy_accum, dt)
+            self._flow_dx_accum = 0.0
+            self._flow_dy_accum = 0.0
             flow_stale = flow_age > self.flow_timeout
-            flow_vx = 0.0 if flow_stale else self.flow_vx
-            flow_vy = 0.0 if flow_stale else self.flow_vy
+            flow_vx = 0.0 if flow_stale else flow_vx_tick
+            flow_vy = 0.0 if flow_stale else flow_vy_tick
 
             self._last_alpha = alpha
             self._last_flow_age = flow_age

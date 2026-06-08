@@ -25,6 +25,7 @@ import sys
 
 import rclpy
 from geometry_msgs.msg import Vector3Stamped
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 from rclpy.qos import qos_profile_sensor_data
@@ -55,10 +56,19 @@ class FlowCheck(Node):
         self.rpm_to_rads   = 2.0 * math.pi / 60.0
 
         # --- trilhas separadas (body frame, curso reto) ---
-        self.flow_fwd = 0.0   # ∫ flow_vx dt
-        self.flow_lat = 0.0    # ∫ flow_vy dt  (deveria ~0 num reto)
+        self.flow_fwd = 0.0   # ∫ d_body_x das contagens (canal limpo, robusto a dt)
+        self.flow_lat = 0.0    # ∫ d_body_y  (deveria ~0 num reto)
         self.wheel_fwd = 0.0   # ∫ wheel_vx dt
-        self.flow_path = 0.0   # ∫ |v_flow| dt (caminho percorrido, p/ ver inflação)
+        self.flow_path = 0.0   # ∫ |d_body| (caminho, p/ ver inflação)
+        # Reproduz a integração REAL do pose_estimator: segura flow_vx e re-integra
+        # a 50 Hz no tick. Se a cadência do flow tiver jitter/burst, isso VAZA vs o
+        # flow_fwd limpo — é o over-travel que o slam fica corrigindo.
+        self.flow_reint = 0.0   # ∫ flow_vx(segurado) · tick_dt
+        # /odom REAL (o que o slam_toolbox consome) — net e caminho da pose publicada
+        self.odom_x0 = self.odom_y0 = None
+        self.odom_x = self.odom_y = 0.0
+        self.odom_path = 0.0
+        self._odom_lx = self._odom_ly = None
 
         # --- estado instantâneo ---
         self.flow_vx = self.flow_vy = 0.0
@@ -78,6 +88,7 @@ class FlowCheck(Node):
 
         self.got_flow = self.got_wheel = self.got_imu = False
 
+        self.create_subscription(Odometry, '/odom', self.on_odom, 10)
         self.create_subscription(Vector3Stamped, '/optical_flow', self.on_flow,
                                  qos_profile_sensor_data)
         self.create_subscription(Imu, '/imu/data', self.on_imu, qos_profile_sensor_data)
@@ -134,6 +145,16 @@ class FlowCheck(Node):
         self.flow_lat += d_body_y
         self.flow_path += math.hypot(d_body_x, d_body_y)
 
+    def on_odom(self, m):
+        x = m.pose.pose.position.x
+        y = m.pose.pose.position.y
+        if self.odom_x0 is None:
+            self.odom_x0, self.odom_y0 = x, y
+            self._odom_lx, self._odom_ly = x, y
+        self.odom_path += math.hypot(x - self._odom_lx, y - self._odom_ly)
+        self._odom_lx, self._odom_ly = x, y
+        self.odom_x, self.odom_y = x, y
+
     def on_imu(self, m):
         self.gz_raw = math.degrees(m.angular_velocity.z)
         self.got_imu = True
@@ -164,6 +185,8 @@ class FlowCheck(Node):
             v_right = (self.v_fr + self.v_rr) / 2.0
             vx_wheel = (v_left + v_right) / 2.0
             self.wheel_fwd += vx_wheel * dt
+            # mesma integração do pose_estimator: flow_vx SEGURADO re-integrado
+            self.flow_reint += self.flow_vx * dt
 
         self._print_div += 1
         if self._print_div % 5:      # ~2 Hz
@@ -181,17 +204,26 @@ class FlowCheck(Node):
         q_mean = self.q_sum / self.n_flow if self.n_flow else 0.0
         a_mean = self.alpha_sum / self.n_alpha if self.n_alpha else 0.0
         ratio = (self.flow_fwd / self.wheel_fwd) if abs(self.wheel_fwd) > 1e-3 else float('nan')
+        odom_net = (math.hypot(self.odom_x - self.odom_x0, self.odom_y - self.odom_y0)
+                    if self.odom_x0 is not None else 0.0)
+        leak = (self.flow_reint / self.flow_fwd) if abs(self.flow_fwd) > 1e-3 else float('nan')
         print("\n========== RESUMO flow_check ==========")
-        print(f"  flow_fwd  = {self.flow_fwd:+.3f} m   (∫ flow_vx dt)")
-        print(f"  flow_lat  = {self.flow_lat:+.3f} m   (deveria ~0 num reto — deriva sem âncora)")
-        print(f"  flow_path = {self.flow_path:+.3f} m   (caminho |v| — inflação por ruído)")
+        print(f"  *** /odom REAL (o que o slam consome) ***")
+        print(f"  odom_net  = {odom_net:+.3f} m   (deslocamento liquido da pose publicada)")
+        print(f"  odom_path = {self.odom_path:+.3f} m   (caminho da pose — jitter inflaciona)")
+        print(f"  --- canais que alimentam o /odom ---")
+        print(f"  flow_fwd  = {self.flow_fwd:+.3f} m   (contagens limpas, robusto a dt)")
+        print(f"  flow_reint= {self.flow_reint:+.3f} m   (flow_vx SEGURADO re-integrado a 50Hz = jeito do pose_estimator)")
+        print(f"  reint/lim = {leak:.3f}            (>1 = a re-integração VAZA pra frente — over-travel)")
+        print(f"  flow_lat  = {self.flow_lat:+.3f} m   (deriva lateral sem ancora)")
+        print(f"  flow_path = {self.flow_path:+.3f} m   (caminho do flow limpo)")
         print(f"  roda_fwd  = {self.wheel_fwd:+.3f} m   (∫ wheel_vx dt)")
-        print(f"  flow/roda = {ratio:.3f}            (>1 = flow exagera o avanço)")
+        print(f"  flow/roda = {ratio:.3f}")
         print(f"  alpha med = {a_mean:.3f}            (peso real do flow na fusão)")
         print(f"  quality   = med {q_mean:.0f} / min {self.q_min:.0f}")
         print(f"  amostras  = {self.n_flow}  | q=0 (gateadas): {self.n_q0}  | spikes>500cnt: {self.n_spike}")
         print("=======================================")
-        print("Compare flow_fwd e roda_fwd com a TRENA. flow_lat alto = deriva lateral.")
+        print("odom_net vs TRENA = verdade. reint/lim>1 = bug da re-integração do flow.")
 
 
 def main():

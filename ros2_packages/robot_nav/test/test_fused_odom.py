@@ -5,6 +5,7 @@ import pytest
 from robot_nav.fused_odom import (
     FusedOdom,
     flow_alpha,
+    flow_tick_velocity,
     flow_yaw_gate,
     fuse_translation,
     wheel_twist,
@@ -57,6 +58,46 @@ def test_flow_alpha_half_at_qmid():
     a = flow_alpha(80.0, q_mid=80.0, q_slope=20.0,
                    flow_age=0.05, flow_timeout=0.5)
     assert a == pytest.approx(0.5)
+
+
+def test_flow_tick_velocity_basic():
+    # deslocamento acumulado / dt do tick = velocidade do tick
+    vx, vy = flow_tick_velocity(0.04, -0.02, dt=0.02)
+    assert vx == pytest.approx(2.0)
+    assert vy == pytest.approx(-1.0)
+    # dt nao-positivo nao explode
+    assert flow_tick_velocity(0.04, 0.0, dt=0.0) == (0.0, 0.0)
+
+
+def test_flow_tick_velocity_conserves_displacement_under_bursty_arrival():
+    # REGRESSAO do bug que dobrava a pose: o flow chega em RAJADA (2 msgs numa
+    # janela de tick, 0 na seguinte). Cada msg anda 0.02 m; 100 msgs = 2.00 m
+    # reais. Acumular o deslocamento e dividir pelo dt do TICK conserva os 2.00 m;
+    # o jeito antigo (flow_vx = d/dt_chegada SEGURADO e re-integrado a 50 Hz)
+    # inflava ~2x (medido na bancada: odom_net 4.88 m num percurso de 2 m).
+    tick_dt = 0.02
+    msgs_per_tick = [2, 0] * 50            # 100 msgs, padrao em rajada
+    true_total = 100 * 0.02               # 2.00 m
+
+    # NOVO (correto): acumula deslocamento, vel = accum/dt_tick, integra, zera
+    accum = 0.0
+    integrated_new = 0.0
+    for n in msgs_per_tick:
+        accum += n * 0.02
+        vx, _ = flow_tick_velocity(accum, 0.0, tick_dt)
+        integrated_new += vx * tick_dt
+        accum = 0.0
+    assert integrated_new == pytest.approx(true_total)
+
+    # ANTIGO (bug): vel instantanea do intervalo de chegada (tick/2 na rajada),
+    # SEGURADA e re-integrada no tick vazio seguinte tambem -> dobra.
+    held_v = 0.0
+    integrated_old = 0.0
+    for n in msgs_per_tick:
+        if n > 0:
+            held_v = 0.02 / (tick_dt / n)
+        integrated_old += held_v * tick_dt
+    assert integrated_old == pytest.approx(2.0 * true_total)
 
 
 def test_fuse_translation_alpha_zero_is_wheel_only():

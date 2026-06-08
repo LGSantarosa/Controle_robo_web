@@ -67,6 +67,23 @@ def flow_yaw_gate(yaw_rate, gate_lo, gate_hi):
     return (gate_hi - w) / (gate_hi - gate_lo)
 
 
+def flow_tick_velocity(accum_dx, accum_dy, dt):
+    """Velocidade do flow no tick a partir do deslocamento ACUMULADO desde o
+    último tick (m), dividido pelo dt do TICK.
+
+    Crítico: usar o dt da janela de integração (o tick), NÃO o intervalo de
+    chegada das mensagens. O PMW3901 chega em rajada (várias msgs coladas, depois
+    um gap); calcular flow_vx = d/dt_chegada gera uma velocidade instantânea
+    alta que, SEGURADA e re-integrada a 50 Hz, dobra a distância (bancada
+    2026-06-08: odom_net 4,88 m num percurso de 2,0 m, fator ~2,1×). Acumular o
+    deslocamento e dividir pelo dt do tick garante Σ(v·dt) = Σ(deslocamento) — a
+    pose não infla com o jitter de chegada.
+    """
+    if dt <= 0.0:
+        return 0.0, 0.0
+    return accum_dx / dt, accum_dy / dt
+
+
 def fuse_translation(vx_wheel, flow_vx, flow_vy, alpha):
     """vx/vy no body frame: funde flow (peso α) e roda (vx); roda contribui 0 em vy."""
     vx_body = alpha * flow_vx + (1.0 - alpha) * vx_wheel
