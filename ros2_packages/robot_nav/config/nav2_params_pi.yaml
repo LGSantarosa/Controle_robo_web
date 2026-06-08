@@ -95,87 +95,49 @@ controller_server:
       yaw_goal_tolerance: 0.35
       stateful: true
     FollowPath:
-      # 2026-06-03 (curvas/giro): DWB sozinho NÃO comita giro acentuado nem
-      # point-turn — os critics de progresso (PathDist/GoalDist) premiam ir reto,
-      # então o robô só faz curvinhas. Envelopamos o DWB no RotationShimController:
-      # quando o caminho aponta > angular_dist_threshold do yaw atual, ele gira no
-      # LUGAR (forte) até alinhar e SÓ ENTÃO entrega pro DWB seguir o caminho.
-      plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "dwb_core::DWBLocalPlanner"
-      # 0.30 rad ≈ 17° (era 30°): o shim alinha MAIS perto antes de soltar pro DWB,
-      # senão sobra até 30° de yaw que o DWB não fecha (deadzone) e ele erra o
-      # ponto. Piso prático ~17° pq a 6.0 rad/s @10 Hz cada ciclo gira ~34° (giro
-      # grosso) — abaixo disso ele passa do alvo e o shim pode ficar oscilando.
-      angular_dist_threshold: 0.30    # ≈17° — acima disso, gira no lugar antes
-      forward_sampling_distance: 0.5      # ponto do caminho p/ medir o heading-alvo
-      # 6.0 rad/s CASA com o manual (teleop_ps4.yaml scale_angular=6.0,
-      # BASE_ANGULAR_SPEED=6.0). Este chassi 4 rodas só vence a patinagem a ~6.0:
-      # via cmd_vel_to_wheels (±100·ω) isso é ±600 unid/roda; abaixo disso as rodas
-      # patinam e o robô NÃO gira. Era a causa raiz do "não vira" (nav2 ia até 2.5
-      # = ±250, fraco demais).
+      # 2026-06-08: TROCADO DWB+RotationShim → Regulated Pure Pursuit (RPP).
+      # POR QUÊ: o DWB é um otimizador de trajetória que PREMIA IR RETO e corta
+      # caminho — mesmo com a linha mandando virar, ele ia reto pro goal e batia
+      # (BaseObstacle.scale 0.15 mal pesava obstáculo). O RPP PERSEGUE um ponto
+      # SOBRE a linha planejada (não corta pro goal), gira no lugar ANTES quando o
+      # caminho aponta torto, freia em curva/perto de obstáculo, e é leve na Pi.
+      # Substitui também o RotationShim (rotate_to_heading é nativo do RPP).
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      desired_linear_vel: 0.35
+      # Lookahead = ponto-alvo na linha. Curto segue mais colado (vira mais cedo,
+      # corta menos quina); escala com a velocidade (0.3 parado → 0.9 rápido).
+      lookahead_dist: 0.5
+      min_lookahead_dist: 0.3
+      max_lookahead_dist: 0.9
+      lookahead_time: 1.5
+      use_velocity_scaled_lookahead_dist: true
+      # ---- giro no lugar (point-turn) p/ seguir a linha de cara ----
+      use_rotate_to_heading: true
+      # Caminho mais torto que ~29° → para e gira no lugar ANTES de andar.
+      rotate_to_heading_min_angle: 0.50
+      # Chassi 4 rodas só vence a patinagem do giro a ~6.0 rad/s (=±600 na
+      # cmd_vel_to_wheels). Mesmo número do manual e do antigo RotationShim.
       rotate_to_heading_angular_vel: 6.0
-      max_angular_accel: 10.0
-      rotate_to_goal_heading: true        # também gira p/ encarar o yaw final do goal
-      simulate_ahead_time: 1.0
-      # CRÍTICO (2026-06-03): false. Com closed_loop=true (default) o shim rampa o
-      # giro a partir da velocidade angular MEDIDA pela odom — e como ±100 (1.0
-      # rad/s, = max_angular_accel·dt) não vence o atrito estático, o robô não
-      # gira, a odom lê ~0, e ele re-comanda só 1.0 eternamente (trava em ±100, NÃO
-      # sobe pros 6.0). Medido na bancada: nav2 ±100 travado vs manual ±600 gira.
-      # false = rampa pela última velocidade COMANDADA (1→2→…→6.0), estoura o
-      # atrito e chega nos ±600 como o manual.
-      closed_loop: false
-      # ---- DWBLocalPlanner (primary_controller, params herdados deste bloco) ----
-      debug_trajectory_details: false
-      min_vel_x: -0.1
-      # 2026-06-08: revertido 0.25 → 0.35 (estava medroso/devagar). A segurança
-      # agora fica só no collision_monitor enfraquecido (reflexo de última hora),
-      # não em cortar velocidade no controlador.
-      max_vel_x: 0.35
-      min_vel_y: 0.0
-      max_vel_y: 0.0
-      # 2.5 → 6.0: idem ao shim — o chassi precisa de ~6.0 p/ rotacionar de fato.
-      # Dá ao DWB autoridade angular pra curvas em movimento (o smoother também
-      # foi subido p/ 6.0, senão corta aqui).
-      max_vel_theta: 6.0
-      min_speed_xy: 0.0
-      max_speed_xy: 0.35
-      min_speed_theta: 0.0
-      acc_lim_x: 1.0
-      acc_lim_theta: 10.0
-      decel_lim_x: -1.0
-      decel_lim_theta: -10.0
-      # PI: 20 → 12 samples por eixo. CPU do DWB cai linearmente, e o resultado
-      # é idêntico em rota livre (a granularidade fina só importa em manobra
-      # apertada — e mesmo aí 12×12=144 trajetórias é mais que suficiente).
-      vx_samples: 12
-      vy_samples: 1
-      vtheta_samples: 12
-      # PI: sim_time 1.5 → 1.2. Cada trajetória integrada por 1.2 s em vez
-      # de 1.5 s. Olha menos pra frente; com nossa v_max baixa (0.35 m/s)
-      # 1.2 s já cobre 42 cm — suficiente pra escolher.
-      sim_time: 1.2
-      linear_granularity: 0.05
-      angular_granularity: 0.025
-      # Alinhado com AMCL/behaviors em 0.5 — ver comentário em AMCL.
+      # ALTO de propósito: o RPP limita o giro pela velocidade MEDIDA (mesmo risco
+      # do closed_loop do shim — roda patina, odom lê ~0, travaria em ±100). Com
+      # max_angular_accel alto o RPP já COMANDA 6.0 de cara; quem faz a rampa
+      # segura é o velocity_smoother (OPEN_LOOP, max_accel angular 10) → sobe
+      # 0→6 sem depender da medida. Sem isso, não giraria (vide NAV2_GIRO).
+      max_angular_accel: 64.0
+      allow_reversing: false
+      # ---- anti-colisão: não bate ----
+      use_collision_detection: true
+      max_allowed_time_to_collision_up_to_carrot: 1.0
+      # ---- regula a velocidade: cai em curva fechada e ao chegar no goal ----
+      use_regulated_linear_velocity_scaling: true
+      use_cost_regulated_linear_velocity_scaling: false
+      regulated_linear_scaling_min_radius: 0.9
+      regulated_linear_scaling_min_speed: 0.25
+      min_approach_linear_velocity: 0.05
+      approach_velocity_scaling_dist: 0.6
+      max_robot_pose_search_dist: 10.0
+      use_interpolation: true
       transform_tolerance: 0.5
-      xy_goal_tolerance: 0.07
-      trans_stopped_velocity: 0.05
-      short_circuit_trajectory_evaluation: true
-      limit_vel_cmd_in_traj: false
-      stateful: true
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 0.15
-      PathAlign.scale: 8.0
-      PathAlign.forward_point_distance: 0.1
-      GoalAlign.scale: 6.0
-      GoalAlign.forward_point_distance: 0.15
-      PathDist.scale: 12.0
-      GoalDist.scale: 8.0
-      RotateToGoal.scale: 64.0
-      RotateToGoal.slowing_factor: 2.0
-      RotateToGoal.lookahead_time: -1.0
-      Oscillation.scale: 0.1
 
 local_costmap:
   local_costmap:
