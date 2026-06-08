@@ -279,7 +279,14 @@ bt_navigator:
     robot_base_frame: base_link
     odom_topic: /odom
     bt_loop_duration: 10
-    default_server_timeout: 20
+    # PI (2026-06-08): 20 → 200 ms. É o tempo que o BT espera o action server só
+    # ACEITAR (ack) o pedido. Medido na bancada: com SLAM localizando, o nav2
+    # replaneja a ~1 Hz e o pedido compute_path_to_pose estourava 20 ms na Pi sob
+    # carga (AMCL + 2 costmaps + DWB + smoother + collision_monitor) → "Timed out
+    # while waiting for action server to acknowledge goal request" → Goal failed
+    # ("girou um pouco e desistiu"). 200 ms dá folga p/ o planner_server aceitar
+    # sem largar a navegação. NÃO é o tempo de planejar (esse é outro) — só o ack.
+    default_server_timeout: 200
 
 waypoint_follower:
   ros__parameters:
