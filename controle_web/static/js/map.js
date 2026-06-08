@@ -616,25 +616,31 @@
       ctx.stroke();
     }
 
-    // Robô (seta laranja apontando para o yaw)
+    // Robô — QUADRADO no tamanho real (footprint 0.5×0.5 m) na escala do mapa,
+    // com risco de direção (yaw). Antes era uma seta fixa de 10 px, FORA de
+    // escala, então parecia longe dos obstáculos que ele já encostava.
     if (robotPose) {
       const c = worldToCanvas(robotPose.x, robotPose.y);
-      if (c) {
-        const size = 10;
+      const dr = getDrawRect();
+      if (c && dr) {
+        const ROBOT_SIZE_M = 0.5;   // lado do footprint (base_link ±0.25 m)
+        const half = (ROBOT_SIZE_M / mapInfo.resolution) * dr.scale / 2;
         ctx.save();
         ctx.translate(c.x, c.y);
         // No PNG y cresce pra baixo, então yaw (CCW positivo) é negativo visualmente.
         ctx.rotate(-robotPose.yaw);
-        ctx.fillStyle = '#f90';
-        ctx.beginPath();
-        ctx.moveTo(size, 0);
-        ctx.lineTo(-size * 0.6, size * 0.6);
-        ctx.lineTo(-size * 0.3, 0);
-        ctx.lineTo(-size * 0.6, -size * 0.6);
-        ctx.closePath();
-        ctx.fill();
+        // Corpo: quadrado translúcido do tamanho real do robô
+        ctx.fillStyle = 'rgba(255,153,0,0.35)';
+        ctx.fillRect(-half, -half, half * 2, half * 2);
+        ctx.strokeStyle = '#f90';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(-half, -half, half * 2, half * 2);
+        // Direção: risco do centro até a frente (+x do robô)
         ctx.strokeStyle = '#000';
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(half, 0);
         ctx.stroke();
         ctx.restore();
       }
