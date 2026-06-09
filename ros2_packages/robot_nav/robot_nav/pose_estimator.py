@@ -40,7 +40,7 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Float32, Float64, String
+from std_msgs.msg import Float32, Float64, Float64MultiArray, String
 
 
 from .utils import quat_to_yaw as _quat_to_yaw  # noqa: F401
@@ -219,14 +219,11 @@ class PoseEstimator(Node):
         # ponteiro. Usado pela web no SLAM (robô sem IMU): gira o yaw integrado
         # da roda e deixa o scan-matcher do slam re-convergir — sem tocar o mapa.
         self.create_subscription(Float64, 'trekking/yaw_fix', self._on_yaw_fix, 10)
-        self.create_subscription(Float64, 'hoverboard/front/left/velocity',
-                                 lambda m: self._set_wheel('fl', m), 10)
-        self.create_subscription(Float64, 'hoverboard/front/right/velocity',
-                                 lambda m: self._set_wheel('fr', m), 10)
-        self.create_subscription(Float64, 'hoverboard/rear/left/velocity',
-                                 lambda m: self._set_wheel('rl', m), 10)
-        self.create_subscription(Float64, 'hoverboard/rear/right/velocity',
-                                 lambda m: self._set_wheel('rr', m), 10)
+        # 4 rodas num tópico só (Float64MultiArray, ordem [FL,FR,RL,RR], RPM já
+        # normalizado pro referencial do robô pelo mega_bridge). Era 4 subs Float64
+        # separadas = 4 wakeups/ciclo do executor; 1 sub = 1 wakeup, mesmo dado.
+        self.create_subscription(Float64MultiArray, 'hoverboard/wheel_velocities',
+                                 self._on_wheels, 10)
 
         # --- Publishers ---
         self.pub_pose = self.create_publisher(PoseStamped, 'trekking/pose', 10)
@@ -315,14 +312,18 @@ class PoseEstimator(Node):
             f'yaw_fix: ponteiro girado {delta:+.3f} rad → yaw(odom)={new_yaw:+.3f}'
         )
 
-    def _set_wheel(self, which: str, msg: Float64):
-        sign = self.left_sign if which in ('fl', 'rl') else self.right_sign
-        v = msg.data * sign * self.rpm_to_rads * self.wheel_radius
+    def _on_wheels(self, msg: Float64MultiArray):
+        # data = [FL, FR, RL, RR] em RPM normalizado (ordem fixada pelo mega_bridge).
+        # Aplica sinal por lado (polaridade) + RPM→m/s, idêntico ao _set_wheel antigo.
+        if len(msg.data) != 4:
+            return
+        fl, fr, rl, rr = msg.data
+        k = self.rpm_to_rads * self.wheel_radius
         with self._lock:
-            if   which == 'fl': self.v_fl = v
-            elif which == 'fr': self.v_fr = v
-            elif which == 'rl': self.v_rl = v
-            elif which == 'rr': self.v_rr = v
+            self.v_fl = fl * self.left_sign  * k
+            self.v_fr = fr * self.right_sign * k
+            self.v_rl = rl * self.left_sign  * k
+            self.v_rr = rr * self.right_sign * k
 
     # ------------------------------------------------------------------
     def _tick(self):

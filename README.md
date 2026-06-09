@@ -173,7 +173,7 @@ Navegador (WASD / Gamepad / Clique / Waypoints)
         │  pinos  ───► relé / LED de marco / botão  (anel WS2812 comentado — A1)
 
   Sensores publicados pela MEGA via mega_bridge:
-    /hoverboard/{front,rear}/{left,right}/velocity  (RPM por roda)
+    /hoverboard/wheel_velocities  (Float64MultiArray, RPM por roda [FL,FR,RL,RR])
     /imu/data           (sensor_msgs/Imu — orientação, gyro, accel)
     /optical_flow       (Vector3Stamped — dx, dy, qualidade)
     /battery/{front,rear}
@@ -938,10 +938,7 @@ Tópicos consumidos:
 | `/web_vel` | `geometry_msgs/Twist` | `controle_web` (se `WEB_TELEOP=on`) | `twist_mux` (prio 50) | opcional |
 | `/nav_vel` | `geometry_msgs/Twist` | `velocity_smoother` (nav2) / `trekking_runner` | `twist_mux` (prio 10) | só `--nav2`/`--trekking` |
 | `/wheel_vel_setpoints` | `wheel_msgs/WheelSpeeds` | `cmd_vel_to_wheels` | `mega_bridge` (envia pras 2 placas) | sempre |
-| `/hoverboard/front/left/velocity` | `std_msgs/Float64` (RPM) | `mega_bridge` | `odom_publisher` | sempre |
-| `/hoverboard/front/right/velocity` | `std_msgs/Float64` (RPM) | `mega_bridge` | `odom_publisher` | sempre |
-| `/hoverboard/rear/left/velocity` | `std_msgs/Float64` (RPM) | `mega_bridge` | `odom_publisher` | sempre |
-| `/hoverboard/rear/right/velocity` | `std_msgs/Float64` (RPM) | `mega_bridge` | `odom_publisher` | sempre |
+| `/hoverboard/wheel_velocities` | `std_msgs/Float64MultiArray` (RPM, ordem [FL,FR,RL,RR]) | `mega_bridge` | `pose_estimator` | sempre |
 | `/imu/data` | `sensor_msgs/Imu` | `mega_bridge` | (disponível, ainda não fundido em odom) | sempre |
 | `/optical_flow` | `geometry_msgs/Vector3Stamped` | `mega_bridge` | (disponível, debug/futuro) | sempre |
 | `/battery/front` | `sensor_msgs/BatteryState` | `mega_bridge` | (monitoramento) | sempre |
@@ -1190,7 +1187,7 @@ ros2 node list | grep mega_bridge
 ros2 topic echo /wheel_vel_setpoints --once
 
 # 3) Feedback chegando da MEGA?
-ros2 topic echo /hoverboard/front/left/velocity --once
+ros2 topic echo /hoverboard/wheel_velocities --once   # data: [FL, FR, RL, RR] em RPM
 
 # 4) Watchdog: se o /wheel_vel_setpoints parar por 500 ms, a MEGA zera as
 #    placas automaticamente. Verifique se cmd_vel_to_wheels está publicando.

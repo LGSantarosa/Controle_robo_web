@@ -2,11 +2,10 @@
 """
 Odometria do robô 4 rodas (skid-steer, 2 placas de hoverboard).
 
-Subscreve as 4 RPMs publicadas pelo `mega_bridge`:
-  /hoverboard/front/left/velocity
-  /hoverboard/front/right/velocity
-  /hoverboard/rear/left/velocity
-  /hoverboard/rear/right/velocity
+Subscreve as 4 RPMs publicadas pelo `mega_bridge` num tópico só:
+  /hoverboard/wheel_velocities  (std_msgs/Float64MultiArray, ordem [FL,FR,RL,RR])
+
+NOTA: nó DEPRECADO — fora dos launches; o pose_estimator é o dono da odometria/TF.
 
 Calcula a média de cada lado (mais robusto a derrapagem de uma roda só) e
 aplica cinemática diff-drive:
@@ -27,7 +26,7 @@ import rclpy
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from std_msgs.msg import Float64
+from std_msgs.msg import Float64MultiArray
 from tf2_ros import TransformBroadcaster
 
 
@@ -68,14 +67,8 @@ class OdomPublisher(Node):
         self.v_rl = 0.0
         self.v_rr = 0.0
 
-        self.create_subscription(Float64, 'hoverboard/front/left/velocity',
-                                 lambda m: self._set_wheel('fl', m), 10)
-        self.create_subscription(Float64, 'hoverboard/front/right/velocity',
-                                 lambda m: self._set_wheel('fr', m), 10)
-        self.create_subscription(Float64, 'hoverboard/rear/left/velocity',
-                                 lambda m: self._set_wheel('rl', m), 10)
-        self.create_subscription(Float64, 'hoverboard/rear/right/velocity',
-                                 lambda m: self._set_wheel('rr', m), 10)
+        self.create_subscription(Float64MultiArray, 'hoverboard/wheel_velocities',
+                                 self._on_wheels, 10)
 
         self.odom_pub = self.create_publisher(Odometry, 'odom', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -90,19 +83,17 @@ class OdomPublisher(Node):
     def _rpm_to_ms(self, rpm: float) -> float:
         return rpm * self.rpm_to_rads * self.wheel_radius
 
-    def _set_wheel(self, which: str, msg: Float64):
-        # Aplica sinal por lado (calibração de polaridade) e converte RPM → m/s
-        sign = self.left_sign if which in ('fl', 'rl') else self.right_sign
-        v = self._rpm_to_ms(msg.data * sign)
+    def _on_wheels(self, msg: Float64MultiArray):
+        # data = [FL, FR, RL, RR] em RPM normalizado (mega_bridge). Aplica sinal
+        # por lado (polaridade) + RPM→m/s. (Nó deprecado, fora dos launches.)
+        if len(msg.data) != 4:
+            return
+        fl, fr, rl, rr = msg.data
         with self._wheel_lock:
-            if which == 'fl':
-                self.v_fl = v
-            elif which == 'fr':
-                self.v_fr = v
-            elif which == 'rl':
-                self.v_rl = v
-            elif which == 'rr':
-                self.v_rr = v
+            self.v_fl = self._rpm_to_ms(fl * self.left_sign)
+            self.v_fr = self._rpm_to_ms(fr * self.right_sign)
+            self.v_rl = self._rpm_to_ms(rl * self.left_sign)
+            self.v_rr = self._rpm_to_ms(rr * self.right_sign)
 
     def _publish_odom(self):
         now = self.get_clock().now()

@@ -30,7 +30,7 @@ from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Float64, String
+from std_msgs.msg import Float64MultiArray, String
 import json
 
 
@@ -93,14 +93,8 @@ class FlowCheck(Node):
                                  qos_profile_sensor_data)
         self.create_subscription(Imu, '/imu/data', self.on_imu, qos_profile_sensor_data)
         self.create_subscription(String, '/trekking/health', self.on_health, 10)
-        self.create_subscription(Float64, '/hoverboard/front/left/velocity',
-                                 lambda m: self._wheel('fl', m), 10)
-        self.create_subscription(Float64, '/hoverboard/front/right/velocity',
-                                 lambda m: self._wheel('fr', m), 10)
-        self.create_subscription(Float64, '/hoverboard/rear/left/velocity',
-                                 lambda m: self._wheel('rl', m), 10)
-        self.create_subscription(Float64, '/hoverboard/rear/right/velocity',
-                                 lambda m: self._wheel('rr', m), 10)
+        self.create_subscription(Float64MultiArray, '/hoverboard/wheel_velocities',
+                                 self._on_wheels, 10)
 
         # integra a roda no timer (velocidade contínua); flow integra na chegada
         self._last_tick = self.get_clock().now()
@@ -168,12 +162,13 @@ class FlowCheck(Node):
         except Exception:
             pass
 
-    def _wheel(self, which, m):
-        v = m.data * self.rpm_to_rads * self.wheel_radius
-        if   which == 'fl': self.v_fl = v
-        elif which == 'fr': self.v_fr = v
-        elif which == 'rl': self.v_rl = v
-        elif which == 'rr': self.v_rr = v
+    def _on_wheels(self, msg):
+        # data = [FL, FR, RL, RR] em RPM normalizado (mega_bridge). Tool de display:
+        # só converte RPM→m/s (sem sinal por-lado, igual à versão antiga).
+        if len(msg.data) != 4:
+            return
+        k = self.rpm_to_rads * self.wheel_radius
+        self.v_fl, self.v_fr, self.v_rl, self.v_rr = (x * k for x in msg.data)
         self.got_wheel = True
 
     def tick(self):

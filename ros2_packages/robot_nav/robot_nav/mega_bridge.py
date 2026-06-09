@@ -13,8 +13,7 @@ placa). Agora a MEGA agrega:
 Protocolo (frames) — ver firmware/mega_bridge/include/protocol.h.
 
 Tópicos publicados:
-  /hoverboard/front/{left,right}/velocity  (std_msgs/Float64, RPM)
-  /hoverboard/rear/{left,right}/velocity   (std_msgs/Float64, RPM)
+  /hoverboard/wheel_velocities             (std_msgs/Float64MultiArray, RPM — ordem [FL,FR,RL,RR])
   /imu/data                                (sensor_msgs/Imu)
   /optical_flow                            (geometry_msgs/Vector3Stamped, x=dx, y=dy, z=quality)
   /battery/{front,rear}                    (sensor_msgs/BatteryState, V)
@@ -39,7 +38,7 @@ from geometry_msgs.msg import Vector3Stamped
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState, Imu
-from std_msgs.msg import Bool, ColorRGBA, Float64, String
+from std_msgs.msg import Bool, ColorRGBA, Float64MultiArray, String
 from wheel_msgs.msg import WheelSpeeds
 
 START0 = 0xAA
@@ -192,12 +191,17 @@ class MegaBridge(Node):
         qos_cmd = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
 
         # Publishers
-        self._pub_rpm = {
-            ('front', 'left'):  self.create_publisher(Float64, 'hoverboard/front/left/velocity', qos_cmd),
-            ('front', 'right'): self.create_publisher(Float64, 'hoverboard/front/right/velocity', qos_cmd),
-            ('rear',  'left'):  self.create_publisher(Float64, 'hoverboard/rear/left/velocity', qos_cmd),
-            ('rear',  'right'): self.create_publisher(Float64, 'hoverboard/rear/right/velocity', qos_cmd),
-        }
+        # 4 rodas num ÚNICO tópico (Float64MultiArray, ordem fixa WHEEL_ORDER =
+        # [front_left, front_right, rear_left, rear_right]; RPM já normalizado pro
+        # referencial do robô via _fb_map). Antes eram 4 tópicos Float64 separados
+        # → o pose_estimator re-juntava com wheel_twist e CADA msg acordava o
+        # executor (4 wakeups/ciclo a 50 Hz). A MEGA já manda as 4 num frame STATE
+        # só, então publicar junto corta 4→1 publish aqui e 4→1 wakeup no consumidor
+        # SEM mudar nenhum valor. Os 4 valores seguem inspecionáveis no array.
+        self.WHEEL_ORDER = [('front', 'left'), ('front', 'right'),
+                            ('rear', 'left'), ('rear', 'right')]
+        self._pub_wheels = self.create_publisher(
+            Float64MultiArray, 'hoverboard/wheel_velocities', qos_cmd)
         self._pub_imu = self.create_publisher(Imu, 'imu/data', qos_profile_sensor_data)
         self._pub_flow = self.create_publisher(Vector3Stamped, 'optical_flow', qos_profile_sensor_data)
         self._pub_bat_front = self.create_publisher(BatteryState, 'battery/front', qos_cmd)
@@ -381,10 +385,12 @@ class MegaBridge(Node):
         # mapa _fb_map (sinal por roda + swap L/R na traseira). Sem isto a odom
         # cancela: andando reto (só sinal) OU no giro (sem o swap). Ver __init__.
         raw = {'FL': rpm_FL, 'FR': rpm_FR, 'RL': rpm_RL, 'RR': rpm_RR}
-        for (board, side), (src, sign) in self._fb_map.items():
-            self._pub_rpm[(board, side)].publish(
-                Float64(data=float(raw[src]) * sign)
-            )
+        wmsg = Float64MultiArray()
+        wmsg.data = [
+            float(raw[self._fb_map[key][0]]) * self._fb_map[key][1]
+            for key in self.WHEEL_ORDER
+        ]
+        self._pub_wheels.publish(wmsg)
 
         # Tensão de bateria muda devagar → republica só a ~5 Hz pra não pagar
         # publish RELIABLE a 50 Hz à toa.
