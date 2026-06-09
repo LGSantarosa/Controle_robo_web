@@ -136,6 +136,11 @@ class PoseEstimator(Node):
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('imu_timeout', 0.3)   # s — IMU a 50 Hz; >0.3 = ausente
+        # s — rodas (/hoverboard/wheel_velocities) a 50 Hz; >0.3 = stream da MEGA
+        # parou. CRÍTICO: sem isso, se a MEGA trava (I2C lockup) com o robô
+        # girando, o diferencial de roda congelado integra um giro fantasma
+        # infinito no mapa. Ver project_mega_i2c_hang + fused_odom (wheel_fresh).
+        self.declare_parameter('wheel_timeout', 0.3)
         # Sinal da taxa de yaw da IMU (gyro Z). A MPU6050 está montada DE
         # PONTA-CABEÇA (Z aponta pra baixo) → giro vem invertido, default -1.0.
         # Se na bancada o robô girar pro lado errado no odom, troque pra +1.0
@@ -169,6 +174,7 @@ class PoseEstimator(Node):
         self.odom_frame     = self.get_parameter('odom_frame').value
         self.base_frame     = self.get_parameter('base_frame').value
         self.imu_timeout    = float(self.get_parameter('imu_timeout').value)
+        self.wheel_timeout  = float(self.get_parameter('wheel_timeout').value)
         self.imu_yaw_sign   = float(self.get_parameter('imu_yaw_sign').value)
 
         # --- Estado ---
@@ -183,6 +189,8 @@ class PoseEstimator(Node):
         # Velocidades nas rodas (m/s, lado)
         self.v_fl = 0.0; self.v_fr = 0.0
         self.v_rl = 0.0; self.v_rr = 0.0
+        self._last_wheel_wall = None  # rclpy.time.Time — última /hoverboard/wheel_velocities
+        self._wheels_was_stale = False
 
         # Deslocamento body-frame do flow ACUMULADO desde o último tick (m). O
         # tick converte em velocidade (accum/dt_tick) — ver flow_tick_velocity:
@@ -324,6 +332,7 @@ class PoseEstimator(Node):
             self.v_fr = fr * self.right_sign * k
             self.v_rl = rl * self.left_sign  * k
             self.v_rr = rr * self.right_sign * k
+            self._last_wheel_wall = self.get_clock().now()
 
     # ------------------------------------------------------------------
     def _tick(self):
@@ -341,6 +350,15 @@ class PoseEstimator(Node):
             else:
                 imu_age = (now - self._last_imu_wall).nanoseconds / 1e9
             imu_fresh = imu_age <= self.imu_timeout
+
+            # Freshness das rodas: se a MEGA parou de mandar frames, v_fl..v_rr
+            # estão CONGELADAS. wheel_fresh=False faz o FusedOdom zerar a
+            # contribuição das rodas (anti-giro-fantasma) — ver project_mega_i2c_hang.
+            if self._last_wheel_wall is None:
+                wheel_age = float('inf')
+            else:
+                wheel_age = (now - self._last_wheel_wall).nanoseconds / 1e9
+            wheel_fresh = wheel_age <= self.wheel_timeout
 
             # Idade + peso do flow
             flow_age = float('inf')
@@ -384,6 +402,7 @@ class PoseEstimator(Node):
                 self.v_fl, self.v_fr, self.v_rl, self.v_rr,
                 imu_fresh, self._imu_yaw_rate,
                 flow_vx, flow_vy, alpha,
+                wheel_fresh=wheel_fresh,
             )
 
             # Cache pra slip / twist
@@ -421,6 +440,23 @@ class PoseEstimator(Node):
         elif not flow_stale and self._flow_was_stale:
             self.get_logger().info('flow voltou')
         self._flow_was_stale = flow_stale
+
+        # ----- diagnóstico do stream das rodas (MEGA viva?) -----
+        # Rodas stale = a MEGA parou de mandar frames (provável I2C lockup do
+        # firmware — ver project_mega_i2c_hang). A pose CONGELA (não integra
+        # lixo); este WARN denuncia a causa raiz no campo em vez de deixar o
+        # robô "girar no mapa" sem explicação.
+        wheels_stale = not wheel_fresh
+        if wheels_stale and not self._wheels_was_stale:
+            self.get_logger().error(
+                f'RODAS stale (age={wheel_age:.2f} s > {self.wheel_timeout:.2f} s) — '
+                f'stream da MEGA parou! Pose CONGELADA (anti-giro-fantasma). '
+                f'Cheque a MEGA (LED ON aceso + TX apagado = firmware travado).',
+                throttle_duration_sec=5.0,
+            )
+        elif not wheels_stale and self._wheels_was_stale:
+            self.get_logger().info('rodas voltaram — stream da MEGA restabelecido')
+        self._wheels_was_stale = wheels_stale
 
         if alpha < 0.05:
             if self._alpha_low_since is None:

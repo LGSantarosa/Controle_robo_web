@@ -128,8 +128,21 @@ class FusedOdom:
 
     def step(self, dt, v_fl, v_fr, v_rl, v_rr,
              imu_fresh, imu_yaw_rate,
-             flow_vx, flow_vy, alpha):
+             flow_vx, flow_vy, alpha,
+             wheel_fresh=True):
         vx_wheel, wheel_angular = wheel_twist(v_fl, v_fr, v_rl, v_rr, self.wheel_base)
+
+        # --- guarda de freshness das rodas (anti-giro-fantasma) ---
+        # Quando o stream da MEGA para (I2C lockup do firmware — ver
+        # project_mega_i2c_hang), `_on_wheels` deixa de disparar e v_fl..v_rr
+        # ficam CONGELADAS no último valor. Se o robô estava girando, o
+        # diferencial congelado vira yaw_rate constante → o tick (50 Hz)
+        # integra um giro INFINITO no mapa com o robô parado. Sem dado novo, a
+        # contribuição das rodas é DESCONHECIDA, não "o último valor": zera.
+        # (Mesma proteção que o flow tem via flow_timeout → vx=0.)
+        if not wheel_fresh:
+            vx_wheel = 0.0
+            wheel_angular = 0.0
 
         # --- seleção da TAXA de yaw com degradação graciosa ---
         # MPU6050 não dá yaw absoluto: integramos sempre a partir do yaw atual

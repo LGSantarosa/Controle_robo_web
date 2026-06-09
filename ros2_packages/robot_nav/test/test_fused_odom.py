@@ -161,6 +161,41 @@ def test_imu_dropout_continues_wheel_from_last_yaw():
     assert r.yaw == pytest.approx(1.0 + 2.0 * 0.1)  # continua de 1.0
 
 
+def test_stale_stream_freezes_pose_no_phantom_spin():
+    # REGRESSAO do giro fantasma (2026-06-09): a MEGA travou (I2C lockup) e
+    # PAROU de mandar frames. Sem novos /imu/data nem /hoverboard/wheel_velocities,
+    # _imu_yaw_rate e v_fl..v_rr ficam CONGELADOS no ultimo valor — e o robo
+    # estava GIRANDO (rodas assimetricas). O tick segue rodando a 50 Hz. Sem
+    # guarda de freshness, o yaw integrava o diferencial de roda congelado pra
+    # sempre -> heading girava no mapa com o robo fisicamente parado.
+    # Com IMU stale E rodas stale: NAO integra nada (pose congela).
+    fo = FusedOdom(wheel_base=0.5)
+    fo.yaw = 1.0  # estava em algum heading
+    # rodas congeladas num giro (esquerda recua, direita avanca)
+    r = fo.step(dt=0.02, v_fl=-0.5, v_fr=0.5, v_rl=-0.5, v_rr=0.5,
+                imu_fresh=False, imu_yaw_rate=0.0,
+                flow_vx=0.0, flow_vy=0.0, alpha=0.0,
+                wheel_fresh=False)
+    assert r.yaw_rate == 0.0          # nao gira
+    assert r.yaw == pytest.approx(1.0)  # heading CONGELADO
+    assert fo.x == pytest.approx(0.0)
+    assert fo.y == pytest.approx(0.0)
+
+
+def test_stale_wheels_fresh_imu_uses_imu_yaw_no_wheel_translation():
+    # MEGA viva mas rodas sem feedback (placa hoverboard muda): IMU manda o yaw,
+    # mas a translacao de roda congelada NAO entra (vx_wheel zerado).
+    fo = FusedOdom(wheel_base=0.5)
+    r = fo.step(dt=0.1, v_fl=2.0, v_fr=2.0, v_rl=2.0, v_rr=2.0,  # rodas congeladas "andando"
+                imu_fresh=True, imu_yaw_rate=0.3,
+                flow_vx=0.0, flow_vy=0.0, alpha=0.0,
+                wheel_fresh=False)
+    assert r.yaw_source == 'imu'
+    assert r.yaw == pytest.approx(0.3 * 0.1)   # yaw da IMU
+    assert fo.x == pytest.approx(0.0)          # rodas congeladas NAO movem a pose
+    assert fo.y == pytest.approx(0.0)
+
+
 def test_degenerate_matches_wheel_only_odom():
     # Sem IMU, sem flow: deve bater com a integração ponto-médio do odom_publisher
     fo = FusedOdom(wheel_base=0.5)
