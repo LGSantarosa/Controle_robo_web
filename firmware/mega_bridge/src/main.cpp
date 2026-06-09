@@ -18,6 +18,7 @@
 #include <Wire.h>
 #include <SPI.h>
 #include <string.h>
+#include <avr/wdt.h>
 
 #include "protocol.h"
 #include "hoverboard.h"
@@ -238,6 +239,19 @@ static void txFlow() {
     protocol::writeFrame(Serial, protocol::FT_FLOW, buf, sizeof(buf));
 }
 
+// Guarda anti-reset-loop do watchdog (project_mega_i2c_hang, 2026-06-09).
+// Roda em .init3 — logo após o reset, ANTES do setup() — pra DESARMAR o WDT e
+// limpar o MCUSR em todo boot. Sem isto, o bootloader stk500v2 da 2560 (que não
+// trata o WDT) poderia ser re-resetado por um WDT ainda armado e cair em
+// reset-loop ("brick" até power-cycle). Com a guarda, o WDT só fica ativo dentro
+// do loop() (re-armado no fim do setup), nunca durante o bootloader nem a
+// calibração bloqueante do giro. Padrão canônico do AVR.
+void wdt_init(void) __attribute__((naked, used, section(".init3")));
+void wdt_init(void) {
+    MCUSR = 0;
+    wdt_disable();
+}
+
 void setup() {
     Serial.begin(PC_BAUD);
     Serial1.begin(HOVER_BAUD);
@@ -247,6 +261,14 @@ void setup() {
 
     Wire.begin();
     Wire.setClock(400000);
+    // Anti-hang do I²C — causa raiz do "MEGA para do nada" (project_mega_i2c_hang,
+    // 2026-06-09). SEM timeout, um lockup do barramento (EMI do motor desincroniza
+    // a máquina de estado TWI) trava o `Wire` PRA SEMPRE dentro de mpu_.getEvent()
+    // → o loop morre, para de mandar frames e de comandar o hover (sintoma: LED ON
+    // aceso, TX apagado, /dev/ttyACM0 vivo mas mudo). Com timeout de 25 ms + reset
+    // do TWI no estouro, getEvent() RETORNA false e a recuperação por software já
+    // existente (sensors_imu.cpp: re-init a cada 2 s) finalmente dispara.
+    Wire.setWireTimeout(25000 /* us */, true /* reset_with_timeout */);
     imu_dev.begin();
 
     SPI.begin();
@@ -254,9 +276,22 @@ void setup() {
 
     // Sem setpoint ainda — não marcamos last_setpoint pra ficar IDLE assim que sair do BOOT.
     last_setpoint = 0;
+
+    // Arma o watchdog SÓ agora (fim do setup): a calibração do giro acima é
+    // bloqueante (~600 ms de I²C) e estouraria um WDT curto. 2 s dá margem
+    // confortável sobre o loop normal (<20 ms, ~50–100× folga → zero risco de
+    // disparo falso que recalibraria o bias) e é MAIOR que o tempo do bootloader
+    // (~1 s) → o WDT nunca dispara durante o bootloader (ver wdt_init/.init3).
+    // Se QUALQUER coisa travar o loop >2 s (lockup I²C residual, Serial.write pro
+    // USB preso por starvation de CPU na Pi, etc.), a MEGA reseta e volta a
+    // streamar sozinha — em vez do hang permanente (ON aceso, TX apagado).
+    wdt_enable(WDTO_2S);
 }
 
 void loop() {
+    // Alimenta o watchdog a cada iteração (loop normal <20 ms ≪ 2 s). Se o loop
+    // travar (não chegar aqui), o WDT reseta a MEGA em 2 s. Ver setup()/wdt_init.
+    wdt_reset();
     // pumpPcSerial drena o buffer do USB (64 B). Com PC_BAUD=230400 + I²C do
     // MPU6050 bloqueando o loop, em pico chega a >64 B entre ticks — drenar uma
     // vez só perde bytes. Chamadas extras no meio mantêm o buffer com folga.
