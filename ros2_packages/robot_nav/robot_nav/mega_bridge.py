@@ -230,8 +230,14 @@ class MegaBridge(Node):
         self._rx_queue: "queue.Queue[tuple[int, bytes]]" = queue.Queue(maxsize=256)
         self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True, name='mega_rx')
         self._rx_thread.start()
-        # 200 Hz: cobre flow a 100 Hz + IMU 50 Hz + STATE 50 Hz com folga.
-        self._drain_timer = self.create_timer(0.005, self._drain_rx)
+        # 50 Hz: o drain esvazia a fila em LOTE (até 64 frames/tick, ~3200/s de
+        # capacidade) — muito acima dos ~200 frames/s reais (flow 100 + IMU 50 +
+        # STATE 50). A 200 Hz o executor single-thread do rclpy remontava o
+        # wait-set sobre ~16 entidades 200×/s em Python puro e queimava ~70% de
+        # um core (medido 2026-06-09: tempo no executor, não na serial/DDS).
+        # 50 Hz corta as acordadas em 4× e adiciona ≤20 ms de latência (irrelevante
+        # pra fusão de odom).
+        self._drain_timer = self.create_timer(0.02, self._drain_rx)
 
         self.get_logger().info(
             f'MegaBridge: {self._port}@{self._baud} | wheel_scale={self._wheel_scale}'
