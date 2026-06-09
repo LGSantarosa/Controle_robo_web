@@ -7,7 +7,7 @@ placa). Agora a MEGA agrega:
   - 2 placas de hoverboard (frontal Serial1, traseira Serial2)
   - MPU6050 IMU (I²C, 6 eixos: giro + accel; sem yaw absoluto)
   - PMW3901 optical flow (SPI)
-  - relé da luz, LED de marco, botão de partida
+  - relé da luz, LED de marco
   - (anel WS2812 comentado no firmware — ver AUDITORIA_2026-05-29 A1)
 
 Protocolo (frames) — ver firmware/mega_bridge/include/protocol.h.
@@ -18,7 +18,6 @@ Tópicos publicados:
   /imu/data                                (sensor_msgs/Imu)
   /optical_flow                            (geometry_msgs/Vector3Stamped, x=dx, y=dy, z=quality)
   /battery/{front,rear}                    (sensor_msgs/BatteryState, V)
-  /start_button                            (std_msgs/Bool)
   /system/health                           (std_msgs/String, JSON)
 
 Tópicos consumidos:
@@ -203,10 +202,16 @@ class MegaBridge(Node):
         self._pub_flow = self.create_publisher(Vector3Stamped, 'optical_flow', qos_profile_sensor_data)
         self._pub_bat_front = self.create_publisher(BatteryState, 'battery/front', qos_cmd)
         self._pub_bat_rear = self.create_publisher(BatteryState, 'battery/rear', qos_cmd)
-        self._pub_button = self.create_publisher(Bool, 'start_button', qos_cmd)
         self._pub_health = self.create_publisher(String, 'system/health', qos_cmd)
         # Cache do último health para evitar reemitir JSON idêntico a 50 Hz.
         self._last_health_json: str = ''
+
+        # Contador de frames STATE para throttle da bateria. A tensão muda
+        # devagar → não faz sentido republicar a 50 Hz. Emite 1 a cada
+        # SLOW_STATE_EVERY frames (~5 Hz com STATE a 50 Hz). RPM segue full
+        # rate (odom precisa).
+        self._state_count = 0
+        self.SLOW_STATE_EVERY = 10
 
         # Estado do FT_RELAY (1 byte relé + 1 byte marker). Guardamos os dois
         # bits aqui pra que comandos vindos em /light/cmd e /light/marker não
@@ -363,13 +368,13 @@ class MegaBridge(Node):
                 self.get_logger().warn(f'erro decodificando frame 0x{ft:02x}: {e}')
 
     def _handle_state(self, p: bytes):
-        # 16 bytes: rpm_FL/FR/RL/RR, batF_x100, batR_x100, faultF, faultR, btn, sensor_flags
+        # 16 bytes: rpm_FL/FR/RL/RR, batF_x100, batR_x100, faultF, faultR, <byte14
+        # não usado: era "btn" de partida, sem botão físico no robô>, sensor_flags
         if len(p) != 16:
             return
         rpm_FL, rpm_FR, rpm_RL, rpm_RR, batF, batR = struct.unpack('<hhhhhh', p[:12])
         faultF = p[12]
         faultR = p[13]
-        btn = p[14]
         sensor_flags = p[15]
 
         # Normaliza o feedback pro referencial do robô (frente = +) com o
@@ -381,20 +386,22 @@ class MegaBridge(Node):
                 Float64(data=float(raw[src]) * sign)
             )
 
-        # present = placa respondendo (não-stale), não "voltagem > 0". Assim
-        # 0 V com present=True = curto/medida real; 0 V com present=False =
-        # placa muda. faultF/faultR bit 0 = stale (ver firmware txState).
-        for pub, raw, stale in (
-            (self._pub_bat_front, batF, bool(faultF & 0x01)),
-            (self._pub_bat_rear,  batR, bool(faultR & 0x01)),
-        ):
-            b = BatteryState()
-            b.header.stamp = self.get_clock().now().to_msg()
-            b.voltage = raw / 100.0
-            b.present = not stale
-            pub.publish(b)
-
-        self._pub_button.publish(Bool(data=bool(btn)))
+        # Tensão de bateria muda devagar → republica só a ~5 Hz pra não pagar
+        # publish RELIABLE a 50 Hz à toa.
+        self._state_count += 1
+        if self._state_count % self.SLOW_STATE_EVERY == 0:
+            # present = placa respondendo (não-stale), não "voltagem > 0". Assim
+            # 0 V com present=True = curto/medida real; 0 V com present=False =
+            # placa muda. faultF/faultR bit 0 = stale (ver firmware txState).
+            for pub, raw, stale in (
+                (self._pub_bat_front, batF, bool(faultF & 0x01)),
+                (self._pub_bat_rear,  batR, bool(faultR & 0x01)),
+            ):
+                b = BatteryState()
+                b.header.stamp = self.get_clock().now().to_msg()
+                b.voltage = raw / 100.0
+                b.present = not stale
+                pub.publish(b)
 
         # /system/health — JSON. Só emite quando muda, evita poluir tópico
         # a 50 Hz com a mesma string.

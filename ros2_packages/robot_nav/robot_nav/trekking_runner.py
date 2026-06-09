@@ -4,8 +4,8 @@ Controlador ponto-a-ponto para a competição de trekking.
 
 Máquina de estado:
   IDLE   — parado. Publica zero em /cmd_vel ocasionalmente e não interfere.
-  RECORD — usuário dirige; cada rising edge do botão (ou /trekking/cmd
-           save_point) grava o waypoint atual + cone mais próximo no scan.
+  RECORD — usuário dirige; /trekking/cmd save_point grava o waypoint atual
+           + cone mais próximo no scan.
   PLAY   — percorre a lista de waypoints com PID heading + velocidade
            proporcional, fazendo "snap-to-cone" quando entra no raio de
            busca do cone gravado.
@@ -13,7 +13,6 @@ Máquina de estado:
 Entradas:
   /trekking/pose       PoseStamped       posição/yaw fundidos
   /trekking/cones      PoseArray         cones detectados em odom (com width na orientation.x)
-  /start_button        Bool              botão físico da MEGA (deadman + save)
   /trekking/cmd        String (JSON)     comandos vindos da UI
 
 Saídas:
@@ -39,7 +38,7 @@ import time
 import rclpy
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped, Twist, Vector3Stamped
 from rclpy.node import Node
-from std_msgs.msg import Bool, ColorRGBA, String
+from std_msgs.msg import ColorRGBA, String
 
 
 MODE_IDLE   = 'idle'
@@ -127,19 +126,6 @@ class TrekkingRunner(Node):
         # --- Cones detectados (lista de tuplas (x, y, w)) ---
         self.cones = []
 
-        # --- Botão ---
-        # `button_stable` é o estado debounçado (último estado confirmado);
-        # `button_pending` guarda quantos frames consecutivos vimos o novo
-        # valor. Só atualiza o estável após DEBOUNCE_FRAMES iguais — evita
-        # falsos rising edges no bouncing mecânico a 50 Hz.
-        # `button_stable=None` marca "ainda não calibrado": o primeiro
-        # callback adota o valor recebido sem disparar rising edge — caso
-        # o botão esteja pressionado quando o nó sobe.
-        self.button_stable = None
-        self.button_pending_value = False
-        self.button_pending_count = 0
-        self.DEBOUNCE_FRAMES = 2
-
         # --- Máquina de estado ---
         self.mode = MODE_IDLE
         # waypoints: lista de dicts {x, y, yaw, cone_x, cone_y, cone_bearing, has_cone}
@@ -163,7 +149,6 @@ class TrekkingRunner(Node):
         # --- Subs ---
         self.create_subscription(PoseStamped, 'trekking/pose', self._on_pose, 20)
         self.create_subscription(PoseArray,   'trekking/cones', self._on_cones, 10)
-        self.create_subscription(Bool,        'start_button', self._on_button, 10)
         self.create_subscription(String,      'trekking/cmd', self._on_cmd, 10)
 
         # --- Pubs ---
@@ -210,33 +195,6 @@ class TrekkingRunner(Node):
     def _state_snapshot(self):
         with self._state_lock:
             return (self.x, self.y, self.yaw, self.have_pose, list(self.cones))
-
-    def _on_button(self, msg: Bool):
-        v = bool(msg.data)
-        if self.button_stable is None:
-            # Primeira amostra — calibra o estado estável sem rising edge.
-            self.button_stable = v
-            self.button_pending_value = v
-            self.button_pending_count = 0
-            return
-        if v == self.button_stable:
-            # Já estamos no estado v — limpa qualquer transição pendente.
-            self.button_pending_value = v
-            self.button_pending_count = 0
-            return
-        if v != self.button_pending_value:
-            self.button_pending_value = v
-            self.button_pending_count = 1
-        else:
-            self.button_pending_count += 1
-        if self.button_pending_count < self.DEBOUNCE_FRAMES:
-            return
-        rising = v and not self.button_stable
-        self.button_stable = v
-        self.button_pending_count = 0
-        # Botão no modo RECORD → grava waypoint.
-        if rising and self.mode == MODE_RECORD:
-            self._save_point()
 
     def _on_cmd(self, msg: String):
         try:

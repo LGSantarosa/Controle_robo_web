@@ -177,7 +177,6 @@ Navegador (WASD / Gamepad / Clique / Waypoints)
     /imu/data           (sensor_msgs/Imu — orientação, gyro, accel)
     /optical_flow       (Vector3Stamped — dx, dy, qualidade)
     /battery/{front,rear}
-    /start_button
 
   LiDAR FHL-LD20  ───────► /scan  (direto no USB do PC, fora da MEGA)
 
@@ -867,7 +866,6 @@ A MEGA também controla periféricos de interface humana:
 | Anel WS2812 (16–24 LEDs) | 6 (DIN com resistor 470 Ω) | `/leds/color` (`std_msgs/ColorRGBA`) | **COMENTADO (AUDITORIA_2026-05-29 A1):** o driver `leds.cpp` está fora do build e a MEGA ignora o frame `FT_LEDS`. O tópico ainda existe no `mega_bridge` mas é no-op até o anel ser reativado. |
 | Relé da luz | 7 | `/light/cmd` (`std_msgs/Bool`) | `true` liga, `false` desliga. |
 | LED do marco | 8 | (controlado junto com o relé, byte 2 do frame `RELAY`) | Indicador externo de status. |
-| Botão de partida | 9 (pull-up interno) | `/start_button` (`std_msgs/Bool`) | `true` enquanto pressionado. Pode ser usado pra habilitar movimentação manualmente no robô (deadman) ou iniciar uma rota de waypoints sem precisar do browser. |
 
 Tudo é configurado por frames do protocolo (`FT_LEDS = 0x02`, `FT_RELAY = 0x03`) — ver `firmware/mega_bridge/include/protocol.h`.
 
@@ -948,7 +946,6 @@ Tópicos consumidos:
 | `/optical_flow` | `geometry_msgs/Vector3Stamped` | `mega_bridge` | (disponível, debug/futuro) | sempre |
 | `/battery/front` | `sensor_msgs/BatteryState` | `mega_bridge` | (monitoramento) | sempre |
 | `/battery/rear` | `sensor_msgs/BatteryState` | `mega_bridge` | (monitoramento) | sempre |
-| `/start_button` | `std_msgs/Bool` | `mega_bridge` | (futuro: deadman/start de rota) | sempre |
 | `/leds/color` | `std_msgs/ColorRGBA` | `trekking_runner` (no-op) | `mega_bridge` → MEGA | sempre (anel comentado — A1) |
 | `/light/cmd` | `std_msgs/Bool` | (cliente, futuro) | `mega_bridge` → MEGA | sempre |
 | `/scan` | `sensor_msgs/LaserScan` | LiDAR driver | `slam_toolbox` / `amcl` / `voxel_layer` | sempre |
