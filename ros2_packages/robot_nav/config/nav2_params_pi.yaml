@@ -264,12 +264,18 @@ global_costmap:
         map_subscribe_transient_local: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # 2026-06-08: revertido p/ 0.25 / 3.5 (estava 0.45 / 2.5 = medroso —
-        # inflava demais e tornava ponto perto de parede inalcançável → o planner
-        # falhava "Failed to create plan" e o robô desistia). Risco de raspar a
-        # quina volta; aceitável pra não travar a navegação.
-        cost_scaling_factor: 3.5
-        inflation_radius: 0.25
+        # FACA DE 2 GUMES (knob sensível, já revertido antes):
+        #  - 0.45/2.5 (medroso, 06-08): inflava demais → goal perto de parede
+        #    INALCANÇÁVEL → "Failed to create plan" → robô desistia. REVERTIDO.
+        #  - 0.25/3.5: 0.25 = raio inscrito do robô → custo ZERA a 26 cm da parede
+        #    → o planner cola na parede e o collision monitor (para ~12-20 cm além
+        #    do footprint ±0.25) trava o robô. Era o sintoma "passa perto e para".
+        # 2026-06-09: meio-termo 0.35/3.0 — gradiente o bastante p/ preferir o MEIO
+        # do corredor, mas ABAIXO do 0.45 que falhava. PONTO DE PARTIDA: afinar AO
+        # VIVO (param dinâmico, sem reiniciar) na faixa 0.32–0.42, validando a cada
+        # degrau que goal perto de parede AINDA planeja. Ver project_nav2_planner_inflation.
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.35
       # PI: false — diffs em vez do mapa inteiro.
       always_send_full_costmap: false
 
