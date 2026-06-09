@@ -440,22 +440,8 @@ class PoseEstimator(Node):
         qz = math.sin(yaw / 2.0)
         qw = math.cos(yaw / 2.0)
 
-        # /trekking/pose (frame odom)
-        ps = PoseStamped()
-        ps.header.stamp = stamp
-        ps.header.frame_id = self.odom_frame
-        ps.pose.position.x = x
-        ps.pose.position.y = y
-        ps.pose.orientation.z = qz
-        ps.pose.orientation.w = qw
-        self.pub_pose.publish(ps)
-
-        # /trekking/odom (twist no body frame)
-        od = _build_odom(stamp, self.odom_frame, self.base_frame,
-                         x, y, qz, qw, vx_out, vy_out, yaw_rate)
-        self.pub_odom.publish(od)
-
-        # /odom padrão (consumido por SLAM/AMCL/Nav2) + covariâncias
+        # /odom padrão (consumido por SLAM/AMCL/Nav2/nav_metrics) + TF: SEMPRE
+        # têm consumidor → publica incondicional.
         od_std = _build_odom(stamp, self.odom_frame, self.base_frame,
                              x, y, qz, qw, vx_out, vy_out, yaw_rate)
         od_std.pose.covariance[0] = 0.05    # var(x)
@@ -479,17 +465,38 @@ class PoseEstimator(Node):
         tf.transform.rotation.w = qw
         self.tf_broadcaster.sendTransform(tf)
 
-        self.pub_slip.publish(Float32(data=float(slip_out)))
+        # /trekking/* só interessam ao modo trekking (cone_detector/trekking_runner)
+        # e a ferramentas manuais (flow_check). No modo nav2 NINGUÉM assina → o
+        # get_subscription_count() == 0 pula a construção/json.dumps/serialização
+        # inteiras. Quando alguém assina, volta a publicar sozinho. Zero diferença
+        # de comportamento, só não trabalha pra plateia vazia.
+        if self.pub_pose.get_subscription_count() > 0:
+            ps = PoseStamped()
+            ps.header.stamp = stamp
+            ps.header.frame_id = self.odom_frame
+            ps.pose.position.x = x
+            ps.pose.position.y = y
+            ps.pose.orientation.z = qz
+            ps.pose.orientation.w = qw
+            self.pub_pose.publish(ps)
 
-        # /trekking/health
-        health = {
-            'flow_stale': bool(flow_stale),
-            'flow_age':   round(flow_age, 3) if flow_age != float('inf') else None,
-            'alpha':      round(alpha, 3),
-            'quality':    int(quality_out),
-            'yaw_source': yaw_source,
-        }
-        self.pub_health.publish(String(data=json.dumps(health, sort_keys=True)))
+        if self.pub_odom.get_subscription_count() > 0:
+            od = _build_odom(stamp, self.odom_frame, self.base_frame,
+                             x, y, qz, qw, vx_out, vy_out, yaw_rate)
+            self.pub_odom.publish(od)
+
+        if self.pub_slip.get_subscription_count() > 0:
+            self.pub_slip.publish(Float32(data=float(slip_out)))
+
+        if self.pub_health.get_subscription_count() > 0:
+            health = {
+                'flow_stale': bool(flow_stale),
+                'flow_age':   round(flow_age, 3) if flow_age != float('inf') else None,
+                'alpha':      round(alpha, 3),
+                'quality':    int(quality_out),
+                'yaw_source': yaw_source,
+            }
+            self.pub_health.publish(String(data=json.dumps(health, sort_keys=True)))
 
 
 def main(args=None):
