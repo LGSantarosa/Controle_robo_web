@@ -313,6 +313,8 @@ fi
 SERVER_PID=""
 ROBOT_PID=""
 LIDAR_PID=""
+WATCHDOG_PID=""
+LIDAR_OK=false
 NAV2_PID=""
 SLAM_PID=""
 SIM_PID=""
@@ -336,6 +338,8 @@ cleanup() {
     trap '' EXIT INT TERM
     echo ""
     echo "Encerrando todos os processos..."
+    # PRIMEIRO o watchdog da LiDAR: senão ele relança o LD06 enquanto derrubamos.
+    kill_tree "$WATCHDOG_PID"
     [ -n "$TAIL_PID" ]     && kill "$TAIL_PID"     2>/dev/null
     kill_tree "$SERVER_PID"
     kill_tree "$SLAM_PID"
@@ -345,7 +349,7 @@ cleanup() {
     kill_tree "$SIM_PID"
     sleep 1
     # Segunda passada: SIGKILL em qualquer filho que tenha sobrevivido
-    for pid in $SERVER_PID $SLAM_PID $NAV2_PID $LIDAR_PID $ROBOT_PID $SIM_PID; do
+    for pid in $WATCHDOG_PID $SERVER_PID $SLAM_PID $NAV2_PID $LIDAR_PID $ROBOT_PID $SIM_PID; do
         for desc in $(pgrep -P "$pid" 2>/dev/null) $pid; do
             kill -9 "$desc" 2>/dev/null
         done
@@ -390,6 +394,61 @@ lidar_scan_healthy() {
     timeout 6 ros2 topic hz /scan 2>/dev/null | grep -q "average rate"
 }
 
+# Sobe o LD06 com retry. O sensor quase nunca vinga de 1ª: ~3s após o start solta
+# "ldlidar communication is abnormal" e o nó morre (exit 1). Lança, espera passar
+# da janela de morte, e se caiu / sem /scan, mata, deixa a serial assentar e
+# relança — até LIDAR_TRIES vezes. Seta LIDAR_PID. Retorna 0 se /scan vingou.
+# Usada no BOOT e pelo watchdog de runtime (lidar_watchdog).
+LIDAR_TRIES=5
+start_lidar() {
+    local try
+    for ((try = 1; try <= LIDAR_TRIES; try++)); do
+        echo "      [lidar] tentativa $try/$LIDAR_TRIES..."
+        ros2 launch robot_nav lidar.launch.py lidar_port:="$LIDAR_PORT" > "$LIDAR_LOG" 2>&1 &
+        LIDAR_PID=$!
+        sleep 5   # passa a janela do "abnormal" antes de julgar
+        if pgrep -f ldlidar_stl_ros2_node >/dev/null 2>&1 \
+           && wait_for_topic /scan 5 && lidar_scan_healthy; then
+            echo "      [lidar] OK — /scan publicando (PID $LIDAR_PID, tentativa $try)."
+            return 0
+        fi
+        echo "      [lidar] caiu / sem /scan — matando e repetindo."
+        kill_tree "$LIDAR_PID"
+        LIDAR_PID=""
+        sleep 2   # deixa a porta serial assentar antes de reabrir
+    done
+    return 1
+}
+
+# Watchdog de RUNTIME (o retry acima é só no BOOT). Visto 2026-06-09: o LD06 subiu,
+# o robô navegou, e o nó MORREU no meio da operação → /scan mudo → nav2 parou, sem
+# ninguém relançar. Aqui monitoramos a liveness do nó e relançamos. Checagem BARATA
+# por processo (pgrep): o "abnormal" MATA o nó (exit 1) — é o modo recuperável por
+# software. NÃO chamamos `ros2 topic hz` em loop (cria nó + 6s a cada ciclo = CPU
+# cara nesta Pi); o caso "nó vivo mas /scan mudo" é HW travado (precisa replug),
+# que relançar não resolve. Back-off quando o relance falha (não martelar física).
+LIDAR_WATCH_INTERVAL="${LIDAR_WATCH_INTERVAL:-15}"
+lidar_watchdog() {
+    local fails=0
+    while true; do
+        sleep "$LIDAR_WATCH_INTERVAL"
+        if pgrep -f ldlidar_stl_ros2_node >/dev/null 2>&1; then
+            fails=0
+            continue
+        fi
+        echo "  [lidar-watchdog] nó da LiDAR caiu em runtime — relançando..."
+        kill_tree "$LIDAR_PID"; LIDAR_PID=""
+        if start_lidar; then
+            echo "  [lidar-watchdog] LiDAR recuperada."
+            fails=0
+        else
+            fails=$((fails + 1))
+            echo "  [lidar-watchdog] não recuperou (falha #$fails) — provável HW (replug/power). Back-off."
+            sleep $((LIDAR_WATCH_INTERVAL * 4))
+        fi
+    done
+}
+
 if [ "$SIM" = true ]; then
     # --- [SIM] Gazebo Harmonic + robô diff-drive + bridges ROS↔GZ ---
     echo "[1/4] Modo SIM — subindo Gazebo com mundo: $WORLD_FILE"
@@ -422,32 +481,11 @@ else
         if [ -e "$LIDAR_PORT" ]; then
             echo "[2/4] Iniciando LiDAR LD06 em $LIDAR_PORT..."
             LIDAR_LOG="$LOG_DIR/lidar.log"
-            # O LD06 quase nunca sobe de primeira: ~3s após o start solta
-            # "ldlidar communication is abnormal" e o nó morre (exit 1). Antes
-            # disso era preciso matar o launch e subir de novo na mão toda vez.
-            # Aqui tentamos sozinhos: lança, espera passar da janela de morte
-            # (~3s), e se o nó caiu / não publica /scan, mata, deixa a serial
-            # assentar e relança — até LIDAR_TRIES vezes.
-            LIDAR_TRIES=5
-            lidar_ok=false
-            for ((try = 1; try <= LIDAR_TRIES; try++)); do
-                echo "      tentativa $try/$LIDAR_TRIES..."
-                ros2 launch robot_nav lidar.launch.py lidar_port:="$LIDAR_PORT" > "$LIDAR_LOG" 2>&1 &
-                LIDAR_PID=$!
-                # Passa da janela do "abnormal" antes de julgar se vingou.
-                sleep 5
-                if pgrep -f ldlidar_stl_ros2_node >/dev/null 2>&1 \
-                   && wait_for_topic /scan 5 && lidar_scan_healthy; then
-                    lidar_ok=true
-                    echo "      LiDAR OK — /scan publicando (PID $LIDAR_PID, tentativa $try)."
-                    break
-                fi
-                echo "      LiDAR caiu / não publicou /scan — matando e repetindo."
-                kill_tree "$LIDAR_PID"
-                LIDAR_PID=""
-                sleep 2   # deixa a porta serial assentar antes de reabrir
-            done
-            if [ "$lidar_ok" = false ]; then
+            # Retry no BOOT via start_lidar(); o watchdog de runtime (lidar_watchdog,
+            # iniciado mais abaixo) cuida das mortes do LD06 DURANTE a operação.
+            if start_lidar; then
+                LIDAR_OK=true
+            else
                 echo "  AVISO: LiDAR não subiu após $LIDAR_TRIES tentativas — seguindo sem /scan."
             fi
         else
@@ -542,6 +580,15 @@ elif [ "$NO_LIDAR" = false ]; then
 fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
+
+# Watchdog de runtime da LiDAR: só se ela subiu no boot (LIDAR_OK) e é hardware
+# real. Roda em background; cleanup() o mata ANTES de derrubar a LiDAR (senão
+# ressuscita no shutdown). Se o LD06 não vingou no boot, não vigia (provável HW).
+if [ "$SIM" = false ] && [ "$NO_LIDAR" = false ] && [ "$LIDAR_OK" = true ]; then
+    lidar_watchdog &
+    WATCHDOG_PID=$!
+    echo "  [lidar-watchdog] ativo (PID $WATCHDOG_PID — checa o LD06 a cada ${LIDAR_WATCH_INTERVAL}s)."
+fi
 
 cd "$SCRIPT_DIR/controle_web"
 if [ -f ".venv/bin/activate" ]; then
