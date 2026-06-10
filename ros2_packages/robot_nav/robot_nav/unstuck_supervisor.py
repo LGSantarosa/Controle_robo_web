@@ -12,8 +12,13 @@ Decisões de campo (2026-06-10, validadas em teste ao vivo):
 - SEM GIRO: o giro a baixa velocidade não vence o atrito do skid-steer (parecia
   "não fez nada"). A manobra é SEMPRE ré. Traseira bloqueada no /scan → espera
   e re-tenta quando liberar.
-- Só age com goal ativo: nav2 comandou há <nav_latch (latch tolera os gaps de
-  ~1-2s do ciclo de abort do progress_checker).
+- Só age com goal ativo: o gate primário é o STATUS do action server do
+  bt_navigator (ACCEPTED/EXECUTING/CANCELING = ativo) — autoritativo, mata a
+  "ré póstuma" pós-cancel e cobre o BT em recovery com o controller mudo.
+  Sem status visto ainda, cai no fallback: nav2 comandou há <nav_latch
+  (latch tolera os gaps de ~1-2s do ciclo de abort do progress_checker).
+- Fim da ré publica um Twist ZERO explícito (cmd_vel_to_wheels segura o último
+  comando) e /scan velho >scan_stale trata a traseira como bloqueada.
 
 O collision monitor e a curva (RotationShim/DWB) NÃO são tocados. Ver
 `docs/superpowers/specs/2026-06-10-unstuck-supervisor-design.md`.
