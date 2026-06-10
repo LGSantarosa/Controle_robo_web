@@ -14,6 +14,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
         (os.path.join('share', package_name, 'urdf'), glob('urdf/*')),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
+        (os.path.join('share', package_name, 'behavior_trees'), glob('behavior_trees/*.xml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

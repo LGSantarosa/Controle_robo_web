@@ -19,6 +19,11 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg = get_package_share_directory('robot_nav')
     default_params = os.path.join(pkg, 'config', 'nav2_params.yaml')
+    # BT custom: recovery reordenado p/ BackUp ANTES de Spin (robô encurralado
+    # entre paredes "volta de onde veio" em vez de girar sem espaço). Ver
+    # behavior_trees/navigate_w_backup_first_recovery.xml. Caminho via share dir
+    # (não-hardcoded). Override do default_nav_to_pose_bt_xml no bt_navigator.
+    bt_xml = os.path.join(pkg, 'behavior_trees', 'navigate_w_backup_first_recovery.xml')
 
     map_arg = DeclareLaunchArgument(
         'map', default_value='',
@@ -88,7 +93,8 @@ def generate_launch_description():
         Node(
             package='nav2_bt_navigator', executable='bt_navigator',
             name='bt_navigator', output=nav_output,
-            parameters=[params_file, sim_time_param],
+            parameters=[params_file, sim_time_param,
+                        {'default_nav_to_pose_bt_xml': bt_xml}],
         ),
         Node(
             package='nav2_waypoint_follower', executable='waypoint_follower',
