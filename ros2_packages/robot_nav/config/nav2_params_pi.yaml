@@ -172,9 +172,14 @@ controller_server:
       # BaseObstacle 0.15 → 1.0: pesa mais ficar longe de obstáculo (anti-bate).
       BaseObstacle.scale: 1.0
       PathAlign.scale: 32.0
-      PathAlign.forward_point_distance: 0.1
+      # 2026-06-10: forward_point_distance 0.1 -> 0.325 (default do nav2). 0.1 era
+      # MIOPIA: alinhava o heading com um ponto a 10 cm do nariz = ~heading atual =
+      # o critic de alinhamento NAO mordia. Sintoma: planner manda pro MEIO do
+      # corredor, mas o robo segue reto colado na parede ("preguica de ajeitar a
+      # direcao"). Mirando 0.325 m a frente, ele vira pra acompanhar a LINHA.
+      PathAlign.forward_point_distance: 0.325
       GoalAlign.scale: 6.0
-      GoalAlign.forward_point_distance: 0.15
+      GoalAlign.forward_point_distance: 0.325
       PathDist.scale: 32.0
       GoalDist.scale: 8.0
       RotateToGoal.scale: 64.0
