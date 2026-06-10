@@ -270,12 +270,20 @@ global_costmap:
         #  - 0.25/3.5: 0.25 = raio inscrito do robô → custo ZERA a 26 cm da parede
         #    → o planner cola na parede e o collision monitor (para ~12-20 cm além
         #    do footprint ±0.25) trava o robô. Era o sintoma "passa perto e para".
-        # 2026-06-09: meio-termo 0.35/3.0 — gradiente o bastante p/ preferir o MEIO
-        # do corredor, mas ABAIXO do 0.45 que falhava. PONTO DE PARTIDA: afinar AO
-        # VIVO (param dinâmico, sem reiniciar) na faixa 0.32–0.42, validando a cada
-        # degrau que goal perto de parede AINDA planeja. Ver project_nav2_planner_inflation.
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.35
+        # 2026-06-09: meio-termo 0.35/3.0 — não centralizou o bastante (planner
+        # ainda colava → collision travava). 2026-06-10: reforço da centralização.
+        #  - cost_scaling_factor 3.0 -> 2.0: é O knob de centralização. Menor =
+        #    custo cai mais DEVAGAR = continua alto ATRAVESSANDO o corredor → o
+        #    planner busca o custo mínimo, que fica no MEIO. Com 3.0 zerava rápido
+        #    e ele cortava reto/colava na parede.
+        #  - inflation_radius 0.35 -> 0.40: gradiente alcança o centro de corredores
+        #    até ~0.80 m (com 0.35 só ~0.70 m; mais largo = centro custo-zero, sem
+        #    atração). Continua ABAIXO do 0.45 que falhava (goal inalcançável).
+        # FALTA validar AO VIVO no robô: corredor largo (centraliza?) E goal perto
+        # de parede (AINDA planeja?). Se overshoot p/ "não chega perto de nada",
+        # baixar inflation_radius primeiro. Ver project_nav2_planner_inflation.
+        cost_scaling_factor: 2.0
+        inflation_radius: 0.40
       # PI: false — diffs em vez do mapa inteiro.
       always_send_full_costmap: false
 
