@@ -88,13 +88,15 @@ class UnstuckConfig:
     grace: float = 2.0
     nav_latch: float = 15.0        # nav2 conta como "com goal" se comandou há <=15s
     # Escalada (pedido 2026-06-10: "limite de 3 tentativas até pensar em virar"):
-    # ré reta repetida no MESMO ponto não resolve -> a partir da 3ª, ré EM ARCO
-    # (ré + virada junto). Virar de ré roda as rodas = não sofre o atrito que
-    # matou o giro parado; e o robô sai apontando pra outro lado.
-    escalate_after: int = 3        # tentativas no mesmo ponto antes do arco
+    # ré reta repetida no MESMO ponto não resolve -> a partir da 3ª, depois da
+    # ré vem um GIRO FORTE no lugar. Forte porque giro fraco não vence o atrito
+    # do skid-steer (0.5 falhou em campo; o RotationShim gira o robô a 3.67).
+    # Arco durante a ré também falhou (30cm não muda heading).
+    escalate_after: int = 3        # tentativas no mesmo ponto antes do giro
     same_spot_radius: float = 0.5  # raio que define "mesmo ponto"
     escalate_window: float = 120.0  # esquece travamentos mais velhos que isso
-    arc_spin: float = 1.0          # rad/s de virada durante a ré em arco
+    spin_speed: float = 3.0        # rad/s do giro pós-ré (precisa vencer atrito)
+    spin_angle: float = 1.57       # quanto girar (~90°), duração = angle/speed
 
 
 class Command(NamedTuple):
@@ -108,6 +110,7 @@ _IDLE = Command(0.0, 0.0, False)
 # estados
 _MONITORING = "monitoring"
 _REVERSING = "reversing"
+_SPINNING = "spinning"
 _GRACE = "grace"
 
 
@@ -121,7 +124,9 @@ class UnstuckSupervisor:
     maneuver_start_pos: Tuple[float, float] = (0.0, 0.0)
     grace_start: float = 0.0
     last_nav_t: Optional[float] = None
-    maneuver_ang: float = 0.0  # 0 = ré reta; ±arc_spin = ré em arco
+    escalated: bool = False    # esta manobra termina em giro forte?
+    spin_side: int = 1         # +1 esq / -1 dir
+    spin_start_t: float = 0.0
     history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
 
     def update(self, now: float, *, nav_wants_move: bool,
@@ -135,6 +140,8 @@ class UnstuckSupervisor:
                                     open_side)
         if self.state == _REVERSING:
             return self._reversing(now, position)
+        if self.state == _SPINNING:
+            return self._spinning(now)
         if self.state == _GRACE:
             return self._grace(now)
         return _IDLE
@@ -171,32 +178,46 @@ class UnstuckSupervisor:
             # no próximo tick — dispara assim que o /scan liberar atrás.
             return _IDLE
         # escalada: conta travamentos recentes perto DESTE ponto; na 3ª
-        # tentativa no mesmo lugar a ré reta não está resolvendo -> arco
+        # tentativa no mesmo lugar a ré reta não resolveu -> ré + GIRO FORTE
         self.history = [(t, p) for (t, p) in self.history
                         if now - t <= self.cfg.escalate_window]
         self.history.append((now, position))
         nearby = sum(
             1 for (_, p) in self.history
             if self._dist(p, position) <= self.cfg.same_spot_radius)
-        side = 1 if open_side >= 0 else -1
-        self.maneuver_ang = (side * self.cfg.arc_spin
-                             if nearby >= self.cfg.escalate_after else 0.0)
+        self.escalated = nearby >= self.cfg.escalate_after
+        self.spin_side = 1 if open_side >= 0 else -1
         self.state = _REVERSING
         self.maneuver_start_t = now
         self.maneuver_start_pos = position
-        return Command(-self.cfg.reverse_speed, self.maneuver_ang, True)
+        return Command(-self.cfg.reverse_speed, 0.0, True)
 
     def _reversing(self, now, position) -> Command:
         dist = self._dist(position, self.maneuver_start_pos)
         if (dist >= self.cfg.reverse_distance
                 or now - self.maneuver_start_t >= self.cfg.reverse_time_cap):
+            if self.escalated:
+                # recuou: agora GIRO FORTE no lugar pro lado mais livre —
+                # muda o heading de verdade (arco em 30cm não virava)
+                self.state = _SPINNING
+                self.spin_start_t = now
+                return Command(0.0, self.spin_side * self.cfg.spin_speed, True)
             self.state = _GRACE
             self.grace_start = now
             # STOP explícito: o cmd_vel_to_wheels segura o último comando;
             # sem este zero o robô continuaria de ré até o nav2 publicar
             # de novo (que pode estar mudo, abortado/replanejando).
             return Command(0.0, 0.0, True)
-        return Command(-self.cfg.reverse_speed, self.maneuver_ang, True)
+        return Command(-self.cfg.reverse_speed, 0.0, True)
+
+    def _spinning(self, now) -> Command:
+        spin_time = (self.cfg.spin_angle / self.cfg.spin_speed
+                     if self.cfg.spin_speed else 0.0)
+        if now - self.spin_start_t >= spin_time:
+            self.state = _GRACE
+            self.grace_start = now
+            return Command(0.0, 0.0, True)  # STOP explícito
+        return Command(0.0, self.spin_side * self.cfg.spin_speed, True)
 
     def _grace(self, now) -> Command:
         if now - self.grace_start >= self.cfg.grace:
@@ -243,7 +264,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("escalate_after", 3),
                 ("same_spot_radius", 0.5),
                 ("escalate_window", 120.0),
-                ("arc_spin", 1.0),
+                ("spin_speed", 3.0),
+                ("spin_angle", 1.57),
                 ("rear_clearance", 0.35),
                 ("rear_sector_deg", 30.0),
                 ("scan_stale", 2.0),
@@ -263,7 +285,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 escalate_after=int(g["escalate_after"]),
                 same_spot_radius=g["same_spot_radius"],
                 escalate_window=g["escalate_window"],
-                arc_spin=g["arc_spin"],
+                spin_speed=g["spin_speed"],
+                spin_angle=g["spin_angle"],
             )
             self.rear_clearance = g["rear_clearance"]
             self.rear_sector_deg = g["rear_sector_deg"]
