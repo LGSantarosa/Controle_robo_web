@@ -129,7 +129,7 @@ def generate_launch_description():
             package='robot_nav', executable='unstuck_supervisor',
             name='unstuck_supervisor', output='screen',
             parameters=[sim_time_param, {
-                'stuck_timeout': 10.0,
+                'stuck_timeout': 5.0,
                 'stuck_radius': 0.05,
                 'reverse_distance': 0.30,
                 'reverse_speed': 0.25,
