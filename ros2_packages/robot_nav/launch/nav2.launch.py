@@ -136,7 +136,7 @@ def generate_launch_description():
                 'reverse_time_cap': 6.0,
                 'grace': 2.0,
                 'nav_latch': 15.0,
-                'escalate_after': 3,
+                'escalate_after': 2,
                 'same_spot_radius': 0.5,
                 'escalate_window': 120.0,
                 'spin_speed': 3.0,
