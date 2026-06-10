@@ -93,6 +93,28 @@ def test_no_action_before_timeout():
     assert cmd.active is False
 
 
+def test_refires_despite_nav_command_dropping_on_abort():
+    # BUG REAL (1 ré só): o controller do nav2 aborta a cada ~8s (progress_checker)
+    # -> nav_vel_raw cai a 0 -> nav_wants_move=False. Mas o robô segue CONGELADO e
+    # o collision STOP ativo. O supervisor DEVE acumular 10s de "travado" pelo odom
+    # e disparar mesmo com o nav_wants_move piscando. (Antes: zerava o contador a
+    # cada abort e nunca mais disparava.)
+    sup = UnstuckSupervisor(_cfg())
+    fired = None
+    t = 0.0
+    while t < 12.0:
+        nav = (t % 9.0) < 8.0  # comanda 8s, aborta 1s, repete
+        cmd = sup.update(t, stop_active=True, frozen=True,
+                         nav_wants_move=nav, position=(0.0, 0.0),
+                         rear_blocked=False)
+        if cmd.active:
+            fired = t
+            break
+        t += 0.5
+    assert fired is not None, "supervisor nunca disparou apesar do robô travado"
+    assert fired <= 11.0
+
+
 def test_reverses_after_timeout_when_rear_clear():
     sup = UnstuckSupervisor(_cfg())
     _stuck(sup, 0.0)

@@ -62,6 +62,12 @@ class UnstuckConfig:
     same_spot_radius: float = 0.5
     escalate_window: float = 60.0
     grace: float = 2.0
+    # Latches: o nav2 aborta a cada ~8s (progress_checker) e o nav_vel_raw pisca
+    # pra 0; o collision STOP também pode oscilar. Tratamos esses sinais como
+    # "visto recentemente" pra o gatilho não zerar a cada abort. O sinal de
+    # travamento de verdade é o odom congelado (frozen), que não oscila.
+    stop_latch: float = 5.0    # collision STOP conta como ativo se visto há <=5s
+    nav_latch: float = 15.0    # nav2 conta como "com goal" se comandou há <=15s
 
 
 class Command(NamedTuple):
@@ -88,6 +94,8 @@ class UnstuckSupervisor:
     maneuver_start_pos: Tuple[float, float] = (0.0, 0.0)
     grace_start: float = 0.0
     history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
+    last_stop_t: Optional[float] = None
+    last_nav_t: Optional[float] = None
 
     def update(self, now: float, *, stop_active: bool, frozen: bool,
                nav_wants_move: bool, position: Tuple[float, float],
@@ -107,7 +115,18 @@ class UnstuckSupervisor:
 
     def _monitoring(self, now, stop_active, frozen, nav_wants_move, position,
                     rear_blk) -> Command:
-        stuck = stop_active and frozen and nav_wants_move
+        # Latcha os sinais que oscilam com o ciclo de abort do nav2.
+        if stop_active:
+            self.last_stop_t = now
+        if nav_wants_move:
+            self.last_nav_t = now
+        stop_recent = (self.last_stop_t is not None
+                       and now - self.last_stop_t <= self.cfg.stop_latch)
+        nav_recent = (self.last_nav_t is not None
+                      and now - self.last_nav_t <= self.cfg.nav_latch)
+        # Travamento = robô CONGELADO (sinal estável) enquanto o collision STOP
+        # esteve ativo há pouco e o nav2 tem um goal (comandou há pouco).
+        stuck = frozen and stop_recent and nav_recent
         if not stuck:
             self.stuck_since = None
             return _IDLE
@@ -199,6 +218,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("same_spot_radius", 0.5),
                 ("escalate_window", 60.0),
                 ("grace", 2.0),
+                ("stop_latch", 5.0),
+                ("nav_latch", 15.0),
                 ("rear_clearance", 0.35),
                 ("rear_sector_deg", 30.0),
                 ("odom_zero_lin", 0.02),
@@ -219,6 +240,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 same_spot_radius=g["same_spot_radius"],
                 escalate_window=g["escalate_window"],
                 grace=g["grace"],
+                stop_latch=g["stop_latch"],
+                nav_latch=g["nav_latch"],
             )
             self.rear_clearance = g["rear_clearance"]
             self.rear_sector_deg = g["rear_sector_deg"]
