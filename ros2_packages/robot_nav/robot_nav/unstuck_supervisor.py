@@ -1,30 +1,33 @@
 """Watchdog de desencalhe do Nav2 — unstuck_supervisor.
 
-Quando o robô fica congelado pelo collision monitor por mais de
-`stuck_timeout` segundos, este nó assume o controle por um canal do twist_mux
-que FURA o collision monitor (`unstuck_vel`, prioridade acima do `nav_vel`),
-executa uma manobra de desencalhe (ré, ou giro se a traseira estiver bloqueada)
-e devolve o controle pro nav2, que replaneja e desvia.
+Se o robô NÃO SE DESLOCA (>stuck_radius) por mais de `stuck_timeout` segundos
+enquanto o nav2 está comandando, este nó assume o controle por um canal do
+twist_mux que FURA o collision monitor (`unstuck_vel`, prioridade acima do
+`nav_vel`) e dá RÉ; depois solta e o nav2 replaneja e desvia.
 
-O collision monitor e a curva (RotationShim/DWB) NÃO são tocados: o nó só age
-DEPOIS que o robô já travou. Ver
+Decisões de campo (2026-06-10, validadas em teste ao vivo):
+- Gatilho por DESLOCAMENTO, não velocidade: o robô "tentando girar" sem sair
+  do lugar (RotationShim, recoveries do nav2) mexe uns mm e enganava o gatilho
+  por velocidade. Não se deslocou = travado, ponto.
+- SEM GIRO: o giro a baixa velocidade não vence o atrito do skid-steer (parecia
+  "não fez nada"). A manobra é SEMPRE ré. Traseira bloqueada no /scan → espera
+  e re-tenta quando liberar.
+- Só age com goal ativo: nav2 comandou há <nav_latch (latch tolera os gaps de
+  ~1-2s do ciclo de abort do progress_checker).
+
+O collision monitor e a curva (RotationShim/DWB) NÃO são tocados. Ver
 `docs/superpowers/specs/2026-06-10-unstuck-supervisor-design.md`.
 
-A lógica de decisão é pura (sem ROS) pra ser testável offline; o nó embaixo é só
-a cola de I/O.
+A lógica de decisão é pura (sem ROS) pra ser testável offline; o nó embaixo é
+só a cola de I/O.
 """
 
 import math
-from dataclasses import dataclass, field
-from typing import List, NamedTuple, Optional, Tuple
+from dataclasses import dataclass
+from typing import NamedTuple, Optional, Tuple
 
 
 # ---- lógica pura -----------------------------------------------------------
-
-def is_frozen(lin: float, ang: float, zero_lin: float, zero_ang: float) -> bool:
-    """True se a velocidade medida está abaixo dos limiares (robô parado)."""
-    return abs(lin) < zero_lin and abs(ang) < zero_ang
-
 
 def _norm_angle(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
@@ -53,21 +56,12 @@ def rear_blocked(ranges, angle_min: float, angle_increment: float,
 @dataclass
 class UnstuckConfig:
     stuck_timeout: float = 10.0
+    stuck_radius: float = 0.05     # deslocou menos que isso = "parado"
     reverse_distance: float = 0.30
-    reverse_speed: float = 0.15
-    reverse_time_cap: float = 3.0
-    spin_speed: float = 0.5
-    spin_angle: float = 1.0
-    escalate_after: int = 3
-    same_spot_radius: float = 0.5
-    escalate_window: float = 60.0
+    reverse_speed: float = 0.25
+    reverse_time_cap: float = 6.0
     grace: float = 2.0
-    # Latches: o nav2 aborta a cada ~8s (progress_checker) e o nav_vel_raw pisca
-    # pra 0; o collision STOP também pode oscilar. Tratamos esses sinais como
-    # "visto recentemente" pra o gatilho não zerar a cada abort. O sinal de
-    # travamento de verdade é o odom congelado (frozen), que não oscila.
-    stop_latch: float = 5.0    # collision STOP conta como ativo se visto há <=5s
-    nav_latch: float = 15.0    # nav2 conta como "com goal" se comandou há <=15s
+    nav_latch: float = 15.0        # nav2 conta como "com goal" se comandou há <=15s
 
 
 class Command(NamedTuple):
@@ -81,7 +75,6 @@ _IDLE = Command(0.0, 0.0, False)
 # estados
 _MONITORING = "monitoring"
 _REVERSING = "reversing"
-_SPINNING = "spinning"
 _GRACE = "grace"
 
 
@@ -89,102 +82,69 @@ _GRACE = "grace"
 class UnstuckSupervisor:
     cfg: UnstuckConfig
     state: str = _MONITORING
-    stuck_since: Optional[float] = None
+    anchor: Optional[Tuple[float, float]] = None  # última posição "nova"
+    anchor_t: float = 0.0
     maneuver_start_t: float = 0.0
     maneuver_start_pos: Tuple[float, float] = (0.0, 0.0)
     grace_start: float = 0.0
-    history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
-    last_stop_t: Optional[float] = None
     last_nav_t: Optional[float] = None
 
-    def update(self, now: float, *, stop_active: bool, frozen: bool,
-               nav_wants_move: bool, position: Tuple[float, float],
-               rear_blocked: bool) -> Command:
+    def update(self, now: float, *, nav_wants_move: bool,
+               position: Tuple[float, float], rear_blocked: bool) -> Command:
+        if nav_wants_move:
+            self.last_nav_t = now
         if self.state == _MONITORING:
-            return self._monitoring(now, stop_active, frozen, nav_wants_move,
-                                    position, rear_blocked)
+            return self._monitoring(now, position, rear_blocked)
         if self.state == _REVERSING:
             return self._reversing(now, position)
-        if self.state == _SPINNING:
-            return self._spinning(now)
         if self.state == _GRACE:
             return self._grace(now)
         return _IDLE
 
     # -- estados --
 
-    def _monitoring(self, now, stop_active, frozen, nav_wants_move, position,
-                    rear_blk) -> Command:
-        # Latcha os sinais que oscilam com o ciclo de abort do nav2.
-        if stop_active:
-            self.last_stop_t = now
-        if nav_wants_move:
-            self.last_nav_t = now
-        stop_recent = (self.last_stop_t is not None
-                       and now - self.last_stop_t <= self.cfg.stop_latch)
+    def _monitoring(self, now, position, rear_blk) -> Command:
         nav_recent = (self.last_nav_t is not None
                       and now - self.last_nav_t <= self.cfg.nav_latch)
-        # Travamento = robô CONGELADO (sinal estável) enquanto o collision STOP
-        # esteve ativo há pouco e o nav2 tem um goal (comandou há pouco).
-        stuck = frozen and stop_recent and nav_recent
-        if not stuck:
-            self.stuck_since = None
+        if not nav_recent:
+            # sem goal ativo: parado aqui é normal (goal atingido/cancelado)
+            self.anchor = None
             return _IDLE
-        if self.stuck_since is None:
-            self.stuck_since = now
+        # âncora de deslocamento: só re-ancora quando o robô REALMENTE sai do
+        # raio — micro-mexidas (tentando girar, ruído de odom) não resetam.
+        if self.anchor is None or self._dist(position, self.anchor) > self.cfg.stuck_radius:
+            self.anchor = position
+            self.anchor_t = now
             return _IDLE
-        if now - self.stuck_since < self.cfg.stuck_timeout:
+        if now - self.anchor_t < self.cfg.stuck_timeout:
             return _IDLE
-        return self._begin_maneuver(now, position, rear_blk)
-
-    def _begin_maneuver(self, now, position, rear_blk) -> Command:
-        # registra o evento e conta quantos houve perto deste ponto na janela
-        self._prune(now)
-        self.history.append((now, position))
-        nearby = sum(
-            1 for (_, p) in self.history
-            if math.hypot(p[0] - position[0], p[1] - position[1])
-            <= self.cfg.same_spot_radius
-        )
-        force_spin = nearby >= self.cfg.escalate_after
-
+        if rear_blk:
+            # traseira bloqueada: NÃO gira (giro removido), segura e re-tenta
+            # no próximo tick — dispara assim que o /scan liberar atrás.
+            return _IDLE
+        self.state = _REVERSING
         self.maneuver_start_t = now
         self.maneuver_start_pos = position
-        if rear_blk or force_spin:
-            self.state = _SPINNING
-            return Command(0.0, self.cfg.spin_speed, True)
-        self.state = _REVERSING
         return Command(-self.cfg.reverse_speed, 0.0, True)
 
     def _reversing(self, now, position) -> Command:
-        dist = math.hypot(position[0] - self.maneuver_start_pos[0],
-                          position[1] - self.maneuver_start_pos[1])
+        dist = self._dist(position, self.maneuver_start_pos)
         if (dist >= self.cfg.reverse_distance
                 or now - self.maneuver_start_t >= self.cfg.reverse_time_cap):
-            return self._enter_grace(now)
+            self.state = _GRACE
+            self.grace_start = now
+            return _IDLE
         return Command(-self.cfg.reverse_speed, 0.0, True)
-
-    def _spinning(self, now) -> Command:
-        spin_time = (self.cfg.spin_angle / self.cfg.spin_speed
-                     if self.cfg.spin_speed else 0.0)
-        if now - self.maneuver_start_t >= spin_time:
-            return self._enter_grace(now)
-        return Command(0.0, self.cfg.spin_speed, True)
-
-    def _enter_grace(self, now) -> Command:
-        self.state = _GRACE
-        self.grace_start = now
-        return _IDLE
 
     def _grace(self, now) -> Command:
         if now - self.grace_start >= self.cfg.grace:
             self.state = _MONITORING
-            self.stuck_since = None
+            self.anchor = None  # re-ancora na posição pós-manobra
         return _IDLE
 
-    def _prune(self, now) -> None:
-        cutoff = now - self.cfg.escalate_window
-        self.history = [(t, p) for (t, p) in self.history if t >= cutoff]
+    @staticmethod
+    def _dist(a: Tuple[float, float], b: Tuple[float, float]) -> float:
+        return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
 # ---- nó ROS (cola de I/O) --------------------------------------------------
@@ -198,10 +158,10 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
     from sensor_msgs.msg import LaserScan
     try:
         from nav2_msgs.msg import CollisionMonitorState
-    except ImportError:  # nome pode variar entre distros
+    except ImportError:
         CollisionMonitorState = None
 
-    # STOP = 1 no enum do collision monitor (DO_NOTHING=0, STOP=1, SLOWDOWN=2, ...)
+    # STOP = 1 no enum do collision monitor — só pra LOG (não é mais gatilho)
     STOP_ACTION = 1
 
     class UnstuckSupervisorNode(Node):
@@ -209,21 +169,14 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             super().__init__("unstuck_supervisor")
             p = self.declare_parameters("", [
                 ("stuck_timeout", 10.0),
+                ("stuck_radius", 0.05),
                 ("reverse_distance", 0.30),
-                ("reverse_speed", 0.15),
-                ("reverse_time_cap", 3.0),
-                ("spin_speed", 0.5),
-                ("spin_angle", 1.0),
-                ("escalate_after", 3),
-                ("same_spot_radius", 0.5),
-                ("escalate_window", 60.0),
+                ("reverse_speed", 0.25),
+                ("reverse_time_cap", 6.0),
                 ("grace", 2.0),
-                ("stop_latch", 5.0),
                 ("nav_latch", 15.0),
                 ("rear_clearance", 0.35),
                 ("rear_sector_deg", 30.0),
-                ("odom_zero_lin", 0.02),
-                ("odom_zero_ang", 0.05),
                 ("nav_move_lin", 0.01),
                 ("nav_move_ang", 0.05),
                 ("rate_hz", 10.0),
@@ -231,32 +184,24 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             g = {n.name: n.value for n in p}
             self.cfg = UnstuckConfig(
                 stuck_timeout=g["stuck_timeout"],
+                stuck_radius=g["stuck_radius"],
                 reverse_distance=g["reverse_distance"],
                 reverse_speed=g["reverse_speed"],
                 reverse_time_cap=g["reverse_time_cap"],
-                spin_speed=g["spin_speed"],
-                spin_angle=g["spin_angle"],
-                escalate_after=int(g["escalate_after"]),
-                same_spot_radius=g["same_spot_radius"],
-                escalate_window=g["escalate_window"],
                 grace=g["grace"],
-                stop_latch=g["stop_latch"],
                 nav_latch=g["nav_latch"],
             )
             self.rear_clearance = g["rear_clearance"]
             self.rear_sector_deg = g["rear_sector_deg"]
-            self.odom_zero_lin = g["odom_zero_lin"]
-            self.odom_zero_ang = g["odom_zero_ang"]
             self.nav_move_lin = g["nav_move_lin"]
             self.nav_move_ang = g["nav_move_ang"]
 
             self.sup = UnstuckSupervisor(self.cfg)
 
-            self._stop_active = False
-            self._frozen = False
             self._nav_wants_move = False
             self._position = (0.0, 0.0)
             self._rear_blocked = False
+            self._stop_active = False  # só pra log
             self._last_state = self.sup.state
 
             be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -270,20 +215,15 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 self.create_subscription(
                     CollisionMonitorState, "collision_monitor_state",
                     self._on_collision, 10)
-            else:
-                self.get_logger().warn(
-                    "CollisionMonitorState indisponível — supervisor inativo")
 
             self.create_timer(1.0 / g["rate_hz"], self._tick)
             self.get_logger().info(
-                "unstuck_supervisor ativo (gatilho %.0fs, ré %.2fm)" % (
+                "unstuck_supervisor ativo (sem-deslocamento %.0fs -> ré %.2fm; "
+                "giro desativado)" % (
                     self.cfg.stuck_timeout, self.cfg.reverse_distance))
 
         def _on_odom(self, msg):
             self._position = (msg.pose.pose.position.x, msg.pose.pose.position.y)
-            self._frozen = is_frozen(
-                msg.twist.twist.linear.x, msg.twist.twist.angular.z,
-                self.odom_zero_lin, self.odom_zero_ang)
 
         def _on_nav_raw(self, msg):
             self._nav_wants_move = (abs(msg.linear.x) > self.nav_move_lin
@@ -300,12 +240,14 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
         def _tick(self):
             now = self.get_clock().now().nanoseconds * 1e-9
             cmd = self.sup.update(
-                now, stop_active=self._stop_active, frozen=self._frozen,
-                nav_wants_move=self._nav_wants_move, position=self._position,
-                rear_blocked=self._rear_blocked)
+                now, nav_wants_move=self._nav_wants_move,
+                position=self._position, rear_blocked=self._rear_blocked)
             if self.sup.state != self._last_state:
                 self.get_logger().warn(
-                    "unstuck: %s -> %s" % (self._last_state, self.sup.state))
+                    "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s rear=%s)" % (
+                        self._last_state, self.sup.state,
+                        self._position[0], self._position[1],
+                        self._stop_active, self._rear_blocked))
                 self._last_state = self.sup.state
             if cmd.active:
                 t = Twist()

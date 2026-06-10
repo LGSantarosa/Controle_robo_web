@@ -5,25 +5,11 @@ import pytest
 from robot_nav.unstuck_supervisor import (
     UnstuckConfig,
     UnstuckSupervisor,
-    is_frozen,
     rear_blocked,
 )
 
 
 # ---- helpers puros ---------------------------------------------------------
-
-def test_is_frozen_true_when_below_thresholds():
-    assert is_frozen(0.01, 0.02, zero_lin=0.02, zero_ang=0.05) is True
-
-
-def test_is_frozen_false_when_linear_moving():
-    assert is_frozen(0.10, 0.0, zero_lin=0.02, zero_ang=0.05) is False
-
-
-def test_is_frozen_false_when_rotating():
-    # robô girando de verdade não está congelado
-    assert is_frozen(0.0, 0.20, zero_lin=0.02, zero_ang=0.05) is False
-
 
 def _scan_with_obstacle_at(angle_rad, dist, n=360):
     # scan de -pi..pi, tudo livre (inf) menos um feixe no ângulo pedido
@@ -61,157 +47,159 @@ def test_rear_blocked_ignores_obstacle_outside_sector():
 def _cfg(**kw):
     base = dict(
         stuck_timeout=10.0,
+        stuck_radius=0.05,
         reverse_distance=0.30,
-        reverse_speed=0.15,
-        reverse_time_cap=3.0,
-        spin_speed=0.5,
-        spin_angle=1.0,
-        escalate_after=3,
-        same_spot_radius=0.5,
-        escalate_window=60.0,
+        reverse_speed=0.25,
+        reverse_time_cap=6.0,
         grace=2.0,
+        nav_latch=15.0,
     )
     base.update(kw)
     return UnstuckConfig(**base)
 
 
-def _stuck(sup, t, pos=(0.0, 0.0), rear=False):
-    return sup.update(
-        t,
-        stop_active=True,
-        frozen=True,
-        nav_wants_move=True,
-        position=pos,
-        rear_blocked=rear,
-    )
+def _tick(sup, t, pos=(0.0, 0.0), nav=True, rear=False):
+    return sup.update(t, nav_wants_move=nav, position=pos, rear_blocked=rear)
 
 
 def test_no_action_before_timeout():
     sup = UnstuckSupervisor(_cfg())
-    _stuck(sup, 0.0)
-    cmd = _stuck(sup, 9.9)
+    _tick(sup, 0.0)
+    cmd = _tick(sup, 9.9)
     assert cmd.active is False
 
 
-def test_refires_despite_nav_command_dropping_on_abort():
-    # BUG REAL (1 ré só): o controller do nav2 aborta a cada ~8s (progress_checker)
-    # -> nav_vel_raw cai a 0 -> nav_wants_move=False. Mas o robô segue CONGELADO e
-    # o collision STOP ativo. O supervisor DEVE acumular 10s de "travado" pelo odom
-    # e disparar mesmo com o nav_wants_move piscando. (Antes: zerava o contador a
-    # cada abort e nunca mais disparava.)
+def test_reverses_after_timeout_when_not_displacing():
     sup = UnstuckSupervisor(_cfg())
-    fired = None
-    t = 0.0
-    while t < 12.0:
-        nav = (t % 9.0) < 8.0  # comanda 8s, aborta 1s, repete
-        cmd = sup.update(t, stop_active=True, frozen=True,
-                         nav_wants_move=nav, position=(0.0, 0.0),
-                         rear_blocked=False)
-        if cmd.active:
-            fired = t
-            break
-        t += 0.5
-    assert fired is not None, "supervisor nunca disparou apesar do robô travado"
-    assert fired <= 11.0
-
-
-def test_reverses_after_timeout_when_rear_clear():
-    sup = UnstuckSupervisor(_cfg())
-    _stuck(sup, 0.0)
-    cmd = _stuck(sup, 10.1)
+    _tick(sup, 0.0)
+    cmd = _tick(sup, 10.1)
     assert cmd.active is True
-    assert cmd.lin == pytest.approx(-0.15)
+    assert cmd.lin == pytest.approx(-0.25)
     assert cmd.ang == pytest.approx(0.0)
 
 
-def test_spins_after_timeout_when_rear_blocked():
+def test_never_spins():
+    # GIRO REMOVIDO (decisão 2026-06-10): a manobra é SEMPRE ré, nunca angular.
     sup = UnstuckSupervisor(_cfg())
-    _stuck(sup, 0.0, rear=True)
-    cmd = _stuck(sup, 10.1, rear=True)
+    _tick(sup, 0.0)
+    for dt in (10.1, 10.2, 11.0, 12.0):
+        cmd = _tick(sup, dt)
+        assert cmd.ang == pytest.approx(0.0)
+
+
+def test_micro_wiggle_still_fires():
+    # BUG REAL: robô "tentando girar" sem sair do lugar (RotationShim/recoveries
+    # do nav2) mexia uns mm e resetava o relógio. Deslocamento <stuck_radius
+    # NÃO pode resetar — tem que disparar a ré mesmo assim.
+    sup = UnstuckSupervisor(_cfg())
+    fired = False
+    t = 0.0
+    while t <= 12.0:
+        wiggle = (0.02 * math.sin(t * 7.0), 0.015 * math.cos(t * 5.0))
+        cmd = _tick(sup, t, pos=wiggle)
+        if cmd.active:
+            fired = True
+            break
+        t += 0.1
+    assert fired is True
+    assert t <= 11.0
+
+
+def test_robot_actually_moving_never_fires():
+    # robô andando de verdade (>stuck_radius continuamente) nunca dispara
+    sup = UnstuckSupervisor(_cfg())
+    t = 0.0
+    while t <= 20.0:
+        cmd = _tick(sup, t, pos=(0.1 * t, 0.0))  # 0.1 m/s
+        assert cmd.active is False
+        t += 0.5
+
+
+def test_no_fire_without_nav_goal():
+    # sem o nav2 comandar (goal cancelado/atingido), parado NÃO é travado
+    sup = UnstuckSupervisor(_cfg())
+    t = 0.0
+    while t <= 20.0:
+        cmd = _tick(sup, t, nav=False)
+        assert cmd.active is False
+        t += 0.5
+
+
+def test_nav_latch_tolerates_abort_gaps():
+    # nav2 aborta e fica ~1-2s sem comandar; o latch segura e a ré ainda sai
+    sup = UnstuckSupervisor(_cfg())
+    fired = False
+    t = 0.0
+    while t <= 12.0:
+        nav = (t % 9.0) < 8.0  # comanda 8s, cala 1s, repete
+        cmd = _tick(sup, t, nav=nav)
+        if cmd.active:
+            fired = True
+            break
+        t += 0.5
+    assert fired is True
+
+
+def test_goal_gone_stops_firing():
+    # nav silencia de vez (goal cancelado) -> depois do nav_latch, nada dispara
+    sup = UnstuckSupervisor(_cfg(nav_latch=5.0))
+    _tick(sup, 0.0, nav=True)
+    t = 0.5
+    while t <= 30.0:
+        cmd = _tick(sup, t, nav=False)
+        if t > 5.0:
+            assert cmd.active is False, f"disparou em t={t} sem goal"
+        t += 0.5
+
+
+def test_rear_blocked_holds_then_fires_when_clear():
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0, rear=True)
+    cmd = _tick(sup, 10.1, rear=True)
+    assert cmd.active is False  # traseira bloqueada: segura (não gira, não ré)
+    cmd = _tick(sup, 10.5, rear=False)  # liberou -> ré
     assert cmd.active is True
-    assert cmd.lin == pytest.approx(0.0)
-    assert cmd.ang == pytest.approx(0.5)
-
-
-def test_timer_resets_when_condition_breaks():
-    # se em algum momento ele NÃO está travado, o contador zera
-    sup = UnstuckSupervisor(_cfg())
-    _stuck(sup, 0.0)
-    # robô andou (não congelado) no meio do caminho
-    sup.update(5.0, stop_active=False, frozen=False, nav_wants_move=True,
-               position=(0.0, 0.0), rear_blocked=False)
-    cmd = _stuck(sup, 10.1)
-    assert cmd.active is False  # só passaram 0.1s desde que re-travou
+    assert cmd.lin == pytest.approx(-0.25)
 
 
 def test_reverse_stops_after_distance():
     sup = UnstuckSupervisor(_cfg())
-    _stuck(sup, 0.0)
-    _stuck(sup, 10.1)  # entra em RÉ na origem
-    # recuou 0.30m -> deve soltar
-    cmd = sup.update(11.0, stop_active=True, frozen=False, nav_wants_move=True,
-                     position=(-0.30, 0.0), rear_blocked=False)
+    _tick(sup, 0.0)
+    _tick(sup, 10.1)  # entra em RÉ na origem
+    cmd = _tick(sup, 11.0, pos=(-0.30, 0.0))
     assert cmd.active is False
 
 
 def test_reverse_stops_after_time_cap():
-    sup = UnstuckSupervisor(_cfg(reverse_time_cap=3.0))
-    _stuck(sup, 0.0)
-    _stuck(sup, 10.1)  # entra em RÉ
-    # passou do cap sem recuar (odom não progrediu)
-    cmd = sup.update(13.2, stop_active=True, frozen=True, nav_wants_move=True,
-                     position=(0.0, 0.0), rear_blocked=False)
+    sup = UnstuckSupervisor(_cfg(reverse_time_cap=6.0))
+    _tick(sup, 0.0)
+    _tick(sup, 10.1)  # entra em RÉ
+    cmd = _tick(sup, 16.3, pos=(0.0, 0.0))  # passou do cap sem recuar
     assert cmd.active is False
 
 
 def test_grace_before_rearming():
     sup = UnstuckSupervisor(_cfg())
-    _stuck(sup, 0.0)
-    _stuck(sup, 10.1)  # RÉ
-    sup.update(11.0, stop_active=True, frozen=False, nav_wants_move=True,
-               position=(-0.30, 0.0), rear_blocked=False)  # solta -> grace
-    # logo após soltar, mesmo travado de novo, ainda está no grace
-    cmd = _stuck(sup, 11.5, pos=(-0.30, 0.0))
-    assert cmd.active is False
+    _tick(sup, 0.0)
+    _tick(sup, 10.1)  # RÉ
+    _tick(sup, 11.0, pos=(-0.30, 0.0))  # completou -> grace
+    cmd = _tick(sup, 11.5, pos=(-0.30, 0.0))
+    assert cmd.active is False  # ainda no grace
 
 
-def _run_stuck_cycle(sup, t0, pos, cap=1.0, grace=0.1):
-    """Roda um ciclo travamento->manobra->fim->volta a MONITORANDO.
-
-    Retorna (cmd_da_manobra, t_pronto_pro_proximo_ciclo).
-    """
-    _stuck(sup, t0, pos=pos)                  # arma o contador
-    cmd = _stuck(sup, t0 + 10.1, pos=pos)     # dispara a manobra
-    # encerra a manobra pelo cap de tempo (robô não progrediu)
-    t_end = t0 + 10.1 + cap + 0.1
-    sup.update(t_end, stop_active=True, frozen=True, nav_wants_move=True,
-               position=pos, rear_blocked=False)
-    # passa do grace -> volta pra MONITORANDO (condição quebra)
-    t_clear = t_end + grace + 0.1
-    sup.update(t_clear, stop_active=False, frozen=False, nav_wants_move=False,
-               position=pos, rear_blocked=False)
-    return cmd, t_clear
-
-
-def test_escalates_to_spin_after_repeated_stuck_same_spot():
-    sup = UnstuckSupervisor(_cfg(reverse_time_cap=1.0, grace=0.1))
+def test_refires_repeatedly_if_still_stuck():
+    # "nunca para sem razão": continua travado -> ré de novo, e de novo
+    sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=1.0))
+    fires = 0
     t = 0.0
-    cmds = []
-    for _ in range(3):
-        cmd, t = _run_stuck_cycle(sup, t, pos=(0.0, 0.0))
-        cmds.append(cmd)
-    # 1ª e 2ª: ré (rear livre); a 3ª no mesmo ponto escala pro giro
-    assert cmds[0].lin == pytest.approx(-0.15) and cmds[0].ang == 0.0
-    assert cmds[2].lin == pytest.approx(0.0) and cmds[2].ang == pytest.approx(0.5)
+    while t <= 60.0 and fires < 3:
+        was_idle = not sup_active(sup)
+        cmd = _tick(sup, t)  # posição parada pra sempre (ré não surte efeito)
+        if cmd.active and was_idle:
+            fires += 1
+        t += 0.5
+    assert fires >= 3
 
 
-def test_does_not_escalate_when_robot_escaped():
-    # travamentos em pontos distantes não contam como "mesmo ponto"
-    sup = UnstuckSupervisor(_cfg(reverse_time_cap=1.0, grace=0.1))
-    t = 0.0
-    for k in range(3):
-        pos = (2.0 * k, 0.0)  # cada travamento 2m adiante
-        cmd, t = _run_stuck_cycle(sup, t, pos=pos)
-        # rear livre -> sempre ré, nunca giro, porque nunca é "o mesmo ponto"
-        assert cmd.lin == pytest.approx(-0.15)
-        assert cmd.ang == pytest.approx(0.0)
+def sup_active(sup):
+    return sup.state != "monitoring"
