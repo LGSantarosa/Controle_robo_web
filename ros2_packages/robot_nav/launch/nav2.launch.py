@@ -138,6 +138,7 @@ def generate_launch_description():
                 'nav_latch': 15.0,
                 'rear_clearance': 0.35,
                 'rear_sector_deg': 30.0,
+                'scan_stale': 2.0,
                 'nav_move_lin': 0.01,
                 'nav_move_ang': 0.05,
                 'rate_hz': 10.0,

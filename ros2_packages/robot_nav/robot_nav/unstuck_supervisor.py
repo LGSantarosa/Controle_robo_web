@@ -90,11 +90,12 @@ class UnstuckSupervisor:
     last_nav_t: Optional[float] = None
 
     def update(self, now: float, *, nav_wants_move: bool,
-               position: Tuple[float, float], rear_blocked: bool) -> Command:
+               position: Tuple[float, float], rear_blocked: bool,
+               goal_active: Optional[bool] = None) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
         if self.state == _MONITORING:
-            return self._monitoring(now, position, rear_blocked)
+            return self._monitoring(now, position, rear_blocked, goal_active)
         if self.state == _REVERSING:
             return self._reversing(now, position)
         if self.state == _GRACE:
@@ -103,10 +104,19 @@ class UnstuckSupervisor:
 
     # -- estados --
 
-    def _monitoring(self, now, position, rear_blk) -> Command:
-        nav_recent = (self.last_nav_t is not None
-                      and now - self.last_nav_t <= self.cfg.nav_latch)
-        if not nav_recent:
+    def _monitoring(self, now, position, rear_blk, goal_active) -> Command:
+        if goal_active is not None:
+            # status do action server do nav2 disponível: é AUTORITATIVO.
+            # Mata a "ré póstuma" (goal cancelado mas flag de nav_vel_raw
+            # parado em True) e cobre o BT em recovery (controller mudo
+            # mas goal seguindo ativo).
+            nav_gate = goal_active
+        else:
+            # fallback sem status: nav2 comandou há <nav_latch (tolera os
+            # gaps de ~1-2s do ciclo de abort do progress_checker)
+            nav_gate = (self.last_nav_t is not None
+                        and now - self.last_nav_t <= self.cfg.nav_latch)
+        if not nav_gate:
             # sem goal ativo: parado aqui é normal (goal atingido/cancelado)
             self.anchor = None
             return _IDLE
@@ -133,7 +143,10 @@ class UnstuckSupervisor:
                 or now - self.maneuver_start_t >= self.cfg.reverse_time_cap):
             self.state = _GRACE
             self.grace_start = now
-            return _IDLE
+            # STOP explícito: o cmd_vel_to_wheels segura o último comando;
+            # sem este zero o robô continuaria de ré até o nav2 publicar
+            # de novo (que pode estar mudo, abortado/replanejando).
+            return Command(0.0, 0.0, True)
         return Command(-self.cfg.reverse_speed, 0.0, True)
 
     def _grace(self, now) -> Command:
@@ -153,6 +166,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+    from action_msgs.msg import GoalStatusArray
     from geometry_msgs.msg import Twist
     from nav_msgs.msg import Odometry
     from sensor_msgs.msg import LaserScan
@@ -163,6 +177,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
 
     # STOP = 1 no enum do collision monitor — só pra LOG (não é mais gatilho)
     STOP_ACTION = 1
+    # GoalStatus: ACCEPTED=1, EXECUTING=2, CANCELING=3 = goal ainda vivo
+    ACTIVE_STATUSES = (1, 2, 3)
 
     class UnstuckSupervisorNode(Node):
         def __init__(self):
@@ -177,6 +193,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("nav_latch", 15.0),
                 ("rear_clearance", 0.35),
                 ("rear_sector_deg", 30.0),
+                ("scan_stale", 2.0),
                 ("nav_move_lin", 0.01),
                 ("nav_move_ang", 0.05),
                 ("rate_hz", 10.0),
@@ -193,6 +210,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             )
             self.rear_clearance = g["rear_clearance"]
             self.rear_sector_deg = g["rear_sector_deg"]
+            self.scan_stale = g["scan_stale"]
             self.nav_move_lin = g["nav_move_lin"]
             self.nav_move_ang = g["nav_move_ang"]
 
@@ -201,6 +219,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._nav_wants_move = False
             self._position = (0.0, 0.0)
             self._rear_blocked = False
+            self._scan_t = None  # quando o último /scan chegou
+            self._goal_active = {}  # por tópico de status; None até a 1ª msg
             self._stop_active = False  # só pra log
             self._last_state = self.sup.state
 
@@ -211,6 +231,14 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self.create_subscription(Odometry, "odom", self._on_odom, 10)
             self.create_subscription(Twist, "nav_vel_raw", self._on_nav_raw, 10)
             self.create_subscription(LaserScan, "scan", self._on_scan, be)
+            # Status dos goals do bt_navigator: gate AUTORITATIVO (mata a
+            # "ré póstuma" após cancel e cobre o BT em recovery c/ controller
+            # mudo). Sem msg ainda -> cai no fallback por nav_latch.
+            for topic in ("navigate_to_pose/_action/status",
+                          "navigate_through_poses/_action/status"):
+                self.create_subscription(
+                    GoalStatusArray, topic,
+                    lambda m, t=topic: self._on_goal_status(t, m), 10)
             if CollisionMonitorState is not None:
                 self.create_subscription(
                     CollisionMonitorState, "collision_monitor_state",
@@ -230,18 +258,32 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                                     or abs(msg.angular.z) > self.nav_move_ang)
 
         def _on_scan(self, msg):
+            self._scan_t = self.get_clock().now().nanoseconds * 1e-9
             self._rear_blocked = rear_blocked(
                 list(msg.ranges), msg.angle_min, msg.angle_increment,
                 self.rear_sector_deg, self.rear_clearance)
+
+        def _on_goal_status(self, topic, msg):
+            self._goal_active[topic] = any(
+                s.status in ACTIVE_STATUSES for s in msg.status_list)
 
         def _on_collision(self, msg):
             self._stop_active = (getattr(msg, "action_type", 0) == STOP_ACTION)
 
         def _tick(self):
             now = self.get_clock().now().nanoseconds * 1e-9
+            # scan velho (LiDAR caiu?) -> trata traseira como BLOQUEADA:
+            # melhor segurar a ré do que dar ré cego.
+            scan_fresh = (self._scan_t is not None
+                          and now - self._scan_t <= self.scan_stale)
+            rear = self._rear_blocked if scan_fresh else True
+            # status visto em algum tópico? OR entre eles; nunca visto -> None
+            goal_active = (any(self._goal_active.values())
+                           if self._goal_active else None)
             cmd = self.sup.update(
                 now, nav_wants_move=self._nav_wants_move,
-                position=self._position, rear_blocked=self._rear_blocked)
+                position=self._position, rear_blocked=rear,
+                goal_active=goal_active)
             if self.sup.state != self._last_state:
                 self.get_logger().warn(
                     "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s rear=%s)" % (

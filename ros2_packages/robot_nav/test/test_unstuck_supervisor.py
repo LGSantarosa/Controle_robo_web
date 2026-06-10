@@ -162,11 +162,18 @@ def test_rear_blocked_holds_then_fires_when_clear():
     assert cmd.lin == pytest.approx(-0.25)
 
 
-def test_reverse_stops_after_distance():
+def test_reverse_ends_with_explicit_stop():
+    # FIM DA RÉ TEM QUE MANDAR ZERO: o cmd_vel_to_wheels segura o último
+    # comando; sem um Twist 0 explícito o robô continuaria de ré até alguém
+    # publicar de novo (nav2 pode estar mudo, abortado).
     sup = UnstuckSupervisor(_cfg())
     _tick(sup, 0.0)
     _tick(sup, 10.1)  # entra em RÉ na origem
-    cmd = _tick(sup, 11.0, pos=(-0.30, 0.0))
+    cmd = _tick(sup, 11.0, pos=(-0.30, 0.0))  # completou a distância
+    assert cmd.active is True   # ainda publica...
+    assert cmd.lin == pytest.approx(0.0)  # ...mas é o STOP
+    assert cmd.ang == pytest.approx(0.0)
+    cmd = _tick(sup, 11.2, pos=(-0.30, 0.0))  # grace: solta o canal
     assert cmd.active is False
 
 
@@ -175,6 +182,8 @@ def test_reverse_stops_after_time_cap():
     _tick(sup, 0.0)
     _tick(sup, 10.1)  # entra em RÉ
     cmd = _tick(sup, 16.3, pos=(0.0, 0.0))  # passou do cap sem recuar
+    assert cmd.active is True and cmd.lin == pytest.approx(0.0)  # STOP explícito
+    cmd = _tick(sup, 16.5, pos=(0.0, 0.0))
     assert cmd.active is False
 
 
@@ -182,9 +191,47 @@ def test_grace_before_rearming():
     sup = UnstuckSupervisor(_cfg())
     _tick(sup, 0.0)
     _tick(sup, 10.1)  # RÉ
-    _tick(sup, 11.0, pos=(-0.30, 0.0))  # completou -> grace
+    _tick(sup, 11.0, pos=(-0.30, 0.0))  # completou -> STOP -> grace
     cmd = _tick(sup, 11.5, pos=(-0.30, 0.0))
     assert cmd.active is False  # ainda no grace
+
+
+# ---- gate por STATUS do goal (autoritativo quando disponível) ---------------
+
+def test_goal_inactive_blocks_fire_even_with_nav_msgs():
+    # goal cancelado/atingido (status diz INATIVO) -> NUNCA dá ré póstuma,
+    # mesmo que o flag de nav_vel_raw tenha ficado True pra trás
+    sup = UnstuckSupervisor(_cfg())
+    t = 0.0
+    while t <= 25.0:
+        cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                         rear_blocked=False, goal_active=False)
+        assert cmd.active is False
+        t += 0.5
+
+
+def test_goal_active_fires_even_with_controller_silent():
+    # BT em recovery (controller mudo, nav_vel_raw sem msg) mas goal ATIVO:
+    # robô sem se deslocar 10s -> ré mesmo assim
+    sup = UnstuckSupervisor(_cfg())
+    fired = False
+    t = 0.0
+    while t <= 12.0:
+        cmd = sup.update(t, nav_wants_move=False, position=(0.0, 0.0),
+                         rear_blocked=False, goal_active=True)
+        if cmd.active:
+            fired = True
+            break
+        t += 0.5
+    assert fired is True
+
+
+def test_goal_status_none_falls_back_to_latch():
+    # sem status (tópico não visto): comportamento antigo via nav_latch
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0)
+    cmd = _tick(sup, 10.1)
+    assert cmd.active is True
 
 
 def test_refires_repeatedly_if_still_stuck():
