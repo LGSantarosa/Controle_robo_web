@@ -70,6 +70,7 @@ def _cfg(**kw):
         escalate_window=120.0,
         spin_speed=3.0,
         spin_angle=1.57,
+        spin_left_boost=1.0,
     )
     base.update(kw)
     return UnstuckConfig(**base)
@@ -316,6 +317,22 @@ def test_spin_duration_matches_angle():
     cmds, _ = _stuck_cycle(sup, t, pos=(0.0, 0.0))
     spins = [c for c in cmds if c.ang != 0.0]
     assert 4 <= len(spins) <= 8
+
+
+def test_spin_left_boost_extends_left_spin():
+    # rodas não pegam bem girando pra ESQUERDA -> boost de DURAÇÃO só nesse
+    # lado (velocidade já satura no motor; mais tempo = mais virada real)
+    def spin_ticks(open_side):
+        sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5,
+                                     spin_left_boost=2.0))
+        t = 0.0
+        for _ in range(2):
+            _, t = _stuck_cycle(sup, t, pos=(0.0, 0.0), open_side=open_side)
+        cmds, _ = _stuck_cycle(sup, t, pos=(0.0, 0.0), open_side=open_side)
+        return len([c for c in cmds if c.ang != 0.0])
+
+    left, right = spin_ticks(+1), spin_ticks(-1)
+    assert left >= 2 * right - 1  # esquerda gira ~2x mais tempo
 
 
 def test_no_escalation_when_stuck_at_different_spots():

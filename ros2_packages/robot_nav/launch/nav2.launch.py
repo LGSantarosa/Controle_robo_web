@@ -141,6 +141,7 @@ def generate_launch_description():
                 'escalate_window': 120.0,
                 'spin_speed': 3.0,
                 'spin_angle': 1.57,
+                'spin_left_boost': 1.5,
                 'rear_clearance': 0.35,
                 'rear_sector_deg': 30.0,
                 'scan_stale': 2.0,

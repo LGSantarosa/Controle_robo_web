@@ -97,6 +97,10 @@ class UnstuckConfig:
     escalate_window: float = 120.0  # esquece travamentos mais velhos que isso
     spin_speed: float = 3.0        # rad/s do giro pós-ré (precisa vencer atrito)
     spin_angle: float = 1.57       # quanto girar (~90°), duração = angle/speed
+    # As rodas pegam pior girando pra ESQUERDA (assimetria mecânica) -> boost
+    # de DURAÇÃO só nesse lado. Velocidade não adianta (satura no motor);
+    # mais tempo girando = mais virada real.
+    spin_left_boost: float = 1.5   # duração do giro à esquerda x1.5
 
 
 class Command(NamedTuple):
@@ -213,6 +217,8 @@ class UnstuckSupervisor:
     def _spinning(self, now) -> Command:
         spin_time = (self.cfg.spin_angle / self.cfg.spin_speed
                      if self.cfg.spin_speed else 0.0)
+        if self.spin_side > 0:
+            spin_time *= self.cfg.spin_left_boost  # esquerda escorrega: + tempo
         if now - self.spin_start_t >= spin_time:
             self.state = _GRACE
             self.grace_start = now
@@ -266,6 +272,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("escalate_window", 120.0),
                 ("spin_speed", 3.0),
                 ("spin_angle", 1.57),
+                ("spin_left_boost", 1.5),
                 ("rear_clearance", 0.35),
                 ("rear_sector_deg", 30.0),
                 ("scan_stale", 2.0),
@@ -287,6 +294,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 escalate_window=g["escalate_window"],
                 spin_speed=g["spin_speed"],
                 spin_angle=g["spin_angle"],
+                spin_left_boost=g["spin_left_boost"],
             )
             self.rear_clearance = g["rear_clearance"]
             self.rear_sector_deg = g["rear_sector_deg"]
