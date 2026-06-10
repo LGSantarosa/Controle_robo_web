@@ -69,7 +69,8 @@ def _cfg(**kw):
         same_spot_radius=0.5,
         escalate_window=120.0,
         spin_speed=3.0,
-        spin_angle=1.57,
+        spin_angle=0.44,
+        spin_time_cap=4.0,
         spin_left_boost=1.0,
     )
     base.update(kw)
@@ -308,31 +309,57 @@ def test_spin_turns_toward_open_side():
     assert spins and spins[0].ang == pytest.approx(-3.0)
 
 
-def test_spin_duration_matches_angle():
-    # giro dura spin_angle/spin_speed (1.57/3.0 ~ 0.52s -> ~6 ticks de 0.1)
-    sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5))
+def _escalated_sup(open_side=1, **cfg_kw):
+    """Leva o supervisor até o INÍCIO do giro da 3ª manobra (já escalada)."""
+    sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5, **cfg_kw))
     t = 0.0
     for _ in range(2):
-        _, t = _stuck_cycle(sup, t, pos=(0.0, 0.0))
-    cmds, _ = _stuck_cycle(sup, t, pos=(0.0, 0.0))
-    spins = [c for c in cmds if c.ang != 0.0]
-    assert 4 <= len(spins) <= 8
+        _, t = _stuck_cycle(sup, t, pos=(0.0, 0.0), open_side=open_side)
+    # 3ª: arma e atravessa a fase de ré até o 1º comando de giro
+    deadline = t + 60.0
+    while t < deadline:
+        cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                         rear_blocked=False, open_side=open_side)
+        if cmd.active and cmd.ang != 0.0:
+            return sup, t, cmd
+        t += 0.1
+    raise AssertionError("nunca chegou no giro")
 
 
-def test_spin_left_boost_extends_left_spin():
-    # rodas não pegam bem girando pra ESQUERDA -> boost de DURAÇÃO só nesse
-    # lado (velocidade já satura no motor; mais tempo = mais virada real)
-    def spin_ticks(open_side):
-        sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5,
-                                     spin_left_boost=2.0))
-        t = 0.0
-        for _ in range(2):
-            _, t = _stuck_cycle(sup, t, pos=(0.0, 0.0), open_side=open_side)
-        cmds, _ = _stuck_cycle(sup, t, pos=(0.0, 0.0), open_side=open_side)
-        return len([c for c in cmds if c.ang != 0.0])
+def test_spin_closed_loop_stops_at_target_yaw():
+    # MALHA FECHADA: roda patina (comanda 30°, vira 5°) -> só para quando o
+    # YAW MEDIDO (IMU) acumular spin_angle, não por tempo
+    sup, t, cmd = _escalated_sup()
+    yaw = 0.0
+    ticks = 0
+    while cmd.ang != 0.0 and ticks < 200:
+        yaw += cmd.ang * 0.1 * 0.3  # patinagem feia: só 30% do comandado vira
+        t += 0.1
+        cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                         rear_blocked=False, yaw=yaw)
+        ticks += 1
+    assert abs(yaw) >= 0.44  # girou os 25° DE VERDADE antes de parar
+    assert cmd == (0.0, 0.0, True)  # e termina com STOP explícito
 
-    left, right = spin_ticks(+1), spin_ticks(-1)
-    assert left >= 2 * right - 1  # esquerda gira ~2x mais tempo
+
+def test_spin_time_cap_when_yaw_frozen():
+    # patinagem total (yaw não sai do lugar): teto de tempo encerra o giro
+    sup, t, cmd = _escalated_sup(spin_time_cap=1.0)
+    ticks = 0
+    while cmd.ang != 0.0 and ticks < 200:
+        t += 0.1
+        cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                         rear_blocked=False, yaw=0.0)
+        ticks += 1
+    assert ticks <= 12  # ~1s de cap, não ficou girando pra sempre
+
+
+def test_spin_left_speed_boost():
+    # esquerda escorrega -> comanda mais força nesse lado
+    _, _, cmd_l = _escalated_sup(open_side=1, spin_left_boost=1.4)
+    _, _, cmd_r = _escalated_sup(open_side=-1, spin_left_boost=1.4)
+    assert cmd_l.ang == pytest.approx(3.0 * 1.4)   # esquerda: 4.2
+    assert cmd_r.ang == pytest.approx(-3.0)        # direita: sem boost
 
 
 def test_no_escalation_when_stuck_at_different_spots():

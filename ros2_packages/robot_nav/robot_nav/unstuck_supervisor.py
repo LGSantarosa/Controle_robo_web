@@ -96,11 +96,13 @@ class UnstuckConfig:
     same_spot_radius: float = 0.5  # raio que define "mesmo ponto"
     escalate_window: float = 120.0  # esquece travamentos mais velhos que isso
     spin_speed: float = 3.0        # rad/s do giro pós-ré (precisa vencer atrito)
-    spin_angle: float = 1.57       # quanto girar (~90°), duração = angle/speed
-    # As rodas pegam pior girando pra ESQUERDA (assimetria mecânica) -> boost
-    # de DURAÇÃO só nesse lado. Velocidade não adianta (satura no motor);
-    # mais tempo girando = mais virada real.
-    spin_left_boost: float = 1.5   # duração do giro à esquerda x1.5
+    # Giro em MALHA FECHADA no yaw (campo: comanda 30° e a roda patinando
+    # entrega 5°): gira até o yaw MEDIDO (IMU, confiável mesmo patinando)
+    # acumular spin_angle; spin_time_cap é o teto se nem patinar resolver.
+    spin_angle: float = 0.44       # alvo de virada REAL (~25°)
+    spin_time_cap: float = 4.0     # teto de tempo do giro
+    # As rodas pegam pior girando pra ESQUERDA -> boost de FORÇA nesse lado.
+    spin_left_boost: float = 1.4   # velocidade do giro à esquerda x1.4
 
 
 class Command(NamedTuple):
@@ -131,21 +133,22 @@ class UnstuckSupervisor:
     escalated: bool = False    # esta manobra termina em giro forte?
     spin_side: int = 1         # +1 esq / -1 dir
     spin_start_t: float = 0.0
+    spin_start_yaw: float = 0.0
     history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
 
     def update(self, now: float, *, nav_wants_move: bool,
                position: Tuple[float, float], rear_blocked: bool,
                goal_active: Optional[bool] = None,
-               open_side: int = 1) -> Command:
+               open_side: int = 1, yaw: float = 0.0) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
         if self.state == _MONITORING:
             return self._monitoring(now, position, rear_blocked, goal_active,
                                     open_side)
         if self.state == _REVERSING:
-            return self._reversing(now, position)
+            return self._reversing(now, position, yaw)
         if self.state == _SPINNING:
-            return self._spinning(now)
+            return self._spinning(now, yaw)
         if self.state == _GRACE:
             return self._grace(now)
         return _IDLE
@@ -196,7 +199,13 @@ class UnstuckSupervisor:
         self.maneuver_start_pos = position
         return Command(-self.cfg.reverse_speed, 0.0, True)
 
-    def _reversing(self, now, position) -> Command:
+    def _spin_cmd(self) -> Command:
+        speed = self.cfg.spin_speed
+        if self.spin_side > 0:
+            speed *= self.cfg.spin_left_boost  # esquerda escorrega: + força
+        return Command(0.0, self.spin_side * speed, True)
+
+    def _reversing(self, now, position, yaw) -> Command:
         dist = self._dist(position, self.maneuver_start_pos)
         if (dist >= self.cfg.reverse_distance
                 or now - self.maneuver_start_t >= self.cfg.reverse_time_cap):
@@ -205,7 +214,8 @@ class UnstuckSupervisor:
                 # muda o heading de verdade (arco em 30cm não virava)
                 self.state = _SPINNING
                 self.spin_start_t = now
-                return Command(0.0, self.spin_side * self.cfg.spin_speed, True)
+                self.spin_start_yaw = yaw
+                return self._spin_cmd()
             self.state = _GRACE
             self.grace_start = now
             # STOP explícito: o cmd_vel_to_wheels segura o último comando;
@@ -214,16 +224,16 @@ class UnstuckSupervisor:
             return Command(0.0, 0.0, True)
         return Command(-self.cfg.reverse_speed, 0.0, True)
 
-    def _spinning(self, now) -> Command:
-        spin_time = (self.cfg.spin_angle / self.cfg.spin_speed
-                     if self.cfg.spin_speed else 0.0)
-        if self.spin_side > 0:
-            spin_time *= self.cfg.spin_left_boost  # esquerda escorrega: + tempo
-        if now - self.spin_start_t >= spin_time:
+    def _spinning(self, now, yaw) -> Command:
+        # MALHA FECHADA: para pelo yaw MEDIDO, não por tempo — roda patinando
+        # comanda 30° e entrega 5°; a IMU vê a virada real.
+        turned = abs(_norm_angle(yaw - self.spin_start_yaw))
+        if (turned >= self.cfg.spin_angle
+                or now - self.spin_start_t >= self.cfg.spin_time_cap):
             self.state = _GRACE
             self.grace_start = now
             return Command(0.0, 0.0, True)  # STOP explícito
-        return Command(0.0, self.spin_side * self.cfg.spin_speed, True)
+        return self._spin_cmd()
 
     def _grace(self, now) -> Command:
         if now - self.grace_start >= self.cfg.grace:
@@ -271,8 +281,9 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("same_spot_radius", 0.5),
                 ("escalate_window", 120.0),
                 ("spin_speed", 3.0),
-                ("spin_angle", 1.57),
-                ("spin_left_boost", 1.5),
+                ("spin_angle", 0.44),
+                ("spin_time_cap", 4.0),
+                ("spin_left_boost", 1.4),
                 ("rear_clearance", 0.35),
                 ("rear_sector_deg", 30.0),
                 ("scan_stale", 2.0),
@@ -294,6 +305,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 escalate_window=g["escalate_window"],
                 spin_speed=g["spin_speed"],
                 spin_angle=g["spin_angle"],
+                spin_time_cap=g["spin_time_cap"],
                 spin_left_boost=g["spin_left_boost"],
             )
             self.rear_clearance = g["rear_clearance"]
@@ -306,6 +318,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
 
             self._nav_wants_move = False
             self._position = (0.0, 0.0)
+            self._yaw = 0.0
             self._rear_blocked = False
             self._open_side = 1  # +1 esq / -1 dir (lado mais livre na frente)
             self._scan_t = None  # quando o último /scan chegou
@@ -341,6 +354,9 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
 
         def _on_odom(self, msg):
             self._position = (msg.pose.pose.position.x, msg.pose.pose.position.y)
+            q = msg.pose.pose.orientation
+            self._yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                   1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
         def _on_nav_raw(self, msg):
             self._nav_wants_move = (abs(msg.linear.x) > self.nav_move_lin
@@ -375,7 +391,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             cmd = self.sup.update(
                 now, nav_wants_move=self._nav_wants_move,
                 position=self._position, rear_blocked=rear,
-                goal_active=goal_active, open_side=self._open_side)
+                goal_active=goal_active, open_side=self._open_side,
+                yaw=self._yaw)
             if self.sup.state != self._last_state:
                 self.get_logger().warn(
                     "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s rear=%s)" % (
