@@ -140,7 +140,7 @@ def generate_launch_description():
                 'same_spot_radius': 0.5,
                 'escalate_window': 120.0,
                 'spin_speed': 3.0,
-                'spin_angle': 0.44,
+                'spin_angle': 0.26,
                 'spin_time_cap': 4.0,
                 'spin_left_boost': 1.4,
                 'rear_clearance': 0.35,
