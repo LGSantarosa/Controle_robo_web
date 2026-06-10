@@ -31,6 +31,7 @@ setup(
             'pose_estimator = robot_nav.pose_estimator:main',
             'cone_detector = robot_nav.cone_detector:main',
             'trekking_runner = robot_nav.trekking_runner:main',
+            'unstuck_supervisor = robot_nav.unstuck_supervisor:main',
         ],
     },
 )

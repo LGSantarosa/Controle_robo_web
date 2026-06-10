@@ -33,6 +33,10 @@ twist_mux:
         topic: web_vel       # publicado pelo controle_web quando WEB_TELEOP=on
         timeout: 0.5
         priority: 50
+      unstuck:
+        topic: unstuck_vel   # publicado pelo unstuck_supervisor (desencalhe)
+        timeout: 0.5
+        priority: 30         # > nav_vel (fura o collision na ré/giro), < web/PS4
       navigation:
         topic: nav_vel       # publicado por velocity_smoother / trekking_runner
         timeout: 0.5

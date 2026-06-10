@@ -119,6 +119,34 @@ def generate_launch_description():
             name='collision_monitor', output=nav_output,
             parameters=[params_file, sim_time_param],
         ),
+        # Watchdog de desencalhe: se o robô fica congelado pelo collision STOP
+        # por >stuck_timeout, publica unstuck_vel (entrada prio 30 do twist_mux,
+        # ACIMA do nav_vel) e dá ré / giro FURANDO o collision; depois solta e o
+        # nav2 replaneja. Não toca no collision nem na curva (RotationShim/DWB).
+        # Ver docs/superpowers/specs/2026-06-10-unstuck-supervisor-design.md
+        Node(
+            package='robot_nav', executable='unstuck_supervisor',
+            name='unstuck_supervisor', output='screen',
+            parameters=[sim_time_param, {
+                'stuck_timeout': 10.0,
+                'reverse_distance': 0.30,
+                'reverse_speed': 0.15,
+                'reverse_time_cap': 3.0,
+                'spin_speed': 0.5,
+                'spin_angle': 1.0,
+                'escalate_after': 3,
+                'same_spot_radius': 0.5,
+                'escalate_window': 60.0,
+                'grace': 2.0,
+                'rear_clearance': 0.35,
+                'rear_sector_deg': 30.0,
+                'odom_zero_lin': 0.02,
+                'odom_zero_ang': 0.05,
+                'nav_move_lin': 0.01,
+                'nav_move_ang': 0.05,
+                'rate_hz': 10.0,
+            }],
+        ),
         Node(
             package='nav2_lifecycle_manager', executable='lifecycle_manager',
             name='lifecycle_manager_navigation', output='screen',
