@@ -5,6 +5,7 @@ import pytest
 from robot_nav.unstuck_supervisor import (
     UnstuckConfig,
     UnstuckSupervisor,
+    freer_side,
     rear_blocked,
 )
 
@@ -42,6 +43,17 @@ def test_rear_blocked_ignores_obstacle_outside_sector():
     assert rear_blocked(ranges, amin, ainc, sector_deg=30, clearance=0.35) is False
 
 
+def test_freer_side_left_when_obstacle_on_right():
+    # obstáculo a 45° à DIREITA -> esquerda mais livre -> +1
+    ranges, amin, ainc = _scan_with_obstacle_at(-math.pi / 4, 0.30)
+    assert freer_side(ranges, amin, ainc) == 1
+
+
+def test_freer_side_right_when_obstacle_on_left():
+    ranges, amin, ainc = _scan_with_obstacle_at(math.pi / 4, 0.30)
+    assert freer_side(ranges, amin, ainc) == -1
+
+
 # ---- máquina de estados ----------------------------------------------------
 
 def _cfg(**kw):
@@ -53,6 +65,10 @@ def _cfg(**kw):
         reverse_time_cap=6.0,
         grace=2.0,
         nav_latch=15.0,
+        escalate_after=3,
+        same_spot_radius=0.5,
+        escalate_window=120.0,
+        arc_spin=1.0,
     )
     base.update(kw)
     return UnstuckConfig(**base)
@@ -232,6 +248,68 @@ def test_goal_status_none_falls_back_to_latch():
     _tick(sup, 0.0)
     cmd = _tick(sup, 10.1)
     assert cmd.active is True
+
+
+# ---- escalada: 3 travamentos no mesmo ponto -> ré EM ARCO -------------------
+
+def _stuck_cycle(sup, t0, pos, open_side=1):
+    """Um ciclo completo: arma 10s -> manobra -> termina por cap -> sai do grace.
+
+    Retorna (cmd_da_manobra, t_pronto_pro_próximo).
+    """
+    _tick(sup, t0, pos=pos)
+    cmd = sup.update(t0 + 10.1, nav_wants_move=True, position=pos,
+                     rear_blocked=False, open_side=open_side)
+    t_end = t0 + 10.1 + sup.cfg.reverse_time_cap + 0.1
+    _tick(sup, t_end, pos=pos)            # termina por time cap (não recuou)
+    t_next = t_end + sup.cfg.grace + 0.1
+    _tick(sup, t_next, pos=pos)           # sai do grace
+    return cmd, t_next
+
+
+def test_escalates_to_arc_after_3_stuck_same_spot():
+    # "deu ré e travou de novo" 3x no mesmo lugar -> a 3ª ré sai EM ARCO
+    # (ré + virada) pra mudar o heading e desviar, em vez de repetir reto
+    sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5))
+    t = 0.0
+    cmds = []
+    for _ in range(3):
+        cmd, t = _stuck_cycle(sup, t, pos=(0.0, 0.0))
+        cmds.append(cmd)
+    assert cmds[0].ang == pytest.approx(0.0)      # 1ª: ré reta
+    assert cmds[1].ang == pytest.approx(0.0)      # 2ª: ré reta
+    assert cmds[2].lin == pytest.approx(-0.25)    # 3ª: ainda é RÉ...
+    assert cmds[2].ang == pytest.approx(1.0)      # ...mas virando
+
+
+def test_arc_turns_toward_open_side():
+    sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5))
+    t = 0.0
+    for _ in range(2):
+        _, t = _stuck_cycle(sup, t, pos=(0.0, 0.0))
+    cmd, _ = _stuck_cycle(sup, t, pos=(0.0, 0.0), open_side=-1)
+    assert cmd.ang == pytest.approx(-1.0)  # lado livre à direita -> vira pra lá
+
+
+def test_no_escalation_when_stuck_at_different_spots():
+    # travou em lugares DIFERENTES (>same_spot_radius): sempre ré reta
+    sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5))
+    t = 0.0
+    for k in range(4):
+        cmd, t = _stuck_cycle(sup, t, pos=(2.0 * k, 0.0))
+        assert cmd.ang == pytest.approx(0.0)
+
+
+def test_escalation_window_expires():
+    # travamentos antigos (fora da janela) não contam pra escalada
+    sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5,
+                                 escalate_window=30.0))
+    t = 0.0
+    cmd, t = _stuck_cycle(sup, t, pos=(0.0, 0.0))
+    cmd, t = _stuck_cycle(sup, t, pos=(0.0, 0.0))
+    t += 40.0  # janela de 30s expira os 2 eventos
+    cmd, _ = _stuck_cycle(sup, t, pos=(0.0, 0.0))
+    assert cmd.ang == pytest.approx(0.0)  # recomeça do zero: ré reta
 
 
 def test_refires_repeatedly_if_still_stuck():

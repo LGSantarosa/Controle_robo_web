@@ -28,8 +28,8 @@ só a cola de I/O.
 """
 
 import math
-from dataclasses import dataclass
-from typing import NamedTuple, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import List, NamedTuple, Optional, Tuple
 
 
 # ---- lógica pura -----------------------------------------------------------
@@ -58,6 +58,26 @@ def rear_blocked(ranges, angle_min: float, angle_increment: float,
     return False
 
 
+def freer_side(ranges, angle_min: float, angle_increment: float) -> int:
+    """+1 se o setor frontal ESQUERDO (20°..90°) tem mais espaço, -1 se o direito.
+
+    Usado pra escolher pra que lado a ré em arco vira o nariz.
+    """
+    if angle_increment == 0.0:
+        return 1
+    lo, hi = math.radians(20.0), math.radians(90.0)
+    best = {1: math.inf, -1: math.inf}
+    for i, r in enumerate(ranges):
+        if r is None or not math.isfinite(r) or r <= 0.0:
+            continue
+        a = _norm_angle(angle_min + i * angle_increment)
+        if lo <= a <= hi:
+            best[1] = min(best[1], r)
+        elif -hi <= a <= -lo:
+            best[-1] = min(best[-1], r)
+    return 1 if best[1] >= best[-1] else -1
+
+
 @dataclass
 class UnstuckConfig:
     stuck_timeout: float = 10.0
@@ -67,6 +87,14 @@ class UnstuckConfig:
     reverse_time_cap: float = 6.0
     grace: float = 2.0
     nav_latch: float = 15.0        # nav2 conta como "com goal" se comandou há <=15s
+    # Escalada (pedido 2026-06-10: "limite de 3 tentativas até pensar em virar"):
+    # ré reta repetida no MESMO ponto não resolve -> a partir da 3ª, ré EM ARCO
+    # (ré + virada junto). Virar de ré roda as rodas = não sofre o atrito que
+    # matou o giro parado; e o robô sai apontando pra outro lado.
+    escalate_after: int = 3        # tentativas no mesmo ponto antes do arco
+    same_spot_radius: float = 0.5  # raio que define "mesmo ponto"
+    escalate_window: float = 120.0  # esquece travamentos mais velhos que isso
+    arc_spin: float = 1.0          # rad/s de virada durante a ré em arco
 
 
 class Command(NamedTuple):
@@ -93,14 +121,18 @@ class UnstuckSupervisor:
     maneuver_start_pos: Tuple[float, float] = (0.0, 0.0)
     grace_start: float = 0.0
     last_nav_t: Optional[float] = None
+    maneuver_ang: float = 0.0  # 0 = ré reta; ±arc_spin = ré em arco
+    history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
 
     def update(self, now: float, *, nav_wants_move: bool,
                position: Tuple[float, float], rear_blocked: bool,
-               goal_active: Optional[bool] = None) -> Command:
+               goal_active: Optional[bool] = None,
+               open_side: int = 1) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
         if self.state == _MONITORING:
-            return self._monitoring(now, position, rear_blocked, goal_active)
+            return self._monitoring(now, position, rear_blocked, goal_active,
+                                    open_side)
         if self.state == _REVERSING:
             return self._reversing(now, position)
         if self.state == _GRACE:
@@ -109,7 +141,8 @@ class UnstuckSupervisor:
 
     # -- estados --
 
-    def _monitoring(self, now, position, rear_blk, goal_active) -> Command:
+    def _monitoring(self, now, position, rear_blk, goal_active,
+                    open_side) -> Command:
         if goal_active is not None:
             # status do action server do nav2 disponível: é AUTORITATIVO.
             # Mata a "ré póstuma" (goal cancelado mas flag de nav_vel_raw
@@ -137,10 +170,21 @@ class UnstuckSupervisor:
             # traseira bloqueada: NÃO gira (giro removido), segura e re-tenta
             # no próximo tick — dispara assim que o /scan liberar atrás.
             return _IDLE
+        # escalada: conta travamentos recentes perto DESTE ponto; na 3ª
+        # tentativa no mesmo lugar a ré reta não está resolvendo -> arco
+        self.history = [(t, p) for (t, p) in self.history
+                        if now - t <= self.cfg.escalate_window]
+        self.history.append((now, position))
+        nearby = sum(
+            1 for (_, p) in self.history
+            if self._dist(p, position) <= self.cfg.same_spot_radius)
+        side = 1 if open_side >= 0 else -1
+        self.maneuver_ang = (side * self.cfg.arc_spin
+                             if nearby >= self.cfg.escalate_after else 0.0)
         self.state = _REVERSING
         self.maneuver_start_t = now
         self.maneuver_start_pos = position
-        return Command(-self.cfg.reverse_speed, 0.0, True)
+        return Command(-self.cfg.reverse_speed, self.maneuver_ang, True)
 
     def _reversing(self, now, position) -> Command:
         dist = self._dist(position, self.maneuver_start_pos)
@@ -152,7 +196,7 @@ class UnstuckSupervisor:
             # sem este zero o robô continuaria de ré até o nav2 publicar
             # de novo (que pode estar mudo, abortado/replanejando).
             return Command(0.0, 0.0, True)
-        return Command(-self.cfg.reverse_speed, 0.0, True)
+        return Command(-self.cfg.reverse_speed, self.maneuver_ang, True)
 
     def _grace(self, now) -> Command:
         if now - self.grace_start >= self.cfg.grace:
@@ -196,6 +240,10 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("reverse_time_cap", 6.0),
                 ("grace", 2.0),
                 ("nav_latch", 15.0),
+                ("escalate_after", 3),
+                ("same_spot_radius", 0.5),
+                ("escalate_window", 120.0),
+                ("arc_spin", 1.0),
                 ("rear_clearance", 0.35),
                 ("rear_sector_deg", 30.0),
                 ("scan_stale", 2.0),
@@ -212,6 +260,10 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 reverse_time_cap=g["reverse_time_cap"],
                 grace=g["grace"],
                 nav_latch=g["nav_latch"],
+                escalate_after=int(g["escalate_after"]),
+                same_spot_radius=g["same_spot_radius"],
+                escalate_window=g["escalate_window"],
+                arc_spin=g["arc_spin"],
             )
             self.rear_clearance = g["rear_clearance"]
             self.rear_sector_deg = g["rear_sector_deg"]
@@ -224,6 +276,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._nav_wants_move = False
             self._position = (0.0, 0.0)
             self._rear_blocked = False
+            self._open_side = 1  # +1 esq / -1 dir (lado mais livre na frente)
             self._scan_t = None  # quando o último /scan chegou
             self._goal_active = {}  # por tópico de status; None até a 1ª msg
             self._stop_active = False  # só pra log
@@ -264,9 +317,12 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
 
         def _on_scan(self, msg):
             self._scan_t = self.get_clock().now().nanoseconds * 1e-9
+            ranges = list(msg.ranges)
             self._rear_blocked = rear_blocked(
-                list(msg.ranges), msg.angle_min, msg.angle_increment,
+                ranges, msg.angle_min, msg.angle_increment,
                 self.rear_sector_deg, self.rear_clearance)
+            self._open_side = freer_side(
+                ranges, msg.angle_min, msg.angle_increment)
 
         def _on_goal_status(self, topic, msg):
             self._goal_active[topic] = any(
@@ -288,7 +344,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             cmd = self.sup.update(
                 now, nav_wants_move=self._nav_wants_move,
                 position=self._position, rear_blocked=rear,
-                goal_active=goal_active)
+                goal_active=goal_active, open_side=self._open_side)
             if self.sup.state != self._last_state:
                 self.get_logger().warn(
                     "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s rear=%s)" % (
