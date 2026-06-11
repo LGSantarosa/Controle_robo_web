@@ -20,8 +20,11 @@
   <xacro:property name="body_width"       value="0.50"/>
   <xacro:property name="body_height"      value="0.26"/>
 
-  <!-- LiDAR no topo, ligeiramente à frente -->
-  <xacro:property name="lidar_x"          value="0.10"/>
+  <!-- LiDAR no topo, no CENTRO do robô (2026-06-11: o 0.10 antigo era falso;
+       TODOS os sensores são centrais). Este valor vira o TF
+       base_link→base_laser usado por SLAM/costmaps — com 0.10, todo scan
+       nascia 10cm à frente do real. -->
+  <xacro:property name="lidar_x"          value="0.0"/>
   <xacro:property name="lidar_z"          value="0.12"/>
 
   <!-- IMU (BNO055) e PMW3901 (optical flow) — montados no centro do chassi.

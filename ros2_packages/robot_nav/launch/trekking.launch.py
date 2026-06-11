@@ -24,8 +24,9 @@ def generate_launch_description():
         description='Velocidade linear máxima do PID (m/s)'
     )
     lidar_offset_x_arg = DeclareLaunchArgument(
-        'lidar_offset_x', default_value='0.10',
-        description='Deslocamento x do base_laser em relação a base_link (m)'
+        'lidar_offset_x', default_value='0.0',
+        description='Deslocamento x do base_laser em relação a base_link (m); '
+                    'LiDAR fica no CENTRO do robô (0.10 antigo era falso)'
     )
     enable_cone_pose_fix_arg = DeclareLaunchArgument(
         'enable_cone_pose_fix', default_value='true',

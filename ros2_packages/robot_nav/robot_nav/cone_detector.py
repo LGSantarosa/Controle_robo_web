@@ -35,7 +35,7 @@ class ConeDetector(Node):
         super().__init__('cone_detector')
 
         # --- Geometria do robô ---
-        self.declare_parameter('lidar_offset_x', 0.10)   # base_laser deslocado em x
+        self.declare_parameter('lidar_offset_x', 0.0)    # LiDAR no CENTRO (0.10 antigo era falso)
         self.declare_parameter('lidar_offset_y', 0.00)
 
         # --- Clustering ---
