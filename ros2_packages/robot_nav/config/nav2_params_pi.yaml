@@ -429,7 +429,13 @@ collision_monitor:
       # 12, eu tinha apertado errado p/ 7 e ele bateu). min_points 5 → 2: 2 feixes
       # já param (perna de gente/cadeira). Margem grande = para ANTES do contato,
       # ainda mais combinado com a PolygonSlow desacelerando na aproximação.
-      points: "[[0.45, 0.38], [0.45, -0.38], [-0.40, -0.38], [-0.40, 0.38]]"
+      # 2026-06-11: largura ±0.38 → ±0.30 — com ±0.38 o robô NÃO PASSAVA EM
+      # PORTA (vão útil ~0.70-0.76 põe os batentes a ±0.35-0.38 = dentro da
+      # caixa → freeze "perfeito no meio da porta"). ±0.30 = 5cm além do corpo
+      # por lado. A margem FRONTAL (0.45 + slow 0.65) fica INTACTA — é ela que
+      # protege gente na frente (o atropelamento de 06-08 foi frontal). Na
+      # porta os batentes seguem dentro da PolygonSlow → atravessa a 30%.
+      points: "[[0.45, 0.30], [0.45, -0.30], [-0.40, -0.30], [-0.40, 0.30]]"
       action_type: "stop"
       min_points: 2
       visualize: True
