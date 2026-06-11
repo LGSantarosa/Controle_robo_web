@@ -146,8 +146,9 @@ def generate_launch_description():
                 # Geometria da ré (batida 2026-06-11: clearance medida do
                 # LiDAR + setor estreito = ré cega). Vão medido do PARA-CHOQUE
                 # traseiro num corredor da largura do robô (carcaça 50x50,
-                # LiDAR +0.10m do centro). Aborta a ré se o vão cair < margem.
-                'rear_lidar_x': 0.10,
+                # LiDAR no CENTRO — todos os sensores são centrais). Aborta a
+                # ré se o vão cair < margem.
+                'rear_lidar_x': 0.0,
                 'rear_tail_x': -0.25,
                 'rear_half_width': 0.30,
                 'rear_stop_margin': 0.10,

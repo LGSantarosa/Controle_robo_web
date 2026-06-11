@@ -22,9 +22,10 @@ def _scan_with_obstacle_at(angle_rad, dist, n=360):
     return ranges, angle_min, angle_increment
 
 
-# Geometria real do robô (carcaça 50x50, LiDAR +0.10m à frente do centro):
-# o vão é medido do PARA-CHOQUE traseiro (tail_x), não do LiDAR.
-GEO = dict(lidar_x=0.10, tail_x=-0.25, half_width=0.30)
+# Geometria real do robô (carcaça 50x50; LiDAR e demais sensores no CENTRO,
+# confirmado pelo usuário 2026-06-11): o vão é medido do PARA-CHOQUE traseiro
+# (tail_x), não do LiDAR.
+GEO = dict(lidar_x=0.0, tail_x=-0.25, half_width=0.30)
 
 
 def _scan_with_obstacle_at_base(x_b, y_b, n=360):
@@ -34,10 +35,10 @@ def _scan_with_obstacle_at_base(x_b, y_b, n=360):
 
 
 def test_rear_gap_measures_from_bumper():
-    # feixe a 180°/0.60m do LiDAR = ponto x=-0.50 no base → vão REAL de 0.25m
-    # atrás do para-choque (o código antigo media do LiDAR e dava ré nisso)
+    # feixe a 180°/0.60m do LiDAR (centro) → vão REAL de 0.35m atrás do
+    # para-choque (o código antigo media do LiDAR: dizia "0.60 de folga")
     ranges, amin, ainc = _scan_with_obstacle_at(math.pi, 0.60)
-    assert rear_min_gap(ranges, amin, ainc, **GEO) == pytest.approx(0.25, abs=0.02)
+    assert rear_min_gap(ranges, amin, ainc, **GEO) == pytest.approx(0.35, abs=0.02)
 
 
 def test_rear_gap_inf_when_only_obstacle_in_front():
@@ -47,8 +48,8 @@ def test_rear_gap_inf_when_only_obstacle_in_front():
 
 def test_rear_gap_sees_corner_obstacle():
     # BUG DA BATIDA (2026-06-11): obstáculo na QUINA traseira (x=-0.30,
-    # y=0.28) está a ~35° do eixo — o setor antigo de ±30° não via e o robô
-    # deu ré em cima. O corredor retangular tem que ver (vão ~0.05m).
+    # y=0.28) está a ~43° do eixo traseiro — o setor antigo de ±30° não via
+    # e o robô deu ré em cima. O corredor retangular tem que ver (vão ~0.05m).
     ranges, amin, ainc = _scan_with_obstacle_at_base(-0.30, 0.28)
     assert rear_min_gap(ranges, amin, ainc, **GEO) == pytest.approx(0.05, abs=0.02)
 

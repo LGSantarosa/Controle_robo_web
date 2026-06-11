@@ -49,12 +49,14 @@ def rear_min_gap(ranges, angle_min: float, angle_increment: float,
     no corredor que o corpo varre dando ré. inf = nada atrás.
 
     Substitui o setor angular de 2026-06-10, que causou a batida de ré de
-    2026-06-11 por 3 vias: media a folga a partir do LIDAR (que fica
-    `lidar_x` à FRENTE do centro — 0.35m de "folga" = obstáculo ENCOSTADO
-    no para-choque), o cone de ±30° era mais estreito que o robô (quina
-    traseira a 35° passava despercebida), e era um bool sem noção de
-    quanto espaço existe. Aqui cada ponto vira (x,y) no frame base_link e
-    conta se cai no retângulo atrás do robô: x < tail_x, |y| <= half_width.
+    2026-06-11 por 3 vias: media a folga a partir do LIDAR e não do
+    para-choque (0.35m de "folga" = 0.10m de vão real, e a ré recuava
+    0.30m), o cone de ±30° era mais estreito que o robô (quina traseira a
+    ~43° passava despercebida), e era um bool sem noção de quanto espaço
+    existe. Aqui cada ponto vira (x,y) no frame base_link e conta se cai
+    no retângulo atrás do robô: x < tail_x, |y| <= half_width.
+    `lidar_x` = posição do LiDAR no frame base (0.0 = centro, confirmado
+    pelo usuário 2026-06-11: TODOS os sensores ficam no centro do robô).
     """
     if angle_increment == 0.0:
         return math.inf
@@ -313,9 +315,10 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("spin_angle", 0.44),
                 ("spin_time_cap", 4.0),
                 ("spin_left_boost", 1.4),
-                # Geometria da ré (frame base_link): LiDAR fica à FRENTE do
-                # centro; o vão é medido do PARA-CHOQUE traseiro (tail_x).
-                ("rear_lidar_x", 0.10),
+                # Geometria da ré (frame base_link): LiDAR no CENTRO do robô
+                # (todos os sensores são centrais — confirmado 2026-06-11);
+                # o vão é medido do PARA-CHOQUE traseiro (tail_x).
+                ("rear_lidar_x", 0.0),
                 ("rear_tail_x", -0.25),
                 ("rear_half_width", 0.30),
                 ("rear_stop_margin", 0.10),
