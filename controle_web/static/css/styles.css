@@ -88,6 +88,14 @@ h1 { margin: 0 0 12px; font-size: 28px; }
 .mode-badge.mode-teleop { background: #3f3f46; color: #e4e4e7; }
 .mode-badge.mode-trekking { background: #7c2d12; color: #fed7aa; }
 
+/* Chip de energia (power_monitor): tensão das placas hoverboard */
+.power-chip { display: inline-block; font-size: 13px; font-weight: 600; padding: 2px 8px; border-radius: 4px; }
+.power-chip.power-na   { background: #1f2937; color: #6b7280; }
+.power-chip.power-ok   { background: #064e3b; color: #6ee7b7; }
+.power-chip.power-warn { background: #78350f; color: #fcd34d; }
+.power-chip.power-trip { background: #7f1d1d; color: #fecaca; animation: power-blink 0.8s step-start infinite; }
+@keyframes power-blink { 50% { opacity: 0.35; } }
+
 /* Painel de mapa (SLAM / Nav2) */
 .map-panel { margin-top: 16px; background: #0b1220; border: 1px solid #243042; padding: 12px; border-radius: 8px; }
 .map-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }

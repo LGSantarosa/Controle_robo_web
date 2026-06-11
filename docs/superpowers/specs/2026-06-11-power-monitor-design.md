@@ -42,7 +42,7 @@ duplicada pra UI, sem ganho).
 | Tópico | Tipo | Conteúdo |
 |---|---|---|
 | `/battery/front`, `/battery/rear` | `sensor_msgs/BatteryState` | V por placa; **0.0 = placa stale** (mega_bridge zera quando a placa não responde >200ms) |
-| `/wheel_vel_setpoints` | `robot_interfaces/WheelSpeeds` (conferir import do mega_bridge) | comando enviado à MEGA (units −1000..1000) |
+| `/wheel_vel_setpoints` | `wheel_msgs/WheelSpeeds` | comando enviado à MEGA, POR LADO (`left_wheel`/`right_wheel`, units −1000..1000) |
 | `/hoverboard/wheel_velocities` | `std_msgs/Float64MultiArray` | medido, ordem FL FR RL RR |
 
 Callbacks apenas guardam o último valor (CPU mínima — a Pi é justa).
@@ -52,18 +52,20 @@ Callbacks apenas guardam o último valor (CPU mínima — a Pi é justa).
 1. **`PowerEventDetector`** — classe pura (sem rclpy), testável com pytest.
    Recebe snapshots (t, v_front, v_rear, setpoints[4], measured[4]) e devolve
    eventos:
-   - `SAG`: queda >3.0V em <1.0s numa placa (vs. média móvel curta).
-   - `TRIP`: tensão <30.0V, OU placa que reportava >20V passa a reportar 0
-     (stale = BMS cortou a alimentação da placa).
-   - `STALL`: |setpoint|>50 units com |medido|≈0 (<tolerância) por >0.5s em
-     qualquer roda.
+   - `SAG`: queda >3.0V em <1.0s numa placa (vs. máximo da janela), na borda
+     da condição (não repete enquanto persiste).
+   - `TRIP`: placa viva cai abaixo de 30.0V (0 = stale, BMS cortou a
+     alimentação). Religa só quando volta ACIMA de 30V (histerese — senão
+     tensão descendo devagar oscilaria viva/morta cuspindo trips).
+   - `STALL`: |setpoint do lado|>50 units com alguma roda do lado |medido|≈0
+     por >0.5s.
    Limiares como parâmetros do construtor (default acima).
 2. **`PowerMonitor`** — serviço: nó rclpy (subs acima) + timer 10 Hz que tira
    snapshot, passa no detector, escreve CSV bufferizado (flush ≤1s) e a 2 Hz
    emite `power_update` pro browser. WARN no logger a cada evento.
 3. **CSV** — `controle_web/logs/power/power_YYYY-MM-DD_HHMMSS.csv` (um por
-   sessão): `ts, v_front, v_rear, set_fl, set_fr, set_rl, set_rr, meas_fl,
-   meas_fr, meas_rl, meas_rr, stall, event`.
+   sessão): `ts, v_front, v_rear, set_left, set_right, meas_fl, meas_fr,
+   meas_rl, meas_rr, stall, event`.
 4. **UI** — chip de telemetria no painel: `F 39.2V · R 39.1V`. Verde normal;
    amarelo com SAG/STALL ativo; vermelho piscando com TRIP/stale. Evento
    `power_update`: `{v_front, v_rear, front_ok, rear_ok, stall, event}`.

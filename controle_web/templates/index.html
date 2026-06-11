@@ -7,7 +7,7 @@
     <meta http-equiv="Cache-Control" content="no-store" />
     <title>Controle do Robô</title>
     <!-- CSS básico da interface -->
-    <link rel="stylesheet" href="/static/css/styles.css?v=5" />
+    <link rel="stylesheet" href="/static/css/styles.css?v=6" />
   </head>
   <body>
     <main>
@@ -47,6 +47,7 @@
       <!-- Status de conexão e teclas/gamepad -->
       <section class="status">
         <div>Socket: <span id="conn">conectando...</span></div>
+        <div>Energia: <span id="power-chip" class="power-chip power-na">—</span></div>
         <div>Modo: <span id="mode-display">Teclado / Web</span></div>
         <div id="pressed-row">Pressionadas: <span id="pressed">(nenhuma)</span></div>
         <div id="gamepad-status-row" style="display:none">
@@ -198,7 +199,7 @@
 
     <!-- Bibliotecas cliente Socket.IO e scripts do cliente -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="/static/js/client.js?v=7"></script>
+    <script src="/static/js/client.js?v=8"></script>
     <script src="/static/js/gamepad.js?v=3"></script>
     <script src="/static/js/map.js?v=3"></script>
     <script src="/static/js/trekking.js?v=1"></script>

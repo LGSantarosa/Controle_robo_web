@@ -54,6 +54,9 @@ map_bridge = None
 nav_metrics = None
 # Ponte ROS↔Web do modo TREKKING (pose fundida, waypoints, cones, comandos)
 trekking_bridge = None
+# Monitor de tensão das placas hoverboard (diagnóstico do desarme do BMS) —
+# CSV contínuo + chip ao vivo na UI. Roda em qualquer modo com ROS.
+power_monitor = None
 
 # rclpy.init() instala seus próprios handlers de SIGINT/SIGTERM que engolem o
 # Ctrl+C (o processo fica preso esperando o executor do ROS2 que nunca acorda).
@@ -68,6 +71,11 @@ def _shutdown_all():
     try:
         if nav_metrics is not None:
             nav_metrics.shutdown()
+    except Exception:
+        pass
+    try:
+        if power_monitor is not None:
+            power_monitor.shutdown()
     except Exception:
         pass
     try:
@@ -200,6 +208,20 @@ if ROBOT_MODE == 'nav2':
             f"[app] Falha ao iniciar NavMetricsCollector: {e}. Métricas desabilitadas."
         )
         nav_metrics = None
+
+# Monitor de tensão: vale em todos os modos (teleop também desarma BMS se
+# encalhar). Se rclpy não importar (dev sem ROS), fica desabilitado.
+try:
+    from power_monitor import PowerMonitor
+    power_monitor = PowerMonitor(
+        socketio,
+        log_dir=os.path.join(os.path.dirname(__file__), 'logs', 'power'),
+    )
+except Exception as e:
+    logging.getLogger(__name__).warning(
+        f"[app] Falha ao iniciar PowerMonitor: {e}. Monitor de tensão desabilitado."
+    )
+    power_monitor = None
 
 # Log de movimentos (JSON Lines) gravado em arquivo rotativo + arquivo legível.
 # Paths absolutos baseados na pasta do app.py — sem isso, rodar de outro diretório

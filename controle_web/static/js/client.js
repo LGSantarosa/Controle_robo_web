@@ -211,6 +211,33 @@
     appendLog('socket', 'conectado');
   });
 
+  // Telemetria de energia (power_monitor): tensão das 2 placas hoverboard.
+  // Verde = ok; amarelo = sag/stall em curso; vermelho = placa caiu (BMS);
+  // cinza = sem dados (MEGA/hoverboards desligados).
+  socket.on('power_update', (data) => {
+    const chip = document.getElementById('power-chip');
+    if (!chip || !data) return;
+    if (!data.fresh) {
+      chip.textContent = '—';
+      chip.className = 'power-chip power-na';
+      return;
+    }
+    const fmt = (v) => (v == null ? '?' : `${v.toFixed(1)}V`);
+    let txt = `F ${fmt(data.v_front)} · R ${fmt(data.v_rear)}`;
+    let cls = 'power-chip power-ok';
+    if (!data.front_ok || !data.rear_ok) {
+      cls = 'power-chip power-trip';
+      txt += !data.front_ok && !data.rear_ok ? ' ⚡ AMBAS' :
+             (!data.front_ok ? ' ⚡ FRENTE' : ' ⚡ TRÁS');
+    } else if (data.stall || (data.event && data.event.startsWith('sag'))) {
+      cls = 'power-chip power-warn';
+      if (data.stall) txt += ' STALL';
+    }
+    chip.textContent = txt;
+    chip.className = cls;
+    if (data.event) appendLog('power', `evento: ${data.event}`);
+  });
+
   socket.on('server_hello', (data) => {
     appendLog('server', `hello sid=${data?.sid || '-'} ok`);
   });
