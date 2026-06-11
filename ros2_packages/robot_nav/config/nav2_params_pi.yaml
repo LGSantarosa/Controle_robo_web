@@ -292,11 +292,14 @@ global_costmap:
         #  - inflation_radius 0.35 -> 0.40: gradiente alcança o centro de corredores
         #    até ~0.80 m (com 0.35 só ~0.70 m; mais largo = centro custo-zero, sem
         #    atração). Continua ABAIXO do 0.45 que falhava (goal inalcançável).
-        # FALTA validar AO VIVO no robô: corredor largo (centraliza?) E goal perto
-        # de parede (AINDA planeja?). Se overshoot p/ "não chega perto de nada",
-        # baixar inflation_radius primeiro. Ver project_nav2_planner_inflation.
-        cost_scaling_factor: 2.0
-        inflation_radius: 0.40
+        # 2026-06-11 VALIDADO EM CAMPO: 0.40/2.0 REPROVADO — o robô parou de
+        # passar na PORTA. Com raio 0.40 os batentes inflam um contra o outro
+        # e o vão inteiro vira custo alto (porta ~0.80: centro a 0.40 de cada
+        # batente = nada de faixa custo-zero). REVERTIDO pro 0.35/3.0 de
+        # 2026-06-10, que passava porta E melhorou o planner ao vivo.
+        # Centralizar corredor SEM engordar a porta fica pra outra abordagem.
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.35
       # PI: false — diffs em vez do mapa inteiro.
       always_send_full_costmap: false
 
