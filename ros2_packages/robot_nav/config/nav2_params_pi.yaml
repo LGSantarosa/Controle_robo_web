@@ -114,7 +114,14 @@ controller_server:
       # senão sobra até 30° de yaw que o DWB não fecha (deadzone) e ele erra o
       # ponto. Piso prático ~17° pq a 6.0 rad/s @10 Hz cada ciclo gira ~34° (giro
       # grosso) — abaixo disso ele passa do alvo e o shim pode ficar oscilando.
-      angular_dist_threshold: 0.30    # ≈17° — acima disso, gira no lugar antes
+      # 2026-06-11 PORTA: 17° não cabe em porta — robô de 0.50 atravessado a 17°
+      # ocupa ~0.63m e as portas do mapa têm ~0.60 de vão. 0.15 (~9°) alinha o
+      # suficiente pra caber (~0.58m). O medo da oscilação não se confirmou nos
+      # dados do unstuck: comandado 3.0+ rad/s o chassi ENTREGA poucos graus por
+      # ciclo (patinagem amortece, "comanda 30° entrega 5°"). SE oscilar girando
+      # esq/dir parado na frente da porta -> rollback 0.15->0.30 e baixar
+      # rotate_to_heading_angular_vel 6.0->4.2 como knob 2.
+      angular_dist_threshold: 0.15    # ≈9° — acima disso, gira no lugar antes
       forward_sampling_distance: 0.5      # ponto do caminho p/ medir o heading-alvo
       # 6.0 rad/s CASA com o manual (teleop_ps4.yaml scale_angular=6.0,
       # BASE_ANGULAR_SPEED=6.0). Este chassi 4 rodas só vence a patinagem a ~6.0:
