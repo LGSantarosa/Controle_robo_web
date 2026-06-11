@@ -143,8 +143,15 @@ def generate_launch_description():
                 'spin_angle': 0.26,
                 'spin_time_cap': 4.0,
                 'spin_left_boost': 1.4,
-                'rear_clearance': 0.35,
-                'rear_sector_deg': 30.0,
+                # Geometria da ré (batida 2026-06-11: clearance medida do
+                # LiDAR + setor estreito = ré cega). Vão medido do PARA-CHOQUE
+                # traseiro num corredor da largura do robô (carcaça 50x50,
+                # LiDAR +0.10m do centro). Aborta a ré se o vão cair < margem.
+                'rear_lidar_x': 0.10,
+                'rear_tail_x': -0.25,
+                'rear_half_width': 0.30,
+                'rear_stop_margin': 0.10,
+                'reverse_min': 0.10,
                 'scan_stale': 2.0,
                 'nav_move_lin': 0.01,
                 'nav_move_ang': 0.05,

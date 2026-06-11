@@ -6,7 +6,7 @@ from robot_nav.unstuck_supervisor import (
     UnstuckConfig,
     UnstuckSupervisor,
     freer_side,
-    rear_blocked,
+    rear_min_gap,
 )
 
 
@@ -22,25 +22,46 @@ def _scan_with_obstacle_at(angle_rad, dist, n=360):
     return ranges, angle_min, angle_increment
 
 
-def test_rear_blocked_detects_obstacle_behind():
-    ranges, amin, ainc = _scan_with_obstacle_at(math.pi, 0.20)
-    assert rear_blocked(ranges, amin, ainc, sector_deg=30, clearance=0.35) is True
+# Geometria real do robô (carcaça 50x50, LiDAR +0.10m à frente do centro):
+# o vão é medido do PARA-CHOQUE traseiro (tail_x), não do LiDAR.
+GEO = dict(lidar_x=0.10, tail_x=-0.25, half_width=0.30)
 
 
-def test_rear_blocked_clear_when_obstacle_only_in_front():
+def _scan_with_obstacle_at_base(x_b, y_b, n=360):
+    # converte um ponto no frame base_link pro feixe equivalente do LiDAR
+    dx, dy = x_b - GEO['lidar_x'], y_b
+    return _scan_with_obstacle_at(math.atan2(dy, dx), math.hypot(dx, dy), n)
+
+
+def test_rear_gap_measures_from_bumper():
+    # feixe a 180°/0.60m do LiDAR = ponto x=-0.50 no base → vão REAL de 0.25m
+    # atrás do para-choque (o código antigo media do LiDAR e dava ré nisso)
+    ranges, amin, ainc = _scan_with_obstacle_at(math.pi, 0.60)
+    assert rear_min_gap(ranges, amin, ainc, **GEO) == pytest.approx(0.25, abs=0.02)
+
+
+def test_rear_gap_inf_when_only_obstacle_in_front():
     ranges, amin, ainc = _scan_with_obstacle_at(0.0, 0.20)
-    assert rear_blocked(ranges, amin, ainc, sector_deg=30, clearance=0.35) is False
+    assert math.isinf(rear_min_gap(ranges, amin, ainc, **GEO))
 
 
-def test_rear_blocked_clear_when_obstacle_far_behind():
-    ranges, amin, ainc = _scan_with_obstacle_at(math.pi, 1.50)
-    assert rear_blocked(ranges, amin, ainc, sector_deg=30, clearance=0.35) is False
+def test_rear_gap_sees_corner_obstacle():
+    # BUG DA BATIDA (2026-06-11): obstáculo na QUINA traseira (x=-0.30,
+    # y=0.28) está a ~35° do eixo — o setor antigo de ±30° não via e o robô
+    # deu ré em cima. O corredor retangular tem que ver (vão ~0.05m).
+    ranges, amin, ainc = _scan_with_obstacle_at_base(-0.30, 0.28)
+    assert rear_min_gap(ranges, amin, ainc, **GEO) == pytest.approx(0.05, abs=0.02)
 
 
-def test_rear_blocked_ignores_obstacle_outside_sector():
-    # 90° à esquerda não é "atrás"
-    ranges, amin, ainc = _scan_with_obstacle_at(math.pi / 2, 0.20)
-    assert rear_blocked(ranges, amin, ainc, sector_deg=30, clearance=0.35) is False
+def test_rear_gap_ignores_lateral_outside_corridor():
+    # atrás mas 0.5m de lado: fora do corredor que o corpo varre na ré
+    ranges, amin, ainc = _scan_with_obstacle_at_base(-0.50, 0.50)
+    assert math.isinf(rear_min_gap(ranges, amin, ainc, **GEO))
+
+
+def test_rear_gap_invalid_returns_are_free():
+    ranges = [0.0] * 180 + [float('nan')] * 90 + [float('inf')] * 90
+    assert math.isinf(rear_min_gap(ranges, -math.pi, 2 * math.pi / 360, **GEO))
 
 
 def test_freer_side_left_when_obstacle_on_right():
@@ -72,13 +93,15 @@ def _cfg(**kw):
         spin_angle=0.44,
         spin_time_cap=4.0,
         spin_left_boost=1.0,
+        reverse_min=0.10,
+        rear_stop_margin=0.10,
     )
     base.update(kw)
     return UnstuckConfig(**base)
 
 
-def _tick(sup, t, pos=(0.0, 0.0), nav=True, rear=False):
-    return sup.update(t, nav_wants_move=nav, position=pos, rear_blocked=rear)
+def _tick(sup, t, pos=(0.0, 0.0), nav=True, gap=math.inf):
+    return sup.update(t, nav_wants_move=nav, position=pos, rear_gap=gap)
 
 
 def test_no_action_before_timeout():
@@ -173,12 +196,41 @@ def test_goal_gone_stops_firing():
 
 def test_rear_blocked_holds_then_fires_when_clear():
     sup = UnstuckSupervisor(_cfg())
-    _tick(sup, 0.0, rear=True)
-    cmd = _tick(sup, 10.1, rear=True)
+    _tick(sup, 0.0, gap=0.12)
+    # vão de 0.12: alvo útil = 0.12-0.10(margem) = 0.02 < reverse_min -> segura
+    cmd = _tick(sup, 10.1, gap=0.12)
     assert cmd.active is False  # traseira bloqueada: segura (não gira, não ré)
-    cmd = _tick(sup, 10.5, rear=False)  # liberou -> ré
+    cmd = _tick(sup, 10.5, gap=math.inf)  # liberou -> ré
     assert cmd.active is True
     assert cmd.lin == pytest.approx(-0.25)
+
+
+def test_partial_reverse_when_gap_limited():
+    # vão de 0.28 < reverse_distance+margem: ré PARCIAL até 0.18 (vão-margem),
+    # não os 0.30 de sempre — encurralado recua o que DÁ, sem bater.
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0, gap=0.28)
+    cmd = _tick(sup, 10.1, gap=0.28)
+    assert cmd.active is True and cmd.lin == pytest.approx(-0.25)
+    cmd = _tick(sup, 10.5, pos=(-0.10, 0.0), gap=0.28)   # ainda não chegou
+    assert cmd.lin == pytest.approx(-0.25)
+    cmd = _tick(sup, 11.0, pos=(-0.19, 0.0), gap=0.28)   # >= alvo 0.18 -> STOP
+    assert cmd.active is True and cmd.lin == pytest.approx(0.0)
+
+
+def test_reverse_aborts_when_obstacle_enters_behind():
+    # BUG DA BATIDA (2026-06-11): durante a ré ninguém olhava mais o scan e o
+    # robô recuou em cima do obstáculo. Vão <= margem no MEIO da manobra tem
+    # que dar STOP imediato (e sem giro — tem coisa colada atrás).
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0)
+    cmd = _tick(sup, 10.1)                                # dispara, tudo livre
+    assert cmd.lin == pytest.approx(-0.25)
+    cmd = _tick(sup, 10.6, pos=(-0.05, 0.0), gap=0.08)    # entrou algo atrás
+    assert cmd.active is True and cmd.lin == pytest.approx(0.0)  # STOP
+    assert cmd.ang == pytest.approx(0.0)
+    cmd = _tick(sup, 10.8, pos=(-0.05, 0.0), gap=0.08)
+    assert cmd.active is False                            # grace, canal solto
 
 
 def test_reverse_ends_with_explicit_stop():
@@ -224,7 +276,7 @@ def test_goal_inactive_blocks_fire_even_with_nav_msgs():
     t = 0.0
     while t <= 25.0:
         cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
-                         rear_blocked=False, goal_active=False)
+                         rear_gap=math.inf, goal_active=False)
         assert cmd.active is False
         t += 0.5
 
@@ -237,7 +289,7 @@ def test_goal_active_fires_even_with_controller_silent():
     t = 0.0
     while t <= 12.0:
         cmd = sup.update(t, nav_wants_move=False, position=(0.0, 0.0),
-                         rear_blocked=False, goal_active=True)
+                         rear_gap=math.inf, goal_active=True)
         if cmd.active:
             fired = True
             break
@@ -267,7 +319,7 @@ def _stuck_cycle(sup, t0, pos, open_side=1):
     fired = False
     while t < deadline:
         cmd = sup.update(t, nav_wants_move=True, position=pos,
-                         rear_blocked=False, open_side=open_side)
+                         rear_gap=math.inf, open_side=open_side)
         if cmd.active:
             fired = True
             cmds.append(cmd)
@@ -319,7 +371,7 @@ def _escalated_sup(open_side=1, **cfg_kw):
     deadline = t + 60.0
     while t < deadline:
         cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
-                         rear_blocked=False, open_side=open_side)
+                         rear_gap=math.inf, open_side=open_side)
         if cmd.active and cmd.ang != 0.0:
             return sup, t, cmd
         t += 0.1
@@ -336,7 +388,7 @@ def test_spin_closed_loop_stops_at_target_yaw():
         yaw += cmd.ang * 0.1 * 0.3  # patinagem feia: só 30% do comandado vira
         t += 0.1
         cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
-                         rear_blocked=False, yaw=yaw)
+                         rear_gap=math.inf, yaw=yaw)
         ticks += 1
     assert abs(yaw) >= 0.44  # girou os 25° DE VERDADE antes de parar
     assert cmd == (0.0, 0.0, True)  # e termina com STOP explícito
@@ -349,7 +401,7 @@ def test_spin_time_cap_when_yaw_frozen():
     while cmd.ang != 0.0 and ticks < 200:
         t += 0.1
         cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
-                         rear_blocked=False, yaw=0.0)
+                         rear_gap=math.inf, yaw=0.0)
         ticks += 1
     assert ticks <= 12  # ~1s de cap, não ficou girando pra sempre
 

@@ -10,8 +10,13 @@ Decisões de campo (2026-06-10, validadas em teste ao vivo):
   do lugar (RotationShim, recoveries do nav2) mexe uns mm e enganava o gatilho
   por velocidade. Não se deslocou = travado, ponto.
 - SEM GIRO: o giro a baixa velocidade não vence o atrito do skid-steer (parecia
-  "não fez nada"). A manobra é SEMPRE ré. Traseira bloqueada no /scan → espera
-  e re-tenta quando liberar.
+  "não fez nada"). A manobra é SEMPRE ré.
+- Ré com OLHO NO VÃO (batida de 2026-06-11: a checagem antiga por setor
+  angular media do LiDAR e era cega pra quina — o robô recuou em cima de um
+  obstáculo atrás): `rear_min_gap` mede em METROS o vão real entre o
+  para-choque traseiro e o /scan num corredor retangular da largura do robô.
+  Sem vão útil → espera; vão curto → ré PARCIAL (recua o que dá); vão some
+  no MEIO da manobra → STOP imediato.
 - Só age com goal ativo: o gate primário é o STATUS do action server do
   bt_navigator (ACCEPTED/EXECUTING/CANCELING = ativo) — autoritativo, mata a
   "ré póstuma" pós-cancel e cobre o BT em recovery com o controller mudo.
@@ -38,24 +43,31 @@ def _norm_angle(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
 
-def rear_blocked(ranges, angle_min: float, angle_increment: float,
-                 sector_deg: float, clearance: float) -> bool:
-    """True se houver retorno do /scan a menos de `clearance` no setor traseiro.
+def rear_min_gap(ranges, angle_min: float, angle_increment: float,
+                 lidar_x: float, tail_x: float, half_width: float) -> float:
+    """Menor vão livre (m) entre o PARA-CHOQUE traseiro e o que o /scan vê
+    no corredor que o corpo varre dando ré. inf = nada atrás.
 
-    Traseira = ângulo ~pi (180°). O setor é pi ± sector_deg.
+    Substitui o setor angular de 2026-06-10, que causou a batida de ré de
+    2026-06-11 por 3 vias: media a folga a partir do LIDAR (que fica
+    `lidar_x` à FRENTE do centro — 0.35m de "folga" = obstáculo ENCOSTADO
+    no para-choque), o cone de ±30° era mais estreito que o robô (quina
+    traseira a 35° passava despercebida), e era um bool sem noção de
+    quanto espaço existe. Aqui cada ponto vira (x,y) no frame base_link e
+    conta se cai no retângulo atrás do robô: x < tail_x, |y| <= half_width.
     """
     if angle_increment == 0.0:
-        return False
-    half = math.radians(sector_deg)
+        return math.inf
+    gap = math.inf
     for i, r in enumerate(ranges):
         if r is None or not math.isfinite(r) or r <= 0.0:
             continue
-        if r >= clearance:
-            continue
         a = angle_min + i * angle_increment
-        if abs(_norm_angle(a - math.pi)) <= half:
-            return True
-    return False
+        x = lidar_x + r * math.cos(a)
+        y = r * math.sin(a)
+        if x < tail_x and abs(y) <= half_width:
+            gap = min(gap, tail_x - x)
+    return gap
 
 
 def freer_side(ranges, angle_min: float, angle_increment: float) -> int:
@@ -103,6 +115,11 @@ class UnstuckConfig:
     spin_time_cap: float = 4.0     # teto de tempo do giro
     # As rodas pegam pior girando pra ESQUERDA -> boost de FORÇA nesse lado.
     spin_left_boost: float = 1.4   # velocidade do giro à esquerda x1.4
+    # Segurança da ré (batida de 2026-06-11: ré em cima de obstáculo atrás).
+    # A ré só sai se houver vão útil, recua NO MÁXIMO (vão - margem) e aborta
+    # na hora se o vão cair abaixo da margem durante a manobra.
+    rear_stop_margin: float = 0.10  # nunca chega a menos disso do obstáculo
+    reverse_min: float = 0.10       # vão útil mínimo pra valer a pena dar ré
 
 
 class Command(NamedTuple):
@@ -128,6 +145,7 @@ class UnstuckSupervisor:
     anchor_t: float = 0.0
     maneuver_start_t: float = 0.0
     maneuver_start_pos: Tuple[float, float] = (0.0, 0.0)
+    reverse_target: float = 0.0    # quanto recuar NESTA manobra (<= reverse_distance)
     grace_start: float = 0.0
     last_nav_t: Optional[float] = None
     escalated: bool = False    # esta manobra termina em giro forte?
@@ -137,16 +155,16 @@ class UnstuckSupervisor:
     history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
 
     def update(self, now: float, *, nav_wants_move: bool,
-               position: Tuple[float, float], rear_blocked: bool,
+               position: Tuple[float, float], rear_gap: float = math.inf,
                goal_active: Optional[bool] = None,
                open_side: int = 1, yaw: float = 0.0) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
         if self.state == _MONITORING:
-            return self._monitoring(now, position, rear_blocked, goal_active,
+            return self._monitoring(now, position, rear_gap, goal_active,
                                     open_side)
         if self.state == _REVERSING:
-            return self._reversing(now, position, yaw)
+            return self._reversing(now, position, yaw, rear_gap)
         if self.state == _SPINNING:
             return self._spinning(now, yaw)
         if self.state == _GRACE:
@@ -155,7 +173,7 @@ class UnstuckSupervisor:
 
     # -- estados --
 
-    def _monitoring(self, now, position, rear_blk, goal_active,
+    def _monitoring(self, now, position, rear_gap, goal_active,
                     open_side) -> Command:
         if goal_active is not None:
             # status do action server do nav2 disponível: é AUTORITATIVO.
@@ -180,9 +198,12 @@ class UnstuckSupervisor:
             return _IDLE
         if now - self.anchor_t < self.cfg.stuck_timeout:
             return _IDLE
-        if rear_blk:
-            # traseira bloqueada: NÃO gira (giro removido), segura e re-tenta
-            # no próximo tick — dispara assim que o /scan liberar atrás.
+        # Quanto dá pra recuar SEM bater: o vão medido menos a margem. Vão
+        # apertado vira ré PARCIAL (encurralado recua o que dá); sem vão
+        # útil, segura e re-tenta no próximo tick (dispara quando liberar).
+        target = min(self.cfg.reverse_distance,
+                     rear_gap - self.cfg.rear_stop_margin)
+        if target < self.cfg.reverse_min:
             return _IDLE
         # escalada: conta travamentos recentes perto DESTE ponto; na 3ª
         # tentativa no mesmo lugar a ré reta não resolveu -> ré + GIRO FORTE
@@ -197,6 +218,7 @@ class UnstuckSupervisor:
         self.state = _REVERSING
         self.maneuver_start_t = now
         self.maneuver_start_pos = position
+        self.reverse_target = target
         return Command(-self.cfg.reverse_speed, 0.0, True)
 
     def _spin_cmd(self) -> Command:
@@ -205,9 +227,16 @@ class UnstuckSupervisor:
             speed *= self.cfg.spin_left_boost  # esquerda escorrega: + força
         return Command(0.0, self.spin_side * speed, True)
 
-    def _reversing(self, now, position, yaw) -> Command:
+    def _reversing(self, now, position, yaw, rear_gap) -> Command:
+        if rear_gap <= self.cfg.rear_stop_margin:
+            # Algo apareceu/entrou atrás DURANTE a ré (batida de 2026-06-11:
+            # a checagem era só no disparo). STOP imediato e SEM giro — com
+            # coisa colada atrás, girar varre as quinas pra cima dela.
+            self.state = _GRACE
+            self.grace_start = now
+            return Command(0.0, 0.0, True)
         dist = self._dist(position, self.maneuver_start_pos)
-        if (dist >= self.cfg.reverse_distance
+        if (dist >= self.reverse_target
                 or now - self.maneuver_start_t >= self.cfg.reverse_time_cap):
             if self.escalated:
                 # recuou: agora GIRO FORTE no lugar pro lado mais livre —
@@ -284,8 +313,13 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("spin_angle", 0.44),
                 ("spin_time_cap", 4.0),
                 ("spin_left_boost", 1.4),
-                ("rear_clearance", 0.35),
-                ("rear_sector_deg", 30.0),
+                # Geometria da ré (frame base_link): LiDAR fica à FRENTE do
+                # centro; o vão é medido do PARA-CHOQUE traseiro (tail_x).
+                ("rear_lidar_x", 0.10),
+                ("rear_tail_x", -0.25),
+                ("rear_half_width", 0.30),
+                ("rear_stop_margin", 0.10),
+                ("reverse_min", 0.10),
                 ("scan_stale", 2.0),
                 ("nav_move_lin", 0.01),
                 ("nav_move_ang", 0.05),
@@ -307,9 +341,12 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 spin_angle=g["spin_angle"],
                 spin_time_cap=g["spin_time_cap"],
                 spin_left_boost=g["spin_left_boost"],
+                rear_stop_margin=g["rear_stop_margin"],
+                reverse_min=g["reverse_min"],
             )
-            self.rear_clearance = g["rear_clearance"]
-            self.rear_sector_deg = g["rear_sector_deg"]
+            self.rear_lidar_x = g["rear_lidar_x"]
+            self.rear_tail_x = g["rear_tail_x"]
+            self.rear_half_width = g["rear_half_width"]
             self.scan_stale = g["scan_stale"]
             self.nav_move_lin = g["nav_move_lin"]
             self.nav_move_ang = g["nav_move_ang"]
@@ -319,7 +356,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._nav_wants_move = False
             self._position = (0.0, 0.0)
             self._yaw = 0.0
-            self._rear_blocked = False
+            self._rear_gap = math.inf
             self._open_side = 1  # +1 esq / -1 dir (lado mais livre na frente)
             self._scan_t = None  # quando o último /scan chegou
             self._goal_active = {}  # por tópico de status; None até a 1ª msg
@@ -365,9 +402,9 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
         def _on_scan(self, msg):
             self._scan_t = self.get_clock().now().nanoseconds * 1e-9
             ranges = list(msg.ranges)
-            self._rear_blocked = rear_blocked(
+            self._rear_gap = rear_min_gap(
                 ranges, msg.angle_min, msg.angle_increment,
-                self.rear_sector_deg, self.rear_clearance)
+                self.rear_lidar_x, self.rear_tail_x, self.rear_half_width)
             self._open_side = freer_side(
                 ranges, msg.angle_min, msg.angle_increment)
 
@@ -380,25 +417,25 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
 
         def _tick(self):
             now = self.get_clock().now().nanoseconds * 1e-9
-            # scan velho (LiDAR caiu?) -> trata traseira como BLOQUEADA:
-            # melhor segurar a ré do que dar ré cego.
+            # scan velho (LiDAR caiu?) -> trata traseira como BLOQUEADA
+            # (vão zero): melhor segurar a ré do que dar ré cego.
             scan_fresh = (self._scan_t is not None
                           and now - self._scan_t <= self.scan_stale)
-            rear = self._rear_blocked if scan_fresh else True
+            gap = self._rear_gap if scan_fresh else 0.0
             # status visto em algum tópico? OR entre eles; nunca visto -> None
             goal_active = (any(self._goal_active.values())
                            if self._goal_active else None)
             cmd = self.sup.update(
                 now, nav_wants_move=self._nav_wants_move,
-                position=self._position, rear_blocked=rear,
+                position=self._position, rear_gap=gap,
                 goal_active=goal_active, open_side=self._open_side,
                 yaw=self._yaw)
             if self.sup.state != self._last_state:
                 self.get_logger().warn(
-                    "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s rear=%s)" % (
+                    "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s vao_re=%.2f)" % (
                         self._last_state, self.sup.state,
                         self._position[0], self._position[1],
-                        self._stop_active, self._rear_blocked))
+                        self._stop_active, gap))
                 self._last_state = self.sup.state
             if cmd.active:
                 t = Twist()
