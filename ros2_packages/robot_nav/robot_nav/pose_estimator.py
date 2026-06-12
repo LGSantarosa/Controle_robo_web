@@ -28,6 +28,7 @@ e o logger emite warn — útil pra UI marcar derrapagem.
 import json
 import math
 import threading
+import time
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, TransformStamped, Vector3Stamped
@@ -184,12 +185,15 @@ class PoseEstimator(Node):
         # Última leitura da IMU (None = nunca chegou). MPU6050 só dá taxa de
         # yaw (gyro Z); não há yaw absoluto.
         self._imu_yaw_rate = 0.0
-        self._last_imu_wall = None    # rclpy.time.Time
+        # Freshness por time.monotonic() (float, imune a NTP): criar
+        # rclpy.time.Time via rcl em todo callback custava ~200 objetos/s
+        # (P3 da AUDITORIA_2026-06-11). Stamps PUBLICADOS seguem no clock ROS.
+        self._last_imu_wall = None    # time.monotonic()
 
         # Velocidades nas rodas (m/s, lado)
         self.v_fl = 0.0; self.v_fr = 0.0
         self.v_rl = 0.0; self.v_rr = 0.0
-        self._last_wheel_wall = None  # rclpy.time.Time — última /hoverboard/wheel_velocities
+        self._last_wheel_wall = None  # time.monotonic() — última /hoverboard/wheel_velocities
         self._wheels_was_stale = False
 
         # Deslocamento body-frame do flow ACUMULADO desde o último tick (m). O
@@ -200,7 +204,7 @@ class PoseEstimator(Node):
         self._flow_dy_accum = 0.0
         self.flow_quality = 0.0
         self._last_flow_stamp = None  # rclpy.time.Time
-        self._last_flow_wall = None   # tempo de chegada
+        self._last_flow_wall = None   # time.monotonic() de chegada
 
         # Última fusão (pra publicar twist)
         self.vx_body = 0.0
@@ -259,7 +263,7 @@ class PoseEstimator(Node):
             # montagem de ponta-cabeça (Z pra baixo → sinal invertido). O yaw é
             # integrado no FusedOdom. Ver project_imu_mpu6050_mounting.
             self._imu_yaw_rate = msg.angular_velocity.z * self.imu_yaw_sign
-            self._last_imu_wall = self.get_clock().now()
+            self._last_imu_wall = time.monotonic()
 
     def _on_flow(self, msg: Vector3Stamped):
         # dx, dy são contagens acumuladas desde a última mensagem. Convertemos em
@@ -268,13 +272,12 @@ class PoseEstimator(Node):
         # o PMW3901 chega em rajada e d/dt_chegada segurado/re-integrado dobrava a
         # pose (ver flow_tick_velocity). Amostra EMI vem NULA (quality=0 → α≈0;
         # AUDITORIA_2026-05-29 A2), então só soma ~0 no acumulador, sem furo.
-        now = self.get_clock().now()
         dx = msg.vector.x
         dy = msg.vector.y
         quality = msg.vector.z
 
         with self._lock:
-            self._last_flow_wall = now    # mantém p/ freshness/timeout no tick
+            self._last_flow_wall = time.monotonic()  # p/ freshness/timeout no tick
             # Converte contagens → metros e aplica sinais/swap
             if self.flow_swap_xy:
                 dx, dy = dy, dx
@@ -332,7 +335,7 @@ class PoseEstimator(Node):
             self.v_fr = fr * self.right_sign * k
             self.v_rl = rl * self.left_sign  * k
             self.v_rr = rr * self.right_sign * k
-            self._last_wheel_wall = self.get_clock().now()
+            self._last_wheel_wall = time.monotonic()
 
     # ------------------------------------------------------------------
     def _tick(self):
@@ -349,12 +352,13 @@ class PoseEstimator(Node):
                 self._flow_dy_accum = 0.0
             return
 
+        mono = time.monotonic()
         with self._lock:
             # Freshness da IMU
             if self._last_imu_wall is None:
                 imu_age = float('inf')
             else:
-                imu_age = (now - self._last_imu_wall).nanoseconds / 1e9
+                imu_age = mono - self._last_imu_wall
             imu_fresh = imu_age <= self.imu_timeout
 
             # Freshness das rodas: se a MEGA parou de mandar frames, v_fl..v_rr
@@ -363,13 +367,13 @@ class PoseEstimator(Node):
             if self._last_wheel_wall is None:
                 wheel_age = float('inf')
             else:
-                wheel_age = (now - self._last_wheel_wall).nanoseconds / 1e9
+                wheel_age = mono - self._last_wheel_wall
             wheel_fresh = wheel_age <= self.wheel_timeout
 
             # Idade + peso do flow
             flow_age = float('inf')
             if self._last_flow_wall is not None:
-                flow_age = (now - self._last_flow_wall).nanoseconds / 1e9
+                flow_age = mono - self._last_flow_wall
             alpha = flow_alpha(self.flow_quality, self.q_mid, self.q_slope,
                                flow_age, self.flow_timeout)
             # Flow desligado (EMI do PMW3901): zera o peso → translação só de roda.

@@ -351,7 +351,7 @@ class MegaBridge(Node):
         # rapidamente.
         dropped = self._decoder.dropped
         if dropped > self._dropped_logged:
-            now = time.time()
+            now = time.monotonic()  # throttle: imune a salto de NTP
             if now - self._dropped_log_ts > 5.0:
                 self.get_logger().warn(
                     f'{dropped} frames descartados (len inválido) desde o boot')

@@ -33,6 +33,7 @@ só a cola de I/O.
 """
 
 import math
+import time
 from dataclasses import dataclass, field
 from typing import List, NamedTuple, Optional, Tuple
 
@@ -413,7 +414,10 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                                     or abs(msg.angular.z) > self.nav_move_ang)
 
         def _on_scan(self, msg):
-            self._scan_t = self.get_clock().now().nanoseconds * 1e-9
+            # time.monotonic(): freshness local, sem criar rclpy.time.Time a
+            # 10 Hz nem depender de NTP (P3 da AUDITORIA_2026-06-11). O update()
+            # da lógica pura só usa diferenças, então a base monotônica serve.
+            self._scan_t = time.monotonic()
             ranges = np.asarray(msg.ranges, dtype=np.float64)
             self._rear_gap = rear_min_gap(
                 ranges, msg.angle_min, msg.angle_increment,
@@ -429,7 +433,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._stop_active = (getattr(msg, "action_type", 0) == STOP_ACTION)
 
         def _tick(self):
-            now = self.get_clock().now().nanoseconds * 1e-9
+            now = time.monotonic()
             # scan velho (LiDAR caiu?) -> trata traseira como BLOQUEADA
             # (vão zero): melhor segurar a ré do que dar ré cego.
             scan_fresh = (self._scan_t is not None
