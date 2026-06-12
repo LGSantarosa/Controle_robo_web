@@ -331,11 +331,17 @@ GC da Pi agradece. Só aplicar se passar perto; não justifica commit próprio.
 
 ## Checklist de aplicação (sessão futura)
 
-1. [ ] B1 (launch.sh) — sem build, sem reflash. Commit isolado.
-2. [ ] P1 (EventsExecutor + helper em utils.py) + B2 + B3 no mesmo build.
-3. [ ] `pytest` (70+ testes) verde no dev via PYTHONPATH (e resolver L3).
+> **APLICADO em 2026-06-12** — commits `1c5e9a9` (B1), `e2d6edc` (P1+B2+B3),
+> `6902248` (P2), `3e7aac0` (P3), `e483dae` (L2), `864de50` (P4),
+> `131b07a` (B4/B5/B6+L1/L3/L4). Falta só deploy na Pi + validação de campo.
+
+1. [x] B1 (launch.sh) — sem build, sem reflash. Commit isolado.
+2. [x] P1 (EventsExecutor + helper em utils.py) + B2 + B3 no mesmo build.
+3. [x] `pytest` (61 robot_nav + 15 controle_web) verde no dev via PYTHONPATH
+   (L3 resolvido: install/ rebuiltado + nota no README).
 4. [ ] Deploy Pi: `git fetch && git reset --hard origin/main` + `colcon build
    --packages-select robot_nav` (**COLCON, sempre** — lição de 976a2b2).
-5. [ ] Robô LIGADO: medir CPU por-thread (método 2026-06-09), `topic hz /odom`,
-   smoke teleop. Anotar números no handoff.
-6. [ ] P2/P3/P4 numa segunda leva, cada um com sua validação acima.
+5. [ ] Robô LIGADO: medir CPU por-thread (método 2026-06-09), `topic hz /odom`
+   e `/hoverboard/wheel_velocities` (50 Hz — P4 mudou QoS!), chip de tensão
+   vivo na UI, smoke teleop. Anotar números no handoff.
+6. [x] P2/P3/P4 aplicados (mesma leva); validação de campo é o item 5.
