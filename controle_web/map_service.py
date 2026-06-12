@@ -15,6 +15,7 @@ Roda um executor próprio em thread daemon pra processar callbacks.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import math
 import os
@@ -37,7 +38,7 @@ from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid, Path
-from std_msgs.msg import Float64
+from std_msgs.msg import Float64, String
 from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -117,6 +118,51 @@ def yaw_delta(desired, current):
     return math.atan2(math.sin(d), math.cos(d))
 
 
+class DoorStore:
+    """Portas marcadas pelo usuário (2 batentes por porta), persistidas em
+    maps/<mapa>.doors.json. Consumidas pelo door_crossing/scan_sanitizer via
+    /doors. Spec: docs/superpowers/specs/2026-06-12-zonas-de-porta-design.md
+    """
+    MIN_W, MAX_W = 0.4, 2.0
+
+    def __init__(self, path: str):
+        self.path = path
+        self.doors = []
+        try:
+            with open(path, encoding='utf-8') as f:
+                self.doors = json.load(f).get('doors', [])
+        except (OSError, ValueError):
+            self.doors = []
+
+    def _save(self):
+        with open(self.path, 'w', encoding='utf-8') as f:
+            json.dump({'doors': self.doors}, f, indent=1)
+
+    def add(self, a, b) -> dict:
+        ax, ay = float(a[0]), float(a[1])
+        bx, by = float(b[0]), float(b[1])
+        w = math.hypot(bx - ax, by - ay)
+        if not (self.MIN_W <= w <= self.MAX_W):
+            raise ValueError(
+                f'vão de {w:.2f} m fora da faixa {self.MIN_W}-{self.MAX_W} m')
+        new_id = max((d['id'] for d in self.doors), default=0) + 1
+        door = {'id': new_id, 'a': [ax, ay], 'b': [bx, by]}
+        self.doors.append(door)
+        self._save()
+        return door
+
+    def remove(self, door_id) -> bool:
+        n = len(self.doors)
+        self.doors = [d for d in self.doors if d['id'] != door_id]
+        if len(self.doors) != n:
+            self._save()
+            return True
+        return False
+
+    def payload(self) -> str:
+        return json.dumps({'doors': self.doors})
+
+
 class MapBridge:
     """Gerencia todos os tópicos ROS2 relacionados a mapa/navegação."""
 
@@ -165,6 +211,22 @@ class MapBridge:
         self._initialpose_pub = self._node.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', 10
         )
+
+        # Portas marcadas (travessia): arquivo ao lado do mapa carregado.
+        # /doors é latched (transient_local) — door_crossing/scan_sanitizer
+        # recebem o estado atual mesmo subindo depois do app.
+        map_file = os.environ.get('ROBOT_MAP_FILE', '')
+        stem = os.path.splitext(os.path.basename(map_file))[0] or 'doors'
+        self._doors = DoorStore(os.path.join(maps_dir, f'{stem}.doors.json'))
+        doors_qos = QoSProfile(
+            depth=1, reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+        self._doors_pub = self._node.create_publisher(String, '/doors',
+                                                      doors_qos)
+        self._doors_pub.publish(String(data=self._doors.payload()))
+        # Estado da travessia -> chip na UI
+        self._node.create_subscription(String, '/door_zone',
+                                       self._on_door_zone, doors_qos)
 
         # Correção manual de DIREÇÃO no SLAM (robô sem IMU): o slam_toolbox em
         # mapeamento não relocaliza por /initialpose, e mexer no pose-graph
@@ -319,6 +381,30 @@ class MapBridge:
     def get_last_map_payload(self) -> Optional[dict]:
         """Retorna o último {info, png_b64} recebido, ou None se nada ainda."""
         return self._last_map_payload
+
+    # ---- Portas (travessia door_crossing) ----
+
+    def door_cmd(self, data: dict) -> dict:
+        try:
+            if 'add' in data:
+                d = self._doors.add(data['add']['a'], data['add']['b'])
+            elif 'del' in data:
+                if not self._doors.remove(int(data['del'])):
+                    return {'ok': False, 'error': 'porta não encontrada'}
+                d = None
+            else:
+                return {'ok': False, 'error': 'cmd desconhecido'}
+        except (ValueError, KeyError, TypeError) as e:
+            return {'ok': False, 'error': str(e)}
+        self._doors_pub.publish(String(data=self._doors.payload()))
+        self._sock.emit('doors_update', self._doors.payload())
+        return {'ok': True, 'door': d}
+
+    def get_doors_payload(self) -> str:
+        return self._doors.payload()
+
+    def _on_door_zone(self, msg):
+        self._sock.emit('door_zone', msg.data)
 
     # ---- Waypoint navigation ----
 

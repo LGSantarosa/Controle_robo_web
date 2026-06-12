@@ -293,6 +293,8 @@ def handle_connect():
         wp_state = map_bridge.get_waypoints_state()
         if wp_state['waypoints']:
             emit('waypoints_restored', wp_state)
+        # Portas marcadas (travessia door_crossing)
+        emit('doors_update', map_bridge.get_doors_payload())
 
 
 @socketio.on('nav_goal')
@@ -331,6 +333,17 @@ def handle_set_pose(data):
         emit('set_pose_ack', result)
     except Exception as e:
         emit('set_pose_ack', {'ok': False, 'error': str(e)})
+
+
+@socketio.on('door_cmd')
+def handle_door_cmd(data):
+    """Marca/apaga porta no mapa (travessia door_crossing)."""
+    if map_bridge is None:
+        emit('door_ack', {'ok': False, 'error': 'sem mapa neste modo'})
+        return
+    result = map_bridge.door_cmd(data or {})
+    app.logger.info(f"door_cmd from {request.remote_addr}: {data} -> {result.get('ok')}")
+    emit('door_ack', result)
 
 
 @socketio.on('start_waypoints')
