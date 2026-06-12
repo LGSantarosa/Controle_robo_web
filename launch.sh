@@ -229,6 +229,7 @@ KNOWN_NODE_PATTERNS=(
     "robot_nav/trekking_runner"
     "robot_nav/unstuck_supervisor"
     "robot_nav/scan_sanitizer"
+    "robot_nav/door_crossing"
     "twist_mux"
     "joy_node"
     "teleop_node"
@@ -607,6 +608,7 @@ echo ""
 export ROBOT_MODE="$MODE"
 export WEB_TELEOP="$WEB_TELEOP"
 export ROBOT_MAPS_DIR="$SCRIPT_DIR/maps"
+export ROBOT_MAP_FILE="$MAP_FILE"
 export ROBOT_SIM="$SIM"
 
 # Servidor em primeiro plano — Ctrl+C aqui dispara cleanup() via trap.
