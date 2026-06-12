@@ -81,3 +81,114 @@ def test_gap_ahead_excludes_marked_jamb():
     g = gap_ahead(ranges, amin, ainc, pose=pose,
                   jambs=[jamb], jamb_r=0.30)
     assert math.isinf(g)                         # batente não conta como vão
+
+
+from robot_nav.door_crossing import DoorCrossing, DoorCrossConfig
+
+DOOR = {'id': 1, 'a': [1.0, 2.0], 'b': [2.0, 2.0]}   # parede em x, vão 1.0 m
+CFG = DoorCrossConfig()
+
+
+def mk():
+    return DoorCrossing(CFG)
+
+
+def step(dc, t, pose, goal=True, nav=True, gap=math.inf, fresh=True):
+    return dc.update(t, pose, [DOOR], goal, nav, gap, fresh)
+
+
+def test_idle_sem_goal_ou_fora_da_zona():
+    dc = mk()
+    # na zona mas sem goal
+    assert step(dc, 0.0, (1.5, 1.2, math.pi/2), goal=False).state == 'idle'
+    # com goal mas longe (>zone_radius do centro)
+    assert step(dc, 0.1, (1.5, -1.0, math.pi/2)).state == 'idle'
+    # sem pose (TF caiu) nunca arma
+    assert step(dc, 0.2, None).state == 'idle'
+
+
+def test_arma_e_vai_pro_staging():
+    dc = mk()
+    # a 1.0 m do centro, olhando pra porta, nav empurrando
+    c = step(dc, 0.0, (1.5, 1.0, math.pi/2))
+    assert c.state == 'staging'
+    assert c.door_id == 1
+    # side foi escolhido pra aproximação: alvo de staging fica ENTRE o robô
+    # e a porta (y = 2.0 - stage_dist)
+    assert dc.side == +1
+
+
+def test_staging_converge_e_rotaciona():
+    dc = mk()
+    t = 0.0
+    pose = (1.7, 1.2, 0.0)   # fora do eixo, yaw errado
+    c = step(dc, t, pose)
+    assert c.state == 'staging'
+    # teleporta pro ponto de staging (simula chegada): vira ROTATING
+    stage_y = 2.0 - CFG.stage_dist
+    c = step(dc, t + 1.0, (1.5, stage_y, 0.0))
+    assert c.state == 'rotating'
+    assert c.vx == pytest.approx(0.0)
+    assert c.wz != 0.0   # girando pra encarar pi/2
+
+
+def test_rotating_estavel_vira_crossing():
+    dc = mk()
+    stage_y = 2.0 - CFG.stage_dist
+    step(dc, 0.0, (1.5, stage_y - 0.3, math.pi/2))    # arma (staging)
+    step(dc, 0.1, (1.5, stage_y, math.pi/2))          # chegou -> rotating
+    # já alinhado: precisa de align_stable ticks estáveis pra promover
+    t = 0.2
+    for _ in range(CFG.align_stable):
+        c = step(dc, t, (1.5, stage_y, math.pi/2))
+        t += 0.05
+    assert c.state == 'crossing'
+
+
+def _ate_crossing(dc):
+    stage_y = 2.0 - CFG.stage_dist
+    step(dc, 0.0, (1.5, stage_y - 0.3, math.pi/2))
+    step(dc, 0.1, (1.5, stage_y, math.pi/2))
+    t = 0.2
+    for _ in range(CFG.align_stable):
+        c = step(dc, t, (1.5, stage_y, math.pi/2))
+        t += 0.05
+    assert c.state == 'crossing'
+    return t
+
+
+def test_crossing_anda_reto_e_solta_depois_da_porta():
+    dc = mk()
+    t = _ate_crossing(dc)
+    c = step(dc, t, (1.5, 1.9, math.pi/2))
+    assert c.state == 'crossing' and c.vx == pytest.approx(CFG.cross_speed)
+    # passou do centro + exit_margin -> solta
+    c = step(dc, t + 1.0, (1.5, 2.0 + CFG.exit_margin + 0.05, math.pi/2))
+    assert c.state == 'idle'
+
+
+def test_crossing_aborta_se_vao_fecha_ou_goal_morre():
+    dc = mk()
+    t = _ate_crossing(dc)
+    assert step(dc, t, (1.5, 1.9, math.pi/2), gap=0.3).state == 'idle'
+    dc2 = mk()
+    t2 = _ate_crossing(dc2)
+    assert step(dc2, t2, (1.5, 1.9, math.pi/2), goal=False).state == 'idle'
+
+
+def test_align_timeout_aborta_e_respeita_cooldown():
+    dc = mk()
+    step(dc, 0.0, (1.5, 1.0, math.pi/2))                       # arma
+    c = step(dc, CFG.align_timeout + 0.1, (1.5, 1.0, math.pi/2))
+    assert c.state == 'idle'
+    # cooldown: tick seguinte ainda não rearma
+    assert step(dc, CFG.align_timeout + 0.2, (1.5, 1.0, math.pi/2)).state == 'idle'
+    # passado o cooldown, rearma
+    t = CFG.align_timeout + CFG.retrigger_cooldown + 0.3
+    assert step(dc, t, (1.5, 1.0, math.pi/2)).state == 'staging'
+
+
+def test_scan_velho_aborta_crossing():
+    dc = mk()
+    t = _ate_crossing(dc)
+    assert step(dc, t, (1.5, 1.9, math.pi/2), fresh=False).state == 'idle'
