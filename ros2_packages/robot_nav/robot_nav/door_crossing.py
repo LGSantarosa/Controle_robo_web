@@ -269,3 +269,156 @@ class DoorCrossing:
             return Cmd('crossing', cfg.cross_speed, wz, self.door['id'])
 
         return Cmd('idle', 0.0, 0.0, None)
+
+
+def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
+    import json
+
+    import rclpy
+    from rclpy.node import Node
+    from rclpy.qos import (QoSDurabilityPolicy, QoSProfile, ReliabilityPolicy,
+                           qos_profile_sensor_data)
+    from action_msgs.msg import GoalStatusArray
+    from geometry_msgs.msg import Twist
+    from sensor_msgs.msg import LaserScan
+    from std_msgs.msg import String
+    from tf2_ros import Buffer, TransformListener, TransformException
+
+    from .utils import quat_to_yaw, spin_node
+
+    ACTIVE = {1, 2, 3}  # ACCEPTED, EXECUTING, CANCELING (igual unstuck)
+
+    latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                         durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+
+    class DoorCrossingNode(Node):
+        def __init__(self):
+            super().__init__('door_crossing')
+            g = {}
+            for name, default in (
+                ('zone_radius', 1.2), ('stage_dist', 0.6),
+                ('align_lat', 0.08), ('align_yaw_deg', 5.0),
+                ('align_timeout', 15.0), ('rot_speed', 3.0),
+                ('cross_speed', 0.15), ('gap_min', 0.45),
+                ('exit_margin', 0.5), ('rate_hz', 20.0),
+                ('scan_stale', 0.6), ('nav_move_lin', 0.02),
+            ):
+                self.declare_parameter(name, default)
+                g[name] = self.get_parameter(name).value
+
+            self.cfg = DoorCrossConfig(
+                zone_radius=g['zone_radius'], stage_dist=g['stage_dist'],
+                align_lat=g['align_lat'],
+                align_yaw=math.radians(g['align_yaw_deg']),
+                align_timeout=g['align_timeout'], rot_speed=g['rot_speed'],
+                cross_speed=g['cross_speed'], gap_min=g['gap_min'],
+                exit_margin=g['exit_margin'])
+            self.sup = DoorCrossing(self.cfg)
+            self.scan_stale = g['scan_stale']
+            self.nav_move_lin = g['nav_move_lin']
+
+            self.doors = []
+            self._goal_active = {}
+            self._nav_forward = False
+            self._scan = None          # (ranges, angle_min, inc)
+            self._scan_t = None
+            self._last_zone = None     # dedup do /door_zone
+
+            self.tf_buffer = Buffer()
+            self.tf_listener = TransformListener(self.tf_buffer, self)
+
+            self.pub = self.create_publisher(Twist, 'door_vel', 10)
+            self.pub_zone = self.create_publisher(String, 'door_zone', latched)
+
+            self.create_subscription(String, 'doors', self._on_doors, latched)
+            be = qos_profile_sensor_data
+            self.create_subscription(LaserScan, 'scan', self._on_scan, be)
+            self.create_subscription(Twist, 'nav_vel_raw', self._on_nav, 10)
+            for topic in ('navigate_to_pose/_action/status',
+                          'navigate_through_poses/_action/status'):
+                self.create_subscription(
+                    GoalStatusArray, topic,
+                    lambda m, t=topic: self._on_status(t, m), 10)
+
+            self.create_timer(1.0 / g['rate_hz'], self._tick)
+            self._publish_zone('idle', None)
+            self.get_logger().info(
+                'door_crossing ativo: zona %.1fm, alinhar |lat|<%.2fm '
+                '|yaw|<%.0f°, atravessa %.2fm/s' % (
+                    self.cfg.zone_radius, self.cfg.align_lat,
+                    math.degrees(self.cfg.align_yaw), self.cfg.cross_speed))
+
+        def _on_doors(self, msg):
+            try:
+                self.doors = json.loads(msg.data).get('doors', [])
+                self.get_logger().info(f'{len(self.doors)} porta(s) carregada(s)')
+            except (ValueError, AttributeError) as e:
+                self.get_logger().warn(f'/doors inválido: {e}')
+
+        def _on_scan(self, msg):
+            self._scan = (msg.ranges, msg.angle_min, msg.angle_increment)
+            self._scan_t = time.monotonic()
+
+        def _on_nav(self, msg):
+            self._nav_forward = msg.linear.x > self.nav_move_lin
+
+        def _on_status(self, topic, msg):
+            self._goal_active[topic] = any(
+                st.status in ACTIVE for st in msg.status_list)
+
+        def _pose_map(self):
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    'map', 'base_link', rclpy.time.Time())
+            except TransformException:
+                return None
+            t = tf.transform.translation
+            q = tf.transform.rotation
+            return (t.x, t.y, quat_to_yaw(q.x, q.y, q.z, q.w))
+
+        def _publish_zone(self, state, door_id):
+            payload = json.dumps({'state': state, 'door_id': door_id})
+            if payload != self._last_zone:
+                self._last_zone = payload
+                self.pub_zone.publish(String(data=payload))
+
+        def _tick(self):
+            now = time.monotonic()
+            pose = self._pose_map()
+            goal = any(self._goal_active.values()) if self._goal_active else False
+            fresh = (self._scan_t is not None
+                     and now - self._scan_t <= self.scan_stale)
+            gap = math.inf
+            if (fresh and pose is not None and self.sup.state == 'crossing'
+                    and self.sup.door is not None):
+                ranges, amin, ainc = self._scan
+                jambs = [tuple(self.sup.door['a']), tuple(self.sup.door['b'])]
+                gap = gap_ahead(ranges, amin, ainc, pose, jambs, 0.30)
+
+            prev = self.sup.state
+            cmd = self.sup.update(now, pose, self.doors, goal,
+                                  self._nav_forward, gap, fresh)
+            if cmd.state != prev:
+                self.get_logger().info(f'door_crossing: {prev} -> {cmd.state}')
+            self._publish_zone(cmd.state, cmd.door_id)
+            if cmd.state != 'idle' or prev != 'idle':
+                # Twist zero explícito na transição pra idle (mesma lição do
+                # unstuck: cmd_vel_to_wheels segura o último comando).
+                t = Twist()
+                t.linear.x = cmd.vx
+                t.angular.z = cmd.wz
+                self.pub.publish(t)
+
+    rclpy.init(args=args)
+    node = DoorCrossingNode()
+    try:
+        spin_node(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == '__main__':  # pragma: no cover
+    main()
