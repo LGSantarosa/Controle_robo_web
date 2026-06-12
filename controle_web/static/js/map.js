@@ -33,6 +33,14 @@
   let setPoseMode = false; // armado: próximo click-arrasta define a pose real (relocaliza)
   let setPoseDrag = null;  // {canvasX, canvasY, curX, curY, world} durante o drag
 
+  // Portas marcadas (travessia door_crossing)
+  let doorMode = false;          // modo "marcar porta"
+  let doorFirst = null;          // 1º batente clicado {x, y}
+  let doors = [];                // [{id, a:[x,y], b:[x,y]}]
+  let doorZone = null;           // {state, door_id} vindo do robô
+  const btnDoor = document.getElementById('map-btn-door');
+  const doorChip = document.getElementById('map-door-chip');
+
   // Espera o socket de client.js existir. client.js cria `window.robotSocket`.
   function waitForSocket(cb) {
     if (window.robotSocket) return cb(window.robotSocket);
@@ -287,6 +295,40 @@
       statusEl.textContent = 'salvando...';
     });
 
+    // --- Portas (travessia door_crossing) ---
+    if (btnDoor) btnDoor.addEventListener('click', () => {
+      doorMode = !doorMode;
+      doorFirst = null;
+      btnDoor.classList.toggle('active', doorMode);
+      statusEl.textContent = doorMode
+        ? 'modo porta: clique no 1º batente (clique numa porta p/ apagar)'
+        : '';
+      render();
+    });
+
+    socket.on('doors_update', (payload) => {
+      try { doors = JSON.parse(payload).doors || []; } catch (e) { doors = []; }
+      render();
+    });
+
+    socket.on('door_ack', (r) => {
+      if (!r.ok) statusEl.textContent = `porta: ${r.error}`;
+    });
+
+    socket.on('door_zone', (payload) => {
+      try { doorZone = JSON.parse(payload); } catch (e) { doorZone = null; }
+      const active = doorZone && doorZone.state !== 'idle';
+      if (doorChip) {
+        doorChip.style.display = active ? '' : 'none';
+        if (active) {
+          const nome = {staging: 'indo pro eixo', rotating: 'alinhando',
+                        crossing: 'ATRAVESSANDO'}[doorZone.state] || doorZone.state;
+          doorChip.textContent = `🚪 porta ${doorZone.door_id}: ${nome}`;
+        }
+      }
+      render();
+    });
+
     // --- Interação com o canvas (goal único + waypoints) ---
     const DRAG_THRESHOLD = 8; // pixels para considerar drag
 
@@ -336,6 +378,32 @@
         if (statusEl) statusEl.textContent = `pose definida: (${w.x.toFixed(2)}, ${w.y.toFixed(2)})`;
         setPoseDrag = null;
         setSetPoseMode(false);
+        render();
+        return;
+      }
+
+      // Modo porta: 1º clique = batente A, 2º = batente B; clique perto de
+      // porta existente = apagar. Tem precedência sobre waypoint/goal.
+      if (doorMode && wpMouseDown) {
+        const world = wpMouseDown.world;
+        const NEAR = 0.35;
+        const hit = doors.find(d => {
+          const mx = (d.a[0] + d.b[0]) / 2, my = (d.a[1] + d.b[1]) / 2;
+          return Math.hypot(world.x - mx, world.y - my) < NEAR;
+        });
+        if (hit) {
+          socket.emit('door_cmd', { del: hit.id });
+          statusEl.textContent = `porta ${hit.id} apagada`;
+        } else if (!doorFirst) {
+          doorFirst = world;
+          statusEl.textContent = 'agora clique no 2º batente';
+        } else {
+          socket.emit('door_cmd', {
+            add: { a: [doorFirst.x, doorFirst.y], b: [world.x, world.y] } });
+          doorFirst = null;
+          statusEl.textContent = 'porta marcada';
+        }
+        wpDrag = null; wpMouseDown = null;
         render();
         return;
       }
@@ -489,6 +557,34 @@
         else         ctx.lineTo(c.x, c.y);
       });
       ctx.stroke();
+    }
+
+    // Portas marcadas: segmento entre batentes + discos; ativa = destacada
+    doors.forEach(d => {
+      const a = worldToCanvas(d.a[0], d.a[1]);
+      const b = worldToCanvas(d.b[0], d.b[1]);
+      if (!a || !b) return;
+      const active = doorZone && doorZone.door_id === d.id
+                     && doorZone.state !== 'idle';
+      ctx.strokeStyle = active ? '#0f0' : '#0aa';
+      ctx.lineWidth = active ? 3 : 2;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      const rPix = (0.30 / mapInfo.resolution) * getDrawRect().scale;
+      [a, b].forEach(p => {
+        ctx.beginPath(); ctx.arc(p.x, p.y, rPix, 0, 2 * Math.PI); ctx.stroke();
+      });
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText(`🚪${d.id}`, (a.x + b.x) / 2 + 6, (a.y + b.y) / 2 - 6);
+    });
+    if (doorMode && doorFirst) {
+      const p = worldToCanvas(doorFirst.x, doorFirst.y);
+      if (p) {
+        ctx.fillStyle = '#0aa';
+        ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 2 * Math.PI); ctx.fill();
+      }
     }
 
     // Último alvo goal único (bolinha vermelha) — esconde se waypoints ativos
