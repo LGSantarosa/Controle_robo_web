@@ -222,7 +222,6 @@ fi
 # Mesma lista usada no cleanup() ao final — uma fonte só pra evitar drift
 # quando adicionar/remover um nó (M5 da AUDITORIA_2026-05-27).
 KNOWN_NODE_PATTERNS=(
-    "robot_nav/odom_publisher"
     "robot_nav/cmd_vel_to_wheels"
     "robot_nav/mega_bridge"
     "robot_nav/pose_estimator"

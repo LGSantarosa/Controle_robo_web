@@ -25,7 +25,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'odom_publisher = robot_nav.odom_publisher:main',
             'cmd_vel_to_wheels = robot_nav.cmd_vel_to_wheels:main',
             'mega_bridge = robot_nav.mega_bridge:main',
             'pose_estimator = robot_nav.pose_estimator:main',
