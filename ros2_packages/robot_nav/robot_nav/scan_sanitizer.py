@@ -39,13 +39,52 @@ def sanitize_ranges(ranges, min_valid: float):
     return out, n
 
 
+def mask_door_jambs(ranges, angle_min: float, angle_increment: float,
+                    pose, jambs, jamb_r: float):
+    """(ranges com batentes mascarados, n_mascarados).
+
+    Converte cada retorno pro frame do MAPA (pose = (x,y,yaw) do TF) e troca
+    por +inf os que caem num disco de jamb_r ao redor de um batente marcado.
+    Chamado SÓ quando o door_crossing está em estado 'crossing' (gate) — o
+    collision monitor fica "do tamanho da porta": cego pros 2 batentes
+    clicados, enxergando todo o resto (pessoa no vão continua freando).
+    """
+    r = np.asarray(ranges, dtype=np.float32)
+    if r.size == 0 or not jambs or angle_increment == 0.0:
+        return r, 0
+    ok = np.isfinite(r) & (r > 0.0)
+    rr = np.where(ok, r, 0.0)
+    a = angle_min + np.arange(r.size) * angle_increment
+    x = rr * np.cos(a)
+    y = rr * np.sin(a)
+    px, py, pyaw = pose
+    c, s = math.cos(pyaw), math.sin(pyaw)
+    mx = px + x * c - y * s
+    my = py + x * s + y * c
+    bad = np.zeros(r.size, dtype=bool)
+    for jx, jy in jambs:
+        bad |= ((mx - jx) ** 2 + (my - jy) ** 2) <= jamb_r ** 2
+    bad &= ok
+    n = int(np.count_nonzero(bad))
+    if n == 0:
+        return r, 0
+    out = r.copy()
+    out[bad] = math.inf
+    return out, n
+
+
 def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
+    import json
+
     import rclpy
     from rclpy.node import Node
-    from rclpy.qos import qos_profile_sensor_data
+    from rclpy.qos import (QoSDurabilityPolicy, QoSProfile, ReliabilityPolicy,
+                           qos_profile_sensor_data)
     from sensor_msgs.msg import LaserScan
+    from std_msgs.msg import String
+    from tf2_ros import Buffer, TransformListener, TransformException
 
-    from .utils import spin_node
+    from .utils import quat_to_yaw, spin_node
 
     class ScanSanitizer(Node):
 
@@ -62,9 +101,51 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                                              qos_profile_sensor_data)
             self.create_subscription(LaserScan, 'scan', self._on_scan,
                                      qos_profile_sensor_data)
+
+            # Máscara de batente: durante a travessia verificada (door_crossing
+            # em 'crossing'), os 2 batentes da porta marcada viram inf no
+            # /scan_safe — o collision monitor fica "do tamanho da porta".
+            self.declare_parameter('jamb_radius', 0.30)
+            self.jamb_r = float(self.get_parameter('jamb_radius').value)
+            self._doors = {}          # id -> {'a': [x,y], 'b': [x,y]}
+            self._crossing_id = None  # id da porta em travessia, ou None
+            self._masked_total = 0
+            self.tf_buffer = Buffer()
+            self.tf_listener = TransformListener(self.tf_buffer, self)
+            latched = QoSProfile(
+                depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+            self.create_subscription(String, 'doors', self._on_doors, latched)
+            self.create_subscription(String, 'door_zone', self._on_zone, latched)
+
             self.get_logger().info(
                 f'scan_sanitizer ativo: retornos <{self.min_valid:.2f} m '
                 f'viram inf (/scan -> /scan_safe)')
+
+        def _on_doors(self, msg):
+            try:
+                self._doors = {d['id']: d
+                               for d in json.loads(msg.data).get('doors', [])}
+            except (ValueError, KeyError, TypeError) as e:
+                self.get_logger().warn(f'/doors inválido: {e}')
+
+        def _on_zone(self, msg):
+            try:
+                z = json.loads(msg.data)
+                self._crossing_id = (z.get('door_id')
+                                     if z.get('state') == 'crossing' else None)
+            except ValueError:
+                self._crossing_id = None
+
+        def _pose_map(self):
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    'map', 'base_link', rclpy.time.Time())
+            except TransformException:
+                return None
+            t = tf.transform.translation
+            q = tf.transform.rotation
+            return (t.x, t.y, quat_to_yaw(q.x, q.y, q.z, q.w))
 
         def _on_scan(self, msg: LaserScan):
             out, n = sanitize_ranges(msg.ranges, self.min_valid)
@@ -77,7 +158,23 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                     f'descartado(s) (total {self._dropped_total})',
                     throttle_duration_sec=10.0)
                 msg.ranges = out.tolist()
-            # Sem fantasma: repassa a msg como veio (zero cópia extra).
+            door = self._doors.get(self._crossing_id)
+            if door is not None:
+                pose = self._pose_map()
+                if pose is not None:     # sem TF -> fail-safe: sem máscara
+                    base = out if n else np.asarray(msg.ranges,
+                                                    dtype=np.float32)
+                    masked, nm = mask_door_jambs(
+                        base, msg.angle_min, msg.angle_increment, pose,
+                        [tuple(door['a']), tuple(door['b'])], self.jamb_r)
+                    if nm:
+                        self._masked_total += nm
+                        self.get_logger().info(
+                            f'porta {self._crossing_id}: {nm} ponto(s) de '
+                            f'batente mascarado(s) (total {self._masked_total})',
+                            throttle_duration_sec=5.0)
+                        msg.ranges = masked.tolist()
+            # Sem fantasma nem máscara: repassa a msg como veio (zero cópia).
             self.pub.publish(msg)
 
     rclpy.init(args=args)
