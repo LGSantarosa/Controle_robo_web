@@ -211,6 +211,7 @@ class PowerMonitor:
         # Imports de ROS aqui dentro pra lógica acima ser testável sem rclpy.
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
+        from rclpy.qos import qos_profile_sensor_data
         from sensor_msgs.msg import BatteryState
         from std_msgs.msg import Float64MultiArray
         from wheel_msgs.msg import WheelSpeeds
@@ -237,8 +238,11 @@ class PowerMonitor:
             lambda m: self._on_battery('rear', m), 10)
         self._node.create_subscription(
             WheelSpeeds, '/wheel_vel_setpoints', self._on_setpoint, 10)
+        # sensor_data: casa com o pub do mega_bridge (P4 da AUDITORIA_2026-06-11;
+        # QoS incompatível = silêncio total).
         self._node.create_subscription(
-            Float64MultiArray, '/hoverboard/wheel_velocities', self._on_wheels, 10)
+            Float64MultiArray, '/hoverboard/wheel_velocities', self._on_wheels,
+            qos_profile_sensor_data)
 
         self._ui_period = 1.0 / ui_hz
         self._last_ui_emit = 0.0

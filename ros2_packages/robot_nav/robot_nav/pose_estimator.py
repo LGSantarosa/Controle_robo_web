@@ -234,8 +234,9 @@ class PoseEstimator(Node):
         # 4 rodas num tópico só (Float64MultiArray, ordem [FL,FR,RL,RR], RPM já
         # normalizado pro referencial do robô pelo mega_bridge). Era 4 subs Float64
         # separadas = 4 wakeups/ciclo do executor; 1 sub = 1 wakeup, mesmo dado.
+        # sensor_data: TEM que casar com o pub do mega_bridge (P4).
         self.create_subscription(Float64MultiArray, 'hoverboard/wheel_velocities',
-                                 self._on_wheels, 10)
+                                 self._on_wheels, qos_profile_sensor_data)
 
         # --- Publishers ---
         self.pub_pose = self.create_publisher(PoseStamped, 'trekking/pose', 10)

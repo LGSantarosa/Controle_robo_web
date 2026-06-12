@@ -202,8 +202,13 @@ class MegaBridge(Node):
         # SEM mudar nenhum valor. Os 4 valores seguem inspecionáveis no array.
         self.WHEEL_ORDER = [('front', 'left'), ('front', 'right'),
                             ('rear', 'left'), ('rear', 'right')]
+        # Rodas: sensor_data (BEST_EFFORT) como IMU/flow — stream 50 Hz, amostra
+        # perdida não importa (wheel_timeout cobre gaps) e latência empilhada
+        # por reenvio RELIABLE é PIOR que perda (odometria atrasada). QoS do
+        # pub e dos subs (pose_estimator, power_monitor) mudam JUNTOS —
+        # incompatível = silêncio total (bug "robô sem IMU" de 2026-06-05).
         self._pub_wheels = self.create_publisher(
-            Float64MultiArray, 'hoverboard/wheel_velocities', qos_cmd)
+            Float64MultiArray, 'hoverboard/wheel_velocities', qos_profile_sensor_data)
         self._pub_imu = self.create_publisher(Imu, 'imu/data', qos_profile_sensor_data)
         self._pub_flow = self.create_publisher(Vector3Stamped, 'optical_flow', qos_profile_sensor_data)
         self._pub_bat_front = self.create_publisher(BatteryState, 'battery/front', qos_cmd)
