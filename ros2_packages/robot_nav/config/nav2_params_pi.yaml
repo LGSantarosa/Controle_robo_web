@@ -451,5 +451,11 @@ collision_monitor:
     observation_sources: ["scan"]
     scan:
       type: "scan"
-      topic: "scan"
+      # 2026-06-12: "scan" -> "scan_safe" (robot_nav/scan_sanitizer). O LD06
+      # cospe retornos fantasmas <15 cm (DENTRO do chassi) em ~2% dos scans,
+      # em setores fixos (~200-260°/80-120°); com min_points=2, dois pontinhos
+      # congelavam o robô — inclusive parado no meio da PORTA (17/22 freezes
+      # da captura no bag). O sanitizer troca só esses por inf. Rollback:
+      # voltar topic pra "scan".
+      topic: "scan_safe"
       enabled: True

@@ -112,8 +112,19 @@ def generate_launch_description():
             # assumir por cima da navegação.
             remappings=[('cmd_vel', 'cmd_vel_nav'), ('cmd_vel_smoothed', 'nav_vel_raw')],
         ),
-        # Collision Monitor: lê /scan cru e freia nav_vel_raw -> nav_vel ANTES do
-        # twist_mux. Topicos in/out definidos no YAML (cmd_vel_in/out_topic).
+        # Sanitizador do scan PRA O COLLISION MONITOR: o LD06 cospe retornos
+        # fantasmas <15 cm (dentro do chassi!) em ~2% dos scans e, com
+        # min_points=2 na PolygonStop, 2 pontinhos congelavam o robô no meio
+        # da PORTA (captura 2026-06-12). /scan -> /scan_safe só troca esses
+        # por inf; SLAM/costmaps/cone_detector seguem no /scan cru.
+        Node(
+            package='robot_nav', executable='scan_sanitizer',
+            name='scan_sanitizer', output=nav_output,
+            parameters=[sim_time_param],
+        ),
+        # Collision Monitor: lê /scan_safe (sanitizado acima) e freia
+        # nav_vel_raw -> nav_vel ANTES do twist_mux. Topicos in/out definidos
+        # no YAML (cmd_vel_in/out_topic; fonte scan no nav2_params_pi.yaml).
         Node(
             package='nav2_collision_monitor', executable='collision_monitor',
             name='collision_monitor', output=nav_output,

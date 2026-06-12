@@ -228,6 +228,7 @@ KNOWN_NODE_PATTERNS=(
     "robot_nav/cone_detector"
     "robot_nav/trekking_runner"
     "robot_nav/unstuck_supervisor"
+    "robot_nav/scan_sanitizer"
     "twist_mux"
     "joy_node"
     "teleop_node"

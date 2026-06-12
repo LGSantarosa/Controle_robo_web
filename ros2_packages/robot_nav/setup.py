@@ -31,6 +31,7 @@ setup(
             'cone_detector = robot_nav.cone_detector:main',
             'trekking_runner = robot_nav.trekking_runner:main',
             'unstuck_supervisor = robot_nav.unstuck_supervisor:main',
+            'scan_sanitizer = robot_nav.scan_sanitizer:main',
         ],
     },
 )
