@@ -36,6 +36,8 @@ import math
 from dataclasses import dataclass, field
 from typing import List, NamedTuple, Optional, Tuple
 
+import numpy as np
+
 
 # ---- lógica pura -----------------------------------------------------------
 
@@ -60,16 +62,21 @@ def rear_min_gap(ranges, angle_min: float, angle_increment: float,
     """
     if angle_increment == 0.0:
         return math.inf
-    gap = math.inf
-    for i, r in enumerate(ranges):
-        if r is None or not math.isfinite(r) or r <= 0.0:
-            continue
-        a = angle_min + i * angle_increment
-        x = lidar_x + r * math.cos(a)
-        y = r * math.sin(a)
-        if x < tail_x and abs(y) <= half_width:
-            gap = min(gap, tail_x - x)
-    return gap
+    # Vetorizado (P2 da AUDITORIA_2026-06-11): ~450 pts a 10 Hz com trig em
+    # Python puro era CPU de verdade na Pi. None vira NaN no asarray e cai
+    # no isfinite — mesmo descarte da versão escalar.
+    r = np.asarray(ranges, dtype=np.float64)
+    if r.size == 0:
+        return math.inf
+    ok = np.isfinite(r) & (r > 0.0)
+    r = np.where(ok, r, 0.0)  # evita inf*cos -> NaN com warning
+    a = angle_min + np.arange(r.size) * angle_increment
+    x = lidar_x + r * np.cos(a)
+    y = r * np.sin(a)
+    sel = ok & (x < tail_x) & (np.abs(y) <= half_width)
+    if not sel.any():
+        return math.inf
+    return float((tail_x - x[sel]).min())
 
 
 def freer_side(ranges, angle_min: float, angle_increment: float) -> int:
@@ -79,17 +86,18 @@ def freer_side(ranges, angle_min: float, angle_increment: float) -> int:
     """
     if angle_increment == 0.0:
         return 1
+    r = np.asarray(ranges, dtype=np.float64)
+    if r.size == 0:
+        return 1
     lo, hi = math.radians(20.0), math.radians(90.0)
-    best = {1: math.inf, -1: math.inf}
-    for i, r in enumerate(ranges):
-        if r is None or not math.isfinite(r) or r <= 0.0:
-            continue
-        a = _norm_angle(angle_min + i * angle_increment)
-        if lo <= a <= hi:
-            best[1] = min(best[1], r)
-        elif -hi <= a <= -lo:
-            best[-1] = min(best[-1], r)
-    return 1 if best[1] >= best[-1] else -1
+    a = angle_min + np.arange(r.size) * angle_increment
+    a = np.arctan2(np.sin(a), np.cos(a))  # wrap (-pi, pi], = _norm_angle
+    ok = np.isfinite(r) & (r > 0.0)
+    left = ok & (a >= lo) & (a <= hi)
+    right = ok & (a >= -hi) & (a <= -lo)
+    best_left = float(r[left].min()) if left.any() else math.inf
+    best_right = float(r[right].min()) if right.any() else math.inf
+    return 1 if best_left >= best_right else -1
 
 
 @dataclass
@@ -406,7 +414,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
 
         def _on_scan(self, msg):
             self._scan_t = self.get_clock().now().nanoseconds * 1e-9
-            ranges = list(msg.ranges)
+            ranges = np.asarray(msg.ranges, dtype=np.float64)
             self._rear_gap = rear_min_gap(
                 ranges, msg.angle_min, msg.angle_increment,
                 self.rear_lidar_x, self.rear_tail_x, self.rear_half_width)
