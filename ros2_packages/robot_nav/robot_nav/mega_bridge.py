@@ -406,13 +406,13 @@ class MegaBridge(Node):
             # present = placa respondendo (não-stale), não "voltagem > 0". Assim
             # 0 V com present=True = curto/medida real; 0 V com present=False =
             # placa muda. faultF/faultR bit 0 = stale (ver firmware txState).
-            for pub, raw, stale in (
+            for pub, volts, stale in (
                 (self._pub_bat_front, batF, bool(faultF & 0x01)),
                 (self._pub_bat_rear,  batR, bool(faultR & 0x01)),
             ):
                 b = BatteryState()
                 b.header.stamp = self.get_clock().now().to_msg()
-                b.voltage = raw / 100.0
+                b.voltage = volts / 100.0
                 b.present = not stale
                 pub.publish(b)
 

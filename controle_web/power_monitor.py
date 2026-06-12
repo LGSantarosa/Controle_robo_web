@@ -263,7 +263,7 @@ class PowerMonitor:
     def _on_battery(self, name: str, msg) -> None:
         with self._lock:
             self._v[name] = float(msg.voltage)
-            self._v_ts = time.time()
+            self._v_ts = time.monotonic()
 
     def _on_setpoint(self, msg) -> None:
         with self._lock:
@@ -278,7 +278,12 @@ class PowerMonitor:
     # ---- Amostragem ----
 
     def _on_tick(self) -> None:
-        now = time.time()
+        # Detector/freshness/throttle em time.monotonic(): na Pi o relógio de
+        # parede SALTA quando o NTP sincroniza pós-boot, e um salto atravessando
+        # a janela de sag de 1 s cuspia sag_* falso no CSV (B5 da
+        # AUDITORIA_2026-06-11). time.time() fica SÓ na coluna ts do CSV
+        # (correlação com logs ROS).
+        now = time.monotonic()
         with self._lock:
             v_front, v_rear = self._v['front'], self._v['rear']
             fresh = (now - self._v_ts) <= self.STALE_AGE_S
@@ -288,7 +293,7 @@ class PowerMonitor:
         if fresh:
             events = self._detector.update(now, v_front, v_rear,
                                            setpoints, measured)
-            self._csv.log(now, v_front, v_rear, setpoints, measured,
+            self._csv.log(time.time(), v_front, v_rear, setpoints, measured,
                           self._detector.stall_active, events)
             for ev in events:
                 log.warning(

@@ -619,9 +619,10 @@ _TREKKING_CMDS = {
     'load_waypoints', 'clear', 'set_cone',
 }
 # Apenas estes kwargs passam para o runner — rejeita o resto pra não acabar
-# como vetor de injeção (`os.system` numa lib futura, etc.).
-_TREKKING_KWARGS = {'waypoints', 'v_max', 'kp_heading', 'kd_heading',
-                    'idx', 'cone_x', 'cone_y', 'clear'}
+# como vetor de injeção (`os.system` numa lib futura, etc.). v_max/kp_heading/
+# kd_heading SAÍRAM: o _on_cmd nunca os tratou (tuning só via launch) e tuning
+# ao vivo por websocket é convite a acidente (B6 da AUDITORIA_2026-06-11).
+_TREKKING_KWARGS = {'waypoints', 'idx', 'cone_x', 'cone_y', 'clear'}
 
 @socketio.on('trekking_cmd')
 def handle_trekking_cmd(data):

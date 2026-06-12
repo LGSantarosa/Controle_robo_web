@@ -344,6 +344,8 @@ echo "source $HOME/Workspace/Controle_robo_web/install/setup.bash" >> ~/.bashrc
 
 > Depois de editar qualquer arquivo em `ros2_packages/robot_nav/`, o `start.sh`/`launch.sh` detecta a mudança por hash e recompila automaticamente. Só preciso rodar `colcon build` manual se quiser controlar.
 >
+> **Rodando os testes no PC dev:** prefira a árvore fonte ao `install/` (que pode estar velho e quebrar a coleta do pytest): `cd ros2_packages/robot_nav && PYTHONPATH=. python3 -m pytest test/`. Os testes do servidor web rodam de `controle_web/` com `python3 -m pytest test_*.py`.
+>
 > **Habilitar o TEB local planner:** `sudo apt install libg2o-dev` e apague `ros2_packages/teb_local_planner/teb_local_planner/COLCON_IGNORE`. Por padrão o Nav2 roda com DWB.
 
 ### 2. Portas USB fixas (obrigatório)

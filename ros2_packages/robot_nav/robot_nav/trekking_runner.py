@@ -581,7 +581,12 @@ class TrekkingRunner(Node):
         }
         self.pub_state.publish(String(data=json.dumps(state)))
 
-        # PoseArray dos waypoints (pra visualização rviz/UI alternativa)
+        # PoseArray dos waypoints (pra visualização rviz/UI alternativa).
+        # Gate por assinante: no robô ninguém assina (a UI usa o JSON do
+        # /trekking/state) — montar/publicar a 10 Hz à toa é CPU da Pi
+        # (L1 da AUDITORIA_2026-06-11; mesmo padrão do pose_estimator).
+        if self.pub_wps.get_subscription_count() == 0:
+            return
         pa = PoseArray()
         pa.header.stamp = self.get_clock().now().to_msg()
         pa.header.frame_id = 'odom'

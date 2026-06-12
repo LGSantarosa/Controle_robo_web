@@ -72,6 +72,9 @@ class ConeDetector(Node):
         self._pose_y = 0.0
         self._pose_yaw = 0.0
         self._have_pose = False
+        # Cache do vetor de ângulos do scan (ver _on_scan / L4)
+        self._angles_key = None
+        self._angles = None
 
         # --- Subs/Pubs ---
         self.create_subscription(PoseStamped, 'trekking/pose', self._on_pose, 10)
@@ -107,7 +110,14 @@ class ConeDetector(Node):
         if ranges.size == 0:
             self._publish_empty(scan)
             return
-        angles = scan.angle_min + np.arange(ranges.size, dtype=np.float32) * scan.angle_increment
+        # Vetor de ângulos cacheado: tamanho/params do LD06 não mudam em
+        # runtime, recomputar+alocar a 10 Hz é lixo pro GC da Pi (L4).
+        key = (ranges.size, scan.angle_min, scan.angle_increment)
+        if self._angles_key != key:
+            self._angles_key = key
+            self._angles = scan.angle_min + np.arange(
+                ranges.size, dtype=np.float32) * scan.angle_increment
+        angles = self._angles
         valid = (
             np.isfinite(ranges)
             & (ranges >= self.r_min) & (ranges <= self.r_max)
