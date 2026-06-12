@@ -65,3 +65,41 @@ def door_progress_lateral(g: DoorGeom, x: float, y: float,
 def crossing_yaw(g: DoorGeom, side: int) -> float:
     """Yaw do mapa que encara o eixo de travessia na direção `side`."""
     return math.atan2(side * g.ny, side * g.nx)
+
+
+GAP_CORRIDOR_HALF_W = 0.28   # m — meia-largura do corredor vigiado (corpo+3cm)
+GAP_MAX_X = 0.80             # m — até onde olhar à frente
+
+
+def gap_ahead(ranges, angle_min: float, angle_increment: float,
+              pose: Tuple[float, float, float],
+              jambs: List[Tuple[float, float]], jamb_r: float) -> float:
+    """Distância (m) do obstáculo mais próximo no corredor à FRENTE do robô,
+    descontando os discos dos batentes marcados (em frame do MAPA). inf = livre.
+
+    Usado no CROSSING: pessoa/obstáculo no vão -> aborta; os batentes que o
+    usuário marcou não contam (são a parede da própria porta).
+    """
+    if angle_increment == 0.0:
+        return math.inf
+    r = np.asarray(ranges, dtype=np.float64)
+    if r.size == 0:
+        return math.inf
+    ok = np.isfinite(r) & (r > 0.0)
+    r = np.where(ok, r, 0.0)
+    a = angle_min + np.arange(r.size) * angle_increment
+    x = r * np.cos(a)
+    y = r * np.sin(a)
+    sel = ok & (x > 0.0) & (x <= GAP_MAX_X) & (np.abs(y) <= GAP_CORRIDOR_HALF_W)
+    if not sel.any():
+        return math.inf
+    if jambs:
+        px, py, pyaw = pose
+        c, s = math.cos(pyaw), math.sin(pyaw)
+        mx = px + x * c - y * s
+        my = py + x * s + y * c
+        for jx, jy in jambs:
+            sel &= ((mx - jx) ** 2 + (my - jy) ** 2) > jamb_r ** 2
+        if not sel.any():
+            return math.inf
+    return float(x[sel].min())

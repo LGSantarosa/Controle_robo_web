@@ -42,3 +42,42 @@ def test_door_geometry_diagonal():
     # n perpendicular a t, ambos unitários
     assert g.tx * g.nx + g.ty * g.ny == pytest.approx(0.0)
     assert math.hypot(g.nx, g.ny) == pytest.approx(1.0)
+
+
+from robot_nav.door_crossing import gap_ahead
+
+
+def _scan_one_point(x_robot, y_robot):
+    # constrói um scan de 8 feixes com UM ponto em (x,y) no frame do robô
+    a = math.atan2(y_robot, x_robot)
+    r = math.hypot(x_robot, y_robot)
+    angle_min, inc = -math.pi, math.pi / 4
+    ranges = [float('inf')] * 8
+    idx = int(round((a - angle_min) / inc)) % 8
+    ranges[idx] = r
+    return ranges, angle_min, inc
+
+
+def test_gap_ahead_sees_obstacle_in_corridor():
+    ranges, amin, ainc = _scan_one_point(0.5, 0.0)   # bem na frente
+    g = gap_ahead(ranges, amin, ainc, pose=(0.0, 0.0, 0.0),
+                  jambs=[], jamb_r=0.30)
+    assert g == pytest.approx(0.5, abs=0.15)  # discretização de 8 feixes
+
+
+def test_gap_ahead_ignores_lateral_and_behind():
+    for px, py in [(0.0, 1.0), (-0.5, 0.0), (0.5, 0.6)]:
+        ranges, amin, ainc = _scan_one_point(px, py)
+        g = gap_ahead(ranges, amin, ainc, pose=(0.0, 0.0, 0.0),
+                      jambs=[], jamb_r=0.30)
+        assert math.isinf(g)
+
+
+def test_gap_ahead_excludes_marked_jamb():
+    # ponto na frente, mas que em coordenadas do MAPA cai no disco do batente
+    ranges, amin, ainc = _scan_one_point(0.5, 0.0)
+    pose = (3.0, 4.0, 0.0)                      # robô no mapa
+    jamb = (3.5, 4.0)                            # batente exatamente ali
+    g = gap_ahead(ranges, amin, ainc, pose=pose,
+                  jambs=[jamb], jamb_r=0.30)
+    assert math.isinf(g)                         # batente não conta como vão
