@@ -46,7 +46,7 @@ MODE_RECORD = 'record'
 MODE_PLAY   = 'play'
 
 
-from .utils import quat_to_yaw as _quat_to_yaw, wrap_pi as _wrap_pi
+from .utils import quat_to_yaw as _quat_to_yaw, spin_node, wrap_pi as _wrap_pi
 from .cone_pose_fix import ConeFixConfirmer, cone_fix_delta, cone_bearing
 
 
@@ -631,7 +631,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = TrekkingRunner()
     try:
-        rclpy.spin(node)
+        spin_node(node)
     except KeyboardInterrupt:
         pass
     finally:

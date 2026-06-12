@@ -389,8 +389,10 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self.create_timer(1.0 / g["rate_hz"], self._tick)
             self.get_logger().info(
                 "unstuck_supervisor ativo (sem-deslocamento %.0fs -> ré %.2fm; "
-                "giro desativado)" % (
-                    self.cfg.stuck_timeout, self.cfg.reverse_distance))
+                "%dª vez no mesmo ponto -> ré + giro %.0f° pro lado livre)" % (
+                    self.cfg.stuck_timeout, self.cfg.reverse_distance,
+                    self.cfg.escalate_after,
+                    math.degrees(self.cfg.spin_angle)))
 
         def _on_odom(self, msg):
             self._position = (msg.pose.pose.position.x, msg.pose.pose.position.y)
@@ -446,10 +448,12 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 t.angular.z = cmd.ang
                 self.pub.publish(t)
 
+    from .utils import spin_node
+
     rclpy.init(args=args)
     node = UnstuckSupervisorNode()
     try:
-        rclpy.spin(node)
+        spin_node(node)
     except KeyboardInterrupt:
         pass
     finally:

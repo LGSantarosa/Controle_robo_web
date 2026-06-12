@@ -44,7 +44,7 @@ from std_msgs.msg import Float32, Float64, Float64MultiArray, String
 
 
 from .utils import quat_to_yaw as _quat_to_yaw  # noqa: F401
-from .utils import wrap_pi
+from .utils import spin_node, wrap_pi
 from .cone_pose_fix import apply_pose_fix
 
 
@@ -340,7 +340,13 @@ class PoseEstimator(Node):
         dt = (now - self.last_pub_time).nanoseconds / 1e9
         self.last_pub_time = now
         if dt <= 0.0 or dt > 0.5:
-            # Salto de tempo (drift do clock ou pausa). Não integra.
+            # Salto de tempo (drift do clock ou pausa). Não integra — e DRENA o
+            # acumulador do flow: o deslocamento da janela perdida re-integrado
+            # no próximo tick (dt≈0,02s) viraria velocidade ~25× a real
+            # (B2 da AUDITORIA_2026-06-11).
+            with self._lock:
+                self._flow_dx_accum = 0.0
+                self._flow_dy_accum = 0.0
             return
 
         with self._lock:
@@ -540,7 +546,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = PoseEstimator()
     try:
-        rclpy.spin(node)
+        spin_node(node)
     except KeyboardInterrupt:
         pass
     finally:

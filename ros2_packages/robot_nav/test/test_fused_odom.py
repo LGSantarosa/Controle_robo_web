@@ -112,6 +112,18 @@ def test_flow_tick_velocity_conserves_displacement_under_bursty_arrival():
     assert integrated_old == pytest.approx(2.0 * true_total)
 
 
+def test_time_jump_must_discard_accumulated_flow_displacement():
+    # Contrato do pose_estimator._tick (B2 da AUDITORIA_2026-06-11): num salto
+    # de tempo (dt <= 0 ou dt > 0.5) o tick NAO integra e DRENA o acumulador do
+    # flow. Sem o drain, o deslocamento da janela perdida re-integrado no tick
+    # normal seguinte (dt=0.02) vira velocidade ~25x a real:
+    vx, vy = flow_tick_velocity(0.5, 0.0, 0.02)   # 0.5 m presos no acumulador
+    assert vx == pytest.approx(25.0)              # 25 m/s fantasma
+    # Hoje o gate de EMI mascara (descarta a amostra = janela de flow perdida),
+    # mas e' o gate escondendo um bug aritmetico — por isso o drain no _tick.
+    assert not flow_plausible(vx, vy, v_max=0.8)
+
+
 def test_fuse_translation_alpha_zero_is_wheel_only():
     vx, vy = fuse_translation(vx_wheel=0.8, flow_vx=0.2, flow_vy=0.1, alpha=0.0)
     assert vx == pytest.approx(0.8)

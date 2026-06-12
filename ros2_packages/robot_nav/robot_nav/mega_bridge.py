@@ -41,6 +41,8 @@ from sensor_msgs.msg import BatteryState, Imu
 from std_msgs.msg import Bool, ColorRGBA, Float64MultiArray, String
 from wheel_msgs.msg import WheelSpeeds
 
+from .utils import spin_node
+
 START0 = 0xAA
 START1 = 0x55
 
@@ -476,7 +478,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = MegaBridge()
     try:
-        rclpy.spin(node)
+        spin_node(node)
     except KeyboardInterrupt:
         pass
     finally:

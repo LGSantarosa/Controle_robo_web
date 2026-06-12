@@ -26,7 +26,7 @@ from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 
-from .utils import quat_to_yaw as _quat_to_yaw
+from .utils import quat_to_yaw as _quat_to_yaw, spin_node
 
 
 class ConeDetector(Node):
@@ -186,7 +186,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = ConeDetector()
     try:
-        rclpy.spin(node)
+        spin_node(node)
     except KeyboardInterrupt:
         pass
     finally:

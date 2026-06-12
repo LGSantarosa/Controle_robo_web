@@ -27,6 +27,8 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from wheel_msgs.msg import WheelSpeeds
 
+from .utils import spin_node
+
 
 class CmdVelToWheels(Node):
 
@@ -96,7 +98,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = CmdVelToWheels()
     try:
-        rclpy.spin(node)
+        spin_node(node)
     except KeyboardInterrupt:
         pass
     finally:
