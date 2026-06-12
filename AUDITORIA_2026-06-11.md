@@ -339,9 +339,14 @@ GC da Pi agradece. Só aplicar se passar perto; não justifica commit próprio.
 2. [x] P1 (EventsExecutor + helper em utils.py) + B2 + B3 no mesmo build.
 3. [x] `pytest` (61 robot_nav + 15 controle_web) verde no dev via PYTHONPATH
    (L3 resolvido: install/ rebuiltado + nota no README).
-4. [ ] Deploy Pi: `git fetch && git reset --hard origin/main` + `colcon build
-   --packages-select robot_nav` (**COLCON, sempre** — lição de 976a2b2).
-5. [ ] Robô LIGADO: medir CPU por-thread (método 2026-06-09), `topic hz /odom`
-   e `/hoverboard/wheel_velocities` (50 Hz — P4 mudou QoS!), chip de tensão
-   vivo na UI, smoke teleop. Anotar números no handoff.
+4. [x] Deploy Pi 2026-06-12: reset --hard pra `18723bd` + COLCON OK; smoke na
+   Pi (EventsExecutor importa, 61 testes verdes na própria Pi); executável
+   órfão do odom_publisher removido do install/ (colcon não limpa sozinho).
+5. [x] **VALIDADO no robô 2026-06-12 (teleop):** CPU por-thread em janela de
+   60 s — pose_estimator **62% → 42,7%** (main 40,1% + DDS 1,6%; −19 pts),
+   mega_bridge **29,5% → 11,6%** (−18 pts), loadavg 1,45/4 cores.
+   `/odom` 49,9 Hz e `/hoverboard/wheel_velocities` 51 Hz (P4 sem silêncio);
+   power_monitor recebendo rodas com o QoS novo (CSV 10 Hz, 42,2/41,6 V,
+   meas_* preenchidos dirigindo). PENDENTE só o log de boot do unstuck (B3),
+   que exige modo nav2 — conferir na próxima sessão de nav2.
 6. [x] P2/P3/P4 aplicados (mesma leva); validação de campo é o item 5.
