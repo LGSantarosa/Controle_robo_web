@@ -212,9 +212,24 @@ class UnstuckSupervisor:
                position: Tuple[float, float], rear_gap: float = math.inf,
                front_gap: float = math.inf,
                goal_active: Optional[bool] = None,
-               open_side: int = 1, yaw: float = 0.0) -> Command:
+               open_side: int = 1, yaw: float = 0.0,
+               door_active: bool = False) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
+        if door_active:
+            # STANDDOWN: o door_crossing está conduzindo a travessia (door_vel,
+            # prio 20 no twist_mux). O unstuck (prio 30) SOBREPÕE e sabotava a
+            # manobra — revertia/girava o robô pra fora do ponto de alinhamento,
+            # então o door_crossing nunca fechava |lat|<8cm/|yaw|<5° dentro do
+            # align_timeout e abortava em loop (campo 2026-06-15: "5 min na
+            # porta", door_crossing staging->idle de 15 em 15s). Enquanto a porta
+            # está ativa o unstuck fica quieto E não acumula tempo de "travado"
+            # (re-ancora). Se a travessia genuinamente travar, o PRÓPRIO
+            # door_crossing aborta (vão/timeout) -> door_active cai -> o unstuck
+            # volta a poder agir.
+            self.state = _MONITORING
+            self.anchor = None
+            return _IDLE
         if self.state == _MONITORING:
             return self._monitoring(now, position, rear_gap, front_gap,
                                     goal_active, open_side)
@@ -368,13 +383,17 @@ class UnstuckSupervisor:
 # ---- nó ROS (cola de I/O) --------------------------------------------------
 
 def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
+    import json
+
     import rclpy
     from rclpy.node import Node
-    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+    from rclpy.qos import (QoSProfile, ReliabilityPolicy, HistoryPolicy,
+                           QoSDurabilityPolicy)
     from action_msgs.msg import GoalStatusArray
     from geometry_msgs.msg import Twist
     from nav_msgs.msg import Odometry
     from sensor_msgs.msg import LaserScan
+    from std_msgs.msg import String
     try:
         from nav2_msgs.msg import CollisionMonitorState
     except ImportError:
@@ -467,15 +486,27 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._scan_t = None  # quando o último /scan chegou
             self._goal_active = {}  # por tópico de status; None até a 1ª msg
             self._stop_active = False  # só pra log
+            self._door_active = False  # door_crossing conduzindo? -> standdown
             self._last_state = self.sup.state
 
             be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
                             history=HistoryPolicy.KEEP_LAST)
+            # /door_zone é latched (door_crossing publica TRANSIENT_LOCAL): casa
+            # a QoS pra pegar o estado atual já no boot.
+            latched = QoSProfile(
+                depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST)
 
             self.pub = self.create_publisher(Twist, "unstuck_vel", 10)
             self.create_subscription(Odometry, "odom", self._on_odom, 10)
             self.create_subscription(Twist, "nav_vel_raw", self._on_nav_raw, 10)
             self.create_subscription(LaserScan, "scan", self._on_scan, be)
+            # Standdown durante a travessia de porta: enquanto o door_crossing
+            # está staging/rotating/crossing, o unstuck fica quieto (senão a ré
+            # prio 30 sabota a manobra prio 20 e a porta nunca fecha).
+            self.create_subscription(
+                String, "door_zone", self._on_door_zone, latched)
             # Status dos goals do bt_navigator: gate AUTORITATIVO (mata a
             # "ré póstuma" após cancel e cobre o BT em recovery c/ controller
             # mudo). Sem msg ainda -> cai no fallback por nav_latch.
@@ -530,6 +561,13 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
         def _on_collision(self, msg):
             self._stop_active = (getattr(msg, "action_type", 0) == STOP_ACTION)
 
+        def _on_door_zone(self, msg):
+            try:
+                st = json.loads(msg.data).get("state", "idle")
+            except (ValueError, AttributeError):
+                st = "idle"
+            self._door_active = st in ("staging", "rotating", "crossing")
+
         def _tick(self):
             now = time.monotonic()
             # scan velho (LiDAR caiu?) -> trata traseira como BLOQUEADA
@@ -546,7 +584,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 now, nav_wants_move=self._nav_wants_move,
                 position=self._position, rear_gap=gap, front_gap=front_gap,
                 goal_active=goal_active, open_side=self._open_side,
-                yaw=self._yaw)
+                yaw=self._yaw, door_active=self._door_active)
             if self.sup.state != self._last_state:
                 self.get_logger().warn(
                     "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s vao_re=%.2f)" % (

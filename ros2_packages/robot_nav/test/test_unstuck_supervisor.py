@@ -159,6 +159,31 @@ def test_reverses_after_timeout_when_not_displacing():
     assert cmd.ang == pytest.approx(0.0)
 
 
+def test_door_active_suppresses_maneuver():
+    # door_crossing (door_vel, prio 20) está conduzindo a travessia; o unstuck
+    # (unstuck_vel, prio 30) SOBREPÕE e sabotava a manobra -> door_crossing
+    # nunca alinhava e abortava em loop ("5 min na porta", campo 2026-06-15).
+    # Com door_active a manobra fica SUPRIMIDA mesmo travado além do timeout.
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0)
+    cmd = sup.update(10.1, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, front_gap=math.inf, door_active=True)
+    assert cmd.active is False
+
+
+def test_unstuck_acts_again_after_door_clears():
+    # quando a porta sai (door_crossing solta/aborta), o unstuck re-ancora e
+    # volta a poder agir se continuar travado.
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0)
+    sup.update(10.1, nav_wants_move=True, position=(0.0, 0.0), door_active=True)
+    sup.update(10.2, nav_wants_move=True, position=(0.0, 0.0), door_active=False)
+    cmd = sup.update(20.4, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, front_gap=math.inf, door_active=False)
+    assert cmd.active is True
+    assert cmd.lin == pytest.approx(-0.25)
+
+
 def test_never_spins():
     # GIRO REMOVIDO (decisão 2026-06-10): a manobra é SEMPRE ré, nunca angular.
     sup = UnstuckSupervisor(_cfg())
