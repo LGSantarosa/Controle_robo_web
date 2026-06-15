@@ -92,14 +92,15 @@ controller_server:
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: false
-      # Permite ré pequena (-0.1 m/s) em navegação normal pra DWB ter como
-      # opção em manobra apertada. Antes era 0.0 — só dava ré via BackUp
-      # recovery, que só dispara após ~15 s de "travado" pelo progress
-      # checker. Resultado: robô parava 15 s antes de fazer uma manobra
-      # que precisaria de 1–2 s de ré pra ajeitar. Os critics PathAlign/
-      # GoalAlign continuam preferindo frente em campo aberto, então a ré
-      # só é escolhida quando realmente é a melhor opção.
-      min_vel_x: -0.1
+      # 2026-06-15: REVERTIDO -0.1 -> 0.0. A ré em navegação normal (latente
+      # desde que o approach do collision_monitor destravou o robô na porta)
+      # fazia o DWB pontuar uma trajetória de RÉ melhor que a de frente na
+      # porta apertada -> o robô ATRAVESSAVA A PORTA DE COSTAS, e como ré
+      # mantém nav_forward=False o door_crossing nunca armava (ciclo vicioso).
+      # 0.0 = DWB encara a porta de nariz e o door_crossing assume a travessia
+      # fina. A ré de DESENCALHE não some: vive no unstuck_supervisor (canal
+      # unstuck_vel, prio 30) e no BackUp recovery — nenhum usa min_vel_x.
+      min_vel_x: 0.0
       max_vel_x: 0.35
       min_vel_y: 0.0
       max_vel_y: 0.0
@@ -279,8 +280,10 @@ velocity_smoother:
     scale_velocities: false
     feedback: "OPEN_LOOP"
     max_velocity: [0.35, 0.0, 0.8]
-    # Ré alinhada com o DWB (min_vel_x: -0.1) — antes -0.15 deixava o smoother
-    # permitir mais ré do que o planejador sabe gerar.
+    # Smoother fica PERMISSIVO em -0.1 de propósito: o DWB virou min_vel_x: 0.0
+    # (não atravessa porta de costas), mas o BackUp recovery, se rotear por aqui,
+    # ainda precisa da folga de ré. O smoother não INVENTA ré — só passa o que o
+    # DWB gera (0..0.35); o -0.1 é só headroom pro recovery.
     min_velocity: [-0.1, 0.0, -0.8]
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0

@@ -143,7 +143,15 @@ controller_server:
       closed_loop: false
       # ---- DWBLocalPlanner (primary_controller, params herdados deste bloco) ----
       debug_trajectory_details: false
-      min_vel_x: -0.1
+      # 2026-06-15: REVERTIDO -0.1 -> 0.0. A ré em navegação normal (latente
+      # desde que o approach do collision_monitor destravou o robô na porta)
+      # fazia o DWB pontuar uma trajetória de RÉ melhor que a de frente na porta
+      # apertada -> o robô ATRAVESSAVA A PORTA DE COSTAS, e como ré mantém
+      # nav_forward=False o door_crossing nunca armava (ciclo vicioso). 0.0 = DWB
+      # encara a porta de nariz e o door_crossing assume a travessia fina. A ré
+      # de DESENCALHE não some: unstuck_supervisor (canal unstuck_vel, prio 30) +
+      # BackUp recovery — nenhum usa min_vel_x.
+      min_vel_x: 0.0
       # 2026-06-08: revertido 0.25 → 0.35 (estava medroso/devagar). A segurança
       # agora fica só no collision_monitor enfraquecido (reflexo de última hora),
       # não em cortar velocidade no controlador.
@@ -375,8 +383,10 @@ velocity_smoother:
     # 2026-06-08: linear revertido 0.25 → 0.35 (casa com DWB max_vel_x; estava
     # medroso). Angular 6.0 (necessário p/ vencer a patinagem do giro).
     max_velocity: [0.35, 0.0, 6.0]
-    # Ré alinhada com o DWB (min_vel_x: -0.1) — antes -0.15 deixava o smoother
-    # permitir mais ré do que o planejador sabe gerar.
+    # Smoother fica PERMISSIVO em -0.1 de propósito: o DWB virou min_vel_x: 0.0
+    # (não atravessa porta de costas), mas o BackUp recovery, se rotear por aqui,
+    # ainda precisa da folga de ré. O smoother não INVENTA ré — só passa o que o
+    # DWB gera (0..0.35); o -0.1 é só headroom pro recovery.
     min_velocity: [-0.1, 0.0, -6.0]
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
