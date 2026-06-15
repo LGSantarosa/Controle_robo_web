@@ -80,6 +80,35 @@ def rear_min_gap(ranges, angle_min: float, angle_increment: float,
     return float((tail_x - x[sel]).min())
 
 
+def front_min_gap(ranges, angle_min: float, angle_increment: float,
+                  lidar_x: float, head_x: float, half_width: float) -> float:
+    """Espelho dianteiro do `rear_min_gap`: menor vão livre (m) entre o
+    PARA-CHOQUE dianteiro (head_x) e o que o /scan vê no corredor retangular
+    que o corpo varre AVANÇANDO. inf = nada na frente.
+
+    Usado pelo escape pra frente (pedido 2026-06-15): quando a traseira está
+    bloqueada, o robô avança em vez de travar. Como o canal `unstuck_vel` fura
+    o collision monitor, esta checagem é o "respeitar o collision" do avanço —
+    mede na MESMA /scan e nunca deixa avançar em cima de obstáculo. Cada ponto
+    vira (x,y) em base_link e conta se cai no retângulo à frente do robô:
+    x > head_x, |y| <= half_width.
+    """
+    if angle_increment == 0.0:
+        return math.inf
+    r = np.asarray(ranges, dtype=np.float64)
+    if r.size == 0:
+        return math.inf
+    ok = np.isfinite(r) & (r > 0.0)
+    r = np.where(ok, r, 0.0)
+    a = angle_min + np.arange(r.size) * angle_increment
+    x = lidar_x + r * np.cos(a)
+    y = r * np.sin(a)
+    sel = ok & (x > head_x) & (np.abs(y) <= half_width)
+    if not sel.any():
+        return math.inf
+    return float((x[sel] - head_x).min())
+
+
 def freer_side(ranges, angle_min: float, angle_increment: float) -> int:
     """+1 se o setor frontal ESQUERDO (20°..90°) tem mais espaço, -1 se o direito.
 
@@ -131,6 +160,18 @@ class UnstuckConfig:
     # na hora se o vão cair abaixo da margem durante a manobra.
     rear_stop_margin: float = 0.10  # nunca chega a menos disso do obstáculo
     reverse_min: float = 0.10       # vão útil mínimo pra valer a pena dar ré
+    # Escape PRA FRENTE (pedido 2026-06-15: "se o obstáculo é atrás, para e
+    # ajusta pra frente"). Antes a manobra era SÓ ré -> com obstáculo atrás o
+    # robô travava (recusava a ré e não tinha plano B). Agora: traseira sem vão
+    # útil + frente livre -> avança. Conservador de propósito (a frente é onde
+    # ele atropelou alguém em 06-08): mais devagar e mais curto que a ré, e
+    # gated pelo front_min_gap (aborta se a frente fechar). A ré segue PREFERIDA
+    # quando há vão atrás (caso comum: obstáculo na frente -> recua).
+    forward_distance: float = 0.20  # avanço mais curto que a ré (0.30)
+    forward_speed: float = 0.15     # mais devagar que a ré (0.25)
+    forward_time_cap: float = 6.0
+    front_stop_margin: float = 0.10  # nunca chega a menos disso do obstáculo à frente
+    forward_min: float = 0.10        # vão frontal mínimo pra valer o avanço
 
 
 class Command(NamedTuple):
@@ -144,6 +185,7 @@ _IDLE = Command(0.0, 0.0, False)
 # estados
 _MONITORING = "monitoring"
 _REVERSING = "reversing"
+_ADVANCING = "advancing"
 _SPINNING = "spinning"
 _GRACE = "grace"
 
@@ -157,6 +199,7 @@ class UnstuckSupervisor:
     maneuver_start_t: float = 0.0
     maneuver_start_pos: Tuple[float, float] = (0.0, 0.0)
     reverse_target: float = 0.0    # quanto recuar NESTA manobra (<= reverse_distance)
+    forward_target: float = 0.0    # quanto avançar NESTA manobra (<= forward_distance)
     grace_start: float = 0.0
     last_nav_t: Optional[float] = None
     escalated: bool = False    # esta manobra termina em giro forte?
@@ -167,15 +210,18 @@ class UnstuckSupervisor:
 
     def update(self, now: float, *, nav_wants_move: bool,
                position: Tuple[float, float], rear_gap: float = math.inf,
+               front_gap: float = math.inf,
                goal_active: Optional[bool] = None,
                open_side: int = 1, yaw: float = 0.0) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
         if self.state == _MONITORING:
-            return self._monitoring(now, position, rear_gap, goal_active,
-                                    open_side)
+            return self._monitoring(now, position, rear_gap, front_gap,
+                                    goal_active, open_side)
         if self.state == _REVERSING:
             return self._reversing(now, position, yaw, rear_gap)
+        if self.state == _ADVANCING:
+            return self._advancing(now, position, front_gap)
         if self.state == _SPINNING:
             return self._spinning(now, yaw)
         if self.state == _GRACE:
@@ -184,7 +230,7 @@ class UnstuckSupervisor:
 
     # -- estados --
 
-    def _monitoring(self, now, position, rear_gap, goal_active,
+    def _monitoring(self, now, position, rear_gap, front_gap, goal_active,
                     open_side) -> Command:
         if goal_active is not None:
             # status do action server do nav2 disponível: é AUTORITATIVO.
@@ -209,15 +255,25 @@ class UnstuckSupervisor:
             return _IDLE
         if now - self.anchor_t < self.cfg.stuck_timeout:
             return _IDLE
-        # Quanto dá pra recuar SEM bater: o vão medido menos a margem. Vão
-        # apertado vira ré PARCIAL (encurralado recua o que dá); sem vão
-        # útil, segura e re-tenta no próximo tick (dispara quando liberar).
-        target = min(self.cfg.reverse_distance,
-                     rear_gap - self.cfg.rear_stop_margin)
-        if target < self.cfg.reverse_min:
-            return _IDLE
+        # Escolha de DIREÇÃO pelo vão de cada lado. Ré é PREFERIDA quando há
+        # vão atrás (caso comum: obstáculo na frente -> recua). Sem vão útil
+        # atrás mas com frente livre -> AVANÇA (pedido 2026-06-15: obstáculo
+        # atrás não pode mais travar o robô). Encurralado dos dois lados ->
+        # segura e re-tenta (dispara quando algum lado liberar).
+        rear_target = min(self.cfg.reverse_distance,
+                          rear_gap - self.cfg.rear_stop_margin)
+        if rear_target >= self.cfg.reverse_min:
+            return self._begin_reverse(now, position, open_side, rear_target)
+        forward_target = min(self.cfg.forward_distance,
+                             front_gap - self.cfg.front_stop_margin)
+        if forward_target >= self.cfg.forward_min:
+            return self._begin_advance(now, position, forward_target)
+        return _IDLE
+
+    def _begin_reverse(self, now, position, open_side, target) -> Command:
         # escalada: conta travamentos recentes perto DESTE ponto; na 3ª
-        # tentativa no mesmo lugar a ré reta não resolveu -> ré + GIRO FORTE
+        # tentativa no mesmo lugar a ré reta não resolveu -> ré + GIRO FORTE.
+        # A escalada vive só na ré (o avanço é o plano B simples).
         self.history = [(t, p) for (t, p) in self.history
                         if now - t <= self.cfg.escalate_window]
         self.history.append((now, position))
@@ -231,6 +287,13 @@ class UnstuckSupervisor:
         self.maneuver_start_pos = position
         self.reverse_target = target
         return Command(-self.cfg.reverse_speed, 0.0, True)
+
+    def _begin_advance(self, now, position, target) -> Command:
+        self.state = _ADVANCING
+        self.maneuver_start_t = now
+        self.maneuver_start_pos = position
+        self.forward_target = target
+        return Command(self.cfg.forward_speed, 0.0, True)
 
     def _spin_cmd(self) -> Command:
         speed = self.cfg.spin_speed
@@ -263,6 +326,22 @@ class UnstuckSupervisor:
             # de novo (que pode estar mudo, abortado/replanejando).
             return Command(0.0, 0.0, True)
         return Command(-self.cfg.reverse_speed, 0.0, True)
+
+    def _advancing(self, now, position, front_gap) -> Command:
+        if front_gap <= self.cfg.front_stop_margin:
+            # algo entrou/apareceu na FRENTE durante o avanço -> STOP imediato.
+            # É o "respeitar o collision" do escape: nunca avança em cima de
+            # obstáculo (o canal unstuck_vel fura o collision monitor real).
+            self.state = _GRACE
+            self.grace_start = now
+            return Command(0.0, 0.0, True)
+        dist = self._dist(position, self.maneuver_start_pos)
+        if (dist >= self.forward_target
+                or now - self.maneuver_start_t >= self.cfg.forward_time_cap):
+            self.state = _GRACE
+            self.grace_start = now
+            return Command(0.0, 0.0, True)  # STOP explícito (mesmo motivo da ré)
+        return Command(self.cfg.forward_speed, 0.0, True)
 
     def _spinning(self, now, yaw) -> Command:
         # MALHA FECHADA: para pelo yaw MEDIDO, não por tempo — roda patinando
@@ -332,6 +411,14 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("rear_half_width", 0.30),
                 ("rear_stop_margin", 0.10),
                 ("reverse_min", 0.10),
+                # Escape pra frente (obstáculo atrás): para-choque dianteiro
+                # em head_x=+0.25; corredor com a MESMA largura da ré.
+                ("front_head_x", 0.25),
+                ("forward_distance", 0.20),
+                ("forward_speed", 0.15),
+                ("forward_time_cap", 6.0),
+                ("front_stop_margin", 0.10),
+                ("forward_min", 0.10),
                 ("scan_stale", 2.0),
                 ("nav_move_lin", 0.01),
                 ("nav_move_ang", 0.05),
@@ -355,10 +442,16 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 spin_left_boost=g["spin_left_boost"],
                 rear_stop_margin=g["rear_stop_margin"],
                 reverse_min=g["reverse_min"],
+                forward_distance=g["forward_distance"],
+                forward_speed=g["forward_speed"],
+                forward_time_cap=g["forward_time_cap"],
+                front_stop_margin=g["front_stop_margin"],
+                forward_min=g["forward_min"],
             )
             self.rear_lidar_x = g["rear_lidar_x"]
             self.rear_tail_x = g["rear_tail_x"]
             self.rear_half_width = g["rear_half_width"]
+            self.front_head_x = g["front_head_x"]
             self.scan_stale = g["scan_stale"]
             self.nav_move_lin = g["nav_move_lin"]
             self.nav_move_ang = g["nav_move_ang"]
@@ -369,6 +462,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._position = (0.0, 0.0)
             self._yaw = 0.0
             self._rear_gap = math.inf
+            self._front_gap = math.inf
             self._open_side = 1  # +1 esq / -1 dir (lado mais livre na frente)
             self._scan_t = None  # quando o último /scan chegou
             self._goal_active = {}  # por tópico de status; None até a 1ª msg
@@ -397,10 +491,11 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
 
             self.create_timer(1.0 / g["rate_hz"], self._tick)
             self.get_logger().info(
-                "unstuck_supervisor ativo (sem-deslocamento %.0fs -> ré %.2fm; "
+                "unstuck_supervisor ativo (sem-deslocamento %.0fs -> ré %.2fm "
+                "se há vão atrás, senão AVANÇA %.2fm se a frente livre; "
                 "%dª vez no mesmo ponto -> ré + giro %.0f° pro lado livre)" % (
                     self.cfg.stuck_timeout, self.cfg.reverse_distance,
-                    self.cfg.escalate_after,
+                    self.cfg.forward_distance, self.cfg.escalate_after,
                     math.degrees(self.cfg.spin_angle)))
 
         def _on_odom(self, msg):
@@ -422,6 +517,9 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._rear_gap = rear_min_gap(
                 ranges, msg.angle_min, msg.angle_increment,
                 self.rear_lidar_x, self.rear_tail_x, self.rear_half_width)
+            self._front_gap = front_min_gap(
+                ranges, msg.angle_min, msg.angle_increment,
+                self.rear_lidar_x, self.front_head_x, self.rear_half_width)
             self._open_side = freer_side(
                 ranges, msg.angle_min, msg.angle_increment)
 
@@ -439,12 +537,14 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             scan_fresh = (self._scan_t is not None
                           and now - self._scan_t <= self.scan_stale)
             gap = self._rear_gap if scan_fresh else 0.0
+            # scan velho -> frente também BLOQUEADA (não avança cego, igual à ré)
+            front_gap = self._front_gap if scan_fresh else 0.0
             # status visto em algum tópico? OR entre eles; nunca visto -> None
             goal_active = (any(self._goal_active.values())
                            if self._goal_active else None)
             cmd = self.sup.update(
                 now, nav_wants_move=self._nav_wants_move,
-                position=self._position, rear_gap=gap,
+                position=self._position, rear_gap=gap, front_gap=front_gap,
                 goal_active=goal_active, open_side=self._open_side,
                 yaw=self._yaw)
             if self.sup.state != self._last_state:
