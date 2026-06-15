@@ -86,7 +86,11 @@ def test_gap_ahead_excludes_marked_jamb():
 from robot_nav.door_crossing import DoorCrossing, DoorCrossConfig
 
 DOOR = {'id': 1, 'a': [1.0, 2.0], 'b': [2.0, 2.0]}   # parede em x, vão 1.0 m
-CFG = DoorCrossConfig()
+# Config FIXA do teste (independente da afinação de produção, que muda em campo:
+# stage_dist/zone_radius/align_timeout foram retunados 2026-06-15). Estes testes
+# verificam a MÁQUINA DE ESTADOS, não os números de campo.
+CFG = DoorCrossConfig(zone_radius=1.2, stage_dist=0.6, align_timeout=15.0,
+                      total_timeout=40.0)
 
 
 def mk():
