@@ -171,7 +171,13 @@ def generate_launch_description():
                 'rear_lidar_x': 0.0,
                 'rear_tail_x': -0.25,
                 'rear_half_width': 0.30,
-                'rear_stop_margin': 0.10,
+                # 2026-06-15: 0.10 -> 0.20. Bateu numa lata de lixo dando ré:
+                # lê vão 0.20m, recua e PARA em 0.08m -> com lata afunilada (o
+                # LiDAR pega o topo, a base é mais perto) + overshoot a 0.25 m/s,
+                # 8cm "no papel" = encostado. Com 0.20: algo a 20cm -> target=0
+                # -> NÃO dá ré (pedido do usuário "não recuar 30cm se há algo a
+                # 20cm"); só recua com folga real (>=0.30) parando 20cm antes.
+                'rear_stop_margin': 0.20,
                 'reverse_min': 0.10,
                 'scan_stale': 2.0,
                 'nav_move_lin': 0.01,
