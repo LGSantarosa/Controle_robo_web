@@ -111,28 +111,27 @@ def gap_ahead(ranges, angle_min: float, angle_increment: float,
 
 @dataclass
 class DoorCrossConfig:
-    # 2026-06-15: 1.2 -> 1.6. Arma mais cedo pra conseguir recuar até o staging
-    # mais afastado (stage_dist abaixo) e ter espaço pro giro porco do skid.
-    zone_radius: float = 1.6        # m — distância do centro que arma a manobra
+    zone_radius: float = 1.2        # m — distância do centro que arma a manobra
     approach_bearing: float = math.radians(70)  # porta tem que estar "na frente"
-    # 2026-06-15: 0.6 -> 1.0. O usuário pediu GIRAR mais longe da porta: o giro
-    # no lugar do skid-steer (pior pra esquerda) DESLOCA o robô, e perto da porta
-    # esse arrasto leva o footprint pro batente/parede -> collision grita. Mais
-    # afastado = mais folga pro giro. Knob de campo (subir se ainda raspar).
-    stage_dist: float = 1.0         # m — ponto de preparação antes do centro
+    # 2026-06-15: experimento "girar mais longe" (0.6 -> 1.0) REVERTIDO pra 0.6.
+    # Com 1.0 o ponto de staging caía num ângulo que exigia GIRAR NO LUGAR pra
+    # encarar (|err|>=60° -> vx=0). E giro no lugar fraco (~2.2 rad/s) o
+    # skid-steer NÃO executa (patina; precisa ~6.0) -> robô travava "tentando
+    # virar". Com 0.6 ele vai DIRIGINDO até o ponto (quebra o atrito andando) e
+    # funciona — era o validado em campo 06-12 (atravessou a porta).
+    stage_dist: float = 0.6         # m — ponto de preparação antes do centro
     stage_tol: float = 0.10         # m — chegou no staging
     stage_speed: float = 0.12       # m/s — aproximação mansa
     stage_k_heading: float = 1.8    # ganho P do heading no staging
     align_lat: float = 0.08         # m — |offset lateral| máximo pra "tô no eixo"
     align_yaw: float = math.radians(5.0)   # rad — |erro de yaw| máximo
     align_stable: int = 5           # ticks consecutivos dentro da tolerância
-    # 2026-06-15: 15 -> 600 ("NÃO desistir"). O usuário não quer que o robô PARE
-    # de tentar atravessar — antes ele abortava a cada 15s e largava pro nav2
-    # (que voltava a fazer arco). Agora o door_crossing fica comprometido e
-    # insiste. Os aborts de SEGURANÇA (pose perdida, scan velho, vão fechou =
-    # pessoa na porta, goal cancelado) seguem ATIVOS — só o "desistir por tempo"
-    # foi removido na prática. Parar = cancelar o goal.
-    align_timeout: float = 600.0    # s — STAGING+ROTATING juntos (~sem desistência)
+    # 2026-06-15: experimento 15 -> 600 REVERTIDO pra 15. O 600 não fazia o robô
+    # "tentar mais" — transformava um STALL (ver stage_dist) num FREEZE de 10
+    # min. O "não desistir do ponto" real era o timeout do MapBridge web (120 ->
+    # 3600), já resolvido. Aqui 15s é a rede de segurança: se não alinhar,
+    # aborta e devolve pro nav2 em vez de congelar.
+    align_timeout: float = 15.0     # s — STAGING+ROTATING juntos
     rot_speed: float = 3.0          # rad/s — giro no lugar (vence atrito; unstuck)
     cross_speed: float = 0.15       # m/s — travessia
     cross_k_lat: float = 1.5        # corrige offset lateral durante a travessia
@@ -140,7 +139,7 @@ class DoorCrossConfig:
     cross_wz_max: float = 0.8       # rad/s — teto da micro-correção (NÃO girar)
     gap_min: float = 0.45           # m — vão mínimo à frente pra seguir
     exit_margin: float = 0.5        # m — além do centro pra soltar
-    total_timeout: float = 600.0    # s — manobra inteira (~sem desistência, idem align_timeout)
+    total_timeout: float = 40.0     # s — manobra inteira (revertido de 600; ver align_timeout)
     retrigger_cooldown: float = 3.0  # s — após abort, não rearmar na hora
 
 
@@ -308,11 +307,12 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             super().__init__('door_crossing')
             g = {}
             for name, default in (
-                # 2026-06-15: zone_radius 1.2->1.6, stage_dist 0.6->1.0 (girar
-                # mais longe da porta), align_timeout 15->600 (não desistir).
-                ('zone_radius', 1.6), ('stage_dist', 1.0),
+                # 2026-06-15: REVERTIDO pros valores de 06-12 (validados: o robô
+                # atravessou a porta). O experimento stage_dist 1.0 + timeout 600
+                # travava o robô girando fraco no lugar. Ver DoorCrossConfig.
+                ('zone_radius', 1.2), ('stage_dist', 0.6),
                 ('align_lat', 0.08), ('align_yaw_deg', 5.0),
-                ('align_timeout', 600.0), ('rot_speed', 3.0),
+                ('align_timeout', 15.0), ('rot_speed', 3.0),
                 ('cross_speed', 0.15), ('gap_min', 0.45),
                 ('exit_margin', 0.5), ('rate_hz', 20.0),
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
