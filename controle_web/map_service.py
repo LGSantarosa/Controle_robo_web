@@ -581,7 +581,10 @@ class MapBridge:
 
     def _wp_runner(self):
         total        = len(self._wp_list)
-        TIMEOUT      = 120.0  # rede de segurança — Nav2 já tem progress_checker
+        TIMEOUT      = 3600.0  # 2026-06-15: 120->3600 (~não cancela). Era ISTO que
+                               # cancelava o goal no meio da travessia ("CANCELED
+                               # em 120.4s"). O usuário não quer que o robô desista
+                               # do ponto; parar = cancelar pela UI.
         MAX_RETRIES  = 2      # tentativas extras quando o Nav2 aborta
 
         def _send(i: int):
