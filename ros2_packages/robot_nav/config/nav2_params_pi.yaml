@@ -429,7 +429,14 @@ collision_monitor:
     # cai pra 30% da velocidade -> aproximação mansa, mais tempo de reagir.
     PolygonSlow:
       type: "polygon"
-      points: "[[0.65, 0.45], [0.65, -0.45], [-0.45, -0.45], [-0.45, 0.45]]"
+      # 2026-06-15: lateral ±0.45 -> ±0.32. A ±0.45 pegava as paredes do
+      # corredor o tempo todo -> robô preso em 30% da velocidade em quase todo
+      # lugar ("tosco/arrastando", 29 slowdowns no log de campo). Encolhido SÓ o
+      # lateral (±0.32 = 7cm além do corpo ±0.25); FRENTE (0.65) e trás (-0.45)
+      # intactos -> proteção frontal preservada (atropelamento de 06-08 foi
+      # FRONTAL; quem vem na frente ainda desacelera). Parede do lado para de
+      # forçar crawl.
+      points: "[[0.65, 0.32], [0.65, -0.32], [-0.45, -0.32], [-0.45, 0.32]]"
       action_type: "slowdown"
       slowdown_ratio: 0.3
       # min_points BAIXO (2) de propósito: perna fina de cadeira a ~1 m devolve
