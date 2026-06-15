@@ -68,10 +68,22 @@ planner_server:
   ros__parameters:
     use_sim_time: false
     planner_plugins: ["GridBased"]
+    # 2026-06-15: NavFn -> ThetaStar. Pedido: "FAZ O NAV2 DAR LINHAS RETAS".
+    # NavFn faz caminho por gradiente (curvo); o ThetaStar é any-angle com
+    # line-of-sight -> gera SEGMENTOS RETOS entre poucos cantos. Com o
+    # RotationShim o robô gira no canto e segue reto = "reta -> gira -> reta".
+    # Rollback: voltar plugin pra nav2_navfn_planner::NavfnPlanner + tolerance
+    # 0.30 + use_astar true.
     GridBased:
-      plugin: "nav2_navfn_planner::NavfnPlanner"
-      tolerance: 0.30
-      use_astar: true
+      plugin: "nav2_theta_star_planner::ThetaStarPlanner"
+      how_many_corners: 8
+      # w_traversal_cost ALTO = evita células de custo alto (perto da parede) =
+      # cola no MEIO do corredor, longe da parede. Casa com a centralização da
+      # inflação (cost_scaling 2.0). Subir se ainda passar perto da parede.
+      w_traversal_cost: 5.0
+      w_euc_cost: 1.0
+      w_heuristic_cost: 1.0
+      use_final_approach_orientation: false
       allow_unknown: true
 
 controller_server:
