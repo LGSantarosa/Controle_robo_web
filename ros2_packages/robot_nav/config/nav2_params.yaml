@@ -318,10 +318,17 @@ collision_monitor:
       visualize: True
       polygon_pub_topic: "polygon_slowdown"
       enabled: True
+    # 2026-06-15: PolygonStop estática -> "approach" (velocity-aware). Espelha o
+    # nav2_params_pi.yaml (ver lá o comentário longo). Caixa fixa congelava ao
+    # manobrar em sala estreita; approach projeta o footprint pela velocidade
+    # comandada e só freia se a trajetória REAL colidir. Rollback: action_type
+    # "stop" + points "[[0.37,0.32],[0.37,-0.32],[-0.35,-0.32],[-0.35,0.32]]".
     PolygonStop:
       type: "polygon"
-      points: "[[0.37, 0.32], [0.37, -0.32], [-0.35, -0.32], [-0.35, 0.32]]"
-      action_type: "stop"
+      points: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
+      action_type: "approach"
+      time_before_collision: 1.5
+      simulation_time_step: 0.1
       min_points: 2
       visualize: True
       polygon_pub_topic: "polygon_stop"

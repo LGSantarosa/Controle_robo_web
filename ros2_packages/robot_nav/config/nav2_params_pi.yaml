@@ -429,22 +429,34 @@ collision_monitor:
       visualize: True
       polygon_pub_topic: "polygon_slowdown"
       enabled: True
-    # Zona de PARADA: ~12 cm além da borda do robô (footprint ±0.25). Qualquer
-    # coisa aqui -> para. Margem antes do contato real.
+    # Zona de PARADA — AGORA "approach" (velocity-aware), não mais caixa fixa.
+    # 2026-06-15: em sala estreita a caixa estática ±0.30 lateral CONGELAVA o robô
+    # ao manobrar — ela não gira junto com o robô, então pegava as paredes que o
+    # footprint REAL (girando) limparia ("bate o collision em algum dos lados e
+    # para"). O corredor cabe o giro (validado no controle), logo o footprint real
+    # nunca sobrepõe a parede em nenhum ângulo → o approach não dá falso-positivo.
+    # COMO FUNCIONA: o monitor pega ESTE polígono (= footprint ±0.25), projeta-o
+    # à frente seguindo a velocidade comandada (linear + ANGULAR) por
+    # time_before_collision segundos, e só freia se a trajetória REAL for colidir
+    # — freada proporcional ao tempo-até-contato, não liga/desliga. Girando pra
+    # longe/recuando não congela; indo CONTRA algo (pessoa na frente) freia. A
+    # proteção FRONTAL (o atropelamento de 06-08 foi frontal) fica preservada: a
+    # 0.35 m/s ele projeta ~0.5 m à frente e para com folga, e a PolygonSlow segue
+    # desacelerando na aproximação.
+    # SEGURANÇA agora mora em time_before_collision (não no tamanho da caixa):
+    # começo conservador 1.5 s; TUNAR em campo (baixar se ficar medroso).
+    # ROLLBACK p/ caixa estática:
+    #   action_type: "stop"; points "[[0.45,0.30],[0.45,-0.30],[-0.40,-0.30],[-0.40,0.30]]";
+    #   remover time_before_collision / simulation_time_step.
     PolygonStop:
       type: "polygon"
-      # 2026-06-08: RESTAURADO + AUMENTADO p/ ~20 cm além do footprint ±0.25 (era
-      # 12, eu tinha apertado errado p/ 7 e ele bateu). min_points 5 → 2: 2 feixes
-      # já param (perna de gente/cadeira). Margem grande = para ANTES do contato,
-      # ainda mais combinado com a PolygonSlow desacelerando na aproximação.
-      # 2026-06-11: largura ±0.38 → ±0.30 — com ±0.38 o robô NÃO PASSAVA EM
-      # PORTA (vão útil ~0.70-0.76 põe os batentes a ±0.35-0.38 = dentro da
-      # caixa → freeze "perfeito no meio da porta"). ±0.30 = 5cm além do corpo
-      # por lado. A margem FRONTAL (0.45 + slow 0.65) fica INTACTA — é ela que
-      # protege gente na frente (o atropelamento de 06-08 foi frontal). Na
-      # porta os batentes seguem dentro da PolygonSlow → atravessa a 30%.
-      points: "[[0.45, 0.30], [0.45, -0.30], [-0.40, -0.30], [-0.40, 0.30]]"
-      action_type: "stop"
+      # = footprint real ±0.25 (igual ao do costmap). NÃO inflar: se inflar, o
+      # canto giratório volta a "abraçar" a parede e o freeze volta. A margem de
+      # frenagem vem do TEMPO abaixo, não do tamanho.
+      points: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
+      action_type: "approach"
+      time_before_collision: 1.5
+      simulation_time_step: 0.1
       min_points: 2
       visualize: True
       polygon_pub_topic: "polygon_stop"
