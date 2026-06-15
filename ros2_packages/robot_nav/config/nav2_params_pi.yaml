@@ -313,8 +313,16 @@ global_costmap:
         # e o vão inteiro vira custo alto (porta ~0.80: centro a 0.40 de cada
         # batente = nada de faixa custo-zero). REVERTIDO pro 0.35/3.0 de
         # 2026-06-10, que passava porta E melhorou o planner ao vivo.
-        # Centralizar corredor SEM engordar a porta fica pra outra abordagem.
-        cost_scaling_factor: 3.0
+        # 2026-06-15 — A "outra abordagem" pra centralizar SEM engordar a porta
+        # (pedido: "vá pelo MEIO do corredor, longe da parede"): mexer SÓ no
+        # cost_scaling_factor (3.0 -> 2.0), MANTENDO inflation_radius 0.35.
+        # POR QUE não quebra a porta: o radius (ALCANCE da inflação) é o que
+        # fechava o vão — e ele NÃO muda. O cost_scaling só muda a VELOCIDADE de
+        # decaimento DENTRO do mesmo raio: o custo fica mais alto atravessando o
+        # corredor (o planner busca o mínimo = MEIO), mas a faixa central da
+        # porta segue sendo o menor custo -> ainda passa. Centraliza corredor,
+        # preserva porta. Baixar mais (1.5) se ainda colar na parede.
+        cost_scaling_factor: 2.0
         inflation_radius: 0.35
       # PI: false — diffs em vez do mapa inteiro.
       always_send_full_costmap: false
