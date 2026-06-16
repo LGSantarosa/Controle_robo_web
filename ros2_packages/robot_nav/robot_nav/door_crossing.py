@@ -406,6 +406,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
     from tf2_ros import Buffer, TransformListener, TransformException
 
     from .utils import quat_to_yaw, spin_node
+    from .unstuck_supervisor import front_min_gap, rear_min_gap
 
     ACTIVE = {1, 2, 3}  # ACCEPTED, EXECUTING, CANCELING (igual unstuck)
 
@@ -426,6 +427,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('cross_speed', 0.15), ('gap_min', 0.45),
                 ('exit_margin', 0.5), ('rate_hz', 20.0),
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
+                ('rear_tail_x', -0.25), ('rear_half_width', 0.30),
+                ('front_head_x', 0.25),
             ):
                 self.declare_parameter(name, default)
                 g[name] = self.get_parameter(name).value
@@ -440,6 +443,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self.sup = DoorCrossing(self.cfg)
             self.scan_stale = g['scan_stale']
             self.nav_move_lin = g['nav_move_lin']
+            self.rear_tail_x = g['rear_tail_x']
+            self.rear_half_width = g['rear_half_width']
+            self.front_head_x = g['front_head_x']
 
             self.doors = []
             self._goal_active = {}
@@ -521,9 +527,23 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 jambs = [tuple(self.sup.door['a']), tuple(self.sup.door['b'])]
                 gap = gap_ahead(ranges, amin, ainc, pose, jambs, 0.30)
 
+            front_gap = math.inf
+            rear_gap = math.inf
+            if fresh and self._scan is not None:
+                ranges, amin, ainc = self._scan
+                arr = np.asarray(ranges, dtype=np.float64)
+                # LiDAR no centro (lidar_x=0); vão medido do para-choque. Sem
+                # descontar batente de propósito (anti-stall: contato com a
+                # parede/batente conta), diferente do gap_ahead do crossing.
+                front_gap = front_min_gap(arr, amin, ainc, 0.0,
+                                          self.front_head_x, self.rear_half_width)
+                rear_gap = rear_min_gap(arr, amin, ainc, 0.0,
+                                        self.rear_tail_x, self.rear_half_width)
+
             prev = self.sup.state
             cmd = self.sup.update(now, pose, self.doors, goal,
-                                  self._nav_forward, gap, fresh)
+                                  self._nav_forward, gap, fresh,
+                                  front_gap, rear_gap)
             if cmd.state != prev:
                 self.get_logger().info(f'door_crossing: {prev} -> {cmd.state}')
             # /door_zone: a manobra ativa manda; senão, se há porta marcada na
