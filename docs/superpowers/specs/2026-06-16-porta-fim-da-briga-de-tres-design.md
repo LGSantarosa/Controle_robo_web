@@ -144,16 +144,37 @@ staging/rotating):
 Geometria da ré em `base_link` (espelha o unstuck): `tail_x = -0.25`,
 `half_width = 0.30`, `rear_stop_margin = 0.10`, LiDAR no centro (`lidar_x = 0`).
 
+### 5. door_crossing — subir a força do giro no lugar (3.0 → 4.0)
+
+`rot_speed` **3.0 → 4.0 rad/s**. Como a iteração 1 mantém o `rotating` como
+giro **no mesmo lugar** (point-turn, NUNCA arco) e passa a depender dele, ele
+precisa vencer melhor o atrito estático do skid-steer.
+
+- **Por que 4.0 (e não 6.0):** observação do usuário em campo — a 6.0 ele gira
+  "rápido e confiante", mas na janela fina da porta (`|yaw| < align_yaw = 5°`)
+  rápido demais tende a passar do ponto (o `rotating` é bang-bang em ±rot_speed).
+  4.0 já gira melhor que 3.0 sem ser agressivo. Bate com o `rotate_to_heading`
+  do RotationShim, que também usa 4.2 pro giro fino.
+- `rot_speed` é **param ROS** (declarado no nó) → tunável ao vivo: se 4.0 ainda
+  patinar saindo do repouso, sobe pra 6.0 sem rebuild
+  (`ros2 param set /door_crossing rot_speed 6.0`).
+- **Precisão fina** (não passar de 5° de forma confiável) NÃO é resolvida aqui —
+  o bang-bang depende da patinagem pra não estourar a tolerância. O fix de
+  precisão é a **iteração 2**: malha fechada no yaw da IMU (gira até o yaw
+  MEDIDO chegar no alvo, igual ao spin do `unstuck_supervisor`). Ainda
+  point-turn, nunca arco.
+
 ## Escopo — o que esta iteração NÃO faz (de propósito)
 
-- **NÃO** mexe ainda no giro-no-lugar fraco (`rot_speed = 3.0 rad/s`, que o
-  skid-steer parado mal vence). A ré de escape (item 4) só dá a ele uma saída
-  quando emperra, não conserta o giro em si. Melhorar o **point-turn** (subir a
-  autoridade pra ~6.0 + malha fechada no yaw da IMU, igual ao spin do
-  `unstuck_supervisor`) é a **iteração 2**.
-  ⛔ **NUNCA via giro em ARCO** — este robô não gira bem em arco (preferência
-  firme do usuário, ver README "Particularidade do giro"). O fix do giro é
-  sempre point-turn mais forte, nunca arco.
+- **NÃO** fecha a malha do giro no yaw da IMU. A iteração 1 sobe a força do
+  point-turn (item 5: `rot_speed` 4.0) e dá a saída da ré de escape (item 4),
+  mas o `rotating` segue sendo bang-bang open-loop — a precisão fina (`|yaw|<5°`
+  sem oscilar) depende da patinagem. A **malha fechada no yaw da IMU** (gira até
+  o yaw MEDIDO chegar no alvo, igual ao spin do `unstuck_supervisor`) é a
+  **iteração 2**.
+  ⛔ **NUNCA via giro em ARCO** em nenhuma iteração — este robô não gira bem em
+  arco (preferência firme do usuário, ver README "Particularidade do giro"). O
+  fix do giro é sempre point-turn (mais forte / em malha fechada), nunca arco.
 - **NÃO** alarga `zone_radius` (fica 1.2m) → a janela em que o `door_vel`
   passa por cima do collision monitor continua a mesma de hoje em tamanho.
   **A segurança dessa janela MELHORA** com o item 4: a ré é gated por
@@ -192,7 +213,8 @@ marcada em modo nav2:
 - `ros2_packages/robot_nav/robot_nav/door_crossing.py` — gate afrouxado
   (lógica pura `DoorCrossing.update`) + publicação do `approaching` (decisão
   pura + cola no `_tick`/`_publish_zone`) + estado `reversing` com a ré de
-  escape (lógica pura; cola alimenta `front_gap` e `rear_gap`).
+  escape (lógica pura; cola alimenta `front_gap` e `rear_gap`) + default de
+  `rot_speed` 3.0 → 4.0 (`DoorCrossConfig` e o `declare_parameter`).
 - `ros2_packages/robot_nav/robot_nav/unstuck_supervisor.py` — `'approaching'`
   no standdown (`_on_door_zone`). A função pura `rear_min_gap` (e o conceito do
   `front_min_gap`) é reaproveitada pelo door_crossing — extrair pra um módulo
