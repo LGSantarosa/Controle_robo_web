@@ -80,6 +80,26 @@ def nav_engaging(linear_x: float, nav_move_lin: float) -> bool:
     return linear_x > -nav_move_lin
 
 
+def nearest_door_in_zone(pose, doors, zone_radius: float):
+    """Porta marcada mais próxima cujo CENTRO está dentro de zone_radius do
+    robô, IGNORANDO o bearing (só proximidade). None se nenhuma.
+
+    Usado pra sinalizar 'approaching' no /door_zone (gate do standdown do
+    unstuck), separado da decisão de CONDUZIR (que usa o cone, em _pick_door).
+    Ignora o cone de propósito: a sabotagem do unstuck era pior justamente na
+    chegada torta (porta fora do cone)."""
+    if pose is None:
+        return None
+    x, y, _ = pose
+    best, best_d = None, zone_radius
+    for d in doors:
+        g = door_geometry(tuple(d['a']), tuple(d['b']))
+        dist = math.hypot(x - g.cx, y - g.cy)
+        if dist <= best_d:
+            best_d, best = dist, d
+    return best
+
+
 GAP_CORRIDOR_HALF_W = 0.28   # m — meia-largura do corredor vigiado (corpo+3cm)
 GAP_MAX_X = 0.80             # m — até onde olhar à frente
 
@@ -427,7 +447,18 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                                   self._nav_forward, gap, fresh)
             if cmd.state != prev:
                 self.get_logger().info(f'door_crossing: {prev} -> {cmd.state}')
-            self._publish_zone(cmd.state, cmd.door_id)
+            # /door_zone: a manobra ativa manda; senão, se há porta marcada na
+            # zona com goal ativo, publica 'approaching' (gate do standdown do
+            # unstuck). 'approaching' NÃO comanda door_vel — só sinaliza a região.
+            if cmd.state != 'idle':
+                self._publish_zone(cmd.state, cmd.door_id)
+            else:
+                nd = (nearest_door_in_zone(pose, self.doors, self.cfg.zone_radius)
+                      if goal else None)
+                if nd is not None:
+                    self._publish_zone('approaching', nd['id'])
+                else:
+                    self._publish_zone('idle', None)
             if cmd.state != 'idle' or prev != 'idle':
                 # Twist zero explícito na transição pra idle (mesma lição do
                 # unstuck: cmd_vel_to_wheels segura o último comando).

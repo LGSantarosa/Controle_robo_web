@@ -219,3 +219,23 @@ def test_nav_engaging_true_when_rotating_or_forward():
 def test_nav_engaging_false_only_on_real_reverse():
     # ré sustentada (abaixo de -nav_move_lin) -> NÃO arma
     assert nav_engaging(-0.05, 0.02) is False
+
+
+from robot_nav.door_crossing import nearest_door_in_zone
+
+
+def test_nearest_door_in_zone_proximity_only():
+    doors = [DOOR]                      # centro em (1.5, 2.0)
+    # dentro da zona, mas de COSTAS pra porta (cone não importa aqui)
+    d = nearest_door_in_zone((1.5, 1.0, -math.pi / 2), doors, zone_radius=1.2)
+    assert d is not None and d['id'] == 1
+    # fora da zona -> None
+    assert nearest_door_in_zone((1.5, -1.0, 0.0), doors, zone_radius=1.2) is None
+    # sem pose -> None
+    assert nearest_door_in_zone(None, doors, zone_radius=1.2) is None
+
+
+def test_nearest_door_in_zone_picks_closest():
+    doors = [DOOR, {'id': 2, 'a': [1.0, 5.0], 'b': [2.0, 5.0]}]  # centro (1.5,5)
+    d = nearest_door_in_zone((1.5, 4.5, 0.0), doors, zone_radius=1.2)
+    assert d['id'] == 2
