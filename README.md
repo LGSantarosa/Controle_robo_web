@@ -1047,6 +1047,8 @@ Skid-steer com 4 rodas motoras: as duas do lado esquerdo (FL+RL) rodam juntas, a
 
 **Particularidade do giro:** o chassi só vence o atrito estático do skid-steer com autoridade angular alta (~6.0 rad/s comandado = ±600 unid/roda). Por isso o teleop e o `RotationShim` usam ganhos altos, e o `closed_loop: false` no shim é **crítico** (em malha fechada na odom medida o robô nunca arranca do lugar).
 
+> ⚠️ **NUNCA usar giro em ARCO pra mudar de heading neste robô.** Ele **não gira bem em arco** (testado em campo — arcos foram revertidos repetidas vezes). Quando precisar realinhar, **melhore o giro NO MESMO LUGAR (point-turn)**: autoridade alta (~6.0) + malha fechada no yaw da IMU (igual ao spin do `unstuck_supervisor`, que gira até o yaw MEDIDO acumular o alvo, com boost de força no lado esquerdo que escorrega mais). Ré reta (gated por `rear_min_gap`) é OK pra reposicionar; arco pra alinhar, não.
+
 Conversão `(left, right) → (steer, speed)` no `mega_bridge` segue a convenção do firmware NiklasFauth/hoverboard-firmware-hack:
 
 ```

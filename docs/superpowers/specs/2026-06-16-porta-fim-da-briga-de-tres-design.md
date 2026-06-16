@@ -146,11 +146,14 @@ Geometria da ré em `base_link` (espelha o unstuck): `tail_x = -0.25`,
 
 ## Escopo — o que esta iteração NÃO faz (de propósito)
 
-- **NÃO** redesenha staging/rotating pra manobrar **sempre em arco** (girar
-  andando, nunca girar parado). O giro-no-lugar fraco (`rot_speed = 3.0 rad/s`,
-  que o skid-steer parado mal vence) continua existindo; a ré de escape (item 4)
-  só dá a ele uma saída quando emperra, não substitui o giro. O arco completo é
-  a **iteração 2**.
+- **NÃO** mexe ainda no giro-no-lugar fraco (`rot_speed = 3.0 rad/s`, que o
+  skid-steer parado mal vence). A ré de escape (item 4) só dá a ele uma saída
+  quando emperra, não conserta o giro em si. Melhorar o **point-turn** (subir a
+  autoridade pra ~6.0 + malha fechada no yaw da IMU, igual ao spin do
+  `unstuck_supervisor`) é a **iteração 2**.
+  ⛔ **NUNCA via giro em ARCO** — este robô não gira bem em arco (preferência
+  firme do usuário, ver README "Particularidade do giro"). O fix do giro é
+  sempre point-turn mais forte, nunca arco.
 - **NÃO** alarga `zone_radius` (fica 1.2m) → a janela em que o `door_vel`
   passa por cima do collision monitor continua a mesma de hoje em tamanho.
   **A segurança dessa janela MELHORA** com o item 4: a ré é gated por
