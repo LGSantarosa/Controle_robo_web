@@ -131,12 +131,15 @@ def freer_side(ranges, angle_min: float, angle_increment: float) -> int:
 
 
 def door_zone_active(state: str) -> bool:
-    """True se o door_crossing está CONDUZINDO (staging/rotating/crossing) OU
-    apenas SE APROXIMANDO ('approaching') de uma porta marcada -> unstuck em
-    standdown. 'approaching' incluído em 2026-06-16: sem ele, o unstuck (prio
-    30, ré+giro 15°) sabotava a aproximação antes do door_crossing assumir, e o
-    robô brigava com a porta por minutos."""
-    return state in ('approaching', 'staging', 'rotating', 'crossing')
+    """True se o door_crossing está CONDUZINDO (staging/rotating/crossing),
+    dando a ré de escape ('reversing') OU apenas SE APROXIMANDO ('approaching')
+    de uma porta marcada -> unstuck em standdown. 'approaching' incluído em
+    2026-06-16: sem ele, o unstuck (prio 30, ré+giro 15°) sabotava a aproximação
+    antes do door_crossing assumir. 'reversing' também: a ré de escape é o
+    door_crossing se reajustando sozinho — o unstuck não pode atropelar a
+    manobra. Garbage/'idle' -> False (não silencia a rede de segurança à toa)."""
+    return state in ('approaching', 'staging', 'rotating', 'crossing',
+                     'reversing')
 
 
 @dataclass
