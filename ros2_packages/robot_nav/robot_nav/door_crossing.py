@@ -69,6 +69,17 @@ def crossing_yaw(g: DoorGeom, side: int) -> float:
     return math.atan2(side * g.ny, side * g.nx)
 
 
+def nav_engaging(linear_x: float, nav_move_lin: float) -> bool:
+    """True se o nav NÃO está dando ré — i.e., avançando OU girando no lugar
+    pra alinhar (linear≈0). Antes o gate exigia avançar (linear>thresh) e a
+    porta NÃO armava na hora que o robô chegava torto e o RotationShim queria
+    girar (linear≈0) -> door_crossing piscava pra idle -> unstuck escapava do
+    standdown e sabotava. Como o DWB roda com min_vel_x:0.0 (não dá ré em
+    navegação normal), nunca há ré sustentada no ramo do nav, então isto é
+    seguro (não reintroduz o 'atravessar de costas')."""
+    return linear_x > -nav_move_lin
+
+
 GAP_CORRIDOR_HALF_W = 0.28   # m — meia-largura do corredor vigiado (corpo+3cm)
 GAP_MAX_X = 0.80             # m — até onde olhar à frente
 
@@ -374,7 +385,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self._scan_t = time.monotonic()
 
         def _on_nav(self, msg):
-            self._nav_forward = msg.linear.x > self.nav_move_lin
+            # 2026-06-16: "indo pra frente" -> "não está dando ré". Deixa o
+            # door_crossing armado quando o nav quer GIRAR pra alinhar (linear≈0).
+            self._nav_forward = nav_engaging(msg.linear.x, self.nav_move_lin)
 
         def _on_status(self, topic, msg):
             self._goal_active[topic] = any(

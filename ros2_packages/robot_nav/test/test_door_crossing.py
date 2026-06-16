@@ -203,3 +203,19 @@ def test_default_rot_speed_is_4():
     # skid-steer parado, sem ser agressivo a ponto de passar do |yaw|<5° (6.0
     # passava). NUNCA arco. Param ROS, sobe pra 6.0 ao vivo se patinar.
     assert DoorCrossConfig().rot_speed == 4.0
+
+
+from robot_nav.door_crossing import nav_engaging
+
+
+def test_nav_engaging_true_when_rotating_or_forward():
+    # girando pra alinhar (linear ~0) ou indo pra frente -> engajado (arma)
+    assert nav_engaging(0.0, 0.02) is True
+    assert nav_engaging(0.30, 0.02) is True
+    # ruído de ré minúsculo dentro da banda ainda conta como engajado
+    assert nav_engaging(-0.01, 0.02) is True
+
+
+def test_nav_engaging_false_only_on_real_reverse():
+    # ré sustentada (abaixo de -nav_move_lin) -> NÃO arma
+    assert nav_engaging(-0.05, 0.02) is False
