@@ -244,3 +244,78 @@ def test_nearest_door_in_zone_picks_closest():
     d = nearest_door_in_zone((1.5, 4.5, 0.0), doors, zone_radius=1.2)
     assert d is not None
     assert d['id'] == 2
+
+
+# ---- ré de escape (2026-06-16) -----------------------------------------------
+
+ECFG = DoorCrossConfig(zone_radius=1.2, stage_dist=0.6, align_timeout=15.0,
+                       total_timeout=40.0)
+P_STAGE = (1.5, 1.0, math.pi / 2)   # na zona, encarando a porta (centro 1.5,2.0)
+
+
+def estep(dc, t, pose, front_gap=math.inf, rear_gap=math.inf,
+          goal=True, nav=True, gap=math.inf, fresh=True):
+    return dc.update(t, pose, [DOOR], goal, nav, gap, fresh, front_gap, rear_gap)
+
+
+def test_escape_reverse_on_front_block():
+    dc = DoorCrossing(ECFG)
+    assert estep(dc, 0.0, P_STAGE).state == 'staging'         # arma
+    c = estep(dc, 0.1, P_STAGE, front_gap=0.10)               # parede perto -> ré
+    assert c.state == 'reversing'
+    assert c.vx < 0.0 and c.wz == pytest.approx(0.0)          # ré RETA, nunca arco
+
+
+def test_escape_reverse_on_substuck_timeout():
+    dc = DoorCrossing(ECFG)
+    estep(dc, 0.0, P_STAGE)                                   # arma (align_t0=0)
+    c = estep(dc, ECFG.escape_substuck_time + 0.1, P_STAGE)   # não progrediu -> ré
+    assert c.state == 'reversing'
+
+
+def test_escape_aborts_when_rear_blocked():
+    dc = DoorCrossing(ECFG)
+    estep(dc, 0.0, P_STAGE)
+    # parede na frente E sem vão atrás -> não força, larga pro nav2/unstuck
+    c = estep(dc, 0.1, P_STAGE, front_gap=0.10, rear_gap=0.05)
+    assert c.state == 'idle'
+
+
+def test_escape_target_capped_by_rear_gap():
+    dc = DoorCrossing(ECFG)
+    estep(dc, 0.0, P_STAGE)
+    estep(dc, 0.1, P_STAGE, front_gap=0.10, rear_gap=0.25)
+    # alvo = min(escape_reverse_dist, rear_gap - escape_rear_margin) = min(0.30,0.15)
+    assert dc._esc_target == pytest.approx(0.15)
+
+
+def test_reverse_returns_to_staging_after_distance():
+    dc = DoorCrossing(ECFG)
+    estep(dc, 0.0, P_STAGE)
+    estep(dc, 0.1, P_STAGE, front_gap=0.10)                   # -> reversing (alvo 0.30)
+    # recuou 0.4 m (afastou da porta, y caiu) -> volta pro staging
+    c = estep(dc, 0.5, (1.5, 0.6, math.pi / 2))
+    assert c.state == 'staging'
+
+
+def test_reverse_aborts_to_staging_if_rear_closes():
+    dc = DoorCrossing(ECFG)
+    estep(dc, 0.0, P_STAGE)
+    estep(dc, 0.1, P_STAGE, front_gap=0.10)                   # -> reversing
+    # algo entrou atrás no meio da ré -> para e volta pro staging
+    c = estep(dc, 0.2, (1.5, 0.95, math.pi / 2), rear_gap=0.05)
+    assert c.state == 'staging'
+    assert c.vx == pytest.approx(0.0)
+
+
+def test_escape_max_count_then_abort():
+    dc = DoorCrossing(ECFG)
+    estep(dc, 0.0, P_STAGE)
+    t = 0.1
+    for _ in range(ECFG.escape_max_count):
+        assert estep(dc, t, P_STAGE, front_gap=0.10).state == 'reversing'
+        # completa a ré (recua bastante) -> staging
+        assert estep(dc, t + 0.05, (1.5, 0.5, math.pi / 2)).state == 'staging'
+        t += 0.2
+    # estourou o nº de escapes -> próximo bloqueio aborta (larga pro unstuck)
+    assert estep(dc, t, P_STAGE, front_gap=0.10).state == 'idle'

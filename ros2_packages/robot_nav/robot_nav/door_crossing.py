@@ -173,6 +173,17 @@ class DoorCrossConfig:
     exit_margin: float = 0.5        # m — além do centro pra soltar
     total_timeout: float = 40.0     # s — manobra inteira (revertido de 600; ver align_timeout)
     retrigger_cooldown: float = 3.0  # s — após abort, não rearmar na hora
+    # Ré de ESCAPE (2026-06-16): sem a ré do unstuck (calado na região da
+    # porta), o door_crossing precisa se reajustar sozinho — senão fica
+    # morto-preso de nariz na parede (e stalla o motor -> desarma o BMS, já que
+    # door_vel fura o collision). Ré RETA (NUNCA arco), gated pelo vão traseiro.
+    escape_front_gap: float = 0.20      # m — obstáculo a menos disso à frente -> ré (anti-stall)
+    escape_substuck_time: float = 5.0   # s — alinhando sem chegar ao crossing -> ré
+    escape_reverse_dist: float = 0.30   # m — quanto recua por escape (teto)
+    escape_reverse_speed: float = 0.12  # m/s — ré mansa
+    escape_max_count: int = 3           # nº de escapes por travessia antes de abortar
+    escape_rear_margin: float = 0.10    # m — nunca chega a menos disso do obstáculo atrás
+    escape_rear_min: float = 0.10       # m — vão traseiro útil mínimo pra valer a ré
 
 
 class Cmd(NamedTuple):
@@ -202,6 +213,10 @@ class DoorCrossing:
         self.t_start = 0.0
         self._stable = 0
         self._cooldown_until = 0.0
+        self._escape_count = 0          # rés de escape NESTA travessia
+        self._align_t0 = 0.0            # início do "tentando alinhar" (sub-timeout)
+        self._esc_start = (0.0, 0.0)    # pose (x,y) no começo da ré atual
+        self._esc_target = 0.0          # quanto recuar nesta ré
 
     # -- helpers ------------------------------------------------------------
     def _abort(self, now: float) -> Cmd:
@@ -211,6 +226,31 @@ class DoorCrossing:
         self._stable = 0
         self._cooldown_until = now + self.cfg.retrigger_cooldown
         return Cmd('idle', 0.0, 0.0, None)
+
+    def _maybe_escape(self, now, pos, front_gap, rear_gap):
+        """Decide se entra na ré de escape (ou aborta). Retorna um Cmd se a ré
+        toma conta agora, ou None pra seguir o staging/rotating normal.
+
+        Dispara quando: obstáculo perto na FRENTE (anti-stall/anti-BMS) OU não
+        alinhou dentro de escape_substuck_time. Recua RETO (nunca arco), no
+        máximo (rear_gap - escape_rear_margin), limitado a escape_reverse_dist.
+        Sem vão atrás útil, ou estourado o escape_max_count -> ABORTA (larga pro
+        nav2/unstuck como último recurso)."""
+        cfg = self.cfg
+        front_block = front_gap < cfg.escape_front_gap
+        need = front_block or (now - self._align_t0 > cfg.escape_substuck_time)
+        if not need:
+            return None
+        if self._escape_count >= cfg.escape_max_count:
+            return self._abort(now)
+        target = min(cfg.escape_reverse_dist, rear_gap - cfg.escape_rear_margin)
+        if target < cfg.escape_rear_min:
+            return self._abort(now)     # sem vão atrás -> não força contra a parede
+        self._escape_count += 1
+        self.state = 'reversing'
+        self._esc_start = pos
+        self._esc_target = target
+        return Cmd('reversing', -cfg.escape_reverse_speed, 0.0, self.door['id'])
 
     def _pick_door(self, pose, doors):
         x, y, yaw = pose
@@ -232,7 +272,7 @@ class DoorCrossing:
 
     # -- tick -----------------------------------------------------------------
     def update(self, now, pose, doors, goal_active, nav_forward, gap,
-               scan_fresh) -> Cmd:
+               scan_fresh, front_gap=math.inf, rear_gap=math.inf) -> Cmd:
         cfg = self.cfg
 
         if self.state == 'idle':
@@ -250,6 +290,8 @@ class DoorCrossing:
             self.state = 'staging'
             self.t_start = now
             self._stable = 0
+            self._escape_count = 0
+            self._align_t0 = now
             # cai no fluxo de staging já neste tick
 
         # guardas comuns a qualquer estado ativo
@@ -269,6 +311,9 @@ class DoorCrossing:
                 return self._abort(now)
 
         if self.state == 'staging':
+            esc = self._maybe_escape(now, (x, y), front_gap, rear_gap)
+            if esc is not None:
+                return esc
             # alvo: ponto no eixo, stage_dist antes do centro
             tgx = g.cx - g.nx * self.side * cfg.stage_dist
             tgy = g.cy - g.ny * self.side * cfg.stage_dist
@@ -285,6 +330,9 @@ class DoorCrossing:
                 return Cmd('staging', vx, wz, self.door['id'])
 
         if self.state == 'rotating':
+            esc = self._maybe_escape(now, (x, y), front_gap, rear_gap)
+            if esc is not None:
+                return esc
             aligned = abs(yaw_err) <= cfg.align_yaw and abs(d) <= cfg.align_lat
             if aligned:
                 self._stable += 1
@@ -300,6 +348,21 @@ class DoorCrossing:
                 return Cmd('staging', 0.0, 0.0, self.door['id'])
             wz = cfg.rot_speed if yaw_err < 0 else -cfg.rot_speed
             return Cmd('rotating', 0.0, wz, self.door['id'])
+
+        if self.state == 'reversing':
+            if rear_gap <= cfg.escape_rear_margin:
+                # algo entrou atrás no meio da ré -> para e re-tenta o staging
+                self.state = 'staging'
+                self._align_t0 = now
+                return Cmd('staging', 0.0, 0.0, self.door['id'])
+            travelled = math.hypot(x - self._esc_start[0], y - self._esc_start[1])
+            if travelled >= self._esc_target:
+                # recuou o suficiente -> re-tenta o alinhamento de um ponto melhor
+                self.state = 'staging'
+                self._align_t0 = now
+                return Cmd('staging', 0.0, 0.0, self.door['id'])
+            return Cmd('reversing', -cfg.escape_reverse_speed, 0.0,
+                       self.door['id'])
 
         if self.state == 'crossing':
             if gap < cfg.gap_min:
