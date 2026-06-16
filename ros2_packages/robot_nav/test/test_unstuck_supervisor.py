@@ -584,3 +584,15 @@ def test_refires_repeatedly_if_still_stuck():
 
 def sup_active(sup):
     return sup.state != "monitoring"
+
+
+from robot_nav.unstuck_supervisor import door_zone_active
+
+
+def test_door_zone_active_includes_approaching():
+    # 2026-06-16: 'approaching' entra no standdown — o unstuck sabotava a
+    # APROXIMAÇÃO da porta (ré+giro) antes do door_crossing assumir.
+    for st in ('approaching', 'staging', 'rotating', 'crossing'):
+        assert door_zone_active(st) is True
+    for st in ('idle', '', 'whatever'):
+        assert door_zone_active(st) is False

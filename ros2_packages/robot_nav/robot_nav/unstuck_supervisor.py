@@ -130,6 +130,15 @@ def freer_side(ranges, angle_min: float, angle_increment: float) -> int:
     return 1 if best_left >= best_right else -1
 
 
+def door_zone_active(state: str) -> bool:
+    """True se o door_crossing está CONDUZINDO (staging/rotating/crossing) OU
+    apenas SE APROXIMANDO ('approaching') de uma porta marcada -> unstuck em
+    standdown. 'approaching' incluído em 2026-06-16: sem ele, o unstuck (prio
+    30, ré+giro 15°) sabotava a aproximação antes do door_crossing assumir, e o
+    robô brigava com a porta por minutos."""
+    return state in ('approaching', 'staging', 'rotating', 'crossing')
+
+
 @dataclass
 class UnstuckConfig:
     stuck_timeout: float = 10.0
@@ -566,7 +575,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 st = json.loads(msg.data).get("state", "idle")
             except (ValueError, AttributeError):
                 st = "idle"
-            self._door_active = st in ("staging", "rotating", "crossing")
+            self._door_active = door_zone_active(st)
 
         def _tick(self):
             now = time.monotonic()
