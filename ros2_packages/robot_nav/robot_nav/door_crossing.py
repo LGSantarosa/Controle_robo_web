@@ -153,7 +153,7 @@ class DoorCrossConfig:
     # funciona — era o validado em campo 06-12 (atravessou a porta).
     stage_dist: float = 0.6         # m — ponto de preparação antes do centro
     stage_tol: float = 0.10         # m — chegou no staging
-    stage_speed: float = 0.12       # m/s — aproximação mansa
+    stage_speed: float = 0.20       # m/s — aproximação (0.12->0.20 em 2026-06-16: a 0.12 patinava sem vencer o atrito estático; régua = ré do unstuck 0.25, validada em campo)
     stage_k_heading: float = 1.8    # ganho P do heading no staging
     align_lat: float = 0.08         # m — |offset lateral| máximo pra "tô no eixo"
     align_yaw: float = math.radians(5.0)   # rad — |erro de yaw| máximo
@@ -165,7 +165,7 @@ class DoorCrossConfig:
     # aborta e devolve pro nav2 em vez de congelar.
     align_timeout: float = 15.0     # s — STAGING+ROTATING juntos
     rot_speed: float = 4.0          # rad/s — giro no lugar (point-turn forte; 3->4 em 2026-06-16, sobe a 6.0 ao vivo se patinar; NUNCA arco)
-    cross_speed: float = 0.15       # m/s — travessia
+    cross_speed: float = 0.22       # m/s — travessia (0.15->0.22 em 2026-06-16: vencer o atrito estático sem patinar)
     cross_k_lat: float = 1.5        # corrige offset lateral durante a travessia
     cross_k_yaw: float = 2.0        # corrige heading durante a travessia
     cross_wz_max: float = 0.8       # rad/s — teto da micro-correção (NÃO girar)
@@ -180,7 +180,7 @@ class DoorCrossConfig:
     escape_front_gap: float = 0.20      # m — obstáculo a menos disso à frente -> ré (anti-stall)
     escape_substuck_time: float = 5.0   # s — alinhando sem chegar ao crossing -> ré
     escape_reverse_dist: float = 0.30   # m — quanto recua por escape (teto)
-    escape_reverse_speed: float = 0.12  # m/s — ré mansa
+    escape_reverse_speed: float = 0.25  # m/s — ré de escape (0.12->0.25 em 2026-06-16: = ré do unstuck, validada vencendo o atrito em campo)
     escape_max_count: int = 3           # nº de escapes por travessia antes de abortar
     escape_rear_margin: float = 0.10    # m — folga: nunca chega a menos disso do obstáculo atrás (cap da distância de ré)
     escape_rear_min: float = 0.10       # m — vão traseiro útil MÍNIMO; abaixo disso nem vale a pena dar ré -> aborta
@@ -424,7 +424,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('zone_radius', 1.2), ('stage_dist', 0.6),
                 ('align_lat', 0.08), ('align_yaw_deg', 5.0),
                 ('align_timeout', 15.0), ('rot_speed', 4.0),
-                ('cross_speed', 0.15), ('gap_min', 0.45),
+                ('cross_speed', 0.22), ('stage_speed', 0.20),
+                ('escape_reverse_speed', 0.25), ('gap_min', 0.45),
                 ('exit_margin', 0.5), ('rate_hz', 20.0),
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
                 ('rear_tail_x', -0.25), ('rear_half_width', 0.30),
@@ -438,8 +439,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 align_lat=g['align_lat'],
                 align_yaw=math.radians(g['align_yaw_deg']),
                 align_timeout=g['align_timeout'], rot_speed=g['rot_speed'],
-                cross_speed=g['cross_speed'], gap_min=g['gap_min'],
-                exit_margin=g['exit_margin'])
+                cross_speed=g['cross_speed'], stage_speed=g['stage_speed'],
+                escape_reverse_speed=g['escape_reverse_speed'],
+                gap_min=g['gap_min'], exit_margin=g['exit_margin'])
             self.sup = DoorCrossing(self.cfg)
             self.scan_stale = g['scan_stale']
             self.nav_move_lin = g['nav_move_lin']
