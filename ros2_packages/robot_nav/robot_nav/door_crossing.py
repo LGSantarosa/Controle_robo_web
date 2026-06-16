@@ -428,7 +428,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('exit_margin', 0.5), ('rate_hz', 20.0),
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
                 ('rear_tail_x', -0.25), ('rear_half_width', 0.30),
-                ('front_head_x', 0.25),
+                ('front_head_x', 0.25), ('lidar_x', 0.0),
             ):
                 self.declare_parameter(name, default)
                 g[name] = self.get_parameter(name).value
@@ -446,6 +446,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self.rear_tail_x = g['rear_tail_x']
             self.rear_half_width = g['rear_half_width']
             self.front_head_x = g['front_head_x']
+            # LiDAR no CENTRO (0.0) hoje; param (igual ao unstuck) p/ não ficar
+            # hardcoded se o sensor sair do centro um dia.
+            self.lidar_x = g['lidar_x']
 
             self.doors = []
             self._goal_active = {}
@@ -535,9 +538,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 # LiDAR no centro (lidar_x=0); vão medido do para-choque. Sem
                 # descontar batente de propósito (anti-stall: contato com a
                 # parede/batente conta), diferente do gap_ahead do crossing.
-                front_gap = front_min_gap(arr, amin, ainc, 0.0,
+                front_gap = front_min_gap(arr, amin, ainc, self.lidar_x,
                                           self.front_head_x, self.rear_half_width)
-                rear_gap = rear_min_gap(arr, amin, ainc, 0.0,
+                rear_gap = rear_min_gap(arr, amin, ainc, self.lidar_x,
                                         self.rear_tail_x, self.rear_half_width)
 
             prev = self.sup.state
