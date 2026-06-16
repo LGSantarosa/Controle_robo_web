@@ -296,9 +296,10 @@ def test_reverse_returns_to_staging_after_distance():
     # recuou 0.4 m (afastou da porta, y caiu) -> volta pro staging
     c = estep(dc, 0.5, (1.5, 0.6, math.pi / 2))
     assert c.state == 'staging'
+    assert dc._align_t0 == pytest.approx(0.5)   # relógio do substuck reiniciado
 
 
-def test_reverse_aborts_to_staging_if_rear_closes():
+def test_reverse_returns_to_staging_if_rear_closes():
     dc = DoorCrossing(ECFG)
     estep(dc, 0.0, P_STAGE)
     estep(dc, 0.1, P_STAGE, front_gap=0.10)                   # -> reversing
@@ -319,3 +320,29 @@ def test_escape_max_count_then_abort():
         t += 0.2
     # estourou o nº de escapes -> próximo bloqueio aborta (larga pro unstuck)
     assert estep(dc, t, P_STAGE, front_gap=0.10).state == 'idle'
+
+
+def test_moving_approach_does_not_trigger_substuck():
+    # aproximação LEGÍTIMA: o robô se desloca a cada tick por > substuck_time
+    # total -> a âncora de progresso reseta o relógio, NÃO dispara a ré.
+    dc = DoorCrossing(ECFG)
+    assert estep(dc, 0.0, (1.5, 1.0, math.pi / 2)).state == 'staging'  # arma
+    # caminha de 1.0 -> 1.35 em y, ao longo de 7 s (bem além do substuck de 5 s)
+    t, y = 0.5, 1.0
+    last = None
+    while t <= 7.0:
+        y = min(1.35, y + 0.03)
+        last = estep(dc, t, (1.5, y, math.pi / 2))
+        t += 0.5
+    assert last.state != 'reversing'   # nunca deu ré de escape durante o avanço
+
+
+def test_escape_from_rotating_on_front_block():
+    dc = DoorCrossing(ECFG)
+    stage_y = 2.0 - ECFG.stage_dist
+    estep(dc, 0.0, (1.5, stage_y - 0.3, math.pi / 2))   # arma (staging)
+    c = estep(dc, 0.1, (1.5, stage_y, math.pi / 2))     # chegou -> rotating
+    assert c.state == 'rotating'
+    c = estep(dc, 0.2, (1.5, stage_y, math.pi / 2), front_gap=0.10)  # parede perto
+    assert c.state == 'reversing'
+    assert c.wz == pytest.approx(0.0)                   # ré RETA, nunca arco

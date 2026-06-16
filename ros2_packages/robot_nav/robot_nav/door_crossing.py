@@ -182,8 +182,9 @@ class DoorCrossConfig:
     escape_reverse_dist: float = 0.30   # m — quanto recua por escape (teto)
     escape_reverse_speed: float = 0.12  # m/s — ré mansa
     escape_max_count: int = 3           # nº de escapes por travessia antes de abortar
-    escape_rear_margin: float = 0.10    # m — nunca chega a menos disso do obstáculo atrás
-    escape_rear_min: float = 0.10       # m — vão traseiro útil mínimo pra valer a ré
+    escape_rear_margin: float = 0.10    # m — folga: nunca chega a menos disso do obstáculo atrás (cap da distância de ré)
+    escape_rear_min: float = 0.10       # m — vão traseiro útil MÍNIMO; abaixo disso nem vale a pena dar ré -> aborta
+    align_progress_radius: float = 0.05  # m — moveu menos que isso desde a âncora = "parado" -> conta o substuck
 
 
 class Cmd(NamedTuple):
@@ -215,6 +216,7 @@ class DoorCrossing:
         self._cooldown_until = 0.0
         self._escape_count = 0          # rés de escape NESTA travessia
         self._align_t0 = 0.0            # início do "tentando alinhar" (sub-timeout)
+        self._align_anchor = (0.0, 0.0)  # posição de referência do substuck
         self._esc_start = (0.0, 0.0)    # pose (x,y) no começo da ré atual
         self._esc_target = 0.0          # quanto recuar nesta ré
 
@@ -237,6 +239,13 @@ class DoorCrossing:
         Sem vão atrás útil, ou estourado o escape_max_count -> ABORTA (larga pro
         nav2/unstuck como último recurso)."""
         cfg = self.cfg
+        # progresso: se o robô se deslocou, reseta o relógio do substuck — só
+        # conta "parado de verdade" (mesma ideia da âncora do unstuck). Assim
+        # uma aproximação LEGÍTIMA (andando devagar) não dispara a ré de escape.
+        if math.hypot(pos[0] - self._align_anchor[0],
+                      pos[1] - self._align_anchor[1]) > cfg.align_progress_radius:
+            self._align_anchor = pos
+            self._align_t0 = now
         front_block = front_gap < cfg.escape_front_gap
         need = front_block or (now - self._align_t0 > cfg.escape_substuck_time)
         if not need:
@@ -292,6 +301,7 @@ class DoorCrossing:
             self._stable = 0
             self._escape_count = 0
             self._align_t0 = now
+            self._align_anchor = (x, y)
             # cai no fluxo de staging já neste tick
 
         # guardas comuns a qualquer estado ativo
@@ -354,12 +364,14 @@ class DoorCrossing:
                 # algo entrou atrás no meio da ré -> para e re-tenta o staging
                 self.state = 'staging'
                 self._align_t0 = now
+                self._align_anchor = (x, y)
                 return Cmd('staging', 0.0, 0.0, self.door['id'])
             travelled = math.hypot(x - self._esc_start[0], y - self._esc_start[1])
             if travelled >= self._esc_target:
                 # recuou o suficiente -> re-tenta o alinhamento de um ponto melhor
                 self.state = 'staging'
                 self._align_t0 = now
+                self._align_anchor = (x, y)
                 return Cmd('staging', 0.0, 0.0, self.door['id'])
             return Cmd('reversing', -cfg.escape_reverse_speed, 0.0,
                        self.door['id'])
