@@ -229,7 +229,7 @@ class DoorCrossing:
         self._cooldown_until = now + self.cfg.retrigger_cooldown
         return Cmd('idle', 0.0, 0.0, None)
 
-    def _maybe_escape(self, now, pos, front_gap, rear_gap):
+    def _maybe_escape(self, now, pos, front_gap, rear_gap, allow_substuck=True):
         """Decide se entra na ré de escape (ou aborta). Retorna um Cmd se a ré
         toma conta agora, ou None pra seguir o staging/rotating normal.
 
@@ -237,7 +237,13 @@ class DoorCrossing:
         alinhou dentro de escape_substuck_time. Recua RETO (nunca arco), no
         máximo (rear_gap - escape_rear_margin), limitado a escape_reverse_dist.
         Sem vão atrás útil, ou estourado o escape_max_count -> ABORTA (larga pro
-        nav2/unstuck como último recurso)."""
+        nav2/unstuck como último recurso).
+
+        allow_substuck=False (no ROTATING): girar parado pra alinhar NÃO é estar
+        travado, então o gatilho por TEMPO não vale ali — só o obstáculo à frente.
+        Era o que fazia a ré reta disparar no meio do giro com a traseira pra porta
+        e parecer que o robô "ia atravessar de ré" (2026-06-16). O align_timeout
+        (15 s) segue como rede de segurança pra 'girando sem nunca alinhar'."""
         cfg = self.cfg
         # progresso: se o robô se deslocou, reseta o relógio do substuck — só
         # conta "parado de verdade" (mesma ideia da âncora do unstuck). Assim
@@ -247,7 +253,8 @@ class DoorCrossing:
             self._align_anchor = pos
             self._align_t0 = now
         front_block = front_gap < cfg.escape_front_gap
-        need = front_block or (now - self._align_t0 > cfg.escape_substuck_time)
+        substuck = allow_substuck and (now - self._align_t0 > cfg.escape_substuck_time)
+        need = front_block or substuck
         if not need:
             return None
         if self._escape_count >= cfg.escape_max_count:
@@ -340,7 +347,8 @@ class DoorCrossing:
                 return Cmd('staging', vx, wz, self.door['id'])
 
         if self.state == 'rotating':
-            esc = self._maybe_escape(now, (x, y), front_gap, rear_gap)
+            esc = self._maybe_escape(now, (x, y), front_gap, rear_gap,
+                                     allow_substuck=False)
             if esc is not None:
                 return esc
             aligned = abs(yaw_err) <= cfg.align_yaw and abs(d) <= cfg.align_lat

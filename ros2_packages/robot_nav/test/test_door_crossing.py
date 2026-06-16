@@ -346,3 +346,19 @@ def test_escape_from_rotating_on_front_block():
     c = estep(dc, 0.2, (1.5, stage_y, math.pi / 2), front_gap=0.10)  # parede perto
     assert c.state == 'reversing'
     assert c.wz == pytest.approx(0.0)                   # ré RETA, nunca arco
+
+
+def test_no_substuck_escape_while_rotating():
+    # 2026-06-16: girar parado pra alinhar NÃO é "estar travado". O substuck por
+    # TEMPO não deve disparar a ré no rotating (senão a ré reta, com a traseira
+    # apontada pra porta, parecia que o robô "entrava de ré na sala"). align_timeout
+    # segue como rede de segurança; obstáculo real à frente ainda dispara.
+    dc = DoorCrossing(ECFG)
+    stage_y = 2.0 - ECFG.stage_dist
+    yaw = math.pi / 2 - 0.3                              # 17° fora do eixo -> NÃO alinha
+    estep(dc, 0.0, (1.5, stage_y - 0.3, yaw))           # arma (staging)
+    c = estep(dc, 0.1, (1.5, stage_y, yaw))             # chegou -> rotating
+    assert c.state == 'rotating'
+    # girando parado por > substuck_time, frente livre -> NÃO pode dar ré
+    c = estep(dc, ECFG.escape_substuck_time + 1.0, (1.5, stage_y, yaw))
+    assert c.state == 'rotating'
