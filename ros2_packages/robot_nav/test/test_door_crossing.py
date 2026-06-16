@@ -235,7 +235,12 @@ def test_nearest_door_in_zone_proximity_only():
     assert nearest_door_in_zone(None, doors, zone_radius=1.2) is None
 
 
+def test_nearest_door_in_zone_empty_list_is_none():
+    assert nearest_door_in_zone((0.0, 0.0, 0.0), [], zone_radius=1.2) is None
+
+
 def test_nearest_door_in_zone_picks_closest():
     doors = [DOOR, {'id': 2, 'a': [1.0, 5.0], 'b': [2.0, 5.0]}]  # centro (1.5,5)
     d = nearest_door_in_zone((1.5, 4.5, 0.0), doors, zone_radius=1.2)
+    assert d is not None
     assert d['id'] == 2

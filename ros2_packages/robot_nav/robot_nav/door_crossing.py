@@ -80,7 +80,8 @@ def nav_engaging(linear_x: float, nav_move_lin: float) -> bool:
     return linear_x > -nav_move_lin
 
 
-def nearest_door_in_zone(pose, doors, zone_radius: float):
+def nearest_door_in_zone(pose: Optional[Tuple[float, float, float]],
+                         doors: List[dict], zone_radius: float) -> Optional[dict]:
     """Porta marcada mais próxima cujo CENTRO está dentro de zone_radius do
     robô, IGNORANDO o bearing (só proximidade). None se nenhuma.
 
@@ -175,7 +176,10 @@ class DoorCrossConfig:
 
 
 class Cmd(NamedTuple):
-    state: str       # idle | staging | rotating | crossing
+    # estados que SAEM do update(): idle | staging | rotating | crossing.
+    # (o /door_zone publica ainda 'approaching', injetado pelo nó na zona da
+    # porta antes de assumir — NÃO é um estado do update().)
+    state: str
     vx: float
     wz: float
     door_id: Optional[int]
