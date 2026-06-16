@@ -196,3 +196,10 @@ def test_scan_velho_aborta_crossing():
     dc = mk()
     t = _ate_crossing(dc)
     assert step(dc, t, (1.5, 1.9, math.pi/2), fresh=False).state == 'idle'
+
+
+def test_default_rot_speed_is_4():
+    # 2026-06-16: 3.0 -> 4.0. Point-turn mais forte pra vencer o atrito do
+    # skid-steer parado, sem ser agressivo a ponto de passar do |yaw|<5° (6.0
+    # passava). NUNCA arco. Param ROS, sobe pra 6.0 ao vivo se patinar.
+    assert DoorCrossConfig().rot_speed == 4.0

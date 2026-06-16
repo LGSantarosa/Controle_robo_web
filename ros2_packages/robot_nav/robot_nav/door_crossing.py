@@ -132,7 +132,7 @@ class DoorCrossConfig:
     # 3600), já resolvido. Aqui 15s é a rede de segurança: se não alinhar,
     # aborta e devolve pro nav2 em vez de congelar.
     align_timeout: float = 15.0     # s — STAGING+ROTATING juntos
-    rot_speed: float = 3.0          # rad/s — giro no lugar (vence atrito; unstuck)
+    rot_speed: float = 4.0          # rad/s — giro no lugar (point-turn forte; 3->4 em 2026-06-16, sobe a 6.0 ao vivo se patinar; NUNCA arco)
     cross_speed: float = 0.15       # m/s — travessia
     cross_k_lat: float = 1.5        # corrige offset lateral durante a travessia
     cross_k_yaw: float = 2.0        # corrige heading durante a travessia
@@ -312,7 +312,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 # travava o robô girando fraco no lugar. Ver DoorCrossConfig.
                 ('zone_radius', 1.2), ('stage_dist', 0.6),
                 ('align_lat', 0.08), ('align_yaw_deg', 5.0),
-                ('align_timeout', 15.0), ('rot_speed', 3.0),
+                ('align_timeout', 15.0), ('rot_speed', 4.0),
                 ('cross_speed', 0.15), ('gap_min', 0.45),
                 ('exit_margin', 0.5), ('rate_hz', 20.0),
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
