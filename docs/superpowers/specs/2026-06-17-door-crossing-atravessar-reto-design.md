@@ -38,13 +38,27 @@ Depois da porta há um **corredor só um pouco mais largo que ela**. Se o robô 
 
 ## Solução — A + B + C
 
-### A. Atalho "tá reto e cabe → ATRAVESSA"
+### A. Checagem universal "passo reto daqui?" → ATRAVESSA (todo tick)
 
-No armar (`idle`), depois de escolher a porta e o `side`, calcular `d` (offset
-lateral) e `yaw_err` ali mesmo. Se `pode_ir_reto` (def. abaixo) → vai **direto
-pra `crossing`**, pulando `staging` e `rotating`. Senão → `staging` (fluxo de
-hoje). Vale de **qualquer distância** dentro da `zone_radius` (decisão do
-usuário: "veio reto, passa").
+A ideia do usuário NÃO é um atalho só no momento de armar — é a pergunta
+**`passo reto daqui?` rodando a TODO momento** do door_crossing. No instante em
+que o robô fica reto e cabendo (em qualquer fase: `staging` OU `rotating`), ele
+**atravessa na hora**, sem esperar ticks estáveis. Isso ataca o sintoma exato:
+"ele alinhava e voltava a CAÇAR o meio" (re-staging/re-alinhar) em vez de só
+passar.
+
+Implementação: uma checagem única no topo do bloco de estado ativo (depois das
+guardas de segurança e do abort por `gap < gap_min`), antes da lógica de
+`staging`/`rotating`:
+
+```
+se pode_ir_reto:  state = 'crossing'; return cmd de crossing
+```
+
+Como o armar cai em `staging` e segue pro mesmo tick, isto também cobre o "veio
+reto, passa" (atravessa já no tick de armar). Vale de qualquer distância na
+`zone_radius`. O `align_stable` (esperar N ticks alinhado) **deixa de existir** na
+decisão — era justamente o "alinhou mas continua verificando".
 
 ### B. Critério único `pode_ir_reto` + fim do ping-pong
 
@@ -67,9 +81,11 @@ que já existe) e da meia-largura do robô. Auto-ajusta:
 ~10cm de folga TOTAL → `fit_lat` apertado é correto e desejado.)
 
 Efeitos no `rotating`:
-- "Alinhado" = `pode_ir_reto`, segurado por `align_stable=2` ticks (era 5).
-- A volta-pro-`staging` passa a usar `fit_lat` (em vez do 8cm fixo) → só
-  reaproxima do eixo quando genuinamente NÃO cabe reto → acaba o ping-pong.
+- A transição pro `crossing` saiu do `rotating` (virou a checagem universal A).
+  O `rotating` agora só: gira no lugar pra endireitar o yaw, e se está
+  genuinamente FORA do vão (`|d| > fit_lat`) volta pro `staging` reaproximar.
+- A volta-pro-`staging` usa `fit_lat` (em vez do 8cm fixo) → só reaproxima do
+  eixo quando genuinamente NÃO cabe reto → acaba o ping-pong.
 - `align_yaw` continua 5° (apertado = reto). O `rotating` point-turn endireita no
   lugar; ninguém arca dentro do vão.
 
@@ -91,7 +107,7 @@ a janela do `/plan` defasado: em ~1s o plano atualiza e o robô já saiu →
 |---|---|---|---|
 | `align_yaw_deg` | 5.0 | 5.0 (mantém) | ângulo apertado = garantia do reto |
 | `align_lat` | 0.08 | — (deixa de ser o gate; vira `fit_lat` geométrico) | — |
-| `align_stable` | 5 | **2** | commita mais rápido quando reto+cabe |
+| `align_stable` | 5 | **DEPRECATED** | a checagem universal cruza na hora, sem esperar ticks |
 | `robot_half_width` | — | **0.25** (novo) | meia-largura do robô p/ `fit_lat` |
 | `fit_margin` | — | **0.05** (novo) | folga de segurança subtraída no `fit_lat` |
 | `success_cooldown` | — | **2.0** (novo) | trava pós-travessia (C) |
