@@ -117,6 +117,37 @@ mas **deixa de ser o gate** de "pronto pra cruzar": esse papel passa pro `fit_la
 geométrico. `align_lat` não entra mais na decisão de readiness nem na volta-pro-
 staging.
 
+## Refino pós-campo (2026-06-17, 2ª rodada)
+
+Validação em campo do A+B+C: "passou 4× liso, confiante e rápido", melhor que
+antes. Mas dois ajustes ("diminuir um pouco a confiança"):
+
+1. **Bateu no batente uma vez:** girando rápido (`rot_speed=4.0`≈11,5°/tick), num
+   tick o yaw caiu na banda de ±`align_yaw` → ativou `crossing` → a **inércia
+   angular** levou o robô torto pra dentro → bateu. A checagem olhava o ângulo
+   INSTANTÂNEO, sem ver se ele tinha PARADO de girar.
+   **Fix:** o "passo reto daqui?" só ativa o crossing quando, além de reto+cabe, a
+   **taxa de giro real ≈ 0** (`cross_yaw_rate_max`, default 0,5 rad/s, medida de
+   dois ticks de pose). "Alinhou E parou, aí passa." Vindo reto do nav2 (não está
+   girando) a taxa já é ~0 → cruza na hora; no meio de um giro rápido → espera
+   assentar. O `rotating` passa a COMANDAR PARAR (wz=0) quando entra na banda de
+   ±`align_yaw` (não gira mais; deixa assentar), em vez de dar mais um giro.
+   *Resíduo a observar em campo:* overshoot além de ±`align_yaw` re-corrige a
+   `rot_speed` cheia (não baixar, stalla); no skid-steer (atrito alto) deve
+   convergir, mas se "tremer" na porta sem cruzar, adicionar banda de
+   amortecimento.
+2. **Ativava demais o "indo pro eixo" (staging) já estando no meio:** quando já
+   centrado (`|d|≤fit_lat`) mas com yaw torto, o `staging` perseguia o PONTO exato
+   de preparação (às vezes recuando) antes de alinhar.
+   **Fix:** já no eixo → vai DIRETO pro `rotating` (alinha no lugar), sem perseguir
+   o ponto. O `staging` passa a servir só pra quando está FORA do eixo
+   (`|d|>fit_lat`) — aí dirige PRO eixo, e ao entrar no fit vira `rotating` em
+   qualquer distância. Removido o `stage_tol` (chegar no ponto) como gatilho.
+
+Novo param live-tunável: `cross_yaw_rate_max` (0,5). Knobs de campo agora:
+`fit_margin` (raspou?), `cross_yaw_rate_max` (cruzou cedo demais girando? baixa;
+demora a cruzar? sobe), `success_cooldown`.
+
 ## Não-objetivos (YAGNI)
 
 - NÃO reescrever a FSM nem colapsar estados (era a opção "D", recusada).
