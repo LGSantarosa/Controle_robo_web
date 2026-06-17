@@ -7,6 +7,7 @@ from robot_nav.door_crossing import (
     door_geometry,
     door_progress_lateral,
     crossing_yaw,
+    plan_crosses_door,
 )
 
 
@@ -99,6 +100,10 @@ def mk():
 
 def step(dc, t, pose, goal=True, nav=True, gap=math.inf, fresh=True):
     return dc.update(t, pose, [DOOR], goal, nav, gap, fresh)
+
+
+def step_plan(dc, t, pose, plan, goal=True, nav=True, gap=math.inf, fresh=True):
+    return dc.update(t, pose, [DOOR], goal, nav, gap, fresh, plan=plan)
 
 
 def test_idle_sem_goal_ou_fora_da_zona():
@@ -222,6 +227,43 @@ def test_cfg_mutation_is_live():
     # recuou -> ainda é staging. Prova que a mutação pegou.
     c = step(dc, 0.1, (1.5, 1.4, math.pi / 2))
     assert c.state == 'staging'
+
+
+# --- arming pelo /plan (2026-06-17): o gate de bearing fechava só DEPOIS da
+# curva do Nav2 -> door assumia tarde/torto. Agora arma se a ROTA cruza a porta,
+# independente de pra onde o nariz aponta. -------------------------------------
+
+def test_plan_crosses_door_geometria():
+    a, b = (1.0, 2.0), (2.0, 2.0)                 # vão em y=2, x∈[1,2]
+    assert plan_crosses_door([(1.5, 1.0), (1.5, 3.0)], a, b) is True
+    assert plan_crosses_door([(1.5, 1.0), (1.5, 1.8)], a, b) is False  # não chega
+    assert plan_crosses_door([(3.0, 1.0), (3.0, 3.0)], a, b) is False  # cruza a parede FORA do vão
+    assert plan_crosses_door([], a, b) is False
+    assert plan_crosses_door([(1.5, 1.0)], a, b) is False
+
+
+def test_sem_plano_de_costas_nao_arma():
+    # baseline: de costas pra porta e sem /plan -> o bearing barra (>70°).
+    dc = mk()
+    assert step(dc, 0.0, (1.5, 1.0, -math.pi / 2)).state == 'idle'
+
+
+def test_arma_pelo_plano_mesmo_de_costas():
+    # MESMA pose de costas, mas com /plan cruzando a porta -> arma (desacoplado
+    # do heading; assume antes da curva do Nav2).
+    dc = mk()
+    plan = [(1.5, 1.0), (1.5, 3.0)]
+    c = step_plan(dc, 0.0, (1.5, 1.0, -math.pi / 2), plan)
+    assert c.state == 'staging'
+
+
+def test_plano_que_nao_cruza_nao_arma_nem_encarando():
+    # anti-falso-positivo: encarando a porta, mas a ROTA não a cruza -> NÃO
+    # rouba o volante (porta que ele só passa do lado).
+    dc = mk()
+    plan = [(1.5, 1.0), (1.5, 1.8)]
+    c = step_plan(dc, 0.0, (1.5, 1.0, math.pi / 2), plan)
+    assert c.state == 'idle'
 
 
 # --- giro limpo no rotating (2026-06-17): troca o bang-bang por um giro de

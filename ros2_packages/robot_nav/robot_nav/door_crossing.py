@@ -139,6 +139,37 @@ def gap_ahead(ranges, angle_min: float, angle_increment: float,
     return float(x[sel].min())
 
 
+def _ccw(a, b, c) -> float:
+    """Produto vetorial (orientação) de a->b vs a->c. >0 esq, <0 dir."""
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _segments_cross(p1, p2, p3, p4) -> bool:
+    """True se os segmentos p1-p2 e p3-p4 se cruzam de verdade (não conta só
+    encostar nas pontas/colinear — quer um cruzamento claro)."""
+    d1, d2 = _ccw(p3, p4, p1), _ccw(p3, p4, p2)
+    d3, d4 = _ccw(p1, p2, p3), _ccw(p1, p2, p4)
+    return ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0))
+
+
+def plan_crosses_door(plan, a, b) -> bool:
+    """True se a rota planejada (lista de (x,y) no frame do mapa) atravessa o
+    vão da porta (segmento entre os 2 batentes a e b).
+
+    É o sinal de arming robusto (achado 2026-06-17): o gate antigo por bearing
+    (porta "na frente" do robô) só fechava DEPOIS do Nav2 curvar o robô pra
+    porta -> o door assumia tarde, colado/torto. O plano cruzar a porta diz
+    'o goal é do outro lado DESTA porta' independente de pra onde o nariz aponta
+    -> arma cedo e reto, antes da curva. E não dá falso-positivo (porta que o
+    robô só passa do lado: o plano não a cruza)."""
+    if not plan or len(plan) < 2:
+        return False
+    for i in range(len(plan) - 1):
+        if _segments_cross(plan[i], plan[i + 1], a, b):
+            return True
+    return False
+
+
 # ---- máquina de estados pura ------------------------------------------------
 
 @dataclass
@@ -275,34 +306,45 @@ class DoorCrossing:
         self._esc_target = target
         return Cmd('reversing', -cfg.escape_reverse_speed, 0.0, self.door['id'])
 
-    def _pick_door(self, pose, doors):
+    def _pick_door(self, pose, doors, plan=None):
+        """Escolhe a porta a cruzar entre as marcadas na zona. Critério primário
+        = o /plan ATRAVESSA a porta (desacopla o arming do heading -> assume
+        antes da curva do Nav2). Sem /plan disponível, cai no bearing antigo
+        (compat). Empate -> a mais próxima."""
         x, y, yaw = pose
+        best, best_dist = None, None
         for d in doors:
             g = door_geometry(tuple(d['a']), tuple(d['b']))
             dist = math.hypot(x - g.cx, y - g.cy)
             if dist > self.cfg.zone_radius:
                 continue
-            # "na frente" = QUALQUER parte do vão dentro do cone (centro ou
-            # batente); na zona (<=1.2 m) a aproximação pode vir torta e o
-            # centro sozinho cair fora do cone com o vão ainda visível.
-            bearing = min(
-                abs(_wrap(math.atan2(py - y, px - x) - yaw))
-                for px, py in ((g.cx, g.cy), tuple(d['a']), tuple(d['b'])))
-            if bearing > self.cfg.approach_bearing:
-                continue
-            return d, g
-        return None, None
+            if plan:
+                # tem rota: só arma se ela cruza ESTA porta (sem falso-positivo)
+                if not plan_crosses_door(plan, tuple(d['a']), tuple(d['b'])):
+                    continue
+            else:
+                # sem rota (/plan não chegou): "na frente" = QUALQUER parte do
+                # vão dentro do cone (centro ou batente).
+                bearing = min(
+                    abs(_wrap(math.atan2(py - y, px - x) - yaw))
+                    for px, py in ((g.cx, g.cy), tuple(d['a']), tuple(d['b'])))
+                if bearing > self.cfg.approach_bearing:
+                    continue
+            if best_dist is None or dist < best_dist:
+                best, best_dist = (d, g), dist
+        return best if best is not None else (None, None)
 
     # -- tick -----------------------------------------------------------------
     def update(self, now, pose, doors, goal_active, nav_forward, gap,
-               scan_fresh, front_gap=math.inf, rear_gap=math.inf) -> Cmd:
+               scan_fresh, front_gap=math.inf, rear_gap=math.inf,
+               plan=None) -> Cmd:
         cfg = self.cfg
 
         if self.state == 'idle':
             if (pose is None or not goal_active or not nav_forward
                     or now < self._cooldown_until or not doors):
                 return Cmd('idle', 0.0, 0.0, None)
-            door, geom = self._pick_door(pose, doors)
+            door, geom = self._pick_door(pose, doors, plan)
             if door is None:
                 return Cmd('idle', 0.0, 0.0, None)
             x, y, _ = pose
@@ -436,6 +478,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                            qos_profile_sensor_data)
     from action_msgs.msg import GoalStatusArray
     from geometry_msgs.msg import Twist
+    from nav_msgs.msg import Path
     from rcl_interfaces.msg import SetParametersResult
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import String
@@ -500,6 +543,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self.doors = []
             self._goal_active = {}
             self._nav_forward = False
+            self._plan = []            # rota planejada [(x,y), ...] no frame map
             self._scan = None          # (ranges, angle_min, inc)
             self._scan_t = None
             self._last_zone = None     # dedup do /door_zone
@@ -514,6 +558,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             be = qos_profile_sensor_data
             self.create_subscription(LaserScan, 'scan', self._on_scan, be)
             self.create_subscription(Twist, 'nav_vel_raw', self._on_nav, 10)
+            self.create_subscription(Path, 'plan', self._on_plan, 10)
             for topic in ('navigate_to_pose/_action/status',
                           'navigate_through_poses/_action/status'):
                 self.create_subscription(
@@ -567,6 +612,11 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             # door_crossing armado quando o nav quer GIRAR pra alinhar (linear≈0).
             self._nav_forward = nav_engaging(msg.linear.x, self.nav_move_lin)
 
+        def _on_plan(self, msg):
+            # rota global do Nav2 -> sinal de arming (atravessa a porta?).
+            self._plan = [(p.pose.position.x, p.pose.position.y)
+                          for p in msg.poses]
+
         def _on_status(self, topic, msg):
             self._goal_active[topic] = any(
                 st.status in ACTIVE for st in msg.status_list)
@@ -616,7 +666,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             prev = self.sup.state
             cmd = self.sup.update(now, pose, self.doors, goal,
                                   self._nav_forward, gap, fresh,
-                                  front_gap, rear_gap)
+                                  front_gap, rear_gap, plan=self._plan)
             if cmd.state != prev:
                 self.get_logger().info(f'door_crossing: {prev} -> {cmd.state}')
             # /door_zone: a manobra ativa manda; senão, se há porta marcada na
