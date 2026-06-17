@@ -210,6 +210,20 @@ def test_default_rot_left_boost():
     assert DoorCrossConfig().rot_left_boost == 1.4
 
 
+def test_cfg_mutation_is_live():
+    # o callback de param do nó (2026-06-17) muta self.cfg em runtime; isto
+    # garante o mecanismo: a máquina de estados guarda a MESMA referência e relê
+    # cfg todo tick, então o valor novo pega sem reconstruir o objeto.
+    dc = mk()
+    c = step(dc, 0.0, (1.5, 1.0, math.pi / 2))   # arma -> staging (alvo y=1.4)
+    assert c.state == 'staging'
+    dc.cfg.stage_dist = 0.9                        # ré ao vivo: alvo recua p/ y=1.1
+    # robô no antigo alvo (y=1.4): com 0.6 já chegava (rotating); com 0.9 o alvo
+    # recuou -> ainda é staging. Prova que a mutação pegou.
+    c = step(dc, 0.1, (1.5, 1.4, math.pi / 2))
+    assert c.state == 'staging'
+
+
 # --- giro limpo no rotating (2026-06-17): troca o bang-bang por um giro de
 # sentido único que PARA ao cruzar o alvo (mata o limit cycle que arrastava o
 # lateral -> ping-pong staging<->rotating). ------------------------------------

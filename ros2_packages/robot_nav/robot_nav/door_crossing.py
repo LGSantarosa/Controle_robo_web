@@ -436,6 +436,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                            qos_profile_sensor_data)
     from action_msgs.msg import GoalStatusArray
     from geometry_msgs.msg import Twist
+    from rcl_interfaces.msg import SetParametersResult
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import String
     from tf2_ros import Buffer, TransformListener, TransformException
@@ -489,6 +490,13 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             # hardcoded se o sensor sair do centro um dia.
             self.lidar_x = g['lidar_x']
 
+            # Live-tuning: o nó lia os params SÓ no boot -> `ros2 param set` não
+            # pegava no nó rodando (achado 2026-06-17 afinando a porta em campo).
+            # O DoorCrossConfig é mutável e a máquina de estados guarda a MESMA
+            # referência (self.sup.cfg is self.cfg) relendo cfg todo tick, então
+            # o callback só muta os campos -> pega no tick seguinte, sem restart.
+            self.add_on_set_parameters_callback(self._on_set_params)
+
             self.doors = []
             self._goal_active = {}
             self._nav_forward = False
@@ -519,6 +527,29 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 '|yaw|<%.0f°, atravessa %.2fm/s' % (
                     self.cfg.zone_radius, self.cfg.align_lat,
                     math.degrees(self.cfg.align_yaw), self.cfg.cross_speed))
+
+        # campos do DoorCrossConfig afináveis ao vivo (mutados na MESMA ref que
+        # a máquina de estados relê todo tick); rate_hz fica de fora (o timer é
+        # criado no boot).
+        _CFG_PARAMS = ('zone_radius', 'stage_dist', 'align_lat',
+                       'align_timeout', 'rot_speed', 'rot_left_boost',
+                       'cross_speed', 'stage_speed', 'escape_reverse_speed',
+                       'gap_min', 'exit_margin')
+        _NODE_PARAMS = ('scan_stale', 'nav_move_lin', 'rear_tail_x',
+                        'rear_half_width', 'front_head_x', 'lidar_x')
+
+        def _on_set_params(self, params):
+            for p in params:
+                if p.name == 'align_yaw_deg':
+                    self.cfg.align_yaw = math.radians(p.value)
+                elif p.name in self._CFG_PARAMS:
+                    setattr(self.cfg, p.name, p.value)
+                elif p.name in self._NODE_PARAMS:
+                    setattr(self, p.name, p.value)
+                elif p.name == 'rate_hz':
+                    self.get_logger().warn(
+                        'rate_hz só muda com restart do nó (timer fixo no boot)')
+            return SetParametersResult(successful=True)
 
         def _on_doors(self, msg):
             try:
