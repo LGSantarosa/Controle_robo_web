@@ -165,6 +165,11 @@ class DoorCrossConfig:
     # aborta e devolve pro nav2 em vez de congelar.
     align_timeout: float = 15.0     # s — STAGING+ROTATING juntos
     rot_speed: float = 4.0          # rad/s — giro no lugar (point-turn forte; 3->4 em 2026-06-16, sobe a 6.0 ao vivo se patinar; NUNCA arco)
+    # As rodas pegam pior girando pra ESQUERDA -> boost de FORÇA nesse lado
+    # (mesmo 1.4 do unstuck spin, validado em campo). Com as rodas ruins na
+    # DIAGONAL (RL+FR), esq/dir é simétrico, então este boost é só paridade com
+    # o unstuck — live-tunable (zerar p/ simétrico se o campo pedir).
+    rot_left_boost: float = 1.4
     cross_speed: float = 0.22       # m/s — travessia (0.15->0.22 em 2026-06-16: vencer o atrito estático sem patinar)
     cross_k_lat: float = 1.5        # corrige offset lateral durante a travessia
     cross_k_yaw: float = 2.0        # corrige heading durante a travessia
@@ -215,6 +220,7 @@ class DoorCrossing:
         self._stable = 0
         self._cooldown_until = 0.0
         self._escape_count = 0          # rés de escape NESTA travessia
+        self._rot_dir = 0               # sentido do giro do episódio atual (+1 esq/-1 dir/0 livre)
         self._align_t0 = 0.0            # início do "tentando alinhar" (sub-timeout)
         self._align_anchor = (0.0, 0.0)  # posição de referência do substuck
         self._esc_start = (0.0, 0.0)    # pose (x,y) no começo da ré atual
@@ -226,6 +232,7 @@ class DoorCrossing:
         self.door = None
         self.geom = None
         self._stable = 0
+        self._rot_dir = 0
         self._cooldown_until = now + self.cfg.retrigger_cooldown
         return Cmd('idle', 0.0, 0.0, None)
 
@@ -338,6 +345,7 @@ class DoorCrossing:
             if dist <= cfg.stage_tol:
                 self.state = 'rotating'
                 self._stable = 0
+                self._rot_dir = 0          # episódio de giro novo
             else:
                 head = math.atan2(tgy - y, tgx - x)
                 err = _wrap(head - yaw)
@@ -354,6 +362,7 @@ class DoorCrossing:
             aligned = abs(yaw_err) <= cfg.align_yaw and abs(d) <= cfg.align_lat
             if aligned:
                 self._stable += 1
+                self._rot_dir = 0
                 if self._stable >= cfg.align_stable:
                     self.state = 'crossing'
                     return Cmd('crossing', cfg.cross_speed, 0.0,
@@ -363,9 +372,27 @@ class DoorCrossing:
             if abs(d) > cfg.align_lat:
                 # saiu do eixo girando (skid-steer arrasta) -> volta pro staging
                 self.state = 'staging'
+                self._rot_dir = 0
                 return Cmd('staging', 0.0, 0.0, self.door['id'])
-            wz = cfg.rot_speed if yaw_err < 0 else -cfg.rot_speed
-            return Cmd('rotating', 0.0, wz, self.door['id'])
+            # GIRO LIMPO (igual ao spin do unstuck): escolhe o lado UMA vez e
+            # gira forte até CRUZAR o alvo, sem inverter a cada tick. O bang-bang
+            # antigo (±rot_speed recalculado todo tick) oscilava em torno do
+            # alvo -> cada vai-e-volta arrastava o lateral -> estourava align_lat
+            # -> ping-pong com o staging. O yaw aqui vem do TF (já fundido c/
+            # IMU pelo pose_estimator), então é "malha fechada na IMU" de graça.
+            want = -1 if yaw_err > 0 else 1     # lado que reduz o yaw_err
+            if self._rot_dir == 0 or want == self._rot_dir:
+                # ainda não cruzou o alvo -> segue no MESMO sentido
+                self._rot_dir = want
+                speed = cfg.rot_speed
+                if want > 0:
+                    speed *= cfg.rot_left_boost   # esquerda escorrega: + força
+                return Cmd('rotating', 0.0, want * speed, self.door['id'])
+            # o lado necessário INVERTEU => cruzou o alvo (overshoot < 1 tick).
+            # PARA e assenta; re-avalia no próximo tick em vez de reverter
+            # girando (é isto que mata o limit cycle do bang-bang).
+            self._rot_dir = 0
+            return Cmd('rotating', 0.0, 0.0, self.door['id'])
 
         if self.state == 'reversing':
             if rear_gap <= cfg.escape_rear_margin:
@@ -432,6 +459,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('zone_radius', 1.2), ('stage_dist', 0.6),
                 ('align_lat', 0.08), ('align_yaw_deg', 5.0),
                 ('align_timeout', 15.0), ('rot_speed', 4.0),
+                ('rot_left_boost', 1.4),
                 ('cross_speed', 0.22), ('stage_speed', 0.20),
                 ('escape_reverse_speed', 0.25), ('gap_min', 0.45),
                 ('exit_margin', 0.5), ('rate_hz', 20.0),
@@ -447,6 +475,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 align_lat=g['align_lat'],
                 align_yaw=math.radians(g['align_yaw_deg']),
                 align_timeout=g['align_timeout'], rot_speed=g['rot_speed'],
+                rot_left_boost=g['rot_left_boost'],
                 cross_speed=g['cross_speed'], stage_speed=g['stage_speed'],
                 escape_reverse_speed=g['escape_reverse_speed'],
                 gap_min=g['gap_min'], exit_margin=g['exit_margin'])

@@ -205,6 +205,54 @@ def test_default_rot_speed_is_4():
     assert DoorCrossConfig().rot_speed == 4.0
 
 
+def test_default_rot_left_boost():
+    # paridade com o spin do unstuck (spin_left_boost=1.4).
+    assert DoorCrossConfig().rot_left_boost == 1.4
+
+
+# --- giro limpo no rotating (2026-06-17): troca o bang-bang por um giro de
+# sentido único que PARA ao cruzar o alvo (mata o limit cycle que arrastava o
+# lateral -> ping-pong staging<->rotating). ------------------------------------
+
+def _into_rotating(dc, yaw, t0=0.0):
+    """Arma a porta (facing) e teleporta pro ponto de staging com `yaw` -> cai
+    no rotating no MESMO tick (staging->rotating é fall-through). Devolve o Cmd
+    do rotating já com o yaw_err desejado."""
+    stage_y = 2.0 - CFG.stage_dist
+    step(dc, t0, (1.5, stage_y - 0.3, math.pi / 2))   # arma encarando a porta
+    return step(dc, t0 + 0.1, (1.5, stage_y, yaw))    # chega -> rotating
+
+
+def test_rotating_gira_um_lado_so_nao_inverte():
+    dc = mk()
+    stage_y = 2.0 - CFG.stage_dist
+    cA = _into_rotating(dc, 0.0)                # yaw_err=-pi/2 -> gira p/ esq (+)
+    assert cA.state == 'rotating' and cA.wz > 0
+    # ainda do mesmo lado do alvo (yaw_err ainda <0): NÃO inverte o sentido
+    cB = step(dc, 0.2, (1.5, stage_y, 0.3))
+    assert cB.state == 'rotating' and cB.wz > 0
+
+
+def test_rotating_para_ao_cruzar_o_alvo():
+    dc = mk()
+    stage_y = 2.0 - CFG.stage_dist
+    cA = _into_rotating(dc, 0.0)               # gira p/ esquerda (wz>0)
+    assert cA.wz > 0
+    # passou do alvo (yaw > pi/2, fora do band de 5°): PARA, não reverte girando
+    cB = step(dc, 0.2, (1.5, stage_y, math.pi / 2 + 0.2))
+    assert cB.state == 'rotating' and cB.wz == pytest.approx(0.0)
+
+
+def test_rotating_boost_a_esquerda_nao_a_direita():
+    # giro à esquerda (want=+1) leva o boost; à direita (want=-1), não.
+    dc = mk()
+    cL = _into_rotating(dc, 0.0)               # yaw_err=-pi/2 -> esquerda
+    assert cL.wz == pytest.approx(CFG.rot_speed * CFG.rot_left_boost)
+    dc2 = mk()
+    cR = _into_rotating(dc2, math.pi / 2 + 0.5)  # yaw_err=+0.5 -> direita
+    assert cR.wz == pytest.approx(-CFG.rot_speed)
+
+
 from robot_nav.door_crossing import nav_engaging
 
 
