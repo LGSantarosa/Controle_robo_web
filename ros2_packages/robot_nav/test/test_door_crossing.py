@@ -219,13 +219,18 @@ def test_cfg_mutation_is_live():
     # o callback de param do nó (2026-06-17) muta self.cfg em runtime; isto
     # garante o mecanismo: a máquina de estados guarda a MESMA referência e relê
     # cfg todo tick, então o valor novo pega sem reconstruir o objeto.
-    dc = mk()
-    c = step(dc, 0.0, (1.5, 1.0, math.pi / 2))   # arma -> staging (alvo y=1.4)
+    # cfg PRÓPRIO (não o CFG compartilhado) — esta mutação pode poluir os outros.
+    cfg = DoorCrossConfig(zone_radius=1.2, stage_dist=0.6, align_timeout=15.0,
+                          total_timeout=40.0)
+    dc = DoorCrossing(cfg)
+    c = dc.update(0.0, (1.5, 1.0, math.pi / 2), [DOOR], True, True,
+                  math.inf, True)                 # arma -> staging (alvo y=1.4)
     assert c.state == 'staging'
-    dc.cfg.stage_dist = 0.9                        # ré ao vivo: alvo recua p/ y=1.1
+    cfg.stage_dist = 0.9                           # ré ao vivo: alvo recua p/ y=1.1
     # robô no antigo alvo (y=1.4): com 0.6 já chegava (rotating); com 0.9 o alvo
     # recuou -> ainda é staging. Prova que a mutação pegou.
-    c = step(dc, 0.1, (1.5, 1.4, math.pi / 2))
+    c = dc.update(0.1, (1.5, 1.4, math.pi / 2), [DOOR], True, True,
+                  math.inf, True)
     assert c.state == 'staging'
 
 
@@ -263,6 +268,37 @@ def test_plano_que_nao_cruza_nao_arma_nem_encarando():
     dc = mk()
     plan = [(1.5, 1.0), (1.5, 1.8)]
     c = step_plan(dc, 0.0, (1.5, 1.0, math.pi / 2), plan)
+    assert c.state == 'idle'
+
+
+# --- aborto-de-segurança na aproximação (2026-06-17): door_vel fura o collision
+# monitor, então staging/rotating precisam largar pro nav2 se um obstáculo (não
+# o batente) aparece na frente. -------------------------------------------------
+
+def test_staging_aborta_se_obstaculo_na_aproximacao():
+    dc = mk()
+    c = step(dc, 0.0, (1.5, 1.0, math.pi / 2))          # arma -> staging
+    assert c.state == 'staging'
+    # algo (não-batente) entra na frente durante a aproximação (gap < gap_min):
+    c = step(dc, 0.1, (1.5, 1.05, math.pi / 2), gap=0.3)
+    assert c.state == 'idle'
+
+
+def test_staging_segue_sem_obstaculo():
+    # sem obstáculo (gap=inf) a aproximação segue normal.
+    dc = mk()
+    step(dc, 0.0, (1.5, 1.0, math.pi / 2))
+    c = step(dc, 0.1, (1.5, 1.05, math.pi / 2))         # gap default = inf
+    assert c.state == 'staging'
+
+
+def test_rotating_aborta_se_obstaculo_na_frente():
+    dc = mk()
+    stage_y = 2.0 - CFG.stage_dist
+    step(dc, 0.0, (1.5, stage_y - 0.3, math.pi / 2))    # arma staging
+    c = step(dc, 0.1, (1.5, stage_y, math.pi / 2))       # chega -> rotating
+    assert c.state == 'rotating'
+    c = step(dc, 0.2, (1.5, stage_y, 0.0), gap=0.3)      # obstáculo na frente -> abort
     assert c.state == 'idle'
 
 

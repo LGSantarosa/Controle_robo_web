@@ -375,6 +375,16 @@ class DoorCrossing:
         if self.state in ('staging', 'rotating'):
             if now - self.t_start > cfg.align_timeout:
                 return self._abort(now)
+            # SEGURANÇA (2026-06-17): obstáculo (não-batente) no vão à frente
+            # DURANTE a aproximação -> larga pro nav2, que passa pelo collision
+            # monitor e freia. Como door_vel fura o collision, a aproximação
+            # precisa da própria checagem. Usa o `gap` COM máscara de batente (a
+            # porta não dispara) e gap_min (0.45) < stage_dist (0.6+) -> a parede
+            # da porta fica SEMPRE além do limiar, então só intruso de verdade
+            # aborta (sem falso-positivo na parede). A travessia (crossing), que
+            # fura o collision no vão estreito, já tinha essa checagem.
+            if gap < cfg.gap_min:
+                return self._abort(now)
 
         if self.state == 'staging':
             esc = self._maybe_escape(now, (x, y), front_gap, rear_gap)
@@ -644,8 +654,10 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             fresh = (self._scan_t is not None
                      and now - self._scan_t <= self.scan_stale)
             gap = math.inf
-            if (fresh and pose is not None and self.sup.state == 'crossing'
-                    and self.sup.door is not None):
+            # gap COM máscara de batente: no crossing (vão estreito) e também no
+            # staging/rotating (aborto-de-segurança da aproximação, 2026-06-17).
+            if (fresh and pose is not None and self.sup.door is not None
+                    and self.sup.state in ('staging', 'rotating', 'crossing')):
                 ranges, amin, ainc = self._scan
                 jambs = [tuple(self.sup.door['a']), tuple(self.sup.door['b'])]
                 gap = gap_ahead(ranges, amin, ainc, pose, jambs, 0.30)
