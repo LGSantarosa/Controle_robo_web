@@ -225,6 +225,15 @@ class DoorCrossConfig:
     # DIAGONAL (RL+FR), esq/dir é simétrico, então este boost é só paridade com
     # o unstuck — live-tunable (zerar p/ simétrico se o campo pedir).
     rot_left_boost: float = 1.4
+    # FREIO do giro perto do alvo (2026-06-17, 3ª rodada): a velocidade cheia (4.0
+    # = 11.5°/tick) PASSAVA DIRETO da banda de ±align_yaw e oscilava esq/dir ->
+    # bateu no batente. Longe do alvo (|yaw_err| > rot_brake_angle) gira cheia
+    # (quebra o atrito); dentro do rot_brake_angle desacelera pra rot_brake_speed
+    # (~5°/tick) pra ENCAIXAR sem overshoot. Não é o "proporcional" reprovado (que
+    # abaixava o giro inteiro): aqui só os últimos graus, e o robô JÁ está girando
+    # (atrito quebrado) -> não stalla. Sem boost no freio (não precisa).
+    rot_brake_angle: float = math.radians(12.0)  # rad — a partir daqui, freia
+    rot_brake_speed: float = 2.0    # rad/s — velocidade do giro dentro do freio
     cross_speed: float = 0.22       # m/s — travessia (0.15->0.22 em 2026-06-16: vencer o atrito estático sem patinar)
     cross_k_lat: float = 1.5        # corrige offset lateral durante a travessia
     cross_k_yaw: float = 2.0        # corrige heading durante a travessia
@@ -277,6 +286,11 @@ class DoorCrossing:
         self.t_start = 0.0
         self._last_yaw = None     # yaw do tick anterior (p/ medir a taxa de giro)
         self._last_now = 0.0
+        # diagnóstico (lido pelo nó p/ log de campo): erro de yaw, offset lateral
+        # e taxa de giro do último tick ativo.
+        self.dbg_yaw_err = 0.0
+        self.dbg_d = 0.0
+        self.dbg_yaw_rate = 0.0
         self._cooldown_until = 0.0
         self._escape_count = 0          # rés de escape NESTA travessia
         self._rot_dir = 0               # sentido do giro do episódio atual (+1 esq/-1 dir/0 livre)
@@ -411,6 +425,7 @@ class DoorCrossing:
         else:
             yaw_rate = math.inf
         self._last_yaw, self._last_now = yaw, now
+        self.dbg_yaw_err, self.dbg_d, self.dbg_yaw_rate = yaw_err, d, yaw_rate
 
         if self.state in ('staging', 'rotating'):
             if now - self.t_start > cfg.align_timeout:
@@ -492,9 +507,15 @@ class DoorCrossing:
             if self._rot_dir == 0 or want == self._rot_dir:
                 # ainda não cruzou o alvo -> segue no MESMO sentido
                 self._rot_dir = want
-                speed = cfg.rot_speed
-                if want > 0:
-                    speed *= cfg.rot_left_boost   # esquerda escorrega: + força
+                if abs(yaw_err) > cfg.rot_brake_angle:
+                    # LONGE do alvo: velocidade cheia (quebra o atrito)
+                    speed = cfg.rot_speed
+                    if want > 0:
+                        speed *= cfg.rot_left_boost   # esquerda escorrega: + força
+                else:
+                    # PERTO do alvo: freia pra ENCAIXAR na banda sem passar direto
+                    # (mata a oscilação esq/dir). Já está girando -> não stalla.
+                    speed = cfg.rot_brake_speed
                 return Cmd('rotating', 0.0, want * speed, self.door['id'])
             # o lado necessário INVERTEU => cruzou o alvo (overshoot < 1 tick).
             # PARA e assenta; re-avalia no próximo tick em vez de reverter
@@ -582,6 +603,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 # trava de taxa de giro (só cruza quando parou de girar)
                 ('robot_half_width', 0.25), ('fit_margin', 0.05),
                 ('success_cooldown', 2.0), ('cross_yaw_rate_max', 0.5),
+                ('rot_brake_deg', 12.0), ('rot_brake_speed', 2.0),
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
                 ('rear_tail_x', -0.25), ('rear_half_width', 0.30),
                 ('front_head_x', 0.25), ('lidar_x', 0.0),
@@ -601,7 +623,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 robot_half_width=g['robot_half_width'],
                 fit_margin=g['fit_margin'],
                 success_cooldown=g['success_cooldown'],
-                cross_yaw_rate_max=g['cross_yaw_rate_max'])
+                cross_yaw_rate_max=g['cross_yaw_rate_max'],
+                rot_brake_angle=math.radians(g['rot_brake_deg']),
+                rot_brake_speed=g['rot_brake_speed'])
             self.sup = DoorCrossing(self.cfg)
             self.scan_stale = g['scan_stale']
             self.nav_move_lin = g['nav_move_lin']
@@ -660,7 +684,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                        'align_timeout', 'rot_speed', 'rot_left_boost',
                        'cross_speed', 'stage_speed', 'escape_reverse_speed',
                        'gap_min', 'exit_margin', 'robot_half_width',
-                       'fit_margin', 'success_cooldown', 'cross_yaw_rate_max')
+                       'fit_margin', 'success_cooldown', 'cross_yaw_rate_max',
+                       'rot_brake_speed')
         _NODE_PARAMS = ('scan_stale', 'nav_move_lin', 'rear_tail_x',
                         'rear_half_width', 'front_head_x', 'lidar_x')
 
@@ -668,6 +693,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             for p in params:
                 if p.name == 'align_yaw_deg':
                     self.cfg.align_yaw = math.radians(p.value)
+                elif p.name == 'rot_brake_deg':
+                    self.cfg.rot_brake_angle = math.radians(p.value)
                 elif p.name in self._CFG_PARAMS:
                     setattr(self.cfg, p.name, p.value)
                 elif p.name in self._NODE_PARAMS:
@@ -750,8 +777,20 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             cmd = self.sup.update(now, pose, self.doors, goal,
                                   self._nav_forward, gap, fresh,
                                   front_gap, rear_gap, plan=self._plan)
+            # diagnóstico de campo (2026-06-17): yaw_err/lat/taxa/gaps na transição
+            # E estrangulado durante a manobra (~2 Hz), p/ achar a causa do "bateu
+            # no batente" sem adivinhar (overshoot do giro? lateral? cruzou torto?).
+            dbg = ('yaw_err=%+.1f° lat=%+.0fcm taxa=%.1f vx=%+.2f wz=%+.2f '
+                   'gap=%.2f front=%.2f' % (
+                       math.degrees(self.sup.dbg_yaw_err), self.sup.dbg_d * 100,
+                       self.sup.dbg_yaw_rate, cmd.vx, cmd.wz, gap, front_gap))
             if cmd.state != prev:
-                self.get_logger().info(f'door_crossing: {prev} -> {cmd.state}')
+                self.get_logger().info(
+                    f'door_crossing: {prev} -> {cmd.state} | {dbg}')
+            elif cmd.state in ('staging', 'rotating', 'crossing', 'reversing'):
+                self._dbg_tick = getattr(self, '_dbg_tick', 0) + 1
+                if self._dbg_tick % 10 == 0:        # ~2 Hz a 20 Hz de loop
+                    self.get_logger().info(f'door_crossing[{cmd.state}] | {dbg}')
             # /door_zone: a manobra ativa manda; senão, se há porta marcada na
             # zona com goal ativo, publica 'approaching' (gate do standdown do
             # unstuck). 'approaching' NÃO comanda door_vel — só sinaliza a região.

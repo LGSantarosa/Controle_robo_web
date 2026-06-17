@@ -336,6 +336,19 @@ def test_rotating_boost_a_esquerda_nao_a_direita():
     assert cR.wz == pytest.approx(-CFG.rot_speed)
 
 
+def test_giro_freia_perto_do_alvo():
+    # 2026-06-17 (3ª rodada): o giro a velocidade cheia (4.0 = 11.5°/tick) passava
+    # direto da banda de ±5° e oscilava esq/dir -> bateu no batente. Agora: LONGE do
+    # alvo = velocidade cheia (quebra o atrito); PERTO (< rot_brake_angle) = freio
+    # (~2 rad/s, ~5°/tick) pra ENCAIXAR sem overshoot.
+    dc = mk()
+    cFar = _into_rotating(dc, 0.0)                    # yaw_err=-pi/2 (longe) -> cheia
+    assert abs(cFar.wz) == pytest.approx(CFG.rot_speed * CFG.rot_left_boost)
+    dc2 = mk()
+    cNear = _into_rotating(dc2, math.pi / 2 - 0.15)   # yaw_err=-0.15 (8.6°) -> freio
+    assert abs(cNear.wz) == pytest.approx(CFG.rot_brake_speed)  # freio, SEM boost
+
+
 from robot_nav.door_crossing import nav_engaging
 
 

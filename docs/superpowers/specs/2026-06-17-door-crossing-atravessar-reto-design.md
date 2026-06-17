@@ -148,6 +148,29 @@ Novo param live-tunável: `cross_yaw_rate_max` (0,5). Knobs de campo agora:
 `fit_margin` (raspou?), `cross_yaw_rate_max` (cruzou cedo demais girando? baixa;
 demora a cruzar? sobe), `success_cooldown`.
 
+## Refino pós-campo (2026-06-17, 3ª rodada) — FREIO no giro
+
+A 2ª rodada bateu no batente DE NOVO. Log (`door_crossing:` transições) mostrou
+~11s de briga `staging↔rotating↔reversing` antes de cruzar torto: o robô "girou
+esquerda-direita rápido demais". **Causa raiz (confirmada):** o point-turn a
+`rot_speed=4.0` = **11,5°/tick** PASSA DIRETO da banda de ±`align_yaw` (10° de
+largura) → na outra ponta recomeça giro a velocidade cheia → **oscila** sem
+assentar. A trava de taxa (2ª rodada) impediu de cruzar no meio do giro, mas não
+curou a oscilação. (A ré que disparou no meio estava CORRETA — ia de cara no
+batente, recuou; é a proteção anti-batida, mantida.)
+
+**Fix — freio nos últimos graus:** o point-turn usa velocidade cheia quando
+`|yaw_err| > rot_brake_angle` (12°, quebra o atrito, gira rápido) e desacelera pra
+`rot_brake_speed` (2,0 rad/s ≈ 5°/tick) dentro disso → ENCAIXA na banda sem
+overshoot → assenta → cruza reto. NÃO é o "proporcional" reprovado (que abaixava o
+giro inteiro): aqui só os últimos ~7° (12°→5°), e o robô já está girando (atrito
+quebrado) → não stalla. Sem boost no freio. Novos params live: `rot_brake_deg`
+(12), `rot_brake_speed` (2,0).
+
+**+ Log de campo por tick:** a FSM expõe `dbg_yaw_err/dbg_d/dbg_yaw_rate`; o nó
+loga na transição E estrangulado (~2 Hz) durante a manobra (`yaw_err° lat_cm taxa
+vx wz gap front`) — pra CONFIRMAR no próximo teste em vez de adivinhar.
+
 ## Não-objetivos (YAGNI)
 
 - NÃO reescrever a FSM nem colapsar estados (era a opção "D", recusada).
