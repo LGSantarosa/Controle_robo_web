@@ -617,6 +617,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self._last_zone = None     # dedup do /door_zone
             # cliente de action nav2 (posicionar via W; re-mandar G ao cruzar)
             self._goal_g = None        # destino do usuário (x,y,yaw) de /goal_pose
+            self._plan_goal = None     # destino = fim do /plan (fonte robusta de G)
             self._wp_status = 'idle'   # status do goal W: idle|active|succeeded|aborted
             self._wp_handle = None     # handle do goal W em voo (p/ cancelar)
             self._nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
@@ -696,6 +697,14 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             # rota global do Nav2 -> sinal de arming (atravessa a porta?).
             self._plan = [(p.pose.position.x, p.pose.position.y)
                           for p in msg.poses]
+            # fim do plano = destino G. Fonte ROBUSTA do destino (o /goal_pose é
+            # VOLATILE de um disparo só -> o door perde se assinar depois). Usado
+            # como goal_g no arming quando o /goal_pose não chegou.
+            if msg.poses:
+                gp = msg.poses[-1].pose
+                q = gp.orientation
+                self._plan_goal = (gp.position.x, gp.position.y,
+                                   quat_to_yaw(q.x, q.y, q.z, q.w))
 
         def _on_status(self, topic, msg):
             self._goal_active[topic] = any(
@@ -784,9 +793,16 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                                 max_x=self.cfg.stop_look_ahead)
 
             prev = self.sup.state
+            # destino G: prefere o /goal_pose (estável); senão o fim do /plan. O
+            # fallback do plano SÓ enquanto idle — em positioning+ o /plan vira a
+            # rota pro W, então usar o fim dele contaminaria (pareceria "novo goal").
+            if prev == 'idle' and self._goal_g is None:
+                goal_g = self._plan_goal
+            else:
+                goal_g = self._goal_g
             cmd = self.sup.update(now, pose, self.doors, goal,
                                   self._nav_forward, gap, fresh,
-                                  goal_g=self._goal_g, wp_status=self._wp_status,
+                                  goal_g=goal_g, wp_status=self._wp_status,
                                   plan=self._plan)
             # executa o pedido de navegação da máquina (cliente de action nav2)
             if cmd.nav is not None:
