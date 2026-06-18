@@ -176,6 +176,18 @@ def test_crossing_solta_quando_passa_dos_batentes_nao_antes():
     assert c.state == 'idle'
 
 
+def test_crossing_solta_mesmo_com_parede_a_frente_depois_dos_batentes():
+    # 2026-06-18: REGRESSÃO de campo. Robô já passou dos batentes (s>exit_margin)
+    # mas tem parede a <stop_dist à frente (corredor de saída). A saída TEM que
+    # vir antes do gap-stop: senão o caminho B congelava o robô já atravessado e
+    # ele só largava pelo timeout de 8s ("atravessou e ficou parado e travado").
+    dc = mk()
+    t = _ate_crossing(dc)
+    # s=0.35 (passou) E gap=0.30 (parede colada à frente) -> SOLTA, não segura
+    c = step(dc, t + 0.5, (1.5, 2.35, math.pi / 2), gap=0.30)
+    assert c.state == 'idle'
+
+
 def test_crossing_aborta_se_goal_morre():
     # goal cancelado durante a travessia -> larga pro nav2.
     dc = mk()

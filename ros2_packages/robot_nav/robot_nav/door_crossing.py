@@ -570,31 +570,35 @@ class DoorCrossing:
                        self.door['id'])
 
         if self.state == 'crossing':
+            # SAÍDA PRIMEIRO (06-18): passou dos batentes (s além do plano) -> o door
+            # cumpriu o papel, SOLTA pro nav2, não importa o que tem à frente. Isto
+            # TEM que vir antes do gap-stop: senão, com o robô JÁ do outro lado mas
+            # uma parede a <stop_dist à frente (corredor de saída), o gap-stop
+            # congelava o robô atravessado e só largava pelo timeout de 8s (campo
+            # 06-18: "atravessou e ficou parado e travado"). O gap-stop (pessoa) só
+            # faz sentido ENQUANTO ainda está no vão.
+            if s > cfg.exit_margin:
+                # Solta com success_cooldown (2026-06-17): o /plan (~1Hz) ainda
+                # mostra por ~1s a rota velha cruzando a porta -> sem cooldown o robô
+                # re-armava, invertia o `side` e tentava voltar pra porta que já
+                # passou. O cooldown segura até o plano atualizar e sair de vez.
+                self.state = 'idle'
+                self.door = None
+                self.geom = None
+                self._cooldown_until = now + cfg.success_cooldown
+                return Cmd('idle', 0.0, 0.0, None)
             if gap < cfg.stop_dist:
                 # SEGURANÇA (caminho B, 2026-06-17): obstáculo não-batente (PESSOA)
-                # na zona de parada à frente. O door_vel fura o collision monitor,
-                # então o door É a autoridade aqui: PARA (vx=0) e segura — NÃO fura
-                # cego pra cima dela. Resume sozinho quando liberar; se persistir
-                # mais que stop_hold_timeout, larga pro nav2 (que freia/replana).
+                # na zona de parada à frente, AINDA dentro do vão. O door_vel fura o
+                # collision monitor, então o door É a autoridade aqui: PARA (vx=0) e
+                # segura — NÃO fura cego pra cima dela. Resume sozinho quando liberar;
+                # se persistir mais que stop_hold_timeout, larga pro nav2 (replana).
                 if self._hold_t0 is None:
                     self._hold_t0 = now
                 elif now - self._hold_t0 > cfg.stop_hold_timeout:
                     return self._abort(now)
                 return Cmd('crossing', 0.0, 0.0, self.door['id'])
             self._hold_t0 = None        # caminho livre -> reseta o relógio do hold
-            if s > cfg.exit_margin:
-                # PASSOU DOS BATENTES (s além do plano da porta): o door cumpriu o
-                # papel — atravessou. Daqui pra frente é problema do NAV2, então
-                # SOLTA e para de corrigir (era a costura pós-porta que enlouquecia,
-                # 06-18). Solta com success_cooldown (2026-06-17): o /plan (~1Hz)
-                # ainda mostra por ~1s a rota velha cruzando a porta -> sem cooldown
-                # o robô re-armava, invertia o `side` e tentava voltar pra porta que
-                # já passou. O cooldown segura até o plano atualizar e sair de vez.
-                self.state = 'idle'
-                self.door = None
-                self.geom = None
-                self._cooldown_until = now + cfg.success_cooldown
-                return Cmd('idle', 0.0, 0.0, None)
             wz = -cfg.cross_k_lat * d - cfg.cross_k_yaw * yaw_err
             wz = max(-cfg.cross_wz_max, min(cfg.cross_wz_max, wz))
             return Cmd('crossing', cfg.cross_speed, wz, self.door['id'])
@@ -639,7 +643,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('rot_left_boost', 1.4),
                 ('cross_speed', 0.22), ('stage_speed', 0.20),
                 ('escape_reverse_speed', 0.25), ('gap_min', 0.45),
-                ('exit_margin', 0.5), ('rate_hz', 20.0),
+                ('exit_margin', 0.30), ('rate_hz', 20.0),
                 # 2026-06-17 (atravessar reto): folga geométrica + cooldown +
                 # trava de taxa de giro (só cruza quando parou de girar)
                 ('robot_half_width', 0.25), ('fit_margin', 0.05),
