@@ -125,6 +125,34 @@ def step_plan(dc, t, pose, plan, goal=True, nav=True, gap=math.inf, fresh=True):
     return dc.update(t, pose, [DOOR], goal, nav, gap, fresh, plan=plan)
 
 
+# --- fluxo novo (2026-06-18): posicionar via nav2, cruzar via door --------
+GPLAN = [(1.5, 1.0), (1.5, 3.0)]          # rota que cruza a porta -> arma
+GDEST = (1.5, 5.0, math.pi / 2)           # destino do usuário, além da porta
+
+
+def step_wp(dc, t, pose, wp_status='idle', goal_g=GDEST, plan=GPLAN,
+            goal=True, nav=True, gap=math.inf, fresh=True):
+    return dc.update(t, pose, [DOOR], goal, nav, gap, fresh,
+                     goal_g=goal_g, wp_status=wp_status, plan=plan)
+
+
+def test_arma_manda_waypoint_e_vai_pro_positioning():
+    dc = mk()
+    c = step_wp(dc, 0.0, (1.5, 1.0, math.pi / 2))
+    assert c.state == 'positioning'
+    assert c.vx == 0.0 and c.wz == 0.0       # mãos quietas: nav2 dirige
+    assert c.nav[0] == 'goto'
+    wx, wy, wyaw = c.nav[1]
+    assert (wx, wy) == pytest.approx((1.5, 2.0 - 1.0))   # W = eixo, 1m antes
+    assert wyaw == pytest.approx(math.pi / 2)
+
+
+def test_nao_arma_sem_goal_g():
+    dc = mk()
+    c = step_wp(dc, 0.0, (1.5, 1.0, math.pi / 2), goal_g=None)
+    assert c.state == 'idle' and c.nav is None
+
+
 def test_idle_sem_goal_ou_fora_da_zona():
     dc = mk()
     # na zona mas sem goal

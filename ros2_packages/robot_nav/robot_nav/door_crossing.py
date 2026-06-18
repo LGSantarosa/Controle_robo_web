@@ -264,6 +264,11 @@ class DoorCrossConfig:
     # (atrito quebrado) -> não stalla. Sem boost no freio (não precisa).
     rot_brake_angle: float = math.radians(12.0)  # rad — a partir daqui, freia
     rot_brake_speed: float = 2.0    # rad/s — velocidade do giro dentro do freio
+    # WAYPOINT pré-porta (2026-06-18): nav2 leva o robô a W (no eixo, recuado,
+    # centrado) e o door só alinha+cruza. Substitui a aproximação reativa.
+    wp_standoff: float = 1.0        # m — distância de W antes do centro da porta
+    wp_retries: int = 2             # re-tentativas de mandar W antes de desistir
+    wp_timeout: float = 30.0        # s — tempo do nav2 chegar em W antes de re-tentar
     cross_speed: float = 0.22       # m/s — travessia (0.15->0.22 em 2026-06-16: vencer o atrito estático sem patinar)
     cross_k_lat: float = 1.5        # corrige offset lateral durante a travessia
     cross_k_yaw: float = 2.0        # corrige heading durante a travessia
@@ -354,6 +359,9 @@ class DoorCrossing:
         self._align_anchor = (0.0, 0.0)  # posição de referência do substuck
         self._esc_start = (0.0, 0.0)    # pose (x,y) no começo da ré atual
         self._esc_target = 0.0          # quanto recuar nesta ré
+        self._goal_g = None             # destino do usuário (x,y,yaw) capturado p/ re-mandar
+        self._wp_t0 = 0.0               # quando mandou o W atual (timeout)
+        self._wp_tries = 0              # re-tentativas de W nesta manobra
 
     # -- helpers ------------------------------------------------------------
     def _abort(self, now: float) -> Cmd:
@@ -435,12 +443,13 @@ class DoorCrossing:
     # -- tick -----------------------------------------------------------------
     def update(self, now, pose, doors, goal_active, nav_forward, gap,
                scan_fresh, front_gap=math.inf, rear_gap=math.inf,
-               plan=None) -> Cmd:
+               goal_g=None, wp_status='idle', plan=None) -> Cmd:
         cfg = self.cfg
 
         if self.state == 'idle':
             if (pose is None or not goal_active or not nav_forward
-                    or now < self._cooldown_until or not doors):
+                    or now < self._cooldown_until or not doors
+                    or goal_g is None):
                 return Cmd('idle', 0.0, 0.0, None)
             door, geom = self._pick_door(pose, doors, plan)
             if door is None:
@@ -450,14 +459,16 @@ class DoorCrossing:
             raw_s = ((x - geom.cx) * geom.nx + (y - geom.cy) * geom.ny)
             self.side = -1 if raw_s > 0 else +1
             self.door, self.geom = door, geom
-            self.state = 'staging'
+            self._goal_g = goal_g          # destino do usuário (re-mandado ao cruzar)
             self.t_start = now
-            self._escape_count = 0
-            self._align_t0 = now
-            self._align_anchor = (x, y)
-            # cai no fluxo já neste tick; a checagem universal "passo reto daqui?"
-            # (logo abaixo) atravessa NA HORA se já estiver alinhado — inclusive
-            # já no tick de armar (era o "veio reto, passa").
+            self._wp_tries = 0
+            self._wp_t0 = now
+            # POSICIONAR via nav2: manda o robô pro waypoint pré-porta W (no eixo,
+            # recuado, de frente). O door fica em positioning (mãos quietas) até o
+            # nav2 entregar; aí assume pro alinhar+cruzar de um ponto seguro.
+            self.state = 'positioning'
+            W = pre_door_waypoint(geom, self.side, cfg.wp_standoff)
+            return Cmd('positioning', 0.0, 0.0, door['id'], nav=('goto', W))
 
         # guardas comuns a qualquer estado ativo
         if pose is None or not goal_active or not scan_fresh:
