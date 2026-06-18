@@ -210,6 +210,14 @@ class DoorCrossConfig:
     # rotating, NUNCA um arco dentro do vão. NÃO afrouxar.
     robot_half_width: float = 0.25  # m — meia-largura do robô (footprint 0.5) p/ fit_lat
     fit_margin: float = 0.05        # m — folga de segurança subtraída do vão no fit_lat
+    turn_standoff: float = 0.5      # m — STANDOFF mínimo do plano da porta pra GIRAR
+    # no lugar (2026-06-18). O giro varre os cantos do robô num raio ~0.35m; girar
+    # colado na porta enfia o canto no batente (campo: "virou perto demais e deu
+    # uma porradona"). Antes a decisão de girar olhava SÓ o alinhamento lateral
+    # (|d|<=fit) e ignorava a distância -> girava onde calhasse (0.82m=ok num teste,
+    # 0.38m=bateu no outro: sorte do approach). Agora: só gira se s<=-turn_standoff
+    # (longe). No eixo MAS colado -> ré reta pra ganhar distância, DEPOIS gira longe.
+    # Se já estiver ALINHADO, atravessa direto mesmo colado (sem giro = sem varrer).
     cross_yaw_rate_max: float = 0.5  # rad/s — só ATRAVESSA quando o robô PAROU de
     # girar (taxa de yaw real entre ticks abaixo disto). Sem isto, no meio de um
     # point-turn rápido (rot_speed 4.0) um tick caía na banda de ±align_yaw e
@@ -486,9 +494,25 @@ class DoorCrossing:
             if esc is not None:
                 return esc
             if abs(d) <= fit:
-                # JÁ NO EIXO: não persegue o ponto exato de staging — vai alinhar
-                # NO LUGAR (rotating). Era o "fica se enrolando indo pro eixo
-                # sendo que já está no meio" (2026-06-17). Cai no rotating abaixo.
+                if abs(yaw_err) > cfg.align_yaw and s > -cfg.turn_standoff:
+                    # PRECISA GIRAR (yaw torto) mas está COLADO na porta: girar aqui
+                    # varre o canto do robô pra dentro do batente (campo 06-18).
+                    # MANOBRA LONGE: ré RETA pra ganhar standoff, e o reversing volta
+                    # pro staging -> aí, longe o bastante, gira. Respeita o vão atrás;
+                    # sem espaço -> larga pro nav2. (Só dispara quando precisa girar:
+                    # se já estiver alinhado, NÃO dá ré — vai pro rotating que só
+                    # parka, sem varrer; e a universal atravessa no tick seguinte.)
+                    avail = rear_gap - cfg.escape_rear_margin
+                    if avail < cfg.escape_rear_min:
+                        return self._abort(now)
+                    self.state = 'reversing'
+                    self._esc_start = (x, y)
+                    self._esc_target = min(cfg.escape_reverse_dist, avail)
+                    return Cmd('reversing', -cfg.escape_reverse_speed, 0.0,
+                               self.door['id'])
+                # NO EIXO e (LONGE o bastante pra girar OU já alinhado): alinha NO
+                # LUGAR (rotating gira se preciso, parka se já reto). Era o "fica se
+                # enrolando indo pro eixo sendo que já está no meio" (2026-06-17).
                 self.state = 'rotating'
                 self._rot_dir = 0          # episódio de giro novo
             else:
@@ -647,6 +671,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 # 2026-06-17 (atravessar reto): folga geométrica + cooldown +
                 # trava de taxa de giro (só cruza quando parou de girar)
                 ('robot_half_width', 0.25), ('fit_margin', 0.05),
+                ('turn_standoff', 0.5),
                 ('success_cooldown', 2.0), ('cross_yaw_rate_max', 0.5),
                 ('rot_brake_deg', 12.0), ('rot_brake_speed', 2.0),
                 # caminho B: zona de parada da travessia (door é a autoridade)
@@ -669,7 +694,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 escape_reverse_speed=g['escape_reverse_speed'],
                 gap_min=g['gap_min'], exit_margin=g['exit_margin'],
                 robot_half_width=g['robot_half_width'],
-                fit_margin=g['fit_margin'],
+                fit_margin=g['fit_margin'], turn_standoff=g['turn_standoff'],
                 success_cooldown=g['success_cooldown'],
                 cross_yaw_rate_max=g['cross_yaw_rate_max'],
                 rot_brake_angle=math.radians(g['rot_brake_deg']),
@@ -736,7 +761,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                        'align_timeout', 'rot_speed', 'rot_left_boost',
                        'cross_speed', 'stage_speed', 'escape_reverse_speed',
                        'gap_min', 'exit_margin', 'robot_half_width',
-                       'fit_margin', 'success_cooldown', 'cross_yaw_rate_max',
+                       'fit_margin', 'turn_standoff', 'success_cooldown',
+                       'cross_yaw_rate_max',
                        'rot_brake_speed', 'stop_zone_half_w', 'stop_look_ahead',
                        'stop_dist', 'stop_hold_timeout')
         _NODE_PARAMS = ('scan_stale', 'nav_move_lin', 'rear_tail_x',

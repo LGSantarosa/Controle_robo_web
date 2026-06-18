@@ -160,6 +160,37 @@ def test_crossing_anda_reto_e_solta_depois_da_porta():
     assert c.state == 'idle'
 
 
+# --- standoff do giro (2026-06-18): NÃO girar colado na porta (varre o canto no
+# batente -> "virou perto demais e deu uma porradona"). Só gira longe o bastante;
+# colado e torto -> ré reta pra ganhar distância; colado MAS já reto -> atravessa.
+
+def test_staging_re_pra_ganhar_standoff_se_colado_e_torto():
+    dc = mk()
+    plan = [(1.5, 1.0), (1.5, 3.0)]   # cruza a porta (arma sem depender do bearing)
+    # COLADO: s=-0.3 (y=1.7) > -turn_standoff(0.5), no eixo (x=1.5), 17° torto
+    c = step_plan(dc, 0.0, (1.5, 1.7, math.pi / 2 - 0.3), plan)
+    assert c.state == 'reversing'      # ré pra manobrar LONGE, não gira colado
+    assert c.vx < 0
+
+
+def test_staging_gira_quando_longe_o_bastante():
+    dc = mk()
+    plan = [(1.5, 1.0), (1.5, 3.0)]
+    # LONGE: s=-0.8 (y=1.2) <= -turn_standoff -> gira no lugar (não ré)
+    c = step_plan(dc, 0.0, (1.5, 1.2, math.pi / 2 - 0.3), plan)
+    assert c.state == 'rotating'
+
+
+def test_colado_mas_ja_alinhado_atravessa_sem_re():
+    dc = mk()
+    plan = [(1.5, 1.0), (1.5, 3.0)]
+    # COLADO (s=-0.2) MAS já reto (yaw=pi/2): não dá ré (sem giro = sem varrer).
+    c = step_plan(dc, 0.0, (1.5, 1.8, math.pi / 2), plan)
+    assert c.state == 'rotating'       # 1o tick: taxa=inf, parka (não ré, não gira)
+    c = step_plan(dc, 0.1, (1.5, 1.8, math.pi / 2), plan)
+    assert c.state == 'crossing'       # assentou -> atravessa direto, colado
+
+
 def test_crossing_solta_quando_passa_dos_batentes_nao_antes():
     # 2026-06-18: o door SOLTA assim que a traseira limpa o batente (s>exit_margin
     # 0.30), não meio metro depois. Era na faixa pós-porta que ele costurava e
