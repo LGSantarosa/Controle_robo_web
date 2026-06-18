@@ -153,6 +153,42 @@ def test_nao_arma_sem_goal_g():
     assert c.state == 'idle' and c.nav is None
 
 
+def _ate_positioning(dc, t=0.0):
+    c = step_wp(dc, t, (1.5, 1.0, math.pi / 2))
+    assert c.state == 'positioning'
+    return GDEST
+
+
+def test_positioning_succeeded_vai_pro_rotating():
+    dc = mk(); _ate_positioning(dc)
+    c = step_wp(dc, 0.1, (1.5, 1.0, math.pi / 2), wp_status='succeeded')
+    assert c.state == 'rotating'
+
+
+def test_positioning_aborted_remanda_w_ate_o_limite():
+    dc = mk(); _ate_positioning(dc)
+    c = step_wp(dc, 0.1, (1.5, 1.0, math.pi / 2), wp_status='aborted')
+    assert c.state == 'positioning' and c.nav[0] == 'goto'     # 1a falha -> retry
+    c = step_wp(dc, 0.2, (1.5, 1.0, math.pi / 2), wp_status='aborted')
+    assert c.state == 'positioning' and c.nav[0] == 'goto'     # 2a falha -> retry
+    c = step_wp(dc, 0.3, (1.5, 1.0, math.pi / 2), wp_status='aborted')
+    assert c.state == 'idle'                                   # estourou -> desiste
+
+
+def test_positioning_timeout_conta_como_falha():
+    dc = mk(); _ate_positioning(dc)
+    c = step_wp(dc, CFG.wp_timeout + 0.1, (1.5, 1.0, math.pi / 2),
+                wp_status='active')                            # nunca chegou
+    assert c.state == 'positioning' and c.nav[0] == 'goto'     # re-mandou W
+
+
+def test_positioning_novo_goal_cancela():
+    dc = mk(); _ate_positioning(dc)
+    c = step_wp(dc, 0.1, (1.5, 1.0, math.pi / 2), wp_status='active',
+                goal_g=(9.0, 9.0, 0.0))                        # destino mudou
+    assert c.state == 'idle' and c.nav == ('cancel',)
+
+
 def test_idle_sem_goal_ou_fora_da_zona():
     dc = mk()
     # na zona mas sem goal

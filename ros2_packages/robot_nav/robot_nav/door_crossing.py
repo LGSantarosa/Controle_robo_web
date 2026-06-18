@@ -332,6 +332,13 @@ def _wrap(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
 
+def _pose_changed(a, b, tol: float = 0.05) -> bool:
+    """True se o destino mudou (posição > tol OU yaw > ~6°). Usado pra detectar
+    que o usuário setou outro goal no meio da manobra."""
+    return (abs(a[0] - b[0]) > tol or abs(a[1] - b[1]) > tol
+            or abs(_wrap(a[2] - b[2])) > 0.1)
+
+
 class DoorCrossing:
     """Decisão pura da travessia. O nó alimenta com pose do TF, portas,
     status do goal, gap e freshness; recebe (estado, vx, wz)."""
@@ -372,6 +379,28 @@ class DoorCrossing:
         self._hold_t0 = None
         self._cooldown_until = now + self.cfg.retrigger_cooldown
         return Cmd('idle', 0.0, 0.0, None)
+
+    def _abort_to_idle(self, now: float, nav=None) -> Cmd:
+        """Volta pra idle com retrigger_cooldown (falha/cancelamento). `nav` deixa
+        cancelar o goal W pendente no nó (nav=('cancel',))."""
+        self.state = 'idle'
+        self.door = None
+        self.geom = None
+        self._goal_g = None
+        self._rot_dir = 0
+        self._hold_t0 = None
+        self._cooldown_until = now + self.cfg.retrigger_cooldown
+        return Cmd('idle', 0.0, 0.0, None, nav=nav)
+
+    def _to_idle_success(self, now: float) -> None:
+        """Travessia OK: idle com success_cooldown (não re-arma no plano defasado)."""
+        self.state = 'idle'
+        self.door = None
+        self.geom = None
+        self._goal_g = None
+        self._rot_dir = 0
+        self._hold_t0 = None
+        self._cooldown_until = now + self.cfg.success_cooldown
 
     def _maybe_escape(self, now, pos, front_gap, rear_gap, allow_substuck=True):
         """Decide se entra na ré de escape (ou aborta). Retorna um Cmd se a ré
@@ -469,6 +498,30 @@ class DoorCrossing:
             self.state = 'positioning'
             W = pre_door_waypoint(geom, self.side, cfg.wp_standoff)
             return Cmd('positioning', 0.0, 0.0, door['id'], nav=('goto', W))
+
+        if self.state == 'positioning':
+            # mãos quietas: o nav2 dirige o robô até W. O door só espera o
+            # RESULTADO do goal W e decide. NÃO precisa de scan aqui.
+            if pose is None or not goal_active:
+                return self._abort_to_idle(now, nav=('cancel',))
+            if (goal_g is not None and self._goal_g is not None
+                    and _pose_changed(goal_g, self._goal_g)):
+                # usuário setou outro destino -> cancela W e re-avalia do idle
+                return self._abort_to_idle(now, nav=('cancel',))
+            if wp_status == 'succeeded':
+                # nav2 entregou o robô em W -> assume pro alinhar+cruzar
+                self.state = 'rotating'
+                self._rot_dir = 0
+                return Cmd('rotating', 0.0, 0.0, self.door['id'])
+            if wp_status == 'aborted' or (now - self._wp_t0) > cfg.wp_timeout:
+                self._wp_tries += 1
+                if self._wp_tries > cfg.wp_retries:
+                    return self._abort_to_idle(now)   # desiste; nó publica 'failed'
+                self._wp_t0 = now
+                W = pre_door_waypoint(self.geom, self.side, cfg.wp_standoff)
+                return Cmd('positioning', 0.0, 0.0, self.door['id'],
+                           nav=('goto', W))
+            return Cmd('positioning', 0.0, 0.0, self.door['id'])  # esperando nav2
 
         # guardas comuns a qualquer estado ativo
         if pose is None or not goal_active or not scan_fresh:
