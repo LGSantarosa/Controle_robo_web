@@ -666,17 +666,19 @@ from robot_nav.door_crossing import fit_lat
 
 
 def test_fit_lat_porta_larga_relaxa_apertada_exige():
-    cfg = DoorCrossConfig()                       # robot_half_width=0.25, margin=0.05
-    larga = door_geometry((0.0, 0.0), (0.93, 0.0))
-    apertada = door_geometry((0.0, 0.0), (0.70, 0.0))
-    assert fit_lat(larga, cfg.robot_half_width, cfg.fit_margin) == pytest.approx(0.165)
-    assert fit_lat(apertada, cfg.robot_half_width, cfg.fit_margin) == pytest.approx(0.05)
+    cfg = DoorCrossConfig()                       # robot_half_width=0.25, margin=0.13
+    larga = door_geometry((0.0, 0.0), (0.93, 0.0))      # meia 0.465
+    apertada = door_geometry((0.0, 0.0), (0.70, 0.0))   # meia 0.35
+    # porta real 0.93: 0.465-0.25-0.13 = 0.085 -> só cruza com |lat|<8.5cm (centrado)
+    assert fit_lat(larga, cfg.robot_half_width, cfg.fit_margin) == pytest.approx(0.085)
+    # apertada demais (0.70): não cabe com folga -> 0 (só dead-center)
+    assert fit_lat(apertada, cfg.robot_half_width, cfg.fit_margin) == pytest.approx(0.0)
 
 
 def test_rotating_drift_pequeno_nao_volta_pro_staging():
     # antes (align_lat=0.08) um drift de 10 cm jogava de volta pro staging =
-    # ping-pong "caçando o meio". Agora o gate é fit_lat (0.20 nesta porta) ->
-    # drift dentro da folga segue no rotating, sem bouncing.
+    # ping-pong "caçando o meio". Agora o gate é fit_lat (0.12 nesta porta de 1.0m
+    # com margem 0.13) -> drift de 10cm dentro da folga segue no rotating, sem bounce.
     dc = mk()
     stage_y = 2.0 - CFG.stage_dist
     _into_rotating(dc, 0.0)

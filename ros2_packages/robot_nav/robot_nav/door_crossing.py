@@ -209,7 +209,14 @@ class DoorCrossConfig:
     # a travessia tem que ser RETA. Quem deixa o robô reto é o point-turn do
     # rotating, NUNCA um arco dentro do vão. NÃO afrouxar.
     robot_half_width: float = 0.25  # m — meia-largura do robô (footprint 0.5) p/ fit_lat
-    fit_margin: float = 0.05        # m — folga de segurança subtraída do vão no fit_lat
+    fit_margin: float = 0.13        # m — folga de segurança subtraída do vão no fit_lat.
+    # 2026-06-18 (0.05 -> 0.13): porta REAL 0.93m (meia 0.465) mas a MARCADA é
+    # 0.968m (meia 0.484, 1.9cm/lado a mais) e robô é 0.50m (meia 0.25, MEDIDO roda
+    # a roda — correto). Com margem 0.05 o fit deixava commitar a |lat|=18cm -> folga
+    # real ~3cm -> raspou a roda no batente (campo 06-18). 0.13 absorve os 1.9cm da
+    # porta marcada larga + deixa folga real ~11cm: só cruza com |lat|<~10cm (as
+    # travessias boas commitaram a 0-9cm; a que raspou foi 18cm -> agora rejeitada,
+    # recentra/larga pro nav2 em vez de raspar). É live-tunable.
     turn_standoff: float = 0.5      # m — STANDOFF mínimo do plano da porta pra GIRAR
     # no lugar (2026-06-18). O giro varre os cantos do robô num raio ~0.35m; girar
     # colado na porta enfia o canto no batente (campo: "virou perto demais e deu
@@ -670,7 +677,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('exit_margin', 0.30), ('rate_hz', 20.0),
                 # 2026-06-17 (atravessar reto): folga geométrica + cooldown +
                 # trava de taxa de giro (só cruza quando parou de girar)
-                ('robot_half_width', 0.25), ('fit_margin', 0.05),
+                ('robot_half_width', 0.25), ('fit_margin', 0.13),
                 ('turn_standoff', 0.5),
                 ('success_cooldown', 2.0), ('cross_yaw_rate_max', 0.5),
                 ('rot_brake_deg', 12.0), ('rot_brake_speed', 2.0),
