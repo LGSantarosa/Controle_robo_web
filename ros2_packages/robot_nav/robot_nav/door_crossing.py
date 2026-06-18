@@ -69,6 +69,15 @@ def crossing_yaw(g: DoorGeom, side: int) -> float:
     return math.atan2(side * g.ny, side * g.nx)
 
 
+def pre_door_waypoint(g: DoorGeom, side: int, standoff: float):
+    """Waypoint pré-porta: no eixo, recuado `standoff` do centro no lado de
+    aproximação `side`, orientação = heading de travessia (de frente pra porta).
+    É a POSIÇÃO que o nav2 entrega; o alinhamento fino fica com o door."""
+    x = g.cx - g.nx * side * standoff
+    y = g.cy - g.ny * side * standoff
+    return x, y, crossing_yaw(g, side)
+
+
 def fit_lat(g: DoorGeom, robot_half_width: float, fit_margin: float) -> float:
     """Folga lateral (m) pra passar RETO sem encostar nos batentes: meia-largura
     do vão MARCADO menos a meia-largura do robô menos uma margem. 'Dá pra ir reto
@@ -307,6 +316,11 @@ class Cmd(NamedTuple):
     vx: float
     wz: float
     door_id: Optional[int]
+    # pedido de navegação pro nó executar (cliente de action nav2):
+    # None | ('goto', (x, y, yaw)) | ('cancel',). A máquina pura só EMITE; o nó
+    # manda/cancela o goal. É como o door leva o robô ao waypoint pré-porta (W)
+    # e re-manda o destino do usuário (G) depois de cruzar.
+    nav: object = None
 
 
 def _wrap(a: float) -> float:

@@ -8,7 +8,26 @@ from robot_nav.door_crossing import (
     door_progress_lateral,
     crossing_yaw,
     plan_crosses_door,
+    pre_door_waypoint,
+    Cmd,
 )
+
+
+def test_pre_door_waypoint_no_eixo_recuado_de_frente():
+    g = door_geometry((1.0, 2.0), (2.0, 2.0))   # centro (1.5,2.0), normal (0,1)
+    # side=+1: aproxima de baixo (y<2). W fica 1.0m ABAIXO do centro, no eixo,
+    # de frente pra porta (yaw=+pi/2).
+    x, y, yaw = pre_door_waypoint(g, side=+1, standoff=1.0)
+    assert (x, y) == pytest.approx((1.5, 1.0))
+    assert yaw == pytest.approx(math.pi / 2)
+    # side=-1: aproxima de cima; W 1.0m ACIMA, de frente (yaw=-pi/2)
+    x2, y2, yaw2 = pre_door_waypoint(g, side=-1, standoff=1.0)
+    assert (x2, y2) == pytest.approx((1.5, 3.0))
+    assert yaw2 == pytest.approx(-math.pi / 2)
+
+
+def test_cmd_nav_default_none():
+    assert Cmd('idle', 0.0, 0.0, None).nav is None
 
 
 def test_door_geometry_axis_horizontal_wall():
