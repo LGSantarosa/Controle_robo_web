@@ -201,13 +201,10 @@ class DoorCrossConfig:
     # ARMA a manobra
     zone_radius: float = 1.2        # m — distância do centro que arma a manobra
     approach_bearing: float = math.radians(70)  # cone (só usado sem /plan)
-    # WAYPOINT pré-porta (2026-06-18): nav2 leva o robô a W (no eixo, recuado,
-    # centrado) e o door só alinha+cruza. Substitui a aproximação reativa
-    # (staging/ré/escape) inteira — o erro principal era o door tentar se
-    # posicionar na unha colado na porta.
-    wp_standoff: float = 1.0        # m — distância de W antes do centro da porta
-    wp_retries: int = 2             # re-tentativas de mandar W antes de desistir
-    wp_timeout: float = 30.0        # s — tempo do nav2 chegar em W antes de re-tentar
+    # 2026-06-18: a WEB põe o ponto-pré-porta NA ROTA (antes do destino), então o
+    # nav2 entrega o robô reto e longe na frente da porta. O door só alinha+cruza —
+    # NÃO manda goal pro nav2 (era o que dava a guerra de preempção). pre_door_waypoint
+    # (módulo) é reusado pela web; o standoff vive lá, não aqui.
     # ALINHA no lugar (point-turn) — longe da porta = seguro
     align_yaw: float = math.radians(5.0)   # rad — |erro de yaw| máximo p/ cruzar
     rot_speed: float = 4.0          # rad/s — giro no lugar (forte; sobe a 6.0 ao vivo se patinar; NUNCA arco)
@@ -248,27 +245,12 @@ class Cmd(NamedTuple):
     vx: float
     wz: float
     door_id: Optional[int]
-    # pedido de navegação pro nó executar (cliente de action nav2):
-    # None | ('goto', (x, y, yaw)) | ('cancel',). A máquina pura só EMITE; o nó
-    # manda/cancela o goal. É como o door leva o robô ao waypoint pré-porta (W)
-    # e re-manda o destino do usuário (G) depois de cruzar.
-    nav: object = None
 
 
 def _wrap(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
 
-def _pose_changed(a, b, tol: float = 0.05) -> bool:
-    """True se o destino mudou (posição > tol OU yaw > ~6°). Usado pra detectar
-    que o usuário setou outro goal no meio da manobra."""
-    return (abs(a[0] - b[0]) > tol or abs(a[1] - b[1]) > tol
-            or abs(_wrap(a[2] - b[2])) > 0.1)
-
-
-def yaw_to_quat(yaw: float):
-    """(x, y, z, w) de um yaw puro (rotação só em Z) — p/ montar o goal do nav2."""
-    return (0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0))
 
 
 class DoorCrossing:
@@ -293,9 +275,6 @@ class DoorCrossing:
         self._hold_t0 = None      # início do stop-hold (pessoa no caminho) no crossing
         self._cooldown_until = 0.0
         self._rot_dir = 0               # sentido do giro do episódio atual (+1 esq/-1 dir/0 livre)
-        self._goal_g = None             # destino do usuário (x,y,yaw) capturado p/ re-mandar
-        self._wp_t0 = 0.0               # quando mandou o W atual (timeout)
-        self._wp_tries = 0              # re-tentativas de W nesta manobra
 
     # -- helpers ------------------------------------------------------------
     def _abort(self, now: float) -> Cmd:
@@ -307,24 +286,11 @@ class DoorCrossing:
         self._cooldown_until = now + self.cfg.retrigger_cooldown
         return Cmd('idle', 0.0, 0.0, None)
 
-    def _abort_to_idle(self, now: float, nav=None) -> Cmd:
-        """Volta pra idle com retrigger_cooldown (falha/cancelamento). `nav` deixa
-        cancelar o goal W pendente no nó (nav=('cancel',))."""
-        self.state = 'idle'
-        self.door = None
-        self.geom = None
-        self._goal_g = None
-        self._rot_dir = 0
-        self._hold_t0 = None
-        self._cooldown_until = now + self.cfg.retrigger_cooldown
-        return Cmd('idle', 0.0, 0.0, None, nav=nav)
-
     def _to_idle_success(self, now: float) -> None:
         """Travessia OK: idle com success_cooldown (não re-arma no plano defasado)."""
         self.state = 'idle'
         self.door = None
         self.geom = None
-        self._goal_g = None
         self._rot_dir = 0
         self._hold_t0 = None
         self._cooldown_until = now + self.cfg.success_cooldown
@@ -359,14 +325,12 @@ class DoorCrossing:
 
     # -- tick -----------------------------------------------------------------
     def update(self, now, pose, doors, goal_active, nav_forward, gap,
-               scan_fresh, front_gap=math.inf, rear_gap=math.inf,
-               goal_g=None, wp_status='idle', plan=None) -> Cmd:
+               scan_fresh, plan=None) -> Cmd:
         cfg = self.cfg
 
         if self.state == 'idle':
             if (pose is None or not goal_active or not nav_forward
-                    or now < self._cooldown_until or not doors
-                    or goal_g is None):
+                    or now < self._cooldown_until or not doors):
                 return Cmd('idle', 0.0, 0.0, None)
             door, geom = self._pick_door(pose, doors, plan)
             if door is None:
@@ -376,41 +340,14 @@ class DoorCrossing:
             raw_s = ((x - geom.cx) * geom.nx + (y - geom.cy) * geom.ny)
             self.side = -1 if raw_s > 0 else +1
             self.door, self.geom = door, geom
-            self._goal_g = goal_g          # destino do usuário (re-mandado ao cruzar)
             self.t_start = now
-            self._wp_tries = 0
-            self._wp_t0 = now
-            # POSICIONAR via nav2: manda o robô pro waypoint pré-porta W (no eixo,
-            # recuado, de frente). O door fica em positioning (mãos quietas) até o
-            # nav2 entregar; aí assume pro alinhar+cruzar de um ponto seguro.
-            self.state = 'positioning'
-            W = pre_door_waypoint(geom, self.side, cfg.wp_standoff)
-            return Cmd('positioning', 0.0, 0.0, door['id'], nav=('goto', W))
-
-        if self.state == 'positioning':
-            # mãos quietas: o nav2 dirige o robô até W. O door só espera o
-            # RESULTADO do goal W e decide. NÃO precisa de scan aqui.
-            if pose is None or not goal_active:
-                return self._abort_to_idle(now, nav=('cancel',))
-            if (goal_g is not None and self._goal_g is not None
-                    and _pose_changed(goal_g, self._goal_g)):
-                # usuário setou outro destino -> cancela W e re-avalia do idle
-                return self._abort_to_idle(now, nav=('cancel',))
-            if wp_status == 'succeeded':
-                # nav2 entregou o robô em W -> assume pro alinhar+cruzar
-                self.state = 'rotating'
-                self._rot_dir = 0
-                self.t_start = now            # reinicia o relógio (timeouts do giro)
-                return Cmd('rotating', 0.0, 0.0, self.door['id'])
-            if wp_status == 'aborted' or (now - self._wp_t0) > cfg.wp_timeout:
-                self._wp_tries += 1
-                if self._wp_tries > cfg.wp_retries:
-                    return self._abort_to_idle(now)   # desiste; nó publica 'failed'
-                self._wp_t0 = now
-                W = pre_door_waypoint(self.geom, self.side, cfg.wp_standoff)
-                return Cmd('positioning', 0.0, 0.0, self.door['id'],
-                           nav=('goto', W))
-            return Cmd('positioning', 0.0, 0.0, self.door['id'])  # esperando nav2
+            self._rot_dir = 0
+            # TOMA O VOLANTE: o robô já chegou na frente da porta — reto e longe,
+            # porque a web pôs o ponto-pré-porta NA ROTA (antes do destino). O door
+            # só ALINHA (rotating) e ATRAVESSA (crossing). NÃO manda goal nenhum pro
+            # nav2 (era o que dava a guerra de preempção, 2026-06-18).
+            self.state = 'rotating'
+            return Cmd('rotating', 0.0, 0.0, door['id'])
 
         # guardas comuns a qualquer estado ativo
         if pose is None or not goal_active or not scan_fresh:
@@ -489,12 +426,12 @@ class DoorCrossing:
             # 06-18: "atravessou e ficou parado e travado"). O gap-stop (pessoa) só
             # faz sentido ENQUANTO ainda está no vão.
             if s > cfg.exit_margin:
-                # PASSOU DOS BATENTES -> o door cumpriu o papel. SOLTA e RE-MANDA o
-                # destino do usuário (G) pro nav2 continuar o trajeto. success_cooldown
-                # segura o re-arme no /plan defasado (~1Hz mostra a rota velha por ~1s).
-                g_dest = self._goal_g
+                # PASSOU DOS BATENTES -> o door cumpriu o papel. SOLTA pro nav2, que
+                # segue pro destino G (já é o próximo ponto da rota — a web pôs o
+                # ponto-pré-porta ANTES de G no clique). O door NÃO manda goal nenhum.
+                # success_cooldown segura o re-arme no /plan defasado (~1Hz).
                 self._to_idle_success(now)
-                return Cmd('idle', 0.0, 0.0, None, nav=('goto', g_dest))
+                return Cmd('idle', 0.0, 0.0, None)
             if gap < cfg.stop_dist:
                 # SEGURANÇA (caminho B, 2026-06-17): obstáculo não-batente (PESSOA)
                 # na zona de parada à frente, AINDA dentro do vão. O door_vel fura o
@@ -508,17 +445,12 @@ class DoorCrossing:
                 return Cmd('crossing', 0.0, 0.0, self.door['id'])
             self._hold_t0 = None        # caminho livre -> reseta o relógio do hold
             # TRAVA DE SEGURANÇA (2026-06-18): chegou perto dos batentes ainda
-            # descentrado (|d|>fit) -> NÃO fura/raspa: volta pra positioning e
-            # re-manda W (re-posiciona). Teve ~1m aberto de W até aqui pra convergir
-            # o lateral; se não convergiu, é re-posicionar, não raspar a roda.
+            # descentrado (|d|>fit) -> NÃO fura/raspa: ABORTA pro nav2 (que re-planeja
+            # a aproximação pelo ponto-pré-porta). Teve a aproximação inteira pra
+            # convergir o lateral; se não convergiu, é largar, não raspar a roda.
             fit = fit_lat(g, cfg.robot_half_width, cfg.fit_margin)
             if s > -cfg.jamb_safety and abs(d) > fit:
-                self.state = 'positioning'
-                self._wp_tries = 0
-                self._wp_t0 = now
-                W = pre_door_waypoint(g, self.side, cfg.wp_standoff)
-                return Cmd('positioning', 0.0, 0.0, self.door['id'],
-                           nav=('goto', W))
+                return self._abort(now)
             wz = -cfg.cross_k_lat * d - cfg.cross_k_yaw * yaw_err
             wz = max(-cfg.cross_wz_max, min(cfg.cross_wz_max, wz))
             return Cmd('crossing', cfg.cross_speed, wz, self.door['id'])
@@ -531,13 +463,11 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
 
     import rclpy
     from rclpy.node import Node
-    from rclpy.action import ActionClient
     from rclpy.qos import (QoSDurabilityPolicy, QoSProfile, ReliabilityPolicy,
                            qos_profile_sensor_data)
     from action_msgs.msg import GoalStatusArray
-    from geometry_msgs.msg import Twist, PoseStamped
+    from geometry_msgs.msg import Twist
     from nav_msgs.msg import Path
-    from nav2_msgs.action import NavigateToPose
     from rcl_interfaces.msg import SetParametersResult
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import String
@@ -559,8 +489,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('rot_speed', 4.0), ('rot_left_boost', 1.4),
                 ('rot_brake_deg', 12.0), ('rot_brake_speed', 2.0),
                 ('cross_yaw_rate_max', 0.5),
-                # WAYPOINT pré-porta (2026-06-18): nav2 posiciona, door cruza
-                ('wp_standoff', 1.0), ('wp_retries', 2), ('wp_timeout', 30.0),
                 ('cross_speed', 0.22), ('exit_margin', 0.30), ('rate_hz', 20.0),
                 ('robot_half_width', 0.25), ('fit_margin', 0.13),
                 ('jamb_safety', 0.25), ('success_cooldown', 2.0),
@@ -581,8 +509,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 rot_brake_angle=math.radians(g['rot_brake_deg']),
                 rot_brake_speed=g['rot_brake_speed'],
                 cross_yaw_rate_max=g['cross_yaw_rate_max'],
-                wp_standoff=g['wp_standoff'], wp_retries=g['wp_retries'],
-                wp_timeout=g['wp_timeout'],
                 cross_speed=g['cross_speed'], exit_margin=g['exit_margin'],
                 robot_half_width=g['robot_half_width'],
                 fit_margin=g['fit_margin'], jamb_safety=g['jamb_safety'],
@@ -615,12 +541,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self._scan = None          # (ranges, angle_min, inc)
             self._scan_t = None
             self._last_zone = None     # dedup do /door_zone
-            # cliente de action nav2 (posicionar via W; re-mandar G ao cruzar)
-            self._goal_g = None        # destino do usuário (x,y,yaw) de /goal_pose
-            self._plan_goal = None     # destino = fim do /plan (fonte robusta de G)
-            self._wp_status = 'idle'   # status do goal W: idle|active|succeeded|aborted
-            self._wp_handle = None     # handle do goal W em voo (p/ cancelar)
-            self._nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
             self.tf_buffer = Buffer()
             self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -633,7 +553,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self.create_subscription(LaserScan, 'scan', self._on_scan, be)
             self.create_subscription(Twist, 'nav_vel_raw', self._on_nav, 10)
             self.create_subscription(Path, 'plan', self._on_plan, 10)
-            self.create_subscription(PoseStamped, 'goal_pose', self._on_goal_pose, 10)
             for topic in ('navigate_to_pose/_action/status',
                           'navigate_through_poses/_action/status'):
                 self.create_subscription(
@@ -654,7 +573,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
         # criado no boot).
         _CFG_PARAMS = ('zone_radius', 'rot_speed', 'rot_left_boost',
                        'rot_brake_speed', 'cross_yaw_rate_max',
-                       'wp_standoff', 'wp_retries', 'wp_timeout',
                        'cross_speed', 'exit_margin', 'robot_half_width',
                        'fit_margin', 'jamb_safety', 'success_cooldown',
                        'stop_zone_half_w', 'stop_look_ahead',
@@ -697,68 +615,10 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             # rota global do Nav2 -> sinal de arming (atravessa a porta?).
             self._plan = [(p.pose.position.x, p.pose.position.y)
                           for p in msg.poses]
-            # fim do plano = destino G. Fonte ROBUSTA do destino (o /goal_pose é
-            # VOLATILE de um disparo só -> o door perde se assinar depois). Usado
-            # como goal_g no arming quando o /goal_pose não chegou.
-            if msg.poses:
-                gp = msg.poses[-1].pose
-                q = gp.orientation
-                self._plan_goal = (gp.position.x, gp.position.y,
-                                   quat_to_yaw(q.x, q.y, q.z, q.w))
 
         def _on_status(self, topic, msg):
             self._goal_active[topic] = any(
                 st.status in ACTIVE for st in msg.status_list)
-
-        # -- cliente de action nav2 (posicionar via W; re-mandar G) ----------
-        def _on_goal_pose(self, msg):
-            # destino do usuário (G). Capturado p/ re-mandar depois de cruzar.
-            q = msg.pose.orientation
-            self._goal_g = (msg.pose.position.x, msg.pose.position.y,
-                            quat_to_yaw(q.x, q.y, q.z, q.w))
-
-        def _send_nav_goal(self, pose, track=True):
-            # track=True (W): rastreia o resultado em self._wp_status. track=False
-            # (G, na saída): fire-and-forget — NÃO toca _wp_status (senão o
-            # resultado de G poluiria o tracking do W na próxima travessia).
-            if not self._nav_client.wait_for_server(timeout_sec=0.0):
-                self.get_logger().warn('navigate_to_pose indisponível')
-                if track:
-                    self._wp_status = 'aborted'
-                return
-            x, y, yaw = pose
-            g = NavigateToPose.Goal()
-            g.pose.header.frame_id = 'map'
-            g.pose.pose.position.x = x
-            g.pose.pose.position.y = y
-            qx, qy, qz, qw = yaw_to_quat(yaw)
-            g.pose.pose.orientation.x = qx
-            g.pose.pose.orientation.y = qy
-            g.pose.pose.orientation.z = qz
-            g.pose.pose.orientation.w = qw
-            fut = self._nav_client.send_goal_async(g)
-            if track:
-                self._wp_status = 'active'
-                fut.add_done_callback(self._on_wp_accepted)
-
-        def _on_wp_accepted(self, fut):
-            h = fut.result()
-            if not h.accepted:
-                self._wp_status = 'aborted'
-                return
-            self._wp_handle = h
-            h.get_result_async().add_done_callback(self._on_wp_result)
-
-        def _on_wp_result(self, fut):
-            # status 4 = SUCCEEDED (action_msgs/GoalStatus.STATUS_SUCCEEDED)
-            self._wp_status = ('succeeded'
-                               if fut.result().status == 4 else 'aborted')
-
-        def _cancel_nav_goal(self):
-            if self._wp_handle is not None:
-                self._wp_handle.cancel_goal_async()
-                self._wp_handle = None
-            self._wp_status = 'idle'
 
         def _pose_map(self):
             try:
@@ -793,29 +653,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                                 max_x=self.cfg.stop_look_ahead)
 
             prev = self.sup.state
-            # destino G: prefere o /goal_pose (estável); senão o fim do /plan. O
-            # fallback do plano SÓ enquanto idle — em positioning+ o /plan vira a
-            # rota pro W, então usar o fim dele contaminaria (pareceria "novo goal").
-            if prev == 'idle' and self._goal_g is None:
-                goal_g = self._plan_goal
-            else:
-                goal_g = self._goal_g
             cmd = self.sup.update(now, pose, self.doors, goal,
                                   self._nav_forward, gap, fresh,
-                                  goal_g=goal_g, wp_status=self._wp_status,
                                   plan=self._plan)
-            # executa o pedido de navegação da máquina (cliente de action nav2)
-            if cmd.nav is not None:
-                if cmd.nav[0] == 'goto':
-                    # W (em positioning) rastreia o resultado; G (na saída) não.
-                    self._send_nav_goal(cmd.nav[1],
-                                        track=(cmd.state == 'positioning'))
-                elif cmd.nav[0] == 'cancel':
-                    self._cancel_nav_goal()
-            # fora do positioning não esperamos mais o W -> status limpo (o
-            # 'succeeded' que levou pro rotating já foi consumido pela transição).
-            if cmd.state in ('idle', 'rotating', 'crossing'):
-                self._wp_status = 'idle'
             # diagnóstico de campo: s/yaw/lat/taxa por tick (transição + ~2 Hz).
             dbg = ('s=%+.2f yaw_err=%+.1f° lat=%+.0fcm taxa=%.1f vx=%+.2f wz=%+.2f '
                    'gap=%.2f' % (
@@ -825,7 +665,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             if cmd.state != prev:
                 self.get_logger().info(
                     f'door_crossing: {prev} -> {cmd.state} | {dbg}')
-            elif cmd.state in ('positioning', 'rotating', 'crossing'):
+            elif cmd.state in ('rotating', 'crossing'):
                 self._dbg_tick = getattr(self, '_dbg_tick', 0) + 1
                 if self._dbg_tick % 10 == 0:        # ~2 Hz a 20 Hz de loop
                     self.get_logger().info(f'door_crossing[{cmd.state}] | {dbg}')
@@ -841,21 +681,15 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                     self._publish_zone('approaching', nd['id'])
                 else:
                     self._publish_zone('idle', None)
-            # door_vel SÓ nos estados que DIRIGEM (rotating/crossing). Em
-            # positioning/idle o nó NÃO publica -> o twist_mux (door_vel prio 20)
-            # NÃO segura o nav2 (que é quem dirige até W). Publica um zero só ao
-            # SAIR de rotating/crossing (solta o último comando, lição do unstuck).
+            # door_vel SÓ nos estados em que o door DIRIGE (rotating/crossing). Em
+            # idle o nó NÃO publica -> nav2 dirige livre. Publica um zero só ao SAIR
+            # de rotating/crossing (solta o último comando, lição do unstuck).
             ACTIVE_DRV = ('rotating', 'crossing')
             if cmd.state in ACTIVE_DRV or prev in ACTIVE_DRV:
                 t = Twist()
                 t.linear.x = cmd.vx
                 t.angular.z = cmd.wz
                 self.pub.publish(t)
-            # desistiu de posicionar (estourou os retries do W) -> avisa
-            if prev == 'positioning' and cmd.state == 'idle' and cmd.nav is None:
-                self.get_logger().warn(
-                    'door_crossing: nav2 não chegou em W (retries esgotados) -> '
-                    'larga pro controle manual')
 
     rclpy.init(args=args)
     node = DoorCrossingNode()
