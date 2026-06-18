@@ -36,11 +36,13 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReli
 
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
-from nav2_msgs.action import NavigateToPose
+from nav2_msgs.action import NavigateToPose, NavigateThroughPoses
 from nav_msgs.msg import OccupancyGrid, Path
 from std_msgs.msg import Float64, String
 from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformException, TransformListener
+
+from door_geom import door_on_segment, pre_door_waypoint
 
 
 log = logging.getLogger(__name__)
@@ -257,6 +259,13 @@ class MapBridge:
         self._nav_action = ActionClient(
             self._node, NavigateToPose, 'navigate_to_pose'
         )
+        # 2026-06-18: rota com ponto-pré-porta. Quando o destino fica do outro
+        # lado de uma porta marcada, manda [ponto-pré-porta, destino] -> o nav2 já
+        # entrega o robô reto e longe na frente da porta, e o door só cruza.
+        self._nav_through = ActionClient(
+            self._node, NavigateThroughPoses, 'navigate_through_poses'
+        )
+        self._last_robot_xy: Optional[tuple] = None   # (x, y) do robô em map
 
         # Guarda o último metadata do mapa para converter clique pixel→mundo
         # no cliente (o cliente já recebe isso no map_update).
@@ -326,6 +335,7 @@ class MapBridge:
                     t.transform.rotation.w,
                 )
                 self._last_robot_yaw = yaw
+                self._last_robot_xy = (x, y)
                 self._sock.emit(
                     'robot_pose',
                     {'x': x, 'y': y, 'yaw': yaw, 'ts': time.time()},
@@ -686,8 +696,7 @@ class MapBridge:
         else:
             self._sock.emit('waypoint_status', {'active': False, 'index': idx, 'total': total})
 
-    def send_goal(self, x: float, y: float, yaw: float = 0.0) -> dict:
-        """Publica PoseStamped em /goal_pose (frame 'map')."""
+    def _pose_stamped(self, x: float, y: float, yaw: float) -> PoseStamped:
         msg = PoseStamped()
         msg.header.frame_id = 'map'
         msg.header.stamp = self._node.get_clock().now().to_msg()
@@ -698,7 +707,32 @@ class MapBridge:
         msg.pose.orientation.y = qy
         msg.pose.orientation.z = qz
         msg.pose.orientation.w = qw
-        self._goal_pub.publish(msg)
+        return msg
+
+    def send_goal(self, x: float, y: float, yaw: float = 0.0) -> dict:
+        """Manda o robô pro destino. Se o trajeto RETO cruza uma porta marcada,
+        põe o ponto-PRÉ-PORTA na rota (navigate_through_poses [pré-porta, destino])
+        -> o nav2 entrega o robô reto e longe na frente da porta, e o door só
+        alinha+cruza. Senão, publica /goal_pose normal (clique-pra-ir)."""
+        robot = self._last_robot_xy
+        door = (door_on_segment(robot, (x, y), self._doors.doors)
+                if robot is not None else None)
+        if door is not None:
+            wx, wy, wyaw = pre_door_waypoint(door['a'], door['b'], robot)
+            poses = [self._pose_stamped(wx, wy, wyaw),
+                     self._pose_stamped(x, y, yaw)]
+            if not self._nav_through.wait_for_server(timeout_sec=2.0):
+                log.warning("[MapBridge] navigate_through_poses indisponível "
+                            "-> caindo no /goal_pose direto")
+            else:
+                g = NavigateThroughPoses.Goal()
+                g.poses = poses
+                self._nav_through.send_goal_async(g)
+                log.info(f"[MapBridge] porta {door['id']} no caminho -> rota "
+                         f"[pré-porta ({wx:.2f},{wy:.2f}), destino ({x:.2f},{y:.2f})]")
+                return {'ok': True, 'x': x, 'y': y, 'yaw': yaw, 'via_door': door['id']}
+        # caminho livre (ou sem pose/porta): destino direto
+        self._goal_pub.publish(self._pose_stamped(x, y, yaw))
         log.info(f"[MapBridge] /goal_pose → ({x:.2f}, {y:.2f}, yaw={yaw:.2f})")
         return {'ok': True, 'x': x, 'y': y, 'yaw': yaw}
 
