@@ -204,6 +204,38 @@ def test_rotating_alinha_e_vai_pro_crossing_mesmo_fora_do_eixo():
     assert c.state == 'crossing'
 
 
+def _into_crossing_from_w(dc):
+    _ate_positioning(dc)
+    step_wp(dc, 0.1, (1.5, 1.0, math.pi / 2), wp_status='succeeded')   # -> rotating
+    step_wp(dc, 0.2, (1.5, 1.0, math.pi / 2))                         # taxa alta
+    c = step_wp(dc, 0.25, (1.5, 1.0, math.pi / 2))                    # -> crossing
+    assert c.state == 'crossing'
+    return GDEST
+
+
+def test_crossing_desde_w_corrige_lateral_andando():
+    # em W, 15cm fora do eixo (ainda longe, s=-0.8): anda corrigindo o lateral
+    dc = mk(); _into_crossing_from_w(dc)
+    c = step_wp(dc, 0.4, (1.5 + 0.15, 1.2, math.pi / 2))
+    assert c.state == 'crossing' and c.vx == pytest.approx(CFG.cross_speed)
+    assert c.wz < 0          # corrige o +15cm de volta pro eixo
+
+
+def test_crossing_aborta_se_descentrado_perto_dos_batentes():
+    # perto dos batentes (s=-0.1 > -jamb_safety) e ainda 18cm fora (>fit) -> ABORTA
+    dc = mk(); _into_crossing_from_w(dc)
+    c = step_wp(dc, 0.4, (1.5 + 0.18, 1.9, math.pi / 2))
+    assert c.state == 'positioning'          # volta a re-posicionar
+    assert c.nav[0] == 'goto'
+
+
+def test_crossing_solta_remandando_g():
+    dc = mk(); G = _into_crossing_from_w(dc)
+    c = step_wp(dc, 0.5, (1.5, 2.0 + CFG.exit_margin + 0.05, math.pi / 2))
+    assert c.state == 'idle'
+    assert c.nav == ('goto', G)              # continua pro destino do usuário
+
+
 def test_idle_sem_goal_ou_fora_da_zona():
     dc = mk()
     # na zona mas sem goal

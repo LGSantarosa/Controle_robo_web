@@ -234,6 +234,11 @@ class DoorCrossConfig:
     # 0.38m=bateu no outro: sorte do approach). Agora: só gira se s<=-turn_standoff
     # (longe). No eixo MAS colado -> ré reta pra ganhar distância, DEPOIS gira longe.
     # Se já estiver ALINHADO, atravessa direto mesmo colado (sem giro = sem varrer).
+    jamb_safety: float = 0.25       # m — trava de segurança da travessia (2026-06-18):
+    # ao chegar a menos disto do plano da porta (s > -jamb_safety), se ainda estiver
+    # descentrado (|d|>fit) -> ABORTA e re-posiciona (volta pra positioning, re-manda
+    # W) em vez de raspar a roda no batente. O crossing tem ~1m de espaço ABERTO de W
+    # até aqui pra convergir o lateral; se não convergiu, é re-posicionar, não furar.
     cross_yaw_rate_max: float = 0.5  # rad/s — só ATRAVESSA quando o robô PAROU de
     # girar (taxa de yaw real entre ticks abaixo disto). Sem isto, no meio de um
     # point-turn rápido (rot_speed 4.0) um tick caía na banda de ±align_yaw e
@@ -682,15 +687,12 @@ class DoorCrossing:
             # 06-18: "atravessou e ficou parado e travado"). O gap-stop (pessoa) só
             # faz sentido ENQUANTO ainda está no vão.
             if s > cfg.exit_margin:
-                # Solta com success_cooldown (2026-06-17): o /plan (~1Hz) ainda
-                # mostra por ~1s a rota velha cruzando a porta -> sem cooldown o robô
-                # re-armava, invertia o `side` e tentava voltar pra porta que já
-                # passou. O cooldown segura até o plano atualizar e sair de vez.
-                self.state = 'idle'
-                self.door = None
-                self.geom = None
-                self._cooldown_until = now + cfg.success_cooldown
-                return Cmd('idle', 0.0, 0.0, None)
+                # PASSOU DOS BATENTES -> o door cumpriu o papel. SOLTA e RE-MANDA o
+                # destino do usuário (G) pro nav2 continuar o trajeto. success_cooldown
+                # segura o re-arme no /plan defasado (~1Hz mostra a rota velha por ~1s).
+                g_dest = self._goal_g
+                self._to_idle_success(now)
+                return Cmd('idle', 0.0, 0.0, None, nav=('goto', g_dest))
             if gap < cfg.stop_dist:
                 # SEGURANÇA (caminho B, 2026-06-17): obstáculo não-batente (PESSOA)
                 # na zona de parada à frente, AINDA dentro do vão. O door_vel fura o
@@ -703,6 +705,18 @@ class DoorCrossing:
                     return self._abort(now)
                 return Cmd('crossing', 0.0, 0.0, self.door['id'])
             self._hold_t0 = None        # caminho livre -> reseta o relógio do hold
+            # TRAVA DE SEGURANÇA (2026-06-18): chegou perto dos batentes ainda
+            # descentrado (|d|>fit) -> NÃO fura/raspa: volta pra positioning e
+            # re-manda W (re-posiciona). Teve ~1m aberto de W até aqui pra convergir
+            # o lateral; se não convergiu, é re-posicionar, não raspar a roda.
+            fit = fit_lat(g, cfg.robot_half_width, cfg.fit_margin)
+            if s > -cfg.jamb_safety and abs(d) > fit:
+                self.state = 'positioning'
+                self._wp_tries = 0
+                self._wp_t0 = now
+                W = pre_door_waypoint(g, self.side, cfg.wp_standoff)
+                return Cmd('positioning', 0.0, 0.0, self.door['id'],
+                           nav=('goto', W))
             wz = -cfg.cross_k_lat * d - cfg.cross_k_yaw * yaw_err
             wz = max(-cfg.cross_wz_max, min(cfg.cross_wz_max, wz))
             return Cmd('crossing', cfg.cross_speed, wz, self.door['id'])
