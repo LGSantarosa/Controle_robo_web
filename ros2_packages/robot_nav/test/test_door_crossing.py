@@ -160,6 +160,22 @@ def test_crossing_anda_reto_e_solta_depois_da_porta():
     assert c.state == 'idle'
 
 
+def test_crossing_solta_quando_passa_dos_batentes_nao_antes():
+    # 2026-06-18: o door SOLTA assim que a traseira limpa o batente (s>exit_margin
+    # 0.30), não meio metro depois. Era na faixa pós-porta que ele costurava e
+    # enlouquecia; passou dos batentes -> papel cumprido -> nav2 assume.
+    assert CFG.exit_margin == pytest.approx(0.30)
+    # s = y - 2.0 (centro da porta em y=2.0, normal +y, side=+1)
+    dc = mk()
+    t = _ate_crossing(dc)
+    # s=0.20: traseira ainda no vão -> AINDA atravessando (não solta cedo demais)
+    c = step(dc, t, (1.5, 2.20, math.pi / 2))
+    assert c.state == 'crossing'
+    # s=0.35: passou dos batentes -> SOLTA pro nav2
+    c = step(dc, t + 0.5, (1.5, 2.35, math.pi / 2))
+    assert c.state == 'idle'
+
+
 def test_crossing_aborta_se_goal_morre():
     # goal cancelado durante a travessia -> larga pro nav2.
     dc = mk()

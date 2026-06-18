@@ -256,7 +256,15 @@ class DoorCrossConfig:
     stop_look_ahead: float = 1.0    # m — alcance da vigia (também o gap reportado no log)
     stop_dist: float = 0.6          # m — obstáculo mais perto que isto no crossing -> PARA
     stop_hold_timeout: float = 8.0  # s — parado esperando liberar; estourou -> aborta pro nav2
-    exit_margin: float = 0.5        # m — além do centro pra soltar
+    exit_margin: float = 0.30       # m — centro além do plano da porta p/ SOLTAR.
+    # 2026-06-18 (0.5 -> 0.30): o door fez o papel dele quando o robô PASSOU DOS
+    # BATENTES (traseira limpou o plano da porta ~= meio-comprimento, 0.30). Daí
+    # pra frente é problema do NAV2, não do door. Com 0.5 o door continuava
+    # CORRIGINDO heading/lateral por mais meio metro DEPOIS de já estar do outro
+    # lado — e era nessa faixa que ele costurava, roçava o batente e enlouquecia
+    # (campo 06-18: entrou reto colado no batente, o "já passei" só dispararia a
+    # 0.5 mas ele travava/pivotava antes de chegar lá -> nunca soltava -> spin).
+    # Soltar assim que limpa o batente mata a costura pós-porta na origem.
     total_timeout: float = 40.0     # s — manobra inteira (revertido de 600; ver align_timeout)
     retrigger_cooldown: float = 3.0  # s — após abort, não rearmar na hora
     success_cooldown: float = 2.0   # s — após ATRAVESSAR limpo, não rearmar (cobre
@@ -308,6 +316,7 @@ class DoorCrossing:
         self.dbg_yaw_err = 0.0
         self.dbg_d = 0.0
         self.dbg_yaw_rate = 0.0
+        self.dbg_s = 0.0          # progresso ao longo do eixo (s>exit_margin solta)
         self._hold_t0 = None      # início do stop-hold (pessoa no caminho) no crossing
         self._cooldown_until = 0.0
         self._escape_count = 0          # rés de escape NESTA travessia
@@ -445,6 +454,7 @@ class DoorCrossing:
             yaw_rate = math.inf
         self._last_yaw, self._last_now = yaw, now
         self.dbg_yaw_err, self.dbg_d, self.dbg_yaw_rate = yaw_err, d, yaw_rate
+        self.dbg_s = s
 
         if self.state in ('staging', 'rotating'):
             if now - self.t_start > cfg.align_timeout:
@@ -573,11 +583,13 @@ class DoorCrossing:
                 return Cmd('crossing', 0.0, 0.0, self.door['id'])
             self._hold_t0 = None        # caminho livre -> reseta o relógio do hold
             if s > cfg.exit_margin:
-                # atravessou: solta com success_cooldown (2026-06-17). NÃO é falha,
-                # mas o /plan (~1Hz) ainda mostra por ~1s a rota velha cruzando a
-                # porta -> sem cooldown o robô re-armava, invertia o `side` e
-                # tentava voltar pra porta que já passou. O cooldown segura até o
-                # plano atualizar e o robô sair de vez.
+                # PASSOU DOS BATENTES (s além do plano da porta): o door cumpriu o
+                # papel — atravessou. Daqui pra frente é problema do NAV2, então
+                # SOLTA e para de corrigir (era a costura pós-porta que enlouquecia,
+                # 06-18). Solta com success_cooldown (2026-06-17): o /plan (~1Hz)
+                # ainda mostra por ~1s a rota velha cruzando a porta -> sem cooldown
+                # o robô re-armava, invertia o `side` e tentava voltar pra porta que
+                # já passou. O cooldown segura até o plano atualizar e sair de vez.
                 self.state = 'idle'
                 self.door = None
                 self.geom = None
@@ -819,10 +831,11 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             # diagnóstico de campo (2026-06-17): yaw_err/lat/taxa/gaps na transição
             # E estrangulado durante a manobra (~2 Hz), p/ achar a causa do "bateu
             # no batente" sem adivinhar (overshoot do giro? lateral? cruzou torto?).
-            dbg = ('yaw_err=%+.1f° lat=%+.0fcm taxa=%.1f vx=%+.2f wz=%+.2f '
+            dbg = ('s=%+.2f yaw_err=%+.1f° lat=%+.0fcm taxa=%.1f vx=%+.2f wz=%+.2f '
                    'gap=%.2f front=%.2f' % (
-                       math.degrees(self.sup.dbg_yaw_err), self.sup.dbg_d * 100,
-                       self.sup.dbg_yaw_rate, cmd.vx, cmd.wz, gap, front_gap))
+                       self.sup.dbg_s, math.degrees(self.sup.dbg_yaw_err),
+                       self.sup.dbg_d * 100, self.sup.dbg_yaw_rate, cmd.vx, cmd.wz,
+                       gap, front_gap))
             if cmd.state != prev:
                 self.get_logger().info(
                     f'door_crossing: {prev} -> {cmd.state} | {dbg}')
