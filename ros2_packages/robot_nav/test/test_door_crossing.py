@@ -189,6 +189,21 @@ def test_positioning_novo_goal_cancela():
     assert c.state == 'idle' and c.nav == ('cancel',)
 
 
+def test_rotating_alinha_e_vai_pro_crossing_mesmo_fora_do_eixo():
+    # nav2 entrega em W mas ~20cm fora do eixo (tolerância dele); o rotating só
+    # alinha o YAW (point-turn não corrige lateral) e DEVE ir pro crossing mesmo
+    # com |d|>fit — o crossing corrige o lateral andando (Task 5). Se exigisse fit
+    # aqui, ficaria preso girando (point-turn não reduz d).
+    dc = mk(); _ate_positioning(dc)
+    step_wp(dc, 0.1, (1.5, 1.0, math.pi / 2), wp_status='succeeded')  # -> rotating
+    off = (1.5 + 0.20, 1.0, math.pi / 2 - 0.5)      # 20cm fora, 28° torto
+    step_wp(dc, 0.2, off)
+    aligned_off = (1.5 + 0.20, 1.0, math.pi / 2)    # alinhado, ainda 20cm fora
+    step_wp(dc, 0.25, aligned_off)                  # taxa alta
+    c = step_wp(dc, 0.30, aligned_off)              # assentou -> crossing
+    assert c.state == 'crossing'
+
+
 def test_idle_sem_goal_ou_fora_da_zona():
     dc = mk()
     # na zona mas sem goal

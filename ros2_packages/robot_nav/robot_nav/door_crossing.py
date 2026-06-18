@@ -512,6 +512,7 @@ class DoorCrossing:
                 # nav2 entregou o robô em W -> assume pro alinhar+cruzar
                 self.state = 'rotating'
                 self._rot_dir = 0
+                self.t_start = now            # reinicia o relógio (timeouts do giro)
                 return Cmd('rotating', 0.0, 0.0, self.door['id'])
             if wp_status == 'aborted' or (now - self._wp_t0) > cfg.wp_timeout:
                 self._wp_tries += 1
@@ -614,25 +615,19 @@ class DoorCrossing:
                 return Cmd('staging', vx, wz, self.door['id'])
 
         if self.state == 'rotating':
-            esc = self._maybe_escape(now, (x, y), front_gap, rear_gap,
-                                     allow_substuck=False)
-            if esc is not None:
-                return esc
-            # Aqui já sabemos que NÃO dá pra passar reto (a checagem universal
-            # acima não disparou). Se está genuinamente FORA do vão (não cabe ir
-            # reto daqui), volta pro staging reaproximar do eixo. Com fit_lat
-            # (folga real, não os 8cm fixos) isso só dispara quando precisa, não a
-            # cada drift de giro = sem ping-pong "caçando o meio".
-            if abs(d) > fit:
-                self.state = 'staging'
-                self._rot_dir = 0
-                return Cmd('staging', 0.0, 0.0, self.door['id'])
+            # ALINHADO e PAROU de girar -> ATRAVESSA. NÃO exige fit: o robô está em
+            # W, ainda pode estar lateralmente fora da tolerância do nav2; o
+            # crossing corrige o lateral ANDANDO (Task 5). Exigir fit aqui prenderia
+            # o robô girando, já que o point-turn (vx=0) não reduz o lateral.
+            # 2026-06-18.
+            if abs(yaw_err) <= cfg.align_yaw and yaw_rate <= cfg.cross_yaw_rate_max:
+                self.state = 'crossing'
+                self._hold_t0 = None
+                return Cmd('crossing', cfg.cross_speed, 0.0, self.door['id'])
             if abs(yaw_err) <= cfg.align_yaw:
-                # JÁ está reto, só não cruzou ainda (a checagem universal exige
-                # também a taxa de giro baixa). Não gira mais — comanda parar e
-                # ASSENTA; quando a taxa cair, a universal acima atravessa. Sem
-                # isto o robô daria mais um giro e perderia o alinhamento (era
-                # parte do "girou demais e bateu").
+                # reto mas ainda girando (taxa alta) -> para e ASSENTA; cruza no
+                # tick seguinte quando a taxa cair. Sem isto o robô daria mais um
+                # giro e perderia o alinhamento (era parte do "girou demais e bateu").
                 self._rot_dir = 0
                 return Cmd('rotating', 0.0, 0.0, self.door['id'])
             # GIRO LIMPO (igual ao spin do unstuck): escolhe o lado UMA vez e
