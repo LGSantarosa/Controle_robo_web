@@ -110,18 +110,24 @@ def nearest_door_in_zone(pose: Optional[Tuple[float, float, float]],
     return best
 
 
-GAP_CORRIDOR_HALF_W = 0.28   # m — meia-largura do corredor vigiado (corpo+3cm)
-GAP_MAX_X = 0.80             # m — até onde olhar à frente
+GAP_CORRIDOR_HALF_W = 0.30   # m — meia-largura do corredor vigiado (corpo 0.25 +5cm)
+GAP_MAX_X = 1.0              # m — até onde olhar à frente (também o gap reportado no log)
 
 
 def gap_ahead(ranges, angle_min: float, angle_increment: float,
               pose: Tuple[float, float, float],
-              jambs: List[Tuple[float, float]], jamb_r: float) -> float:
-    """Distância (m) do obstáculo mais próximo no corredor à FRENTE do robô,
-    descontando os discos dos batentes marcados (em frame do MAPA). inf = livre.
+              jambs: List[Tuple[float, float]], jamb_r: float,
+              half_w: float = GAP_CORRIDOR_HALF_W,
+              max_x: float = GAP_MAX_X) -> float:
+    """Distância (m) do obstáculo mais próximo numa ZONA DE PARADA à FRENTE do
+    robô (corredor de meia-largura `half_w`, até `max_x` à frente), descontando os
+    discos dos batentes marcados (em frame do MAPA). inf = livre.
 
-    Usado no CROSSING: pessoa/obstáculo no vão -> aborta; os batentes que o
-    usuário marcou não contam (são a parede da própria porta).
+    É a checagem de segurança da travessia: como o `door_vel` PASSA POR CIMA do
+    collision monitor (prio 20 no twist_mux), o collision NÃO protege contra uma
+    pessoa durante o crossing — então o door_crossing precisa ser a própria
+    autoridade. Os batentes que o usuário marcou não contam (são a parede da porta);
+    qualquer outra coisa (pessoa!) conta -> o crossing PARA (não fura cego).
     """
     if angle_increment == 0.0:
         return math.inf
@@ -133,7 +139,7 @@ def gap_ahead(ranges, angle_min: float, angle_increment: float,
     a = angle_min + np.arange(r.size) * angle_increment
     x = r * np.cos(a)
     y = r * np.sin(a)
-    sel = ok & (x > 0.0) & (x <= GAP_MAX_X) & (np.abs(y) <= GAP_CORRIDOR_HALF_W)
+    sel = ok & (x > 0.0) & (x <= max_x) & (np.abs(y) <= half_w)
     if not sel.any():
         return math.inf
     if jambs:
@@ -238,7 +244,18 @@ class DoorCrossConfig:
     cross_k_lat: float = 1.5        # corrige offset lateral durante a travessia
     cross_k_yaw: float = 2.0        # corrige heading durante a travessia
     cross_wz_max: float = 0.8       # rad/s — teto da micro-correção (NÃO girar)
-    gap_min: float = 0.45           # m — vão mínimo à frente pra seguir
+    gap_min: float = 0.45           # m — vão mínimo na APROXIMAÇÃO (staging/rotating);
+    # abaixo disso larga pro nav2 (que freia pelo collision). A travessia usa o
+    # stop_dist abaixo (PARA em vez de largar).
+    # SEGURANÇA da travessia (2026-06-17, "caminho B"): como o door_vel fura o
+    # collision monitor (prio 20), o door_crossing É a autoridade de segurança no
+    # crossing. Em vez da janela estreita antiga (0.80×±0.28 que deixou ele ir pra
+    # cima de uma pessoa), olha uma ZONA DE PARADA mais larga/longa (gap_ahead) e,
+    # se tiver obstáculo não-batente, PARA (vx=0) e segura — não fura cego.
+    stop_zone_half_w: float = 0.30  # m — meia-largura da zona vigiada (corpo 0.25 +5cm)
+    stop_look_ahead: float = 1.0    # m — alcance da vigia (também o gap reportado no log)
+    stop_dist: float = 0.6          # m — obstáculo mais perto que isto no crossing -> PARA
+    stop_hold_timeout: float = 8.0  # s — parado esperando liberar; estourou -> aborta pro nav2
     exit_margin: float = 0.5        # m — além do centro pra soltar
     total_timeout: float = 40.0     # s — manobra inteira (revertido de 600; ver align_timeout)
     retrigger_cooldown: float = 3.0  # s — após abort, não rearmar na hora
@@ -291,6 +308,7 @@ class DoorCrossing:
         self.dbg_yaw_err = 0.0
         self.dbg_d = 0.0
         self.dbg_yaw_rate = 0.0
+        self._hold_t0 = None      # início do stop-hold (pessoa no caminho) no crossing
         self._cooldown_until = 0.0
         self._escape_count = 0          # rés de escape NESTA travessia
         self._rot_dir = 0               # sentido do giro do episódio atual (+1 esq/-1 dir/0 livre)
@@ -305,6 +323,7 @@ class DoorCrossing:
         self.door = None
         self.geom = None
         self._rot_dir = 0
+        self._hold_t0 = None
         self._cooldown_until = now + self.cfg.retrigger_cooldown
         return Cmd('idle', 0.0, 0.0, None)
 
@@ -541,8 +560,18 @@ class DoorCrossing:
                        self.door['id'])
 
         if self.state == 'crossing':
-            if gap < cfg.gap_min:
-                return self._abort(now)
+            if gap < cfg.stop_dist:
+                # SEGURANÇA (caminho B, 2026-06-17): obstáculo não-batente (PESSOA)
+                # na zona de parada à frente. O door_vel fura o collision monitor,
+                # então o door É a autoridade aqui: PARA (vx=0) e segura — NÃO fura
+                # cego pra cima dela. Resume sozinho quando liberar; se persistir
+                # mais que stop_hold_timeout, larga pro nav2 (que freia/replana).
+                if self._hold_t0 is None:
+                    self._hold_t0 = now
+                elif now - self._hold_t0 > cfg.stop_hold_timeout:
+                    return self._abort(now)
+                return Cmd('crossing', 0.0, 0.0, self.door['id'])
+            self._hold_t0 = None        # caminho livre -> reseta o relógio do hold
             if s > cfg.exit_margin:
                 # atravessou: solta com success_cooldown (2026-06-17). NÃO é falha,
                 # mas o /plan (~1Hz) ainda mostra por ~1s a rota velha cruzando a
@@ -604,6 +633,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('robot_half_width', 0.25), ('fit_margin', 0.05),
                 ('success_cooldown', 2.0), ('cross_yaw_rate_max', 0.5),
                 ('rot_brake_deg', 12.0), ('rot_brake_speed', 2.0),
+                # caminho B: zona de parada da travessia (door é a autoridade)
+                ('stop_zone_half_w', 0.30), ('stop_look_ahead', 1.0),
+                ('stop_dist', 0.6), ('stop_hold_timeout', 8.0),
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
                 ('rear_tail_x', -0.25), ('rear_half_width', 0.30),
                 ('front_head_x', 0.25), ('lidar_x', 0.0),
@@ -625,7 +657,11 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 success_cooldown=g['success_cooldown'],
                 cross_yaw_rate_max=g['cross_yaw_rate_max'],
                 rot_brake_angle=math.radians(g['rot_brake_deg']),
-                rot_brake_speed=g['rot_brake_speed'])
+                rot_brake_speed=g['rot_brake_speed'],
+                stop_zone_half_w=g['stop_zone_half_w'],
+                stop_look_ahead=g['stop_look_ahead'],
+                stop_dist=g['stop_dist'],
+                stop_hold_timeout=g['stop_hold_timeout'])
             self.sup = DoorCrossing(self.cfg)
             self.scan_stale = g['scan_stale']
             self.nav_move_lin = g['nav_move_lin']
@@ -685,7 +721,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                        'cross_speed', 'stage_speed', 'escape_reverse_speed',
                        'gap_min', 'exit_margin', 'robot_half_width',
                        'fit_margin', 'success_cooldown', 'cross_yaw_rate_max',
-                       'rot_brake_speed')
+                       'rot_brake_speed', 'stop_zone_half_w', 'stop_look_ahead',
+                       'stop_dist', 'stop_hold_timeout')
         _NODE_PARAMS = ('scan_stale', 'nav_move_lin', 'rear_tail_x',
                         'rear_half_width', 'front_head_x', 'lidar_x')
 
@@ -758,7 +795,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                     and self.sup.state in ('staging', 'rotating', 'crossing')):
                 ranges, amin, ainc = self._scan
                 jambs = [tuple(self.sup.door['a']), tuple(self.sup.door['b'])]
-                gap = gap_ahead(ranges, amin, ainc, pose, jambs, 0.30)
+                gap = gap_ahead(ranges, amin, ainc, pose, jambs, 0.30,
+                                half_w=self.cfg.stop_zone_half_w,
+                                max_x=self.cfg.stop_look_ahead)
 
             front_gap = math.inf
             rear_gap = math.inf

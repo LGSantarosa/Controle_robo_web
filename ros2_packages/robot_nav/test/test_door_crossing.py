@@ -160,13 +160,49 @@ def test_crossing_anda_reto_e_solta_depois_da_porta():
     assert c.state == 'idle'
 
 
-def test_crossing_aborta_se_vao_fecha_ou_goal_morre():
+def test_crossing_aborta_se_goal_morre():
+    # goal cancelado durante a travessia -> larga pro nav2.
     dc = mk()
     t = _ate_crossing(dc)
-    assert step(dc, t, (1.5, 1.9, math.pi/2), gap=0.3).state == 'idle'
-    dc2 = mk()
-    t2 = _ate_crossing(dc2)
-    assert step(dc2, t2, (1.5, 1.9, math.pi/2), goal=False).state == 'idle'
+    assert step(dc, t, (1.5, 1.9, math.pi/2), goal=False).state == 'idle'
+
+
+# --- caminho B (2026-06-17): door é a autoridade de segurança no crossing.
+# Como o door_vel fura o collision monitor, uma PESSOA no caminho só é pega pela
+# checagem do próprio door -> agora ele PARA (vx=0) e segura, em vez de furar cego
+# (antes ia de cara na pessoa) ou de só abortar.
+
+def test_crossing_para_e_segura_se_pessoa_no_caminho():
+    dc = mk()
+    t = _ate_crossing(dc)
+    c = step(dc, t, (1.5, 1.9, math.pi / 2), gap=0.3)
+    assert c.state == 'crossing'                 # NÃO aborta — segura a posição
+    assert c.vx == pytest.approx(0.0)            # PARA (não fura pra cima da pessoa)
+
+
+def test_crossing_para_mais_cedo_em_stop_dist():
+    # para a stop_dist (0.6), não só no gap_min (0.45) -> não chega scary-close.
+    dc = mk()
+    t = _ate_crossing(dc)
+    c = step(dc, t, (1.5, 1.9, math.pi / 2), gap=0.5)  # 0.45 < 0.5 < 0.6
+    assert c.state == 'crossing' and c.vx == pytest.approx(0.0)
+
+
+def test_crossing_resume_quando_libera():
+    dc = mk()
+    t = _ate_crossing(dc)
+    assert step(dc, t, (1.5, 1.9, math.pi / 2), gap=0.3).vx == pytest.approx(0.0)
+    c = step(dc, t + 0.1, (1.5, 1.9, math.pi / 2), gap=math.inf)   # caminho liberou
+    assert c.state == 'crossing' and c.vx == pytest.approx(CFG.cross_speed)
+
+
+def test_crossing_stop_hold_timeout_aborta():
+    # pessoa parada bloqueando por muito tempo -> larga pro nav2 (que freia/replana).
+    dc = mk()
+    t = _ate_crossing(dc)
+    step(dc, t, (1.5, 1.9, math.pi / 2), gap=0.3)                  # entra no hold
+    c = step(dc, t + CFG.stop_hold_timeout + 0.1, (1.5, 1.9, math.pi / 2), gap=0.3)
+    assert c.state == 'idle'
 
 
 def test_align_timeout_aborta_e_respeita_cooldown():
