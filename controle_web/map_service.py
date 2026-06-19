@@ -717,6 +717,9 @@ class MapBridge:
         robot = self._last_robot_xy
         door = (door_on_segment(robot, (x, y), self._doors.doors)
                 if robot is not None else None)
+        log.info(f"[MapBridge] send_goal dest=({x:.2f},{y:.2f}) robot={robot} "
+                 f"portas={len(self._doors.doors)} "
+                 f"-> door={door['id'] if door else None}")
         if door is not None:
             wx, wy, wyaw = pre_door_waypoint(door['a'], door['b'], robot)
             poses = [self._pose_stamped(wx, wy, wyaw),
