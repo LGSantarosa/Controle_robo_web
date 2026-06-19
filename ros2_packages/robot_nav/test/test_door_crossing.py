@@ -209,44 +209,29 @@ def test_default_rot_speed_is_4():
     assert DoorCrossConfig().rot_speed == 4.0
 
 
-def test_default_rot_left_boost_is_1_4():
-    assert DoorCrossConfig().rot_left_boost == 1.4
-
-
-def test_rotating_gira_um_lado_so_sem_pingpong():
-    # 2026-06-19: regressão do revert 46ec8ab reintroduziu o bang-bang -> robô
-    # "doidinho esq-dir" sem nunca alinhar. Giro limpo: escolhe UM sentido e
-    # mantém enquanto não cruzar o alvo (não inverte tick a tick).
+def test_rotating_is_proportional_slows_near_target():
+    # 2026-06-16 (3b40817), re-aplicado 2026-06-19: o giro no lugar era bang-bang
+    # (sempre rot_speed) -> a ~11.5°/tick passava da janela de ±5° e ficava
+    # caçando direita/esquerda ("doidinho na frente da porta", relato de campo).
+    # O sentido-único do 1a0fe30 também girava a vel. cheia -> seguia caçando.
+    # Agora é proporcional: teto longe, desacelera perto, piso pra não stallar.
     dc = mk()
-    # yaw=pi pede girar pra DIREITA (want=-1) pra chegar em pi/2 (yaw_des +1)
-    c = step(dc, 0.0, (1.5, 1.0, math.pi))     # arma -> rotating, gira
-    assert c.state == 'rotating' and c.wz < 0.0
-    d0 = dc._rot_dir
-    assert d0 == -1
-    # ticks seguintes ainda longe do alvo: MESMO sentido, sem inverter
-    for t in (0.05, 0.10, 0.15):
-        c = step(dc, t, (1.5, 1.0, math.pi - 0.05))
-        assert c.wz < 0.0 and dc._rot_dir == -1
-
-
-def test_rotating_para_ao_cruzar_em_vez_de_reverter():
-    # ao CRUZAR o alvo (o lado necessário inverte), PARA (wz=0) e re-avalia no
-    # próximo tick — não fica revertendo girando (é o que matava o limit cycle).
-    dc = mk()
-    c = step(dc, 0.0, (1.5, 1.0, math.pi/2 + 0.3))   # yaw_err>0 -> want=-1
-    assert c.wz < 0.0 and dc._rot_dir == -1
-    # próximo tick simula que passou do alvo (yaw_err<0 -> want=+1, inverteu)
-    c = step(dc, 0.05, (1.5, 1.0, math.pi/2 - 0.3))
+    c = step(dc, 0.0, (1.5, 1.0, math.pi))               # arma -> rotating
+    # LONGE do alvo (yaw_des=pi/2) -> velocidade no teto
+    c = step(dc, 0.1, (1.5, 1.0, math.pi/2 - 1.0))
     assert c.state == 'rotating'
-    assert c.wz == pytest.approx(0.0)
-    assert dc._rot_dir == 0
+    assert abs(c.wz) == pytest.approx(CFG.rot_speed)
+    # PERTO do alvo -> proporcional, mais devagar que o teto, mas >= piso
+    c = step(dc, 0.2, (1.5, 1.0, math.pi/2 - 0.5))
+    assert CFG.rot_min <= abs(c.wz) < CFG.rot_speed
+    # MUITO perto (mas fora de align_yaw) -> piso (não para de girar)
+    c = step(dc, 0.3, (1.5, 1.0, math.pi/2 - 0.1))
+    assert abs(c.wz) == pytest.approx(CFG.rot_min)
 
 
-def test_rotating_boost_de_forca_na_esquerda():
-    # girar pra ESQUERDA (want=+1, wz>0) leva o rot_left_boost.
-    dc = mk()
-    c = step(dc, 0.0, (1.5, 1.0, math.pi/2 - 0.5))   # yaw_err<0 -> want=+1
-    assert c.wz == pytest.approx(CFG.rot_speed * CFG.rot_left_boost)
+def test_default_rot_k_e_rot_min():
+    assert DoorCrossConfig().rot_k == 6.0
+    assert DoorCrossConfig().rot_min == 2.5
 
 
 from robot_nav.door_crossing import nav_engaging
