@@ -175,6 +175,20 @@ def test_crossing_anda_reto_e_solta_depois_da_porta():
     assert c.state == 'idle'
 
 
+def test_crossing_para_correcao_lateral_apos_o_centro():
+    # 2026-06-19: a correção lateral persegue o EIXO dos 2 cliques (doors.json),
+    # não o corredor real -> dava uma curvinha no fim que deixava o robô torto no
+    # corredor pós-porta. Antes do centro (s<0) corrige lateral; depois (s>=0) NÃO.
+    dc = mk()
+    _ate_crossing(dc)                              # side=+1, centro da porta (1.5,2.0)
+    # offset lateral d=0.1, AINDA antes do centro (s=-0.1) -> corrige (wz!=0)
+    c = step(dc, 1.0, (1.6, 1.9, math.pi/2))
+    assert c.state == 'crossing' and c.wz < 0.0
+    # mesmo offset, PASSADO o centro (s=+0.1) -> NÃO corrige lateral; yaw alinhado -> wz~0
+    c = step(dc, 1.1, (1.6, 2.1, math.pi/2))
+    assert c.state == 'crossing' and c.wz == pytest.approx(0.0)
+
+
 def test_crossing_aborta_se_vao_fecha_ou_goal_morre():
     dc = mk()
     t = _ate_crossing(dc)

@@ -176,6 +176,12 @@ class DoorCrossConfig:
     cross_k_lat: float = 1.5        # corrige offset lateral durante a travessia
     cross_k_yaw: float = 2.0        # corrige heading durante a travessia
     cross_wz_max: float = 0.8       # rad/s — teto da micro-correção (NÃO girar)
+    # 2026-06-19: passado o centro (s >= cross_lat_off_s) PARA de corrigir lateral.
+    # A correção lateral persegue o eixo dos 2 cliques (doors.json), NÃO o corredor
+    # real -> no fim da travessia dava uma curvinha desnecessária que deixava o robô
+    # anguladinho no corredor pós-porta (relato de campo). Antes do centro corrige
+    # (pra cruzar centrado no batente); depois sai RETO, só segurando o yaw.
+    cross_lat_off_s: float = 0.0    # m — progresso (s) a partir do qual zera a correção lateral (0 = centro)
     gap_min: float = 0.45           # m — vão mínimo à frente pra seguir
     exit_margin: float = 0.5        # m — além do centro pra soltar
     total_timeout: float = 40.0     # s — manobra inteira (revertido de 600; ver align_timeout)
@@ -413,7 +419,10 @@ class DoorCrossing:
                 self.door = None
                 self.geom = None
                 return Cmd('idle', 0.0, 0.0, None)
-            wz = -cfg.cross_k_lat * d - cfg.cross_k_yaw * yaw_err
+            # corrige lateral SÓ até o centro; depois sai reto (só segura o yaw)
+            # pra não sair anguladinho perseguindo o eixo dos cliques (campo 06-19)
+            k_lat = cfg.cross_k_lat if s < cfg.cross_lat_off_s else 0.0
+            wz = -k_lat * d - cfg.cross_k_yaw * yaw_err
             wz = max(-cfg.cross_wz_max, min(cfg.cross_wz_max, wz))
             return Cmd('crossing', cfg.cross_speed, wz, self.door['id'])
 
@@ -454,6 +463,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('align_timeout', 15.0), ('rot_speed', 3.0),
                 ('rot_k', 6.0), ('rot_min', 2.5),
                 ('cross_speed', 0.22), ('stage_speed', 0.20),
+                ('cross_lat_off_s', 0.0),
                 ('escape_reverse_speed', 0.25), ('gap_min', 0.45),
                 ('exit_margin', 0.5), ('rate_hz', 20.0),
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
@@ -470,6 +480,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 align_timeout=g['align_timeout'], rot_speed=g['rot_speed'],
                 rot_k=g['rot_k'], rot_min=g['rot_min'],
                 cross_speed=g['cross_speed'], stage_speed=g['stage_speed'],
+                cross_lat_off_s=g['cross_lat_off_s'],
                 escape_reverse_speed=g['escape_reverse_speed'],
                 gap_min=g['gap_min'], exit_margin=g['exit_margin'])
             self.sup = DoorCrossing(self.cfg)
