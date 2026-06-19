@@ -42,3 +42,26 @@ def door_on_segment(robot_xy, goal_xy, doors):
         if _seg_cross(robot_xy, goal_xy, tuple(d['a']), tuple(d['b'])):
             return d
     return None
+
+
+def expand_route_with_pre_door(start_xy, waypoints, doors, standoff=DOOR_STANDOFF):
+    """Expande a rota inserindo o ponto-PRÉ-PORTA antes de cada waypoint cujo
+    trecho (ponto anterior -> waypoint) cruza uma porta marcada -> o nav2 entrega
+    o robô reto e longe na frente da porta, e o door só alinha+cruza.
+
+    `start_xy` = pose do robô (início do 1º trecho); se None, devolve a rota
+    intacta (sem pose não dá pra avaliar o 1º trecho). Cada waypoint é
+    {'x','y','yaw'}; o ponto-pré-porta entra com o yaw de frente pra porta."""
+    if start_xy is None:
+        return list(waypoints)
+    out = []
+    prev = tuple(start_xy)
+    for wp in waypoints:
+        to = (wp['x'], wp['y'])
+        door = door_on_segment(prev, to, doors)
+        if door is not None:
+            wx, wy, wyaw = pre_door_waypoint(door['a'], door['b'], prev, standoff)
+            out.append({'x': wx, 'y': wy, 'yaw': wyaw})
+        out.append(dict(wp))
+        prev = to
+    return out

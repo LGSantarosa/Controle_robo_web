@@ -2,7 +2,11 @@ import math
 
 import pytest
 
-from door_geom import door_on_segment, pre_door_waypoint
+from door_geom import (
+    door_on_segment,
+    expand_route_with_pre_door,
+    pre_door_waypoint,
+)
 
 
 # porta: batentes em y=2, vão x∈[1,2] (parede ao longo de x, atravessa em y)
@@ -40,3 +44,34 @@ def test_pre_door_waypoint_porta_na_vertical():
     wx, wy, wyaw = pre_door_waypoint([2.0, 1.0], [2.0, 2.0], (0.5, 1.5), standoff=1.0)
     assert (wx, wy) == pytest.approx((1.0, 1.5))   # 1m à esquerda do centro (2,1.5)
     assert wyaw == pytest.approx(0.0)               # de frente (+x)
+
+
+def test_expand_insere_pre_porta_quando_trecho_cruza():
+    # robô (1.5,0.5) -> destino (1.5,4.0) cruza a porta -> insere pré-porta antes
+    wps = [{'x': 1.5, 'y': 4.0, 'yaw': 0.0}]
+    out = expand_route_with_pre_door((1.5, 0.5), wps, [DOOR], standoff=1.0)
+    assert len(out) == 2
+    assert (out[0]['x'], out[0]['y']) == pytest.approx((1.5, 1.0))   # pré-porta
+    assert out[0]['yaw'] == pytest.approx(math.pi / 2)              # de frente
+    assert (out[1]['x'], out[1]['y']) == pytest.approx((1.5, 4.0))  # destino original
+
+
+def test_expand_nao_mexe_quando_nao_cruza():
+    wps = [{'x': 1.5, 'y': 1.5, 'yaw': 0.0}]   # mesmo lado da porta
+    out = expand_route_with_pre_door((1.5, 0.5), wps, [DOOR], standoff=1.0)
+    assert out == wps
+
+
+def test_expand_multi_waypoint_insere_so_no_trecho_que_cruza():
+    # robô (1.5,0.5) -> wp1 (1.5,1.2) [não cruza] -> wp2 (1.5,4.0) [cruza]
+    wps = [{'x': 1.5, 'y': 1.2, 'yaw': 0.0}, {'x': 1.5, 'y': 4.0, 'yaw': 0.0}]
+    out = expand_route_with_pre_door((1.5, 0.5), wps, [DOOR], standoff=1.0)
+    assert len(out) == 3
+    assert (out[0]['x'], out[0]['y']) == pytest.approx((1.5, 1.2))   # wp1
+    assert (out[1]['x'], out[1]['y']) == pytest.approx((1.5, 1.0))   # pré-porta (lado do wp1)
+    assert (out[2]['x'], out[2]['y']) == pytest.approx((1.5, 4.0))   # wp2
+
+
+def test_expand_sem_pose_do_robo_nao_mexe():
+    wps = [{'x': 1.5, 'y': 4.0, 'yaw': 0.0}]
+    assert expand_route_with_pre_door(None, wps, [DOOR]) == wps

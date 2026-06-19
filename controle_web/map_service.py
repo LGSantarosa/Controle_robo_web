@@ -42,7 +42,11 @@ from std_msgs.msg import Float64, String
 from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from door_geom import door_on_segment, pre_door_waypoint
+from door_geom import (
+    door_on_segment,
+    expand_route_with_pre_door,
+    pre_door_waypoint,
+)
 
 
 log = logging.getLogger(__name__)
@@ -433,6 +437,15 @@ class MapBridge:
         if not waypoints:
             return {'ok': False, 'error': 'lista de waypoints vazia'}
         self.stop_waypoints()
+        # Se algum trecho cruza uma porta marcada, insere o ponto-PRÉ-PORTA antes
+        # do destino daquele trecho -> o nav2 entrega o robô reto/longe na frente
+        # da porta e o door_crossing só alinha+cruza.
+        n_in = len(waypoints)
+        waypoints = expand_route_with_pre_door(
+            self._last_robot_xy, waypoints, self._doors.doors)
+        if len(waypoints) != n_in:
+            log.info(f"[MapBridge] rota expandida {n_in} -> {len(waypoints)} "
+                     f"pontos (ponto-pré-porta inserido); robot={self._last_robot_xy}")
         with self._wp_lock:
             self._wp_list = waypoints
             self._wp_loop = loop
