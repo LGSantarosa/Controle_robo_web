@@ -143,12 +143,13 @@ def gap_ahead(ranges, angle_min: float, angle_increment: float,
 
 @dataclass
 class DoorCrossConfig:
-    # 2026-06-19: 1.2 -> 0.9. O ponto-pré-porta fica a 1.0 m do centro; com 1.2 o
-    # door ARMAVA 0.2 m ANTES do robô chegar nesse ponto -> pegava o robô ainda
-    # torto (nav2 não tinha entregado no eixo) -> girava errado/apontava pra
-    # parede antes da porta (campo 2026-06-19). Com 0.9 (< 1.0) o nav2 entrega o
-    # robô reto NO ponto do eixo primeiro e só então o door assume, já centrado.
-    zone_radius: float = 0.9        # m — distância do centro que arma a manobra
+    # 2026-06-19: 1.2 -> 0.9 -> 1.1. O ponto-pré-porta fica a 1.0 m do centro.
+    # 1.2 armava 0.2 m ANTES do ponto -> pegava o robô torto (apontava pra parede).
+    # 0.9 (< 1.0) foi LONGE demais: o robô parava NO ponto (1.0 m), FORA da zona,
+    # e o door nunca pegava (só armava se o robô continuasse entrando, com atraso
+    # enorme/"não ativou"). A zona TEM que ser >= standoff. 1.1 arma só 0.1 m antes
+    # do ponto, com o robô já vindo centrado pelo xy_goal_tolerance=0.15 do nav2.
+    zone_radius: float = 1.1        # m — distância do centro que arma a manobra (>= standoff 1.0)
     approach_bearing: float = math.radians(70)  # porta tem que estar "na frente"
     # 2026-06-15: experimento "girar mais longe" (0.6 -> 1.0) REVERTIDO pra 0.6.
     # Com 1.0 o ponto de staging caía num ângulo que exigia GIRAR NO LUGAR pra
@@ -458,7 +459,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 # 2026-06-15: REVERTIDO pros valores de 06-12 (validados: o robô
                 # atravessou a porta). O experimento stage_dist 1.0 + timeout 600
                 # travava o robô girando fraco no lugar. Ver DoorCrossConfig.
-                ('zone_radius', 0.9), ('stage_dist', 0.6),
+                ('zone_radius', 1.1), ('stage_dist', 0.6),
                 ('align_lat', 0.08), ('align_yaw_deg', 3.0),
                 ('align_timeout', 15.0), ('rot_speed', 3.0),
                 ('rot_k', 6.0), ('rot_min', 2.5),
