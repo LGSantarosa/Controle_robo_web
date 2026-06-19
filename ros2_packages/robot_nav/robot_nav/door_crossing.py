@@ -161,7 +161,7 @@ class DoorCrossConfig:
     stage_speed: float = 0.20       # m/s — aproximação (0.12->0.20 em 2026-06-16: a 0.12 patinava sem vencer o atrito estático; régua = ré do unstuck 0.25, validada em campo)
     stage_k_heading: float = 1.8    # ganho P do heading no staging
     align_lat: float = 0.08         # m — |offset lateral| máximo pra "tô no eixo"
-    align_yaw: float = math.radians(5.0)   # rad — |erro de yaw| máximo
+    align_yaw: float = math.radians(3.0)   # rad — |erro de yaw| máximo (5°->3° em 2026-06-19: 5° numa porta de ~11cm de folga desvia ~9cm no fim -> apontava pro batente; 3° alinha mais reto)
     align_stable: int = 5           # ticks consecutivos dentro da tolerância
     # 2026-06-15: experimento 15 -> 600 REVERTIDO pra 15. O 600 não fazia o robô
     # "tentar mais" — transformava um STALL (ver stage_dist) num FREEZE de 10
@@ -169,7 +169,7 @@ class DoorCrossConfig:
     # 3600), já resolvido. Aqui 15s é a rede de segurança: se não alinhar,
     # aborta e devolve pro nav2 em vez de congelar.
     align_timeout: float = 15.0     # s — STAGING+ROTATING juntos
-    rot_speed: float = 4.0          # rad/s — TETO do giro no lugar (point-turn forte; 3->4 em 2026-06-16, sobe a 6.0 ao vivo se patinar; NUNCA arco)
+    rot_speed: float = 3.0          # rad/s — TETO do giro no lugar (4->3 em 2026-06-19: giro estava forte/passando do alvo pós-fitas nas rodas; proporcional rot_k/piso rot_min seguem; NUNCA arco)
     rot_k: float = 6.0              # ganho P do giro: desacelera perto do alvo (2026-06-16; bang-bang passava da janela ±5° e ficava caçando dir/esq)
     rot_min: float = 2.5            # rad/s — PISO do giro: abaixo disso o skid-steer não vira (atrito); nunca desacelera além disso
     cross_speed: float = 0.22       # m/s — travessia (0.15->0.22 em 2026-06-16: vencer o atrito estático sem patinar)
@@ -450,8 +450,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 # atravessou a porta). O experimento stage_dist 1.0 + timeout 600
                 # travava o robô girando fraco no lugar. Ver DoorCrossConfig.
                 ('zone_radius', 0.9), ('stage_dist', 0.6),
-                ('align_lat', 0.08), ('align_yaw_deg', 5.0),
-                ('align_timeout', 15.0), ('rot_speed', 4.0),
+                ('align_lat', 0.08), ('align_yaw_deg', 3.0),
+                ('align_timeout', 15.0), ('rot_speed', 3.0),
                 ('rot_k', 6.0), ('rot_min', 2.5),
                 ('cross_speed', 0.22), ('stage_speed', 0.20),
                 ('escape_reverse_speed', 0.25), ('gap_min', 0.45),

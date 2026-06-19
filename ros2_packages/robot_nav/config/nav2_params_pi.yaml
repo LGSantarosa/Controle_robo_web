@@ -136,7 +136,10 @@ controller_server:
       # = ±250, fraco demais). 2026-06-12: o rotate_to_heading usa 4.2 — o giro
       # do shim é CONTÍNUO (já vencido o atrito estático, fica mais fino); o
       # piso de 6.0 segue valendo pro arranque parado do teleop/unstuck.
-      rotate_to_heading_angular_vel: 4.2
+      # 2026-06-19: 4.2 -> 4.0. As fitas nas rodas deram grip -> o giro no lugar
+      # passava do alvo (overshoot ~14°/ciclo a 10Hz). Passo pequeno pra testar;
+      # o spin_calib indica que dá pra ir até ~3.0 (gira de rest, ~4.5°/ciclo).
+      rotate_to_heading_angular_vel: 4.0
       max_angular_accel: 10.0
       rotate_to_goal_heading: true        # também gira p/ encarar o yaw final do goal
       simulate_ahead_time: 1.0

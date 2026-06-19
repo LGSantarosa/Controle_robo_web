@@ -202,11 +202,10 @@ def test_scan_velho_aborta_crossing():
     assert step(dc, t, (1.5, 1.9, math.pi/2), fresh=False).state == 'idle'
 
 
-def test_default_rot_speed_is_4():
-    # 2026-06-16: 3.0 -> 4.0. Point-turn mais forte pra vencer o atrito do
-    # skid-steer parado, sem ser agressivo a ponto de passar do |yaw|<5° (6.0
-    # passava). NUNCA arco. Param ROS, sobe pra 6.0 ao vivo se patinar.
-    assert DoorCrossConfig().rot_speed == 4.0
+def test_default_rot_speed_is_3():
+    # 2026-06-19: 4.0 -> 3.0. As fitas nas rodas deram grip; a 4.0 o giro passava
+    # do alvo (apontava pro batente). Teto do proporcional (rot_k/rot_min seguem).
+    assert DoorCrossConfig().rot_speed == 3.0
 
 
 def test_rotating_is_proportional_slows_near_target():
@@ -221,8 +220,10 @@ def test_rotating_is_proportional_slows_near_target():
     c = step(dc, 0.1, (1.5, 1.0, math.pi/2 - 1.0))
     assert c.state == 'rotating'
     assert abs(c.wz) == pytest.approx(CFG.rot_speed)
-    # PERTO do alvo -> proporcional, mais devagar que o teto, mas >= piso
-    c = step(dc, 0.2, (1.5, 1.0, math.pi/2 - 0.5))
+    # PERTO do alvo -> proporcional, mais devagar que o teto, mas >= piso.
+    # Banda proporcional = err em (rot_min/rot_k, rot_speed/rot_k) = (0.417, 0.5)
+    # com rot_speed=3, rot_k=6, rot_min=2.5 -> uso 0.45 (mag=2.7).
+    c = step(dc, 0.2, (1.5, 1.0, math.pi/2 - 0.45))
     assert CFG.rot_min <= abs(c.wz) < CFG.rot_speed
     # MUITO perto (mas fora de align_yaw) -> piso (não para de girar)
     c = step(dc, 0.3, (1.5, 1.0, math.pi/2 - 0.1))
