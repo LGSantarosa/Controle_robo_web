@@ -111,26 +111,30 @@ def test_idle_sem_goal_ou_fora_da_zona():
     assert step(dc, 0.2, None).state == 'idle'
 
 
-def test_arma_e_vai_pro_staging():
+def test_arma_e_vai_pro_rotating():
+    # 2026-06-19: a web (nav2 via ponto-pré-porta) entrega o robô centrado na
+    # frente da porta -> o door arma DIRETO no rotating (só alinha o ângulo),
+    # sem staging (que perseguia o centro do vão e estragava a posição boa).
     dc = mk()
-    # a 1.0 m do centro, olhando pra porta, nav empurrando
     c = step(dc, 0.0, (1.5, 1.0, math.pi/2))
-    assert c.state == 'staging'
+    assert c.state == 'rotating'
     assert c.door_id == 1
-    # side foi escolhido pra aproximação: alvo de staging fica ENTRE o robô
-    # e a porta (y = 2.0 - stage_dist)
     assert dc.side == +1
 
 
 def test_staging_converge_e_rotaciona():
+    # staging não é mais o caminho do arme; só é alcançado como recuperação
+    # pós-escape. Testado direto aqui (força o estado).
     dc = mk()
-    t = 0.0
-    pose = (1.7, 1.2, 0.0)   # fora do eixo, yaw errado
-    c = step(dc, t, pose)
-    assert c.state == 'staging'
+    step(dc, 0.0, (1.7, 1.2, 0.0))     # arma -> rotating
+    dc.state = 'staging'               # recuperação: staging
+    dc._align_t0 = 0.0
+    dc._align_anchor = (1.7, 1.2)
+    c = step(dc, 0.5, (1.7, 1.2, 0.0))
+    assert c.state == 'staging'        # ainda indo pro ponto no eixo
     # teleporta pro ponto de staging (simula chegada): vira ROTATING
     stage_y = 2.0 - CFG.stage_dist
-    c = step(dc, t + 1.0, (1.5, stage_y, 0.0))
+    c = step(dc, 1.0, (1.5, stage_y, 0.0))
     assert c.state == 'rotating'
     assert c.vx == pytest.approx(0.0)
     assert c.wz != 0.0   # girando pra encarar pi/2
@@ -189,7 +193,7 @@ def test_align_timeout_aborta_e_respeita_cooldown():
     assert step(dc, CFG.align_timeout + 0.2, (1.5, 1.0, math.pi/2)).state == 'idle'
     # passado o cooldown, rearma
     t = CFG.align_timeout + CFG.retrigger_cooldown + 0.3
-    assert step(dc, t, (1.5, 1.0, math.pi/2)).state == 'staging'
+    assert step(dc, t, (1.5, 1.0, math.pi/2)).state == 'rotating'
 
 
 def test_scan_velho_aborta_crossing():
@@ -260,15 +264,20 @@ def estep(dc, t, pose, front_gap=math.inf, rear_gap=math.inf,
 
 def test_escape_reverse_on_front_block():
     dc = DoorCrossing(ECFG)
-    assert estep(dc, 0.0, P_STAGE).state == 'staging'         # arma
+    assert estep(dc, 0.0, P_STAGE).state == 'rotating'        # arma -> rotating
     c = estep(dc, 0.1, P_STAGE, front_gap=0.10)               # parede perto -> ré
     assert c.state == 'reversing'
     assert c.vx < 0.0 and c.wz == pytest.approx(0.0)          # ré RETA, nunca arco
 
 
 def test_escape_reverse_on_substuck_timeout():
+    # substuck (parado sem progredir) só vale no staging (recuperação); no
+    # rotating é giro no lugar e NÃO conta como travado.
     dc = DoorCrossing(ECFG)
-    estep(dc, 0.0, P_STAGE)                                   # arma (align_t0=0)
+    estep(dc, 0.0, P_STAGE)            # arma -> rotating
+    dc.state = 'staging'               # recuperação: staging
+    dc._align_t0 = 0.0
+    dc._align_anchor = (P_STAGE[0], P_STAGE[1])
     c = estep(dc, ECFG.escape_substuck_time + 0.1, P_STAGE)   # não progrediu -> ré
     assert c.state == 'reversing'
 
@@ -323,10 +332,13 @@ def test_escape_max_count_then_abort():
 
 
 def test_moving_approach_does_not_trigger_substuck():
-    # aproximação LEGÍTIMA: o robô se desloca a cada tick por > substuck_time
-    # total -> a âncora de progresso reseta o relógio, NÃO dispara a ré.
+    # aproximação LEGÍTIMA no staging (recuperação): o robô se desloca a cada
+    # tick -> a âncora de progresso reseta o relógio, NÃO dispara a ré.
     dc = DoorCrossing(ECFG)
-    assert estep(dc, 0.0, (1.5, 1.0, math.pi / 2)).state == 'staging'  # arma
+    estep(dc, 0.0, (1.5, 1.0, math.pi / 2))   # arma -> rotating
+    dc.state = 'staging'                        # recuperação: staging
+    dc._align_t0 = 0.0
+    dc._align_anchor = (1.5, 1.0)
     # caminha de 1.0 -> 1.35 em y, ao longo de 7 s (bem além do substuck de 5 s)
     t, y = 0.5, 1.0
     last = None

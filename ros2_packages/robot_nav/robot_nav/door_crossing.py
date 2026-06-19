@@ -303,13 +303,18 @@ class DoorCrossing:
             raw_s = ((x - geom.cx) * geom.nx + (y - geom.cy) * geom.ny)
             self.side = -1 if raw_s > 0 else +1
             self.door, self.geom = door, geom
-            self.state = 'staging'
+            # 2026-06-19: a web (nav2 via ponto-pré-porta) já entrega o robô
+            # centrado na frente da porta. Arma DIRETO no rotating (só alinha o
+            # ângulo) e cruza — NÃO faz staging (não persegue o centro do vão,
+            # que era o "buscando eixo" que estragava a posição já boa). O
+            # staging fica só como recuperação pós-escape (reversing).
+            self.state = 'rotating'
             self.t_start = now
             self._stable = 0
             self._escape_count = 0
             self._align_t0 = now
             self._align_anchor = (x, y)
-            # cai no fluxo de staging já neste tick
+            # cai no fluxo de rotating já neste tick
 
         # guardas comuns a qualquer estado ativo
         if pose is None or not goal_active or not scan_fresh:
@@ -351,7 +356,11 @@ class DoorCrossing:
                                      allow_substuck=False)
             if esc is not None:
                 return esc
-            aligned = abs(yaw_err) <= cfg.align_yaw and abs(d) <= cfg.align_lat
+            # Alinha SÓ o ângulo (yaw) no lugar. NÃO exige estar no eixo
+            # (|lat|): o nav2 já entregou centrado e o offset lateral residual é
+            # corrigido aos poucos ANDANDO no crossing (cross_k_lat) — nunca
+            # girando atrás do centro do vão.
+            aligned = abs(yaw_err) <= cfg.align_yaw
             if aligned:
                 self._stable += 1
                 if self._stable >= cfg.align_stable:
@@ -360,10 +369,6 @@ class DoorCrossing:
                                self.door['id'])
                 return Cmd('rotating', 0.0, 0.0, self.door['id'])
             self._stable = 0
-            if abs(d) > cfg.align_lat:
-                # saiu do eixo girando (skid-steer arrasta) -> volta pro staging
-                self.state = 'staging'
-                return Cmd('staging', 0.0, 0.0, self.door['id'])
             wz = cfg.rot_speed if yaw_err < 0 else -cfg.rot_speed
             return Cmd('rotating', 0.0, wz, self.door['id'])
 
