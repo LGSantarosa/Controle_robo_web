@@ -3,6 +3,7 @@ import math
 import pytest
 
 from door_geom import (
+    door_on_path,
     door_on_segment,
     expand_route_with_pre_door,
     pre_door_waypoint,
@@ -75,3 +76,32 @@ def test_expand_multi_waypoint_insere_so_no_trecho_que_cruza():
 def test_expand_sem_pose_do_robo_nao_mexe():
     wps = [{'x': 1.5, 'y': 4.0, 'yaw': 0.0}]
     assert expand_route_with_pre_door(None, wps, [DOOR]) == wps
+
+
+def test_door_on_path_detecta_porta_no_caminho_curvo():
+    # caminho que SOBE reto pelo vão (a reta robô->fim NÃO precisa cruzar):
+    # trecho (1.5,1.5)->(1.5,3.0) atravessa o vão em y=2
+    path = [(1.5, 0.5), (1.5, 1.5), (1.5, 3.0)]
+    d = door_on_path(path, [DOOR])
+    assert d is not None and d['id'] == 1
+
+
+def test_door_on_path_caminho_que_so_passa_perto_nao_conta():
+    # caminho que contorna a porta pela parede (x=3, fora do vão) -> não cruza
+    path = [(3.0, 0.5), (3.0, 1.5), (3.0, 3.0)]
+    assert door_on_path(path, [DOOR]) is None
+    # caminho curto do mesmo lado
+    assert door_on_path([(1.5, 0.5), (1.5, 1.0)], [DOOR]) is None
+    # path degenerado / vazio
+    assert door_on_path([], [DOOR]) is None
+    assert door_on_path([(1.5, 0.5)], [DOOR]) is None
+
+
+def test_door_on_path_pega_o_caso_real_de_campo():
+    # robô (-1.3,2.67) -> dest (5.76,-3.35): a RETA passa 1.1m acima do vão
+    # (door_on_segment=None), mas o /plan curva pra baixo e ATRAVESSA a porta.
+    DOOR_REAL = {'id': 1, 'a': [3.90, -2.90], 'b': [3.90, -3.87]}
+    assert door_on_segment((-1.3, 2.67), (5.76, -3.35), [DOOR_REAL]) is None
+    plan = [(-1.3, 2.67), (2.0, -2.5), (3.5, -3.4), (4.3, -3.4), (5.76, -3.35)]
+    d = door_on_path(plan, [DOOR_REAL])
+    assert d is not None and d['id'] == 1

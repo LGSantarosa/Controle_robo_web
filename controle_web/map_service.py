@@ -36,15 +36,19 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReli
 
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
-from nav2_msgs.action import NavigateToPose, NavigateThroughPoses
+from nav2_msgs.action import (
+    ComputePathToPose,
+    NavigateToPose,
+    NavigateThroughPoses,
+)
 from nav_msgs.msg import OccupancyGrid, Path
 from std_msgs.msg import Float64, String
 from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from door_geom import (
+    door_on_path,
     door_on_segment,
-    expand_route_with_pre_door,
     pre_door_waypoint,
 )
 
@@ -269,6 +273,13 @@ class MapBridge:
         self._nav_through = ActionClient(
             self._node, NavigateThroughPoses, 'navigate_through_poses'
         )
+        # 2026-06-19: calcula o caminho do nav2 SEM mover o robô. Usado pra
+        # decidir se a rota cruza uma porta marcada (o /plan REAL curva até a
+        # abertura; a reta robô->destino pode passar longe do vão) e, se cruzar,
+        # inserir o ponto-pré-porta ANTES de mandar executar.
+        self._compute_path = ActionClient(
+            self._node, ComputePathToPose, 'compute_path_to_pose'
+        )
         self._last_robot_xy: Optional[tuple] = None   # (x, y) do robô em map
 
         # Guarda o último metadata do mapa para converter clique pixel→mundo
@@ -433,16 +444,84 @@ class MapBridge:
                 'total':     len(self._wp_list),
             }
 
+    def _plan_path_xy(self, start_xy, goal_xy, timeout=4.0):
+        """Pede ao nav2 o caminho (ComputePathToPose) de start_xy a goal_xy SEM
+        executar. Devolve lista de (x,y) ou None (indisponível/timeout/vazio)."""
+        if not self._compute_path.wait_for_server(timeout_sec=1.0):
+            log.warning("[MapBridge] compute_path_to_pose indisponível")
+            return None
+        goal = ComputePathToPose.Goal()
+        goal.use_start = True
+        goal.start = self._pose_stamped(start_xy[0], start_xy[1], 0.0)
+        goal.goal = self._pose_stamped(goal_xy[0], goal_xy[1], 0.0)
+        done = threading.Event()
+        box = {'path': None}
+
+        def _on_result(fut):
+            try:
+                box['path'] = fut.result().result.path
+            except Exception as e:
+                log.warning(f"[MapBridge] erro no compute_path result: {e}")
+            done.set()
+
+        def _on_resp(fut):
+            try:
+                h = fut.result()
+            except Exception as e:
+                log.warning(f"[MapBridge] erro no compute_path: {e}")
+                done.set()
+                return
+            if not h.accepted:
+                log.warning("[MapBridge] compute_path rejeitado pelo Nav2")
+                done.set()
+                return
+            h.get_result_async().add_done_callback(_on_result)
+
+        self._compute_path.send_goal_async(goal).add_done_callback(_on_resp)
+        if not done.wait(timeout=timeout):
+            log.warning("[MapBridge] compute_path timeout")
+            return None
+        path = box['path']
+        if path is None or not path.poses:
+            return None
+        return [(p.pose.position.x, p.pose.position.y) for p in path.poses]
+
+    def _expand_route_via_plan(self, start_xy, waypoints):
+        """Insere o ponto-PRÉ-PORTA antes de cada trecho cujo CAMINHO do nav2
+        cruza uma porta marcada -> o nav2 entrega o robô reto/longe na frente da
+        porta e o door_crossing só alinha+cruza. Usa o /plan real
+        (compute_path_to_pose); se o cálculo falhar num trecho, cai no teste de
+        reta como rede de segurança. Web é a ÚNICA que manda goal (sem preempção:
+        decide ANTES de executar)."""
+        doors = self._doors.doors
+        if start_xy is None or not doors:
+            return list(waypoints)
+        out = []
+        prev = tuple(start_xy)
+        for wp in waypoints:
+            to = (wp['x'], wp['y'])
+            path = self._plan_path_xy(prev, to)
+            door = (door_on_path(path, doors) if path is not None
+                    else door_on_segment(prev, to, doors))
+            if door is not None:
+                wx, wy, wyaw = pre_door_waypoint(door['a'], door['b'], prev)
+                out.append({'x': wx, 'y': wy, 'yaw': wyaw})
+                log.info(f"[MapBridge] porta {door['id']} no caminho "
+                         f"{prev}->{to} -> ponto-pré-porta "
+                         f"({wx:.2f},{wy:.2f}) inserido")
+            out.append(dict(wp))
+            prev = to
+        return out
+
     def start_waypoints(self, waypoints: list, loop: bool = False) -> dict:
         if not waypoints:
             return {'ok': False, 'error': 'lista de waypoints vazia'}
         self.stop_waypoints()
-        # Se algum trecho cruza uma porta marcada, insere o ponto-PRÉ-PORTA antes
-        # do destino daquele trecho -> o nav2 entrega o robô reto/longe na frente
-        # da porta e o door_crossing só alinha+cruza.
+        # Se o CAMINHO do nav2 cruza uma porta marcada, insere o ponto-PRÉ-PORTA
+        # antes do destino daquele trecho (decidido pelo /plan real, ANTES de
+        # executar -> sem guerra de preempção).
         n_in = len(waypoints)
-        waypoints = expand_route_with_pre_door(
-            self._last_robot_xy, waypoints, self._doors.doors)
+        waypoints = self._expand_route_via_plan(self._last_robot_xy, waypoints)
         if len(waypoints) != n_in:
             log.info(f"[MapBridge] rota expandida {n_in} -> {len(waypoints)} "
                      f"pontos (ponto-pré-porta inserido); robot={self._last_robot_xy}")

@@ -44,6 +44,18 @@ def door_on_segment(robot_xy, goal_xy, doors):
     return None
 
 
+def door_on_path(path_xy, doors):
+    """A porta marcada que o CAMINHO (polilinha do /plan do nav2) cruza, ou None.
+    Mais robusto que `door_on_segment`: o caminho real curva até a abertura na
+    parede, enquanto a reta robô->destino pode passar longe do vão. `path_xy` =
+    lista de (x,y)."""
+    for i in range(len(path_xy) - 1):
+        d = door_on_segment(path_xy[i], path_xy[i + 1], doors)
+        if d is not None:
+            return d
+    return None
+
+
 def expand_route_with_pre_door(start_xy, waypoints, doors, standoff=DOOR_STANDOFF):
     """Expande a rota inserindo o ponto-PRÉ-PORTA antes de cada waypoint cujo
     trecho (ponto anterior -> waypoint) cruza uma porta marcada -> o nav2 entrega
