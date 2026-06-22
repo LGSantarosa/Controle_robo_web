@@ -269,6 +269,7 @@ class DoorCrossing:
         self._align_anchor = (0.0, 0.0)  # posição de referência do substuck
         self._esc_start = (0.0, 0.0)    # pose (x,y) no começo da ré atual
         self._esc_target = 0.0          # quanto recuar nesta ré
+        self._cleared: set = set()      # ids de portas com o pré-porta cumprido (pendência C)
 
     # -- helpers ------------------------------------------------------------
     def _abort(self, now: float) -> Cmd:
@@ -329,6 +330,11 @@ class DoorCrossing:
     def _pick_door(self, pose, doors):
         x, y, yaw = pose
         for d in doors:
+            # pendência C: só assume porta cujo ponto pré-porta já foi cumprido
+            # (senão a door agarrava na aproximação, antes do robô chegar no
+            # standoff, e brigava com o nav2 — freeze de campo 06-22).
+            if d['id'] not in self._cleared:
+                continue
             g = door_geometry(tuple(d['a']), tuple(d['b']))
             dist = math.hypot(x - g.cx, y - g.cy)
             if dist > self.cfg.zone_radius:
@@ -346,8 +352,19 @@ class DoorCrossing:
 
     # -- tick -----------------------------------------------------------------
     def update(self, now, pose, doors, goal_active, nav_forward, gap,
-               scan_fresh, front_gap=math.inf, rear_gap=math.inf) -> Cmd:
+               scan_fresh, front_gap=math.inf, rear_gap=math.inf,
+               goal_succeeded=False) -> Cmd:
         cfg = self.cfg
+
+        # pendência C — "pré-porta cumprido": um goal do nav2 termina (succeeded)
+        # com o robô na zona de uma porta => libera o arme dela. Sai da zona de
+        # todas => esquece (próxima aproximação exige cumprir o pré-porta de novo).
+        if pose is not None and doors:
+            nd = nearest_door_in_zone(pose, doors, cfg.zone_radius)
+            if nd is None:
+                self._cleared.clear()
+            elif goal_succeeded:
+                self._cleared.add(nd['id'])
 
         if self.state == 'idle':
             if (pose is None or not goal_active or not nav_forward
@@ -467,6 +484,7 @@ class DoorCrossing:
             if s > cfg.exit_margin:
                 # atravessou: solta e ARMA cooldown pra não re-armar com a ré
                 # pós-porta (que traz o robô de volta pra zona, já do outro lado).
+                self._cleared.discard(self.door['id'])   # cruzou -> exige pré-porta de novo
                 self.state = 'idle'
                 self.door = None
                 self.geom = None
@@ -508,6 +526,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
     from .unstuck_supervisor import front_min_gap, rear_min_gap
 
     ACTIVE = {1, 2, 3}  # ACCEPTED, EXECUTING, CANCELING (igual unstuck)
+    SUCCEEDED = 4       # GoalStatus.STATUS_SUCCEEDED
 
     latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                          durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
@@ -561,6 +580,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
 
             self.doors = []
             self._goal_active = {}
+            self._goal_succeeded_edge = False  # pulso de 1 tick: goal terminou OK
             self._nav_forward = False
             self._scan = None          # (ranges, angle_min, inc)
             self._scan_t = None
@@ -607,8 +627,13 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self._nav_forward = nav_engaging(msg.linear.x, self.nav_move_lin)
 
         def _on_status(self, topic, msg):
-            self._goal_active[topic] = any(
-                st.status in ACTIVE for st in msg.status_list)
+            active = any(st.status in ACTIVE for st in msg.status_list)
+            # borda: estava ativo e agora terminou COM SUCESSO (pré-porta cumprido,
+            # pendência C). Pulso de 1 tick consumido no _tick.
+            if (self._goal_active.get(topic, False) and not active
+                    and any(st.status == SUCCEEDED for st in msg.status_list)):
+                self._goal_succeeded_edge = True
+            self._goal_active[topic] = active
 
         def _pose_map(self):
             try:
@@ -652,10 +677,13 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 rear_gap = rear_min_gap(arr, amin, ainc, self.lidar_x,
                                         self.rear_tail_x, self.rear_half_width)
 
+            goal_succeeded = self._goal_succeeded_edge
+            self._goal_succeeded_edge = False     # consome o pulso
             prev = self.sup.state
             cmd = self.sup.update(now, pose, self.doors, goal,
                                   self._nav_forward, gap, fresh,
-                                  front_gap, rear_gap)
+                                  front_gap, rear_gap,
+                                  goal_succeeded=goal_succeeded)
             if cmd.state != prev:
                 self.get_logger().info(f'door_crossing: {prev} -> {cmd.state}')
             # /door_zone: a manobra ativa manda; senão, se há porta marcada na

@@ -97,8 +97,11 @@ def mk():
     return DoorCrossing(CFG)
 
 
-def step(dc, t, pose, goal=True, nav=True, gap=math.inf, fresh=True):
-    return dc.update(t, pose, [DOOR], goal, nav, gap, fresh)
+def step(dc, t, pose, goal=True, nav=True, gap=math.inf, fresh=True, cleared=True):
+    # cleared=True simula "ponto pré-porta cumprido" (libera o arme — pendência C).
+    # Default True pra os testes da máquina de estados seguirem armando.
+    return dc.update(t, pose, [DOOR], goal, nav, gap, fresh,
+                     goal_succeeded=cleared)
 
 
 def test_idle_sem_goal_ou_fora_da_zona():
@@ -298,8 +301,9 @@ P_STAGE = (1.5, 1.0, math.pi / 2)   # na zona, encarando a porta (centro 1.5,2.0
 
 
 def estep(dc, t, pose, front_gap=math.inf, rear_gap=math.inf,
-          goal=True, nav=True, gap=math.inf, fresh=True):
-    return dc.update(t, pose, [DOOR], goal, nav, gap, fresh, front_gap, rear_gap)
+          goal=True, nav=True, gap=math.inf, fresh=True, cleared=True):
+    return dc.update(t, pose, [DOOR], goal, nav, gap, fresh, front_gap, rear_gap,
+                     goal_succeeded=cleared)
 
 
 def test_escape_reverse_on_front_block():
@@ -520,6 +524,52 @@ def test_crossing_still_restages_before_commit_point():
     _ate_crossing(dc)
     c = step(dc, 1.0, (1.65, 1.7, math.pi / 2))        # s=-0.3 (< commit_s), d=0.15
     assert c.state == 'reversing'
+
+
+# ---- C: armar só DEPOIS do ponto pré-porta cumprido (campo 2026-06-22) --------
+
+def test_nao_arma_sem_pre_porta_cumprido():
+    # O BUG DE CAMPO: porta na zona, todos os gates ok, MAS o ponto pré-porta
+    # ainda não foi cumprido -> a door NÃO assume (fica idle), deixa o nav2 levar.
+    dc = mk()
+    c = step(dc, 0.0, (1.5, 1.1, math.pi / 2), cleared=False)
+    assert c.state == 'idle'
+
+
+def test_pre_porta_cumprido_libera_e_arma():
+    # goal do nav2 deu succeeded com o robô na zona (= pré-porta cumprido) -> arma
+    dc = mk()
+    c = step(dc, 0.0, (1.5, 1.1, math.pi / 2), cleared=True)
+    assert c.state == 'rotating'
+    assert DOOR['id'] in dc._cleared
+
+
+def test_succeeded_fora_da_zona_nao_libera():
+    dc = mk()
+    # succeeded longe da porta (fora da zona) -> não libera nada
+    step(dc, 0.0, (1.5, -1.5, math.pi / 2), cleared=True)   # dist 3.5 > zona
+    assert DOOR['id'] not in dc._cleared
+    # chega na zona SEM novo succeeded -> não arma
+    c = step(dc, 0.1, (1.5, 1.1, math.pi / 2), cleared=False)
+    assert c.state == 'idle'
+
+
+def test_cleared_reseta_ao_cruzar():
+    dc = mk()
+    t = _ate_crossing(dc)
+    assert DOOR['id'] in dc._cleared
+    c = step(dc, t + 1.0, (1.5, 2.0 + CFG.exit_margin + 0.05, math.pi / 2),
+             cleared=False)
+    assert c.state == 'idle'
+    assert DOOR['id'] not in dc._cleared        # cruzou -> exige pré-porta de novo
+
+
+def test_cleared_reseta_ao_sair_da_zona():
+    dc = mk()
+    step(dc, 0.0, (1.5, 1.1, math.pi / 2), cleared=True)   # libera
+    assert DOOR['id'] in dc._cleared
+    step(dc, 0.1, (1.5, -1.5, 0.0), cleared=False)         # saiu da zona
+    assert DOOR['id'] not in dc._cleared
 
 
 # ---- não re-armar após cruzar / cooldown pós-travessia (campo 2026-06-22) -----
