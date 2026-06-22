@@ -593,6 +593,9 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._stop_active = False  # só pra log
             self._door_active = False  # door_crossing conduzindo? -> standdown
             self._map = None           # MapGrid do /map estático (None até a 1ª msg)
+            self._near_r = math.inf    # DEBUG: retorno LiDAR mais próximo (m)
+            self._near_deg = 0.0       # DEBUG: ângulo desse retorno (graus)
+            self._dbg_t = 0.0          # DEBUG: throttle do log
             self._last_state = self.sup.state
 
             be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -663,6 +666,14 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 self.rear_lidar_x, self.front_head_x, self.rear_half_width)
             self._open_side = freer_side(
                 ranges, msg.angle_min, msg.angle_increment)
+            # DEBUG temporário (2026-06-22): retorno mais próximo (dist+ângulo)
+            # pra ver se o bloqueio está fora do eixo na recovery contextual.
+            finite = np.isfinite(ranges) & (ranges > 0.0)
+            if finite.any():
+                i = int(np.argmin(np.where(finite, ranges, np.inf)))
+                self._near_r = float(ranges[i])
+                self._near_deg = math.degrees(
+                    _norm_angle(msg.angle_min + i * msg.angle_increment))
 
         def _on_goal_status(self, topic, msg):
             self._goal_active[topic] = any(
@@ -713,6 +724,18 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 goal_active=goal_active, open_side=self._open_side,
                 yaw=self._yaw, door_active=self._door_active,
                 obstacle_mapped=obstacle_mapped)
+            # DEBUG temporário (2026-06-22): diagnóstico da recovery contextual.
+            if (self.sup.state == "monitoring" and self._nav_wants_move
+                    and now - self._dbg_t >= 1.0):
+                self._dbg_t = now
+                bx = self._position[0] + (front_gap + self.front_head_x) * math.cos(self._yaw)
+                by = self._position[1] + (front_gap + self.front_head_x) * math.sin(self._yaw)
+                self.get_logger().warn(
+                    "DBG recov: front_gap=%.2f map=%s mapped=%s near=%.2fm@%.0f° "
+                    "blk=(%.2f,%.2f) anchor_t=%.1f" % (
+                        front_gap, self._map is not None, obstacle_mapped,
+                        self._near_r, self._near_deg, bx, by,
+                        now - self.sup.anchor_t if self.sup.anchor else -1))
             if self.sup.state != self._last_state:
                 self.get_logger().warn(
                     "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s vao_re=%.2f)" % (
