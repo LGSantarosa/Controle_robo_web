@@ -157,7 +157,7 @@ def generate_launch_description():
                 'stuck_timeout_mapped': 2.0,
                 'block_range': 0.5,
                 'map_occ_threshold': 65,
-                'map_neighborhood': 0.15,
+                'map_neighborhood': 0.22,
                 'stuck_radius': 0.05,
                 'reverse_distance': 0.30,
                 'reverse_speed': 0.25,

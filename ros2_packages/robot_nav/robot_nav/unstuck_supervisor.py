@@ -148,18 +148,46 @@ def front_min_gap(ranges, angle_min: float, angle_increment: float,
     return float((x[sel] - head_x).min())
 
 
-def forward_block_mapped(grid, position, yaw, front_gap, head_x, block_range,
-                         neighborhood, occ_threshold) -> bool:
-    """True se o bloqueio à frente coincide com parede MAPEADA. `front_gap` vem
-    do `front_min_gap`, medido a partir do PARA-CHOQUE (head_x à frente do
-    centro) — então o obstáculo está a `front_gap + head_x` do CENTRO. Sem grid
-    ou frente livre (front_gap > block_range) -> False (não encurta o timeout)."""
-    if grid is None or front_gap > block_range:
+def front_block_point(ranges, angle_min, angle_increment, lidar_x, head_x,
+                      half_width):
+    """(x,y) em base_link do retorno mais próximo à FRENTE — a "parte que
+    travou". Mesmo corredor do `front_min_gap` (x>head_x, |y|<=half_width), mas
+    devolve o PONTO (com o offset lateral real), não só a distância. None se o
+    corredor está livre. Campo 2026-06-22: o robô encosta torto, então o contato
+    NÃO está reto à frente — projetar reto errava a parede no mapa."""
+    if angle_increment == 0.0:
+        return None
+    r = np.asarray(ranges, dtype=np.float64)
+    if r.size == 0:
+        return None
+    ok = np.isfinite(r) & (r > 0.0)
+    r = np.where(ok, r, 0.0)                          # evita inf*cos (warning/nan)
+    a = angle_min + np.arange(r.size) * angle_increment
+    x = lidar_x + r * np.cos(a)
+    y = r * np.sin(a)
+    sel = ok & (x > head_x) & (np.abs(y) <= half_width)
+    if not sel.any():
+        return None
+    i = int(np.argmin(np.where(sel, x, np.inf)))    # o mais próximo (menor x)
+    return (float(x[i]), float(y[i]))
+
+
+def block_point_mapped(grid, position, yaw, bp, head_x, block_range,
+                       neighborhood, occ_threshold) -> bool:
+    """True se o ponto de contato `bp` (x,y em base_link, do `front_block_point`)
+    coincide com parede MAPEADA. Transforma bp pro frame do MAPA com a rotação
+    2D COMPLETA (preserva o offset lateral — era o bug: projetava só reto à
+    frente) e consulta a vizinhança. Gated pela distância frontal ao para-choque
+    (bx-head_x <= block_range). Sem grid/contato -> False."""
+    if grid is None or bp is None:
         return False
-    dist = front_gap + head_x        # do centro até o obstáculo (corrige o offset)
-    bx = position[0] + dist * math.cos(yaw)
-    by = position[1] + dist * math.sin(yaw)
-    return map_occupied(grid, bx, by, neighborhood, occ_threshold)
+    bx_r, by_r = bp
+    if (bx_r - head_x) > block_range:
+        return False
+    c, s = math.cos(yaw), math.sin(yaw)
+    mx = position[0] + bx_r * c - by_r * s
+    my = position[1] + bx_r * s + by_r * c
+    return map_occupied(grid, mx, my, neighborhood, occ_threshold)
 
 
 def freer_side(ranges, angle_min: float, angle_increment: float) -> int:
@@ -509,7 +537,10 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("stuck_timeout_mapped", 2.0),
                 ("block_range", 0.5),
                 ("map_occ_threshold", 65),
-                ("map_neighborhood", 0.15),
+                # 0.22 (não 0.15): absorve o offset de registro pose↔mapa (~0.2 m
+                # medido em campo 2026-06-22 — a leitura do LiDAR cai ~0.2 m antes
+                # da parede do /map).
+                ("map_neighborhood", 0.22),
                 ("stuck_radius", 0.05),
                 ("reverse_distance", 0.30),
                 ("reverse_speed", 0.25),
@@ -593,6 +624,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._stop_active = False  # só pra log
             self._door_active = False  # door_crossing conduzindo? -> standdown
             self._map = None           # MapGrid do /map estático (None até a 1ª msg)
+            self._front_bp = None      # ponto de contato à frente (x,y base_link)
             self._near_r = math.inf    # DEBUG: retorno LiDAR mais próximo (m)
             self._near_deg = 0.0       # DEBUG: ângulo desse retorno (graus)
             self._dbg_t = 0.0          # DEBUG: throttle do log
@@ -666,8 +698,12 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 self.rear_lidar_x, self.front_head_x, self.rear_half_width)
             self._open_side = freer_side(
                 ranges, msg.angle_min, msg.angle_increment)
-            # DEBUG temporário (2026-06-22): retorno mais próximo (dist+ângulo)
-            # pra ver se o bloqueio está fora do eixo na recovery contextual.
+            # ponto de contato à frente (base_link) pra recovery contextual:
+            # a "parte que travou", com o offset lateral real (não reto à frente).
+            self._front_bp = front_block_point(
+                ranges, msg.angle_min, msg.angle_increment,
+                self.rear_lidar_x, self.front_head_x, self.rear_half_width)
+            # DEBUG temporário (2026-06-22): retorno mais próximo (dist+ângulo).
             finite = np.isfinite(ranges) & (ranges > 0.0)
             if finite.any():
                 i = int(np.argmin(np.where(finite, ranges, np.inf)))
@@ -696,12 +732,12 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 origin_x=msg.info.origin.position.x,
                 origin_y=msg.info.origin.position.y)
 
-        def _obstacle_mapped(self, front_gap):
-            """True se o bloqueio à frente coincide com parede MAPEADA. front_gap
-            é medido do PARA-CHOQUE (front_head_x); a função pura soma o offset
-            até o centro pra acertar a parede no /map."""
-            return forward_block_mapped(
-                self._map, self._position, self._yaw, front_gap,
+        def _obstacle_mapped(self):
+            """True se o ponto de contato à frente coincide com parede MAPEADA.
+            Usa o (x,y) REAL do contato (front_block_point) com o offset lateral,
+            transformado pro frame do mapa — não a projeção reto à frente."""
+            return block_point_mapped(
+                self._map, self._position, self._yaw, self._front_bp,
                 self.front_head_x, self.block_range, self.map_neighborhood,
                 self.map_occ_threshold)
 
@@ -717,7 +753,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             # status visto em algum tópico? OR entre eles; nunca visto -> None
             goal_active = (any(self._goal_active.values())
                            if self._goal_active else None)
-            obstacle_mapped = self._obstacle_mapped(front_gap) if scan_fresh else False
+            obstacle_mapped = self._obstacle_mapped() if scan_fresh else False
             cmd = self.sup.update(
                 now, nav_wants_move=self._nav_wants_move,
                 position=self._position, rear_gap=gap, front_gap=front_gap,
@@ -728,13 +764,18 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             if (self.sup.state == "monitoring" and self._nav_wants_move
                     and now - self._dbg_t >= 1.0):
                 self._dbg_t = now
-                bx = self._position[0] + (front_gap + self.front_head_x) * math.cos(self._yaw)
-                by = self._position[1] + (front_gap + self.front_head_x) * math.sin(self._yaw)
+                if self._front_bp is not None:
+                    bx_r, by_r = self._front_bp
+                    c, s = math.cos(self._yaw), math.sin(self._yaw)
+                    mx = self._position[0] + bx_r * c - by_r * s
+                    my = self._position[1] + bx_r * s + by_r * c
+                else:
+                    mx = my = float('nan')
                 self.get_logger().warn(
                     "DBG recov: front_gap=%.2f map=%s mapped=%s near=%.2fm@%.0f° "
                     "blk=(%.2f,%.2f) anchor_t=%.1f" % (
                         front_gap, self._map is not None, obstacle_mapped,
-                        self._near_r, self._near_deg, bx, by,
+                        self._near_r, self._near_deg, mx, my,
                         now - self.sup.anchor_t if self.sup.anchor else -1))
             if self.sup.state != self._last_state:
                 self.get_logger().warn(

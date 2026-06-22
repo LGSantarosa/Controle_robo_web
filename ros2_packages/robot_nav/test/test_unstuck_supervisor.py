@@ -702,32 +702,57 @@ def test_obstacle_mapped_defaults_to_todays_behavior():
     assert sup.update(2.1, nav_wants_move=True, position=(0.0, 0.0)).active is False
 
 
-# ---- projeção do bloqueio à frente (bug do offset do para-choque, 2026-06-22) -
+# ---- bloqueio FORA do eixo: usa o ponto de contato REAL (2026-06-22) ----------
+# Campo: o robô encostou torto (contato a -32°); projetar "reto à frente" caía ao
+# lado da parede mapeada (mapped=False). Fix: usar o (x,y) REAL do contato (com
+# offset lateral) + vizinhança maior pra absorver o registro (~0.2 m de pose).
 
-from robot_nav.unstuck_supervisor import forward_block_mapped
+from robot_nav.unstuck_supervisor import front_block_point, block_point_mapped
 
 
-def test_forward_block_mapped_accounts_for_bumper_offset():
-    # front_min_gap mede do PARA-CHOQUE (head_x=0.25). O obstáculo está a
-    # front_gap+head_x do CENTRO. Robô em (0.05,0.25) olhando +x, front_gap=0.1
-    # -> parede a 0.35 do centro = (0.40,0.25). Célula ocupada (2,4)=(0.45,0.25).
+def _scan_pt(x, y, n=72):
+    """scan de n feixes (360°) com UM ponto em (x,y) no frame do robô."""
+    a = math.atan2(y, x)
+    r = math.hypot(x, y)
+    amin, ainc = -math.pi, 2 * math.pi / n
+    ranges = [float('inf')] * n
+    i = int(round((a - amin) / ainc)) % n
+    ranges[i] = r
+    return ranges, amin, ainc
+
+
+def test_front_block_point_returns_offaxis_contact():
+    ranges, amin, ainc = _scan_pt(0.40, -0.20)        # contato à direita do eixo
+    bp = front_block_point(ranges, amin, ainc, lidar_x=0.0, head_x=0.25,
+                           half_width=0.30)
+    assert bp is not None
+    assert bp[0] == pytest.approx(0.40, abs=0.06)
+    assert bp[1] == pytest.approx(-0.20, abs=0.06)     # mantém o lateral real
+
+
+def test_front_block_point_none_when_corridor_clear():
+    ranges, amin, ainc = _scan_pt(0.0, 1.0)            # só de lado, nada na frente
+    assert front_block_point(ranges, amin, ainc, 0.0, 0.25, 0.30) is None
+
+
+def test_block_point_mapped_uses_real_lateral_offset():
+    # contato FORA do eixo (y=-0.20). Reto à frente cairia em (0.45,0.45) [livre];
+    # usar o (x,y) real cai em (0.45,0.25) = parede mapeada. Robô em (0.05,0.45).
+    g = _grid_with([(2, 4)])                            # ocupada em (0.45,0.25)
+    assert block_point_mapped(g, (0.05, 0.45), 0.0, (0.40, -0.20), head_x=0.25,
+                              block_range=0.5, neighborhood=0.10,
+                              occ_threshold=65) is True
+
+
+def test_block_point_mapped_gated_by_block_range():
     g = _grid_with([(2, 4)])
-    assert forward_block_mapped(g, (0.05, 0.25), 0.0, front_gap=0.1, head_x=0.25,
-                                block_range=0.5, neighborhood=0.15,
-                                occ_threshold=65) is True
-    # SEM o offset (projetar só front_gap=0.1 -> ponto (0.15,0.25)) erraria a
-    # parede -> este teste falha se o head_x não for somado.
+    # contato longe (forward_dist = 0.90-0.25 = 0.65 > block_range 0.5) -> False
+    assert block_point_mapped(g, (0.05, 0.45), 0.0, (0.90, 0.0), head_x=0.25,
+                              block_range=0.5, neighborhood=0.10,
+                              occ_threshold=65) is False
 
 
-def test_forward_block_mapped_gated_by_block_range():
+def test_block_point_mapped_none_inputs_false():
     g = _grid_with([(2, 4)])
-    # front_gap acima de block_range -> não conta como bloqueio à frente
-    assert forward_block_mapped(g, (0.05, 0.25), 0.0, front_gap=0.6, head_x=0.25,
-                                block_range=0.5, neighborhood=0.15,
-                                occ_threshold=65) is False
-
-
-def test_forward_block_mapped_none_grid_is_false():
-    assert forward_block_mapped(None, (0.05, 0.25), 0.0, front_gap=0.1,
-                                head_x=0.25, block_range=0.5, neighborhood=0.15,
-                                occ_threshold=65) is False
+    assert block_point_mapped(g, (0.05, 0.45), 0.0, None, 0.25, 0.5, 0.10, 65) is False
+    assert block_point_mapped(None, (0.05, 0.45), 0.0, (0.40, -0.20), 0.25, 0.5, 0.10, 65) is False
