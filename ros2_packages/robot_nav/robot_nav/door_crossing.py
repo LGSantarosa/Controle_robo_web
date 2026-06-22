@@ -210,6 +210,14 @@ class DoorCrossConfig:
     # trajetória reta até o plano dos batentes; se não passa, re-estagia.
     robot_half_width: float = 0.25  # m — meia-largura do robô (0.50 medido roda-a-roda)
     fit_margin: float = 0.13        # m — folga subtraída do vão no will_clear (fit = half_width - robot_half_width - fit_margin). KNOB DE CAMPO nº1: re-estagia à toa -> DIMINUIR fit_margin (afrouxa a trava)
+    # Ponto de não-retorno (2026-06-22, capengada de campo): nos últimos cm antes
+    # do plano (s>commit_s) o robô já está com >metade do corpo no vão; o braço de
+    # alavanca do will_clear some (lat≈d) e um offset lateral residual irrelevante
+    # disparava a ré a meia-travessia (saía de um lugar que JÁ estava passando bem).
+    # A partir daqui PARA de re-checar e COMITA pra frente — dar ré meio-atravessado
+    # é mais arriscado que terminar. commit_s=-0.15: para-choque (front_head_x~0.25)
+    # já ~0.10 m além do plano. A trava segue inteira longe da porta (onde importa).
+    commit_s: float = -0.15         # m — progresso (s) a partir do qual não re-checa o will_clear (commit)
     gap_min: float = 0.45           # m — vão mínimo à frente pra seguir
     exit_margin: float = 0.5        # m — além do centro pra soltar
     total_timeout: float = 40.0     # s — manobra inteira (revertido de 600; ver align_timeout)
@@ -463,9 +471,12 @@ class DoorCrossing:
                 return Cmd('idle', 0.0, 0.0, None)
             # trava "passo aqui?" no meio: se a projeção (lateral + yaw) deriva e
             # passa a bater no batente antes de cruzar (s<0), re-estagia em vez de
-            # raspar. Passado o estreito (s>=0) will_clear já devolve True.
-            if not will_clear(g, s, d, yaw_err, self.side,
-                              cfg.robot_half_width, cfg.fit_margin):
+            # raspar. Passado o estreito (s>=0) will_clear já devolve True. Mas só
+            # re-checa ATÉ o ponto de não-retorno (s<=commit_s): nos últimos cm o
+            # robô já está comprometido no vão e a ré custa mais que terminar.
+            if s <= cfg.commit_s and not will_clear(
+                    g, s, d, yaw_err, self.side,
+                    cfg.robot_half_width, cfg.fit_margin):
                 return self._enter_reverse(now, (x, y), rear_gap)
             # corrige lateral SÓ até o centro; depois sai reto (só segura o yaw)
             # pra não sair anguladinho perseguindo o eixo dos cliques (campo 06-19)
@@ -513,6 +524,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('cross_speed', 0.22), ('stage_speed', 0.20),
                 ('cross_lat_off_s', 0.0),
                 ('robot_half_width', 0.25), ('fit_margin', 0.13),
+                ('commit_s', -0.15),
                 ('escape_reverse_speed', 0.25), ('gap_min', 0.45),
                 ('exit_margin', 0.5), ('rate_hz', 20.0),
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
@@ -531,7 +543,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 cross_speed=g['cross_speed'], stage_speed=g['stage_speed'],
                 cross_lat_off_s=g['cross_lat_off_s'],
                 robot_half_width=g['robot_half_width'],
-                fit_margin=g['fit_margin'],
+                fit_margin=g['fit_margin'], commit_s=g['commit_s'],
                 escape_reverse_speed=g['escape_reverse_speed'],
                 gap_min=g['gap_min'], exit_margin=g['exit_margin'])
             self.sup = DoorCrossing(self.cfg)

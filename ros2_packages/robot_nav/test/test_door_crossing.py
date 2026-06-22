@@ -500,3 +500,23 @@ def test_crossing_centered_still_crosses():
     t = _ate_crossing(dc)
     c = step(dc, t, (1.5, 1.9, math.pi / 2))
     assert c.state == 'crossing'
+
+
+# ---- ponto de não-retorno / commit_s (capengada de campo 2026-06-22) ---------
+
+def test_crossing_commits_in_final_stretch_despite_offset():
+    # CAPENGADA: >metade do corpo no vão (s passou de commit_s) mas com offset
+    # lateral residual que o will_clear reprovaria -> NÃO dá ré, COMITA pra frente.
+    dc = mk()
+    _ate_crossing(dc)                                  # centrado, side=+1
+    # s=-0.1 (> commit_s=-0.15), d=0.15 (> fit 0.12, will_clear reprovaria)
+    c = step(dc, 1.0, (1.65, 1.9, math.pi / 2))
+    assert c.state == 'crossing'
+
+
+def test_crossing_still_restages_before_commit_point():
+    # regressão: ANTES do commit_s (s bem negativo) a trava segue valendo -> ré.
+    dc = mk()
+    _ate_crossing(dc)
+    c = step(dc, 1.0, (1.65, 1.7, math.pi / 2))        # s=-0.3 (< commit_s), d=0.15
+    assert c.state == 'reversing'
