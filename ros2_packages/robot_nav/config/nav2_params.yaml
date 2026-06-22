@@ -342,7 +342,7 @@ collision_monitor:
       type: "polygon"
       points: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
       action_type: "approach"
-      time_before_collision: 1.5
+      time_before_collision: 1.0   # 1.5->1.0 em 2026-06-22 (corredor apertado: approach freava sem parar; ver nav2_params_pi.yaml)
       simulation_time_step: 0.1
       min_points: 2
       visualize: True

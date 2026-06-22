@@ -471,7 +471,10 @@ collision_monitor:
     # 0.35 m/s ele projeta ~0.5 m à frente e para com folga, e a PolygonSlow segue
     # desacelerando na aproximação.
     # SEGURANÇA agora mora em time_before_collision (não no tamanho da caixa):
-    # começo conservador 1.5 s; TUNAR em campo (baixar se ficar medroso).
+    # 1.5 -> 1.0 em 2026-06-22: no corredor APERTADO pós-porta o approach projetava
+    # o footprint longe demais, encostava na parede e freava sem parar ("obstáculo
+    # invisível"; só destravava dirigindo no controle, que fura o collision). 1.0 s
+    # projeta menos à frente. TUNAR em campo (frontal ainda coberto pela PolygonSlow).
     # ROLLBACK p/ caixa estática:
     #   action_type: "stop"; points "[[0.45,0.30],[0.45,-0.30],[-0.40,-0.30],[-0.40,0.30]]";
     #   remover time_before_collision / simulation_time_step.
@@ -482,7 +485,7 @@ collision_monitor:
       # frenagem vem do TEMPO abaixo, não do tamanho.
       points: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
       action_type: "approach"
-      time_before_collision: 1.5
+      time_before_collision: 1.0
       simulation_time_step: 0.1
       min_points: 2
       visualize: True
