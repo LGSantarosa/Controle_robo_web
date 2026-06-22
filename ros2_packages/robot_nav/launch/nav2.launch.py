@@ -150,6 +150,14 @@ def generate_launch_description():
             name='unstuck_supervisor', output='screen',
             parameters=[sim_time_param, {
                 'stuck_timeout': 5.0,
+                # Recovery contextual (2026-06-22): bloqueio à frente que bate no
+                # /map cru (parede mapeada) -> ré aos 2s (não os 5s); novo (só no
+                # LiDAR) segue os 5s. Os 2s são tb a mini-confirmação. Ver
+                # docs/superpowers/specs/2026-06-22-unstuck-recovery-contextual-design.md
+                'stuck_timeout_mapped': 2.0,
+                'block_range': 0.5,
+                'map_occ_threshold': 65,
+                'map_neighborhood': 0.15,
                 'stuck_radius': 0.05,
                 'reverse_distance': 0.30,
                 'reverse_speed': 0.25,
