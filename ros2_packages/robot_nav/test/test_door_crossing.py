@@ -359,12 +359,10 @@ def test_reverse_returns_to_staging_if_rear_closes():
 
 
 def test_escape_max_count_then_abort():
-    # modo CAPADO (escape_max_count>0): ainda aborta após o limite. Produção usa 0
-    # (ilimitado, ver test_escape_unlimited_never_aborts_on_count).
-    dc = DoorCrossing(CAPPED)
+    dc = DoorCrossing(ECFG)
     estep(dc, 0.0, P_STAGE)
     t = 0.1
-    for _ in range(CAPPED.escape_max_count):
+    for _ in range(ECFG.escape_max_count):
         assert estep(dc, t, P_STAGE, front_gap=0.10).state == 'reversing'
         # completa a ré (recua bastante) -> staging
         assert estep(dc, t + 0.05, (1.5, 0.5, math.pi / 2)).state == 'staging'
@@ -488,11 +486,10 @@ def test_crossing_restages_on_yaw_drift_before_jamb():
 
 
 def test_restage_gives_up_to_nav2_after_max_escapes():
-    # modo CAPADO: esgotou as re-tentativas -> larga pro nav2 (idle). Produção usa
-    # 0 (ilimitado); este teste fixa um limite pra cobrir o caminho do abort.
-    dc = DoorCrossing(CAPPED)
+    # esgotou as re-tentativas -> larga pro nav2 (idle), não fica eterno
+    dc = mk()
     _ate_crossing(dc)
-    dc._escape_count = CAPPED.escape_max_count         # já gastou todas
+    dc._escape_count = CFG.escape_max_count            # já gastou todas
     c = step(dc, 1.0, (1.65, 1.7, math.pi / 2))
     assert c.state == 'idle'
 
@@ -550,21 +547,3 @@ def test_rearm_allowed_after_crossing_cooldown_expires():
     assert c.state == 'rotating'                        # cooldown expirou -> re-arma
 
 
-# ---- door sem limite de tentativa (campo 2026-06-22, #1) ----------------------
-
-CAPPED = DoorCrossConfig(zone_radius=1.2, stage_dist=0.6, align_timeout=15.0,
-                         total_timeout=40.0, escape_max_count=3)
-
-
-def test_escape_unlimited_never_aborts_on_count():
-    # #1: sem limite (escape_max_count=0) -> segue re-estagiando indefinidamente,
-    # NUNCA desiste por contagem. Deixar preso na zona (unstuck calado) era pior.
-    cfg = DoorCrossConfig(zone_radius=1.2, stage_dist=0.6, align_timeout=15.0,
-                          total_timeout=40.0, escape_max_count=0)
-    dc = DoorCrossing(cfg)
-    estep(dc, 0.0, P_STAGE)
-    t = 0.1
-    for _ in range(10):                                  # >> antigo limite de 3
-        assert estep(dc, t, P_STAGE, front_gap=0.10).state == 'reversing'
-        assert estep(dc, t + 0.05, (1.5, 0.5, math.pi / 2)).state == 'staging'
-        t += 0.2

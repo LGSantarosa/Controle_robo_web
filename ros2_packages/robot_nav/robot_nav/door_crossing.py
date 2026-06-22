@@ -231,7 +231,7 @@ class DoorCrossConfig:
     escape_substuck_time: float = 5.0   # s — alinhando sem chegar ao crossing -> ré
     escape_reverse_dist: float = 0.30   # m — quanto recua por escape (teto)
     escape_reverse_speed: float = 0.25  # m/s — ré de escape (0.12->0.25 em 2026-06-16: = ré do unstuck, validada vencendo o atrito em campo)
-    escape_max_count: int = 0           # nº de escapes por travessia antes de abortar; 0 = ILIMITADO (campo 06-22: a door ajusta bem, deixar PRESO na zona — unstuck calado no standdown — era pior que seguir re-estagiando; total_timeout segue como rede)
+    escape_max_count: int = 3           # nº de escapes por travessia antes de abortar
     escape_rear_margin: float = 0.10    # m — folga: nunca chega a menos disso do obstáculo atrás (cap da distância de ré)
     escape_rear_min: float = 0.10       # m — vão traseiro útil MÍNIMO; abaixo disso nem vale a pena dar ré -> aborta
     align_progress_radius: float = 0.05  # m — moveu menos que isso desde a âncora = "parado" -> conta o substuck
@@ -312,10 +312,10 @@ class DoorCrossing:
     def _enter_reverse(self, now, pos, rear_gap) -> Cmd:
         """Entra na ré RETA de re-aproximação (nunca arco), limitada pelo vão
         traseiro. Compartilhada pela ré de escape (_maybe_escape) e pela trava
-        'passo aqui?' (re-estágio). Sem vão atrás útil -> ABORTA pro nav2. Com
-        escape_max_count>0 também aborta ao estourar a contagem; 0 = ilimitado."""
+        'passo aqui?' (re-estágio). Sem vão atrás útil ou estourado o
+        escape_max_count -> ABORTA pro nav2 (último recurso)."""
         cfg = self.cfg
-        if cfg.escape_max_count > 0 and self._escape_count >= cfg.escape_max_count:
+        if self._escape_count >= cfg.escape_max_count:
             return self._abort(now)
         target = min(cfg.escape_reverse_dist, rear_gap - cfg.escape_rear_margin)
         if target < cfg.escape_rear_min:
