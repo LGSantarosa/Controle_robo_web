@@ -148,6 +148,20 @@ def front_min_gap(ranges, angle_min: float, angle_increment: float,
     return float((x[sel] - head_x).min())
 
 
+def forward_block_mapped(grid, position, yaw, front_gap, head_x, block_range,
+                         neighborhood, occ_threshold) -> bool:
+    """True se o bloqueio à frente coincide com parede MAPEADA. `front_gap` vem
+    do `front_min_gap`, medido a partir do PARA-CHOQUE (head_x à frente do
+    centro) — então o obstáculo está a `front_gap + head_x` do CENTRO. Sem grid
+    ou frente livre (front_gap > block_range) -> False (não encurta o timeout)."""
+    if grid is None or front_gap > block_range:
+        return False
+    dist = front_gap + head_x        # do centro até o obstáculo (corrige o offset)
+    bx = position[0] + dist * math.cos(yaw)
+    by = position[1] + dist * math.sin(yaw)
+    return map_occupied(grid, bx, by, neighborhood, occ_threshold)
+
+
 def freer_side(ranges, angle_min: float, angle_increment: float) -> int:
     """+1 se o setor frontal ESQUERDO (20°..90°) tem mais espaço, -1 se o direito.
 
@@ -672,14 +686,13 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 origin_y=msg.info.origin.position.y)
 
         def _obstacle_mapped(self, front_gap):
-            """True se o bloqueio à frente (ponto a front_gap no heading)
-            coincide com parede MAPEADA. Sem /map ou frente livre -> False."""
-            if self._map is None or front_gap > self.block_range:
-                return False
-            bx = self._position[0] + front_gap * math.cos(self._yaw)
-            by = self._position[1] + front_gap * math.sin(self._yaw)
-            return map_occupied(self._map, bx, by, self.map_neighborhood,
-                                self.map_occ_threshold)
+            """True se o bloqueio à frente coincide com parede MAPEADA. front_gap
+            é medido do PARA-CHOQUE (front_head_x); a função pura soma o offset
+            até o centro pra acertar a parede no /map."""
+            return forward_block_mapped(
+                self._map, self._position, self._yaw, front_gap,
+                self.front_head_x, self.block_range, self.map_neighborhood,
+                self.map_occ_threshold)
 
         def _tick(self):
             now = time.monotonic()
