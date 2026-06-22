@@ -414,3 +414,89 @@ def test_no_substuck_escape_while_rotating():
     # girando parado por > substuck_time, frente livre -> NÃO pode dar ré
     c = estep(dc, ECFG.escape_substuck_time + 1.0, (1.5, stage_y, yaw))
     assert c.state == 'rotating'
+
+
+# ---- trava "passo aqui?" geométrica com yaw (2026-06-22, pendência A) ---------
+
+from robot_nav.door_crossing import will_clear
+
+# DOOR tem vão 1.0 m -> half_width=0.5. Com robot_half_width=0.25, fit_margin=0.13
+# a folga lateral útil (fit) = 0.5 - 0.25 - 0.13 = 0.12 m.
+WC_DOOR = door_geometry((1.0, 2.0), (2.0, 2.0))
+
+
+def test_will_clear_centered_and_straight_passes():
+    assert will_clear(WC_DOOR, s=-1.0, d=0.0, yaw_err=0.0, side=+1,
+                      robot_half_width=0.25, fit_margin=0.13) is True
+
+
+def test_will_clear_angled_into_jamb_fails():
+    # centrado AGORA, mas apontando 10° -> projetado 1 m à frente desvia
+    # 1.0*tan(10°)=0.176 > fit 0.12 -> não passa (era a falha de campo: lat OK, yaw ruim)
+    assert will_clear(WC_DOOR, s=-1.0, d=0.0, yaw_err=math.radians(10), side=+1,
+                      robot_half_width=0.25, fit_margin=0.13) is False
+
+
+def test_will_clear_lateral_offset_too_big_fails():
+    assert will_clear(WC_DOOR, s=-0.2, d=0.20, yaw_err=0.0, side=+1,
+                      robot_half_width=0.25, fit_margin=0.13) is False
+
+
+def test_will_clear_past_jamb_always_passes():
+    # s>=0 já passou do ponto mais estreito -> sempre "passa"
+    assert will_clear(WC_DOOR, s=0.1, d=5.0, yaw_err=math.radians(40), side=+1,
+                      robot_half_width=0.25, fit_margin=0.13) is True
+
+
+def test_will_clear_yaw_can_compensate_offset():
+    # offset d=+0.1 mas apontando de volta pro eixo: a 1 m a projeção fecha em ~0
+    # -> PASSA. Prova que é projeção real, não só |d| nem só |yaw|.
+    assert will_clear(WC_DOOR, s=-1.0, d=0.10, yaw_err=math.radians(5.71), side=+1,
+                      robot_half_width=0.25, fit_margin=0.13) is True
+
+
+def test_will_clear_side_minus_one():
+    # aproximando de cima (side=-1): mesma projeção, sinal coerente
+    assert will_clear(WC_DOOR, s=-1.0, d=0.0, yaw_err=math.radians(10), side=-1,
+                      robot_half_width=0.25, fit_margin=0.13) is False
+
+
+# ---- re-estágio quando "não passo" (2026-06-22) ------------------------------
+
+def test_restage_when_aligned_but_wont_fit():
+    # alinhado no YAW mas descentrado (d=0.2 > fit 0.12) -> NÃO commita a
+    # travessia: recua reto pra re-estagiar (não atravessa torto).
+    dc = DoorCrossing(CFG)
+    estep(dc, 0.0, (1.7, 1.4, math.pi / 2))            # arma -> rotating (d=0.2)
+    t, last = 0.1, None
+    for _ in range(CFG.align_stable + 1):
+        last = estep(dc, t, (1.7, 1.4, math.pi / 2))
+        t += 0.05
+    assert last.state == 'reversing'
+    assert last.wz == pytest.approx(0.0)               # ré RETA, nunca arco
+
+
+def test_crossing_restages_on_yaw_drift_before_jamb():
+    # no meio da travessia (s<0) o yaw deriva e a projeção bate no batente ->
+    # re-estágio em vez de raspar.
+    dc = mk()
+    _ate_crossing(dc)                                  # centrado, side=+1
+    c = step(dc, 1.0, (1.65, 1.7, math.pi / 2))        # s=-0.3, d=0.15 > fit
+    assert c.state == 'reversing'
+
+
+def test_restage_gives_up_to_nav2_after_max_escapes():
+    # esgotou as re-tentativas -> larga pro nav2 (idle), não fica eterno
+    dc = mk()
+    _ate_crossing(dc)
+    dc._escape_count = CFG.escape_max_count            # já gastou todas
+    c = step(dc, 1.0, (1.65, 1.7, math.pi / 2))
+    assert c.state == 'idle'
+
+
+def test_crossing_centered_still_crosses():
+    # regressão: centrado e reto NÃO re-estagia (segue cruzando)
+    dc = mk()
+    t = _ate_crossing(dc)
+    c = step(dc, t, (1.5, 1.9, math.pi / 2))
+    assert c.state == 'crossing'
