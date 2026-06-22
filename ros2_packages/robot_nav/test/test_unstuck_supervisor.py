@@ -598,3 +598,105 @@ def test_door_zone_active_includes_approaching():
         assert door_zone_active(st) is True
     for st in ('idle', '', 'whatever'):
         assert door_zone_active(st) is False
+
+
+# ---- recovery contextual: mapeado vs novo (2026-06-22) -----------------------
+
+from robot_nav.unstuck_supervisor import MapGrid, map_occupied
+
+# grid 5x5, resolução 0.1 m, origem (0,0) -> mundo [0,0.5)x[0,0.5).
+# célula (row,col) tem centro ((col+0.5)*0.1, (row+0.5)*0.1). index = row*5+col.
+def _grid_with(occ_cells, unknown_cells=()):
+    data = [0] * 25
+    for (r, c) in occ_cells:
+        data[r * 5 + c] = 100
+    for (r, c) in unknown_cells:
+        data[r * 5 + c] = -1
+    return MapGrid(data=data, width=5, height=5, resolution=0.1,
+                   origin_x=0.0, origin_y=0.0)
+
+
+def test_map_occupied_on_occupied_cell():
+    g = _grid_with([(2, 2)])                      # centro (0.25, 0.25)
+    assert map_occupied(g, 0.25, 0.25, 0.02, 65) is True
+
+
+def test_map_occupied_on_free_cell():
+    g = _grid_with([(2, 2)])
+    assert map_occupied(g, 0.05, 0.05, 0.02, 65) is False   # célula (0,0) livre
+
+
+def test_map_occupied_unknown_is_not_occupied():
+    g = _grid_with([], unknown_cells=[(2, 3)])    # centro (0.35, 0.25) = -1
+    assert map_occupied(g, 0.35, 0.25, 0.02, 65) is False
+
+
+def test_map_occupied_out_of_bounds_is_false():
+    g = _grid_with([(2, 2)])
+    assert map_occupied(g, 5.0, 5.0, 0.02, 65) is False
+    assert map_occupied(g, -1.0, 0.25, 0.02, 65) is False
+
+
+def test_map_occupied_neighborhood_reaches_occupied():
+    g = _grid_with([(2, 2)])                      # ocupada em (0.25, 0.25)
+    # ponto a 0.06 m da célula ocupada
+    assert map_occupied(g, 0.25, 0.19, 0.08, 65) is True    # vizinhança 0.08 alcança
+    assert map_occupied(g, 0.25, 0.19, 0.03, 65) is False   # vizinhança 0.03 não
+
+
+def test_map_occupied_below_threshold_is_free():
+    g = MapGrid(data=[50] * 25, width=5, height=5, resolution=0.1,
+                origin_x=0.0, origin_y=0.0)
+    assert map_occupied(g, 0.25, 0.25, 0.02, 65) is False   # 50 < 65
+
+
+def _umap(sup, t, mapped, pos=(0.0, 0.0), gap=math.inf, front_gap=0.3):
+    return sup.update(t, nav_wants_move=True, position=pos, rear_gap=gap,
+                      front_gap=front_gap, obstacle_mapped=mapped)
+
+
+def test_mapped_block_reverses_at_short_timeout():
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=10.0, stuck_timeout_mapped=2.0))
+    _umap(sup, 0.0, True)
+    cmd = _umap(sup, 2.1, True)
+    assert cmd.active is True
+    assert cmd.lin == pytest.approx(-0.25)   # ré (não esperou os 10 s)
+
+
+def test_mapped_block_does_not_fire_before_short_timeout():
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=10.0, stuck_timeout_mapped=2.0))
+    _umap(sup, 0.0, True)
+    assert _umap(sup, 1.9, True).active is False
+
+
+def test_new_block_still_waits_full_timeout():
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=10.0, stuck_timeout_mapped=2.0))
+    _umap(sup, 0.0, False)
+    assert _umap(sup, 2.1, False).active is False     # novo: NÃO encurta
+    assert _umap(sup, 10.1, False).active is True     # mas dispara aos 10 s
+
+
+def test_late_mapped_flip_respects_confirmation_window():
+    # parado desde 0; vira mapeado só aos 9 s -> precisa 2 s contínuos de mapeado,
+    # não dispara na hora. stuck_timeout alto isola o caminho mapeado.
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=100.0, stuck_timeout_mapped=2.0))
+    _umap(sup, 0.0, False)
+    _umap(sup, 8.9, False)
+    _umap(sup, 9.0, True)                              # mapped_since = 9.0
+    assert _umap(sup, 9.5, True).active is False       # só 0.5 s de mapeado
+    assert _umap(sup, 11.05, True).active is True      # 2.05 s de mapeado -> dispara
+
+
+def test_mapped_since_resets_when_unmapped():
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=100.0, stuck_timeout_mapped=2.0))
+    _umap(sup, 0.0, True)                              # mapped_since = 0
+    _umap(sup, 1.0, False)                             # deixou de ser mapeado -> reset
+    _umap(sup, 2.0, True)                              # mapped_since = 2.0 (não carrega do 0)
+    assert _umap(sup, 2.5, True).active is False        # só 0.5 s -> não dispara
+
+
+def test_obstacle_mapped_defaults_to_todays_behavior():
+    # sem passar obstacle_mapped -> default False -> espera os 10 s (inalterado)
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=10.0, stuck_timeout_mapped=2.0))
+    sup.update(0.0, nav_wants_move=True, position=(0.0, 0.0))
+    assert sup.update(2.1, nav_wants_move=True, position=(0.0, 0.0)).active is False
