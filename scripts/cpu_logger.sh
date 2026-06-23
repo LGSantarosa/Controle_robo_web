@@ -29,13 +29,31 @@ set -u
 
 OUT="${1:-/tmp/cpu_run_$(date +%Y%m%d_%H%M%S).log}"
 INTERVAL="${2:-1}"
+LOAD_THRESH="${3:-5}"      # captura o top dos processos quando load1 >= isto
+CAPTURE_EVERY="${4:-3}"    # mas no maximo 1 captura a cada N segundos (debounce)
 MARKFILE="/tmp/cpu_logger.mark"
 PIDFILE="/tmp/cpu_logger.pid"
+TOPOUT="${OUT%.log}.top"   # snapshots de processos vao pra arquivo separado
 
 echo $$ > "$PIDFILE"
 rm -f "$MARKFILE"
 
 NCPU=$(grep -c '^processor' /proc/cpuinfo)
+
+# Foto dos 6 processos que mais comem CPU, AGORA (instantaneo real: top -bn2
+# pega o delta da 2a iteracao, 0.5s). Roda em BACKGROUND pra nao furar o 1Hz.
+# So dispara dentro de um pico, entao o custo extra mora onde a CPU ja esta cheia.
+capture_top() {
+  local ts="$1" load="$2"
+  {
+    printf '### %s  load1=%s\n' "$ts" "$load"
+    top -bn2 -d 0.5 -w 256 -o %CPU 2>/dev/null | awk '
+      /^[ \t]*PID[ \t]+USER/ { iter++; next }
+      iter==2 && $9+0>0 { printf "  %6s %5s%%  %s\n", $1, $9, $12; c++ }
+      iter==2 && c>=6 { exit }
+    '
+  } >> "$TOPOUT"
+}
 
 # Snapshot de /proc/stat -> arrays globais PREV_IDLE[i], PREV_TOTAL[i]
 # indice 0 = agregado "cpu", 1..N = "cpu0".."cpu(N-1)"
@@ -72,7 +90,9 @@ cleanup() { rm -f "$PIDFILE" "$MARKFILE"; echo "[cpu_logger] fim -> $OUT"; }
 trap cleanup EXIT INT TERM
 
 echo "[cpu_logger] gravando em $OUT (1 amostra/${INTERVAL}s). Pare com Ctrl-C."
+echo "[cpu_logger] top dos processos quando load1>=$LOAD_THRESH -> $TOPOUT"
 
+last_top=0
 read_stat PREV_IDLE PREV_TOTAL
 sleep "$INTERVAL"
 
@@ -103,6 +123,13 @@ while :; do
   line="$line $runq $mark"
 
   echo "$line" >> "$OUT"
+
+  # dentro de um pico? fotografa os processos (debounce CAPTURE_EVERY, em bg)
+  now=$(date +%s)
+  if awk "BEGIN{exit !($load1 >= $LOAD_THRESH)}" && (( now - last_top >= CAPTURE_EVERY )); then
+    last_top=$now
+    capture_top "$ts" "$load1" &
+  fi
 
   PREV_IDLE=("${IDLE[@]}")
   PREV_TOTAL=("${TOTAL[@]}")
