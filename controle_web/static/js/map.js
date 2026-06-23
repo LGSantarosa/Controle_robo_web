@@ -161,7 +161,12 @@
     });
 
     socket.on('scan_update', (data) => {
-      scan = data;   // { xs:[], ys:[] }
+      scan = data;   // { xs:[], ys:[], rx, ry, ryaw }
+      // Pose veio junto com o scan (mesmo instante) -> desenha o boneco daqui
+      // pra ele andar colado nos pontos em curva.
+      if (data && typeof data.rx === 'number') {
+        robotPose = { x: data.rx, y: data.ry, yaw: data.ryaw };
+      }
       render();
     });
 

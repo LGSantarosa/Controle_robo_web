@@ -453,7 +453,21 @@ class MapBridge:
         rr = ranges[sel]
         xs = (lx + rr * np.cos(ang[sel])).round(3).tolist()
         ys = (ly + rr * np.sin(ang[sel])).round(3).tolist()
-        self._sock.emit('scan_update', {'xs': xs, 'ys': ys}, namespace='/')
+        payload = {'xs': xs, 'ys': ys}
+        # Pose do robô NO MESMO instante do scan -> o boneco e os pontos andam
+        # juntos (sem o "se procurando" em curva, que era boneco@10Hz vs scan@5Hz
+        # chegando dessincronizados).
+        try:
+            btf = self._tf_buffer.lookup_transform(
+                'map', 'base_link', msg.header.stamp)
+            payload['rx'] = round(btf.transform.translation.x, 3)
+            payload['ry'] = round(btf.transform.translation.y, 3)
+            payload['ryaw'] = round(_quat_to_yaw(
+                btf.transform.rotation.x, btf.transform.rotation.y,
+                btf.transform.rotation.z, btf.transform.rotation.w), 4)
+        except Exception:
+            pass
+        self._sock.emit('scan_update', payload, namespace='/')
 
     # ---- API pública ----
     def get_last_map_payload(self) -> Optional[dict]:
