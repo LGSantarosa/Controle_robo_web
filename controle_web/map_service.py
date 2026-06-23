@@ -180,6 +180,8 @@ class MapBridge:
 
     POSE_PUBLISH_HZ = 10.0
     SCAN_PUBLISH_HZ = 5.0
+    PRE_DOOR_CLEARANCE = 0.30   # m — folga mínima do ponto-pré-porta até parede
+                                # (> inflation_radius 0.25 p/ o planner não recusar)
 
     def __init__(self, socketio, mode: str, maps_dir: str):
         self._sock = socketio
@@ -294,6 +296,10 @@ class MapBridge:
         # Guarda o último metadata do mapa para converter clique pixel→mundo
         # no cliente (o cliente já recebe isso no map_update).
         self._last_map_info: Optional[dict] = None
+        # Grade de ocupação crua (pra checar folga do ponto-pré-porta). PNG é só
+        # pra exibir; aqui guardamos os números pra geometria.
+        self._grid = None                  # np.int8 [h, w]: 0 livre, 100 ocupado, -1 desconhecido
+        self._grid_meta = None             # (res, origin_x, origin_y, w, h)
         # Cache do payload completo do último map_update ({info, png_b64}).
         # Permite reemitir pra clientes que conectam depois que o map_server
         # (latched) já foi processado — sem isso, a UI fica em "aguardando /map".
@@ -391,6 +397,12 @@ class MapBridge:
                 'stamp': time.time(),
             }
             self._last_map_info = info
+            self._grid = np.asarray(msg.data, dtype=np.int8).reshape(
+                msg.info.height, msg.info.width)
+            self._grid_meta = (msg.info.resolution,
+                               msg.info.origin.position.x,
+                               msg.info.origin.position.y,
+                               msg.info.width, msg.info.height)
             payload = {'info': info, 'png_b64': png_b64}
             self._last_map_payload = payload
             self._sock.emit('map_update', payload, namespace='/')
@@ -454,6 +466,54 @@ class MapBridge:
         xs = (lx + rr * np.cos(ang[sel])).round(3).tolist()
         ys = (ly + rr * np.sin(ang[sel])).round(3).tolist()
         self._sock.emit('scan_update', {'xs': xs, 'ys': ys}, namespace='/')
+
+    # ---- Folga do ponto-pré-porta (option A 2026-06-23) -------------------
+    def _point_clear(self, x: float, y: float, clearance: float) -> bool:
+        """True se não há célula OCUPADA a menos de `clearance` m de (x,y).
+        Sem grade ou ponto fora do mapa -> True (não bloqueia)."""
+        if self._grid is None:
+            return True
+        res, ox, oy, w, h = self._grid_meta
+        col = int((x - ox) / res)
+        row = int((y - oy) / res)
+        rad = int(math.ceil(clearance / res))
+        r0, r1 = max(0, row - rad), min(h, row + rad + 1)
+        c0, c1 = max(0, col - rad), min(w, col + rad + 1)
+        if r0 >= r1 or c0 >= c1:
+            return True
+        occ = self._grid[r0:r1, c0:c1] >= 50      # 100=ocupado; -1/0 não
+        if not occ.any():
+            return True
+        rr, cc = np.nonzero(occ)
+        dr = (rr + r0 - row) * res
+        dc = (cc + c0 - col) * res
+        return bool(np.all(dr * dr + dc * dc > clearance * clearance))
+
+    def _clear_pre_door_point(self, door, wx, wy):
+        """Se o ponto-pré-porta caiu colado em parede (parede LATERAL aperta o
+        skid-steer), desliza EM DIREÇÃO À PORTA ao longo do eixo até achar folga
+        (a garganta do vão é mais aberta). Mantém original se nada servir."""
+        cl = self.PRE_DOOR_CLEARANCE
+        if self._point_clear(wx, wy, cl):
+            return wx, wy
+        ax, ay = door['a']
+        bx, by = door['b']
+        cx, cy = (ax + bx) / 2.0, (ay + by) / 2.0
+        dist = math.hypot(cx - wx, cy - wy)
+        if dist < 1e-6:
+            return wx, wy
+        ux, uy = (cx - wx) / dist, (cy - wy) / dist
+        d, step, min_standoff = 0.05, 0.05, 0.3
+        while d <= dist - min_standoff:
+            nx, ny = wx + ux * d, wy + uy * d
+            if self._point_clear(nx, ny, cl):
+                log.info(f"[MapBridge] ponto-pré-porta colado em parede -> "
+                         f"deslocado {d:.2f}m p/ a porta ({nx:.2f},{ny:.2f})")
+                return nx, ny
+            d += step
+        log.warning("[MapBridge] ponto-pré-porta sem folga no eixo; "
+                    "mantido original")
+        return wx, wy
 
     # ---- API pública ----
     def get_last_map_payload(self) -> Optional[dict]:
@@ -558,6 +618,7 @@ class MapBridge:
                     else door_on_segment(prev, to, doors))
             if door is not None:
                 wx, wy, wyaw = pre_door_waypoint(door['a'], door['b'], prev)
+                wx, wy = self._clear_pre_door_point(door, wx, wy)
                 out.append({'x': wx, 'y': wy, 'yaw': wyaw})
                 log.info(f"[MapBridge] porta {door['id']} no caminho "
                          f"{prev}->{to} -> ponto-pré-porta "
@@ -867,6 +928,7 @@ class MapBridge:
                  f"-> door={door['id'] if door else None}")
         if door is not None:
             wx, wy, wyaw = pre_door_waypoint(door['a'], door['b'], robot)
+            wx, wy = self._clear_pre_door_point(door, wx, wy)
             poses = [self._pose_stamped(wx, wy, wyaw),
                      self._pose_stamped(x, y, yaw)]
             if not self._nav_through.wait_for_server(timeout_sec=2.0):
