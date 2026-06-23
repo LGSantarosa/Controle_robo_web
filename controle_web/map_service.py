@@ -42,6 +42,8 @@ from nav2_msgs.action import (
     NavigateThroughPoses,
 )
 from nav_msgs.msg import OccupancyGrid, Path
+from sensor_msgs.msg import LaserScan
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Float64, String
 from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformException, TransformListener
@@ -177,6 +179,7 @@ class MapBridge:
     """Gerencia todos os tópicos ROS2 relacionados a mapa/navegação."""
 
     POSE_PUBLISH_HZ = 10.0
+    SCAN_PUBLISH_HZ = 5.0
 
     def __init__(self, socketio, mode: str, maps_dir: str):
         self._sock = socketio
@@ -210,6 +213,12 @@ class MapBridge:
         )
         self._node.create_subscription(
             Path, '/plan', self._on_plan, 10
+        )
+        # /scan ao vivo -> overlay azul no mapa (debug de localização: ver se o
+        # scan encaixa nas paredes do mapa com o robô parado).
+        self._last_scan_emit = 0.0
+        self._node.create_subscription(
+            LaserScan, '/scan', self._on_scan, qos_profile_sensor_data
         )
         self._goal_pub = self._node.create_publisher(
             PoseStamped, '/goal_pose', 10
@@ -401,6 +410,41 @@ class MapBridge:
             self._sock.emit('plan_update', {'points': pts}, namespace='/')
         except Exception as e:
             log.debug(f"[MapBridge] erro no /plan: {e}")
+
+    def _on_scan(self, msg: LaserScan):
+        # Converte o /scan pro frame 'map' e emite pontos pro overlay azul.
+        # Throttle (SCAN_PUBLISH_HZ) + downsample pra não afogar o websocket.
+        now = time.time()
+        if now - self._last_scan_emit < 1.0 / self.SCAN_PUBLISH_HZ:
+            return
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                'map', msg.header.frame_id, rclpy.time.Time()
+            )
+        except Exception:
+            return  # sem TF ainda -> sem overlay
+        lx = tf.transform.translation.x
+        ly = tf.transform.translation.y
+        lyaw = _quat_to_yaw(
+            tf.transform.rotation.x, tf.transform.rotation.y,
+            tf.transform.rotation.z, tf.transform.rotation.w,
+        )
+        ranges = np.asarray(msg.ranges, dtype=np.float32)
+        n = ranges.size
+        if n == 0:
+            return
+        idx = np.arange(n)
+        ang = msg.angle_min + idx * msg.angle_increment + lyaw
+        step = max(1, n // 150)   # LD06 ~450 pts -> ~150
+        sel = (np.isfinite(ranges) & (ranges >= msg.range_min)
+               & (ranges <= msg.range_max) & (idx % step == 0))
+        self._last_scan_emit = now
+        if not sel.any():
+            return
+        rr = ranges[sel]
+        xs = (lx + rr * np.cos(ang[sel])).round(3).tolist()
+        ys = (ly + rr * np.sin(ang[sel])).round(3).tolist()
+        self._sock.emit('scan_update', {'xs': xs, 'ys': ys}, namespace='/')
 
     # ---- API pública ----
     def get_last_map_payload(self) -> Optional[dict]:

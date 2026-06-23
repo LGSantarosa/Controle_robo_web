@@ -22,6 +22,7 @@
   let robotPose = null;    // { x, y, yaw }
   let plan = [];           // [{ x, y }]
   let lastGoal = null;     // { x, y }
+  let scan = null;         // { xs:[], ys:[] } — /scan ao vivo em coords do mapa
 
   // Waypoints
   let waypoints  = [];     // [{x, y, yaw}]
@@ -156,6 +157,11 @@
 
     socket.on('plan_update', (data) => {
       plan = (data && data.points) || [];
+      render();
+    });
+
+    socket.on('scan_update', (data) => {
+      scan = data;   // { xs:[], ys:[] }
       render();
     });
 
@@ -575,6 +581,16 @@
     ctx.strokeStyle = '#555';
     ctx.lineWidth = 1;
     ctx.strokeRect(r.dx, r.dy, r.dw, r.dh);
+
+    // Scan do LiDAR ao vivo (pontos azuis) — debug de localização
+    if (scan && scan.xs && scan.xs.length) {
+      ctx.fillStyle = '#1e90ff';
+      for (let i = 0; i < scan.xs.length; i++) {
+        const c = worldToCanvas(scan.xs[i], scan.ys[i]);
+        if (!c) continue;
+        ctx.fillRect(c.x - 1, c.y - 1, 2, 2);
+      }
+    }
 
     // Trajetória planejada (Nav2)
     if (plan && plan.length > 1) {
