@@ -161,12 +161,10 @@
     });
 
     socket.on('scan_update', (data) => {
-      scan = data;   // { xs:[], ys:[], rx, ry, ryaw }
-      // Pose veio junto com o scan (mesmo instante) -> desenha o boneco daqui
-      // pra ele andar colado nos pontos em curva.
-      if (data && typeof data.rx === 'number') {
-        robotPose = { x: data.rx, y: data.ry, yaw: data.ryaw };
-      }
+      // Só os pontos. O boneco fica no robot_pose AO VIVO (10Hz, último TF) —
+      // desenhar o boneco no stamp do scan (5Hz, atrasado) deixava ele pra trás.
+      // Scan cai nas paredes (estáticas) então o atraso dele não aparece.
+      scan = { xs: data.xs, ys: data.ys };
       render();
     });
 
