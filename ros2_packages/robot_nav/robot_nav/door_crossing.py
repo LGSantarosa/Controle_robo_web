@@ -209,7 +209,7 @@ class DoorCrossConfig:
     # backup door-redesign-0618 + projeção do yaw). will_clear projeta a
     # trajetória reta até o plano dos batentes; se não passa, re-estagia.
     robot_half_width: float = 0.25  # m — meia-largura do robô (0.50 medido roda-a-roda)
-    fit_margin: float = 0.13        # m — folga subtraída do vão no will_clear (fit = half_width - robot_half_width - fit_margin). KNOB DE CAMPO nº1: re-estagia à toa -> DIMINUIR fit_margin (afrouxa a trava)
+    fit_margin: float = 0.05        # m — folga subtraída do vão no will_clear (fit = half_width - robot_half_width - fit_margin). KNOB DE CAMPO nº1: re-estagia à toa -> DIMINUIR fit_margin (afrouxa a trava). 2026-06-23: 0.13->0.05 (re-estagiava de LONGE por yaw de 1-2° amplificado pela alavanca da distância -> priorizava o eixo em vez de atravessar; porta larga 1.09m, sobra muito)
     # Ponto de não-retorno (2026-06-22, capengada de campo): nos últimos cm antes
     # do plano (s>commit_s) o robô já está com >metade do corpo no vão; o braço de
     # alavanca do will_clear some (lat≈d) e um offset lateral residual irrelevante
@@ -545,7 +545,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('rot_k', 6.0), ('rot_min', 2.5),
                 ('cross_speed', 0.22), ('stage_speed', 0.20),
                 ('cross_lat_off_s', 0.0),
-                ('robot_half_width', 0.25), ('fit_margin', 0.13),
+                ('robot_half_width', 0.25), ('fit_margin', 0.05),
                 ('commit_s', -0.15),
                 ('escape_reverse_speed', 0.25), ('gap_min', 0.45),
                 ('exit_margin', 0.5), ('rate_hz', 20.0),
