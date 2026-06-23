@@ -468,13 +468,13 @@ def test_will_clear_side_minus_one():
 # ---- re-estágio quando "não passo" (2026-06-22) ------------------------------
 
 def test_restage_when_aligned_but_wont_fit():
-    # alinhado no YAW mas descentrado (d=0.2 > fit 0.12) -> NÃO commita a
+    # alinhado no YAW mas MUITO descentrado (d=0.3 > fit 0.20) -> NÃO commita a
     # travessia: recua reto pra re-estagiar (não atravessa torto).
     dc = DoorCrossing(CFG)
-    estep(dc, 0.0, (1.7, 1.4, math.pi / 2))            # arma -> rotating (d=0.2)
+    estep(dc, 0.0, (1.8, 1.4, math.pi / 2))            # arma -> rotating (d=0.3)
     t, last = 0.1, None
     for _ in range(CFG.align_stable + 1):
-        last = estep(dc, t, (1.7, 1.4, math.pi / 2))
+        last = estep(dc, t, (1.8, 1.4, math.pi / 2))
         t += 0.05
     assert last.state == 'reversing'
     assert last.wz == pytest.approx(0.0)               # ré RETA, nunca arco
@@ -485,7 +485,7 @@ def test_crossing_restages_on_yaw_drift_before_jamb():
     # re-estágio em vez de raspar.
     dc = mk()
     _ate_crossing(dc)                                  # centrado, side=+1
-    c = step(dc, 1.0, (1.65, 1.7, math.pi / 2))        # s=-0.3, d=0.15 > fit
+    c = step(dc, 1.0, (1.8, 1.7, math.pi / 2))         # s=-0.3, d=0.3 > fit 0.20
     assert c.state == 'reversing'
 
 
@@ -494,7 +494,7 @@ def test_restage_gives_up_to_nav2_after_max_escapes():
     dc = mk()
     _ate_crossing(dc)
     dc._escape_count = CFG.escape_max_count            # já gastou todas
-    c = step(dc, 1.0, (1.65, 1.7, math.pi / 2))
+    c = step(dc, 1.0, (1.8, 1.7, math.pi / 2))         # s=-0.3, d=0.3 > fit 0.20
     assert c.state == 'idle'
 
 
@@ -513,8 +513,8 @@ def test_crossing_commits_in_final_stretch_despite_offset():
     # lateral residual que o will_clear reprovaria -> NÃO dá ré, COMITA pra frente.
     dc = mk()
     _ate_crossing(dc)                                  # centrado, side=+1
-    # s=-0.1 (> commit_s=-0.15), d=0.15 (> fit 0.12, will_clear reprovaria)
-    c = step(dc, 1.0, (1.65, 1.9, math.pi / 2))
+    # s=-0.1 (> commit_s=-0.15), d=0.3 (> fit 0.20, will_clear reprovaria)
+    c = step(dc, 1.0, (1.8, 1.9, math.pi / 2))
     assert c.state == 'crossing'
 
 
@@ -522,7 +522,7 @@ def test_crossing_still_restages_before_commit_point():
     # regressão: ANTES do commit_s (s bem negativo) a trava segue valendo -> ré.
     dc = mk()
     _ate_crossing(dc)
-    c = step(dc, 1.0, (1.65, 1.7, math.pi / 2))        # s=-0.3 (< commit_s), d=0.15
+    c = step(dc, 1.0, (1.8, 1.7, math.pi / 2))         # s=-0.3 (< commit_s), d=0.3
     assert c.state == 'reversing'
 
 
