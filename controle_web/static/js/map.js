@@ -588,7 +588,7 @@
       for (let i = 0; i < scan.xs.length; i++) {
         const c = worldToCanvas(scan.xs[i], scan.ys[i]);
         if (!c) continue;
-        ctx.fillRect(c.x - 1, c.y - 1, 2, 2);
+        ctx.fillRect(c.x - 1.5, c.y - 1.5, 3, 3);
       }
     }
 

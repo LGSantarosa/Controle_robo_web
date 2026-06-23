@@ -418,11 +418,20 @@ class MapBridge:
         if now - self._last_scan_emit < 1.0 / self.SCAN_PUBLISH_HZ:
             return
         try:
+            # TF no INSTANTE do scan (não o atual): em giro rápido o scan é de
+            # alguns ms atrás; usar o stamp dele alinha os pontos com a pose da
+            # hora -> sem o "borrado/girando". Fallback pro mais recente se o
+            # buffer não tiver esse stamp exato.
             tf = self._tf_buffer.lookup_transform(
-                'map', msg.header.frame_id, rclpy.time.Time()
+                'map', msg.header.frame_id, msg.header.stamp
             )
         except Exception:
-            return  # sem TF ainda -> sem overlay
+            try:
+                tf = self._tf_buffer.lookup_transform(
+                    'map', msg.header.frame_id, rclpy.time.Time()
+                )
+            except Exception:
+                return  # sem TF ainda -> sem overlay
         lx = tf.transform.translation.x
         ly = tf.transform.translation.y
         lyaw = _quat_to_yaw(
@@ -435,7 +444,7 @@ class MapBridge:
             return
         idx = np.arange(n)
         ang = msg.angle_min + idx * msg.angle_increment + lyaw
-        step = max(1, n // 150)   # LD06 ~450 pts -> ~150
+        step = max(1, n // 320)   # LD06 ~450 pts -> ~320 (mais denso = legível)
         sel = (np.isfinite(ranges) & (ranges >= msg.range_min)
                & (ranges <= msg.range_max) & (idx % step == 0))
         self._last_scan_emit = now

@@ -24,17 +24,11 @@
 amcl:
   ros__parameters:
     use_sim_time: false
-    # 2026-06-23: alpha1/alpha2 0.2 -> 0.1 (ruído de rotação do modelo de
-    # movimento). Diagnóstico de campo: na porta o robô dizia estar reto e
-    # estava ~10° torto pra esquerda -> batia o batente. Decompondo o TF:
-    # odom (IMU+rodas) media +8.5° (CERTO, bate com o visto), mas o AMCL
-    # aplicava -8.6° e achatava pra ~0°. Perto da porta o corredor é geometria
-    # degenerada pro likelihood_field (paredes paralelas -> yaw ambíguo) e o
-    # scan-match torcia o ângulo que o IMU já tinha certo. Baixar alpha1/alpha2
-    # cola as partículas no odom (confia MAIS no IMU, deixa o laser torcer
-    # MENOS o yaw). Param GLOBAL do AMCL (vale em todo lugar) -> validar campo.
-    alpha1: 0.1
-    alpha2: 0.1
+    # 2026-06-23: REVERTIDO pra 0.2 (eram 0.1 num beco sem saída — a pose torta
+    # era do MAPA SKEWED, resolvida por re-SLAM, não do alpha). Com mapa bom o
+    # lidar acerta; voltar a 0.2 deixa o scan corrigir o yaw normalmente.
+    alpha1: 0.2
+    alpha2: 0.2
     alpha3: 0.2
     alpha4: 0.2
     alpha5: 0.2
@@ -60,8 +54,12 @@ amcl:
     # Alinhado com DWB e behaviors em 0.5 — antes AMCL=1.0 e DWB=0.2,
     # com erros transientes de TF quando AMCL atualizava map→odom devagar.
     transform_tolerance: 0.5
-    update_min_a: 0.2
-    update_min_d: 0.25
+    # 2026-06-23: 0.2/0.25 -> 0.1/0.10. AMCL só usa o laser (corrige a pose)
+    # depois do robô se mover esse tanto; com mapa bom o lidar está certo, então
+    # baixar faz a pose re-encaixar com MENOS movimento (era "só ajusta depois
+    # de andar"). ~0.1 rad (5.7°) / 0.10 m. Custa um pouco mais de CPU.
+    update_min_a: 0.1
+    update_min_d: 0.10
     resample_interval: 1
     do_beamskip: true
     beam_skip_distance: 0.5
