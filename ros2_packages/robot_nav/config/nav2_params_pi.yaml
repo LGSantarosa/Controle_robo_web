@@ -245,7 +245,13 @@ local_costmap:
         enabled: true
         observation_sources: scan
         scan:
-          topic: /scan
+          # 2026-06-23: /scan -> /scan_safe. Com /scan cru e obstacle_min_range
+          # 0.0, os fantasmas <0.15 m do LD06 (a porta dispara) viravam obstaculo
+          # letal colado no robo -> DWB "Failed to make progress" e robo fincado
+          # >1 min na porta + re do unstuck "no nada". O scan_sanitizer ja dropa
+          # esses fantasmas em /scan_safe (so o collision_monitor usava). Aqui o
+          # costmap passa a usar o mesmo scan limpo.
+          topic: /scan_safe
           data_type: "LaserScan"
           marking: true
           clearing: true
@@ -289,7 +295,9 @@ global_costmap:
         enabled: true
         observation_sources: scan
         scan:
-          topic: /scan
+          # 2026-06-23: /scan -> /scan_safe (idem ao local). Fantasma <0.15 m do
+          # LD06 nao entra mais como obstaculo no costmap global.
+          topic: /scan_safe
           max_obstacle_height: 2.0
           clearing: true
           marking: true
