@@ -686,38 +686,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                                   goal_succeeded=goal_succeeded)
             if cmd.state != prev:
                 self.get_logger().info(f'door_crossing: {prev} -> {cmd.state}')
-            # DBG door (TEMP 2026-06-23, REMOVER após diagnóstico): prova o que o
-            # will_clear vê em cada decisão — separa "pose errada no commit" de
-            # "margem do will_clear frouxa". SÓ log, não muda comportamento.
-            if (pose is not None and self.sup.geom is not None
-                    and self.sup.side != 0
-                    and (cmd.state in ('crossing', 'reversing')
-                         or prev in ('crossing', 'reversing'))):
-                _x, _y, _yw = pose
-                _g = self.sup.geom
-                _s, _d = door_progress_lateral(_g, _x, _y, self.sup.side)
-                _ye = _wrap(_yw - crossing_yaw(_g, self.sup.side))
-                _fit = _g.half_width - self.cfg.robot_half_width - self.cfg.fit_margin
-                _lat = _d + _s * self.sup.side * math.tan(_ye)
-                _wc = will_clear(_g, _s, _d, _ye, self.sup.side,
-                                 self.cfg.robot_half_width, self.cfg.fit_margin)
-                _tag = 'COMMIT' if (cmd.state == 'crossing'
-                                    and prev != 'crossing') else (
-                       'RESTAGE' if cmd.state == 'reversing' else 'cross')
-                _msg = (
-                    'DBG door %s: s=%.3f d=%.3f yaw_err=%.1f° lat_proj=%.3f '
-                    'fit=%.3f will_clear=%s pose=(%.2f,%.2f,%.1f°)' % (
-                        _tag, _s, _d, math.degrees(_ye), _lat, _fit, _wc,
-                        _x, _y, math.degrees(_yw)))
-                # DUAS chamadas distintas (linhas distintas): o rclpy NÃO deixa
-                # uma mesma chamada alternar o filtro de throttle entre ticks
-                # (ValueError 'logging filters cannot be changed') -> foi o que
-                # matou o nó em 2026-06-23. Eventos-chave sem throttle; cross
-                # com throttle CONSTANTE.
-                if _tag == 'cross':
-                    self.get_logger().info(_msg, throttle_duration_sec=0.5)
-                else:
-                    self.get_logger().info(_msg)
             # /door_zone: a manobra ativa manda; senão, se há porta marcada na
             # zona com goal ativo, publica 'approaching' (gate do standdown do
             # unstuck). 'approaching' NÃO comanda door_vel — só sinaliza a região.
