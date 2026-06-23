@@ -704,12 +704,20 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 _tag = 'COMMIT' if (cmd.state == 'crossing'
                                     and prev != 'crossing') else (
                        'RESTAGE' if cmd.state == 'reversing' else 'cross')
-                self.get_logger().info(
+                _msg = (
                     'DBG door %s: s=%.3f d=%.3f yaw_err=%.1f° lat_proj=%.3f '
                     'fit=%.3f will_clear=%s pose=(%.2f,%.2f,%.1f°)' % (
                         _tag, _s, _d, math.degrees(_ye), _lat, _fit, _wc,
-                        _x, _y, math.degrees(_yw)),
-                    throttle_duration_sec=(0.0 if _tag != 'cross' else 0.5))
+                        _x, _y, math.degrees(_yw)))
+                # DUAS chamadas distintas (linhas distintas): o rclpy NÃO deixa
+                # uma mesma chamada alternar o filtro de throttle entre ticks
+                # (ValueError 'logging filters cannot be changed') -> foi o que
+                # matou o nó em 2026-06-23. Eventos-chave sem throttle; cross
+                # com throttle CONSTANTE.
+                if _tag == 'cross':
+                    self.get_logger().info(_msg, throttle_duration_sec=0.5)
+                else:
+                    self.get_logger().info(_msg)
             # /door_zone: a manobra ativa manda; senão, se há porta marcada na
             # zona com goal ativo, publica 'approaching' (gate do standdown do
             # unstuck). 'approaching' NÃO comanda door_vel — só sinaliza a região.
