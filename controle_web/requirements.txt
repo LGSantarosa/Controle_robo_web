@@ -1,5 +1,8 @@
 flask==3.0.0
 flask-socketio==5.4.1
+# Necessário p/ o upgrade polling->websocket no async_mode="threading".
+# Sem ele a conexão fica presa em long-polling -> viz do robô atrasa (lag).
+simple-websocket>=1.0,<2.0
 pyyaml>=6.0,<7.0
 numpy>=1.24,<3.0
 Pillow>=10.0,<12.0

@@ -28,8 +28,11 @@ def generate_launch_description():
 
     # Caminhos padrão (sobrescrevíveis via argumentos de launch)
     default_world = os.environ.get('SIM_WORLD', '')  # preenchido pelo launch.sh
-    default_robot_sdf = os.path.join(pkg_robot_nav, 'urdf', 'husky.sdf')
-    urdf_xacro = os.path.join(pkg_robot_nav, 'urdf', 'husky.urdf.xacro')
+    # Robô skid-steer 4 rodas com as dimensões REAIS (0.5×0.5, bitola 0.50,
+    # raio 0.085). O husky.sdf/husky.urdf.xacro (mini diff-drive 0.31×0.24)
+    # ficou obsoleto — proporções não batiam com o robô real (2026-06-24).
+    default_robot_sdf = os.path.join(pkg_robot_nav, 'urdf', 'sim_robot.sdf')
+    urdf_xacro = os.path.join(pkg_robot_nav, 'urdf', 'sim_robot.urdf.xacro')
 
     world_arg = DeclareLaunchArgument(
         'world',
@@ -41,9 +44,11 @@ def generate_launch_description():
         default_value=default_robot_sdf,
         description='Caminho para o SDF do robô simulado',
     )
-    spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='2.0')
-    spawn_y_arg = DeclareLaunchArgument('spawn_y', default_value='2.5')
-    spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='0.2')
+    # Spawn no centro da sala 6×6 (empty.sdf): o robô real é 0.5×0.5, então o
+    # canto (2.0, 2.5) do husky mini ficava colado na parede.
+    spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='0.0')
+    spawn_y_arg = DeclareLaunchArgument('spawn_y', default_value='0.0')
+    spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='0.3')
 
     world = LaunchConfiguration('world')
     robot_sdf = LaunchConfiguration('robot_sdf')
@@ -72,7 +77,7 @@ def generate_launch_description():
         executable='create',
         arguments=[
             '-file', robot_sdf,
-            '-name', 'husky',
+            '-name', 'sim_robot',
             '-x', spawn_x, '-y', spawn_y, '-z', spawn_z,
         ],
         output='screen',

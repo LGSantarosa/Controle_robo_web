@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import csv
 import math
 import os
 import subprocess
@@ -175,6 +176,51 @@ class DoorStore:
         return json.dumps({'doors': self.doors})
 
 
+class ScanLagCsv:
+    """DIAG lag do scan/boneco (2026-06-24). Um CSV por sessão em
+    logs/scan_lag/scan_lag_<ts>.csv. Pra EU (assistente) ler depois e achar o
+    hop do atraso sem o usuário ter que ler nada. Remover quando fechar o
+    diagnóstico. Escrita bufferizada, flush ~1s. Nunca quebra a viz (try/except
+    no chamador)."""
+
+    FIELDS = ['ts', 'scan_stamp', 'age_ms', 'tf_fallback', 'ryaw_deg', 'npts']
+
+    def __init__(self, log_dir: str, flush_interval_s: float = 1.0):
+        os.makedirs(log_dir, exist_ok=True)
+        self._path = os.path.join(
+            log_dir, time.strftime('scan_lag_%Y-%m-%d_%H%M%S.csv'))
+        self._flush_interval_s = flush_interval_s
+        self._last_flush = 0.0
+        self._file = open(self._path, 'w', newline='')
+        self._writer = csv.DictWriter(self._file, fieldnames=self.FIELDS)
+        self._writer.writeheader()
+
+    @property
+    def path(self) -> str:
+        return self._path
+
+    def log(self, ts, scan_stamp, age, tf_fallback, ryaw, npts):
+        self._writer.writerow({
+            'ts': f'{ts:.3f}',
+            'scan_stamp': f'{scan_stamp:.3f}',
+            'age_ms': f'{age * 1000:.0f}',
+            'tf_fallback': '1' if tf_fallback else '0',
+            'ryaw_deg': f'{ryaw * 180.0 / math.pi:.1f}',
+            'npts': str(npts),
+        })
+        now = time.monotonic()
+        if now - self._last_flush >= self._flush_interval_s:
+            self._file.flush()
+            self._last_flush = now
+
+    def close(self):
+        try:
+            self._file.flush()
+            self._file.close()
+        except Exception:
+            pass
+
+
 class MapBridge:
     """Gerencia todos os tópicos ROS2 relacionados a mapa/navegação."""
 
@@ -219,6 +265,15 @@ class MapBridge:
         # /scan ao vivo -> overlay azul no mapa (debug de localização: ver se o
         # scan encaixa nas paredes do mapa com o robô parado).
         self._last_scan_emit = 0.0
+        # DIAG lag (2026-06-24): grava age/tf_fallback/ryaw por scan num CSV
+        # pra EU ler depois e achar o hop do atraso. Remover ao fechar.
+        try:
+            self._lag_csv = ScanLagCsv(
+                os.path.join(os.path.dirname(__file__), 'logs', 'scan_lag'))
+            log.info(f"[MapBridge] DIAG scan_lag CSV: {self._lag_csv.path}")
+        except Exception as e:
+            self._lag_csv = None
+            log.warning(f"[MapBridge] scan_lag CSV off: {e}")
         self._node.create_subscription(
             LaserScan, '/scan', self._on_scan, qos_profile_sensor_data
         )
@@ -436,6 +491,12 @@ class MapBridge:
         now = time.time()
         if now - self._last_scan_emit < 1.0 / self.SCAN_PUBLISH_HZ:
             return
+        # DIAG lag (2026-06-24): idade do scan no emit + se caiu no fallback de
+        # TF (yaw velho -> arrasto da nuvem no giro). Vai no payload p/ a UI
+        # mostrar; some quando fechar o diagnóstico. NÃO logar no rosout.
+        stamp_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        scan_age = now - stamp_sec
+        tf_fallback = False
         try:
             # TF no INSTANTE do scan (não o atual): em giro rápido o scan é de
             # alguns ms atrás; usar o stamp dele alinha os pontos com a pose da
@@ -451,6 +512,7 @@ class MapBridge:
                 'map', 'base_link', msg.header.stamp
             )
         except Exception:
+            tf_fallback = True
             try:
                 tf = self._tf_buffer.lookup_transform(
                     'map', msg.header.frame_id, rclpy.time.Time()
@@ -460,6 +522,11 @@ class MapBridge:
                 )
             except Exception:
                 return  # sem TF ainda -> sem overlay
+        diag = {
+            '_age': round(scan_age, 3),     # s: sensor->emit (TF/CPU)
+            '_fb': tf_fallback,             # True = usou yaw velho (fallback)
+            '_sts': now,                    # server_ts p/ medir transporte
+        }
         lx = tf.transform.translation.x
         ly = tf.transform.translation.y
         lyaw = _quat_to_yaw(
@@ -487,14 +554,25 @@ class MapBridge:
         self._last_scan_emit = now
         if not sel.any():
             # Sem pontos válidos, mas ainda manda a pose pro boneco acompanhar.
-            self._sock.emit('scan_update', {'xs': [], 'ys': [], **pose},
+            self._sock.emit('scan_update', {'xs': [], 'ys': [], **pose, **diag},
                             namespace='/')
+            self._log_scan_lag(now, stamp_sec, scan_age, tf_fallback, ryaw, 0)
             return
         rr = ranges[sel]
         xs = (lx + rr * np.cos(ang[sel])).round(3).tolist()
         ys = (ly + rr * np.sin(ang[sel])).round(3).tolist()
-        self._sock.emit('scan_update', {'xs': xs, 'ys': ys, **pose},
+        self._sock.emit('scan_update', {'xs': xs, 'ys': ys, **pose, **diag},
                         namespace='/')
+        self._log_scan_lag(now, stamp_sec, scan_age, tf_fallback, ryaw, len(xs))
+
+    def _log_scan_lag(self, ts, scan_stamp, age, tf_fallback, ryaw, npts):
+        # DIAG lag (2026-06-24): nunca deixa o CSV derrubar a viz.
+        if self._lag_csv is None:
+            return
+        try:
+            self._lag_csv.log(ts, scan_stamp, age, tf_fallback, ryaw, npts)
+        except Exception as e:
+            log.debug(f"[MapBridge] scan_lag log: {e}")
 
     # ---- Folga do ponto-pré-porta (option A 2026-06-23) -------------------
     def _point_clear(self, x: float, y: float, clearance: float) -> bool:
@@ -1050,6 +1128,8 @@ class MapBridge:
 
     def shutdown(self):
         self._running = False
+        if getattr(self, '_lag_csv', None) is not None:
+            self._lag_csv.close()
         try:
             self._executor.shutdown()
             self._node.destroy_node()
