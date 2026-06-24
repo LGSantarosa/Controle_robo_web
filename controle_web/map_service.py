@@ -179,7 +179,7 @@ class MapBridge:
     """Gerencia todos os tópicos ROS2 relacionados a mapa/navegação."""
 
     POSE_PUBLISH_HZ = 10.0
-    SCAN_PUBLISH_HZ = 5.0
+    SCAN_PUBLISH_HZ = 10.0
     PRE_DOOR_CLEARANCE = 0.30   # m — folga mínima do ponto-pré-porta até parede
                                 # (> inflation_radius 0.25 p/ o planner não recusar)
 
@@ -353,6 +353,13 @@ class MapBridge:
         period = 1.0 / self.POSE_PUBLISH_HZ
         while self._running:
             try:
+                # FALLBACK: quando o /scan está vivo, o _on_scan já manda a pose
+                # do boneco JUNTO com os pontos (mesmo frame, mesmo stamp) ->
+                # boneco e scan andam colados. Aqui só emite se o scan parou,
+                # senão o boneco "agora" descolaria do scan (no stamp dele).
+                if time.time() - self._last_scan_emit < 0.5:
+                    time.sleep(period)
+                    continue
                 t = self._tf_buffer.lookup_transform(
                     'map', 'base_link', rclpy.time.Time()
                 )
@@ -437,10 +444,19 @@ class MapBridge:
             tf = self._tf_buffer.lookup_transform(
                 'map', msg.header.frame_id, msg.header.stamp
             )
+            # Pose do boneco (base_link) NO MESMO stamp do scan: vai junto no
+            # payload pra render no MESMO frame -> boneco colado nos pontos,
+            # lidar não fica "na frente" do desenho do robô.
+            tf_base = self._tf_buffer.lookup_transform(
+                'map', 'base_link', msg.header.stamp
+            )
         except Exception:
             try:
                 tf = self._tf_buffer.lookup_transform(
                     'map', msg.header.frame_id, rclpy.time.Time()
+                )
+                tf_base = self._tf_buffer.lookup_transform(
+                    'map', 'base_link', rclpy.time.Time()
                 )
             except Exception:
                 return  # sem TF ainda -> sem overlay
@@ -450,6 +466,15 @@ class MapBridge:
             tf.transform.rotation.x, tf.transform.rotation.y,
             tf.transform.rotation.z, tf.transform.rotation.w,
         )
+        rx = tf_base.transform.translation.x
+        ry = tf_base.transform.translation.y
+        ryaw = _quat_to_yaw(
+            tf_base.transform.rotation.x, tf_base.transform.rotation.y,
+            tf_base.transform.rotation.z, tf_base.transform.rotation.w,
+        )
+        self._last_robot_yaw = ryaw
+        self._last_robot_xy = (rx, ry)
+        pose = {'rx': rx, 'ry': ry, 'ryaw': ryaw}
         ranges = np.asarray(msg.ranges, dtype=np.float32)
         n = ranges.size
         if n == 0:
@@ -461,11 +486,15 @@ class MapBridge:
                & (ranges <= msg.range_max) & (idx % step == 0))
         self._last_scan_emit = now
         if not sel.any():
+            # Sem pontos válidos, mas ainda manda a pose pro boneco acompanhar.
+            self._sock.emit('scan_update', {'xs': [], 'ys': [], **pose},
+                            namespace='/')
             return
         rr = ranges[sel]
         xs = (lx + rr * np.cos(ang[sel])).round(3).tolist()
         ys = (ly + rr * np.sin(ang[sel])).round(3).tolist()
-        self._sock.emit('scan_update', {'xs': xs, 'ys': ys}, namespace='/')
+        self._sock.emit('scan_update', {'xs': xs, 'ys': ys, **pose},
+                        namespace='/')
 
     # ---- Folga do ponto-pré-porta (option A 2026-06-23) -------------------
     def _point_clear(self, x: float, y: float, clearance: float) -> bool:

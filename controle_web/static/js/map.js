@@ -161,10 +161,15 @@
     });
 
     socket.on('scan_update', (data) => {
-      // Só os pontos. O boneco fica no robot_pose AO VIVO (10Hz, último TF) —
-      // desenhar o boneco no stamp do scan (5Hz, atrasado) deixava ele pra trás.
-      // Scan cai nas paredes (estáticas) então o atraso dele não aparece.
+      // Pontos + pose do boneco NO MESMO frame (mesmo stamp do scan): o robot_pose
+      // separado (10Hz, TF "agora") chegava em outro momento e o boneco descolava
+      // dos pontos (lidar parecia "na frente" do desenho). Aqui os dois andam
+      // colados. O robot_pose ao vivo segue como fallback quando o scan para.
       scan = { xs: data.xs, ys: data.ys };
+      if (data.rx !== undefined) {
+        robotPose = { x: data.rx, y: data.ry, yaw: data.ryaw };
+        poseEl.textContent = `robô: x=${data.rx.toFixed(2)} y=${data.ry.toFixed(2)} yaw=${(data.ryaw * 180 / Math.PI).toFixed(0)}°`;
+      }
       render();
     });
 
