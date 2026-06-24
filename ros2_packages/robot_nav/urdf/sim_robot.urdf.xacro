@@ -14,17 +14,19 @@
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="sim_robot">
 
-  <!-- Dimensões medidas no chassi real (2026-05-11) — iguais ao robot.urdf.xacro -->
+  <!-- Medidas reais do chassi (2026-06-24, confirmadas). Ponta-a-ponta das
+       rodas = 0.50 nas DUAS direções -> centros: track = 0.50-wheel_width(0.06)
+       = 0.44; wheelbase = 0.50-diâmetro(0.17) = 0.33. -->
   <xacro:property name="wheel_radius"  value="0.085"/>
   <xacro:property name="wheel_width"   value="0.06"/>
-  <xacro:property name="track_width"   value="0.50"/>   <!-- bitola esq-dir -->
-  <xacro:property name="wheelbase"     value="0.37"/>   <!-- entre-eixos F-R -->
+  <xacro:property name="track_width"   value="0.44"/>   <!-- centros esq-dir -->
+  <xacro:property name="wheelbase"     value="0.33"/>   <!-- centros F-R -->
 
-  <!-- Chassi (estrutura interna): 0.37 frente-trás × 0.35 esq-dir. O footprint
-       roda-a-roda ~0.50×0.50 vem das RODAS (track 0.50), o chassi fica por dentro. -->
+  <!-- Chassi: 0.37 frente-trás × 0.35 esq-dir × 0.16 altura. As rodas ficam
+       POR FORA (ponta-a-ponta 0.50×0.50), conectadas por eixo no chassi. -->
   <xacro:property name="body_length"   value="0.37"/>
   <xacro:property name="body_width"    value="0.35"/>
-  <xacro:property name="body_height"   value="0.26"/>
+  <xacro:property name="body_height"   value="0.16"/>
 
   <!-- LiDAR no CENTRO (2026-06-11: o 0.10 antigo era falso), assentado no TOPO
        do chassi (sem mastro): z = body_height/2 + lidar_z = 0.13 + 0.02 = 0.15. -->
@@ -41,7 +43,7 @@
     </collision>
     <inertial>
       <mass value="15.46"/>
-      <inertia ixx="0.25" ixy="0" ixz="0" iyy="0.26" iyz="0" izz="0.33"/>
+      <inertia ixx="0.19" ixy="0" ixz="0" iyy="0.21" iyz="0" izz="0.33"/>
     </inertial>
   </link>
 
