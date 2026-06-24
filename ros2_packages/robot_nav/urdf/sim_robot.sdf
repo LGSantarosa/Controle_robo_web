@@ -2,10 +2,11 @@
 <!--
   Robô skid-steer 4 RODAS simulado no Gazebo Harmonic.
   Dimensões batem 1:1 com o robô REAL (robot.urdf.xacro):
-    corpo 0.50 x 0.50 x 0.26 m | massa 15.46 kg
+    chassi 0.37 (frente-trás) x 0.35 (esq-dir) x 0.26 m | massa 15.46 kg
     roda  raio 0.085 m, largura 0.06 m
-    bitola (esq-dir) 0.50 m | entre-eixos (F-R) 0.37 m
-    LiDAR no CENTRO, 0.25 m acima do base_link
+    bitola (esq-dir, roda a roda) 0.50 m | entre-eixos (F-R) 0.37 m
+    -> footprint roda-a-roda ~0.50×0.50; o chassi (35×37) fica POR DENTRO
+    LiDAR assentado no TOPO do chassi (sem mastro), z=0.15 acima do base_link
 
   Skid-steer = DiffDrive com 2 left_joint + 2 right_joint (truque padrão do
   gz-sim). O giro no lugar acontece por derrapagem lateral das 4 rodas; o
@@ -23,13 +24,14 @@
     <link name="base_link">
       <inertial>
         <mass>15.46</mass>
+        <!-- Caixa 0.37×0.35×0.26, m=15.46: ixx=m(W²+H²)/12, etc. -->
         <inertia>
-          <ixx>0.41</ixx><iyy>0.41</iyy><izz>0.64</izz>
+          <ixx>0.25</ixx><iyy>0.26</iyy><izz>0.33</izz>
           <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
         </inertia>
       </inertial>
       <visual name="body_visual">
-        <geometry><box><size>0.50 0.50 0.26</size></box></geometry>
+        <geometry><box><size>0.37 0.35 0.26</size></box></geometry>
         <material>
           <ambient>0.5 0.5 0.5 1</ambient>
           <diffuse>0.55 0.55 0.55 1</diffuse>
@@ -37,12 +39,12 @@
         </material>
       </visual>
       <collision name="body_collision">
-        <geometry><box><size>0.50 0.50 0.26</size></box></geometry>
+        <geometry><box><size>0.37 0.35 0.26</size></box></geometry>
       </collision>
       <!-- Marca da frente (+x): faixa laranja pra enxergar a orientação -->
       <visual name="front_marker">
-        <pose>0.22 0 0.131 0 0 0</pose>
-        <geometry><box><size>0.06 0.50 0.005</size></box></geometry>
+        <pose>0.15 0 0.131 0 0 0</pose>
+        <geometry><box><size>0.06 0.35 0.005</size></box></geometry>
         <material><ambient>0.9 0.45 0 1</ambient><diffuse>1 0.5 0 1</diffuse></material>
       </visual>
     </link>
@@ -112,10 +114,10 @@
       <axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis>
     </joint>
 
-    <!-- ====== LiDAR 2D centralizado ======
-         z = body_height/2 + lidar_z = 0.13 + 0.12 = 0.25 rel ao base_link -->
+    <!-- ====== LiDAR 2D centralizado, assentado no topo do chassi ======
+         z = body_height/2 + meia-altura-do-lidar = 0.13 + 0.02 = 0.15 -->
     <link name="base_laser">
-      <pose>0 0 0.25 0 0 0</pose>
+      <pose>0 0 0.15 0 0 0</pose>
       <inertial><mass>0.1</mass>
         <inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
       </inertial>
