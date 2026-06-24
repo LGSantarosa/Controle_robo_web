@@ -122,6 +122,14 @@ def generate_launch_description():
             name='scan_sanitizer', output=nav_output,
             parameters=[sim_time_param],
         ),
+        # Diagnóstico "congela perto do goal" (2026-06-24): grava a cadeia
+        # cmd_vel_nav/nav_vel/cmd_vel + odom num CSV (controle_web/logs/
+        # freeze_capture.csv) pra eu ler DEPOIS. Read-only, não interfere.
+        Node(
+            package='robot_nav', executable='freeze_capture',
+            name='freeze_capture', output=nav_output,
+            parameters=[sim_time_param],
+        ),
         # Travessia de porta: alinha no eixo de porta MARCADA e atravessa
         # reto vigiando o vão (door_vel, prio 20 no twist_mux). Publica
         # /door_zone = gate da máscara de batente no scan_sanitizer.
