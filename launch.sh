@@ -521,11 +521,16 @@ case "$MODE" in
         ;;
     nav2)
         NAV2_PARAMS_ARG=""
-        if [ "$PI_PROFILE" = true ]; then
+        # FIDELIDADE SIM=REAL: o --sim também usa nav2_params_pi.yaml (a config que
+        # roda no robô). Sem isto o sim caía no nav2_params.yaml antigo (DWB puro,
+        # sem RotationShim, max_vel_theta 0.8) → outro nav, resultado que não vale
+        # pro real. Ver ESTADO_PROJETO.md (análise de lacunas sim vs real).
+        if [ "$PI_PROFILE" = true ] || [ "$SIM" = true ]; then
             PI_YAML="$(ros2 pkg prefix robot_nav 2>/dev/null)/share/robot_nav/config/nav2_params_pi.yaml"
             if [ -f "$PI_YAML" ]; then
                 NAV2_PARAMS_ARG="params_file:=$PI_YAML"
-                echo "[3/4] Modo NAV2 (perfil PI) — params: $PI_YAML"
+                _perfil="PI"; [ "$SIM" = true ] && _perfil="SIM=REAL"
+                echo "[3/4] Modo NAV2 (perfil $_perfil) — params: $PI_YAML"
             else
                 echo "[3/4] Modo NAV2 — aviso: nav2_params_pi.yaml não encontrado, usando defaults"
             fi

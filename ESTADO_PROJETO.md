@@ -47,14 +47,20 @@
      **NÃO reproduz** por padrão: ruído/confiança dos sensores, patinagem do skid-steer,
      EMI do motor, travas de I²C da MEGA, quedas de BMS, lag de transporte do scan, etc.
 
-### O que falta pra valer a pena (deixar o sim "parecido com o real")
-- Modelar **ruído/confiança dos sensores igual ao real** (temos os dados medidos):
-  - IMU ~99% boa; escala de giro real ≈ `0,6·(cmd−1,7)`, satura ~2,5 rad/s, não gira <1,7,
-    direita gira mais que esquerda (3% a 4–6 rad/s, 30% a 2 rad/s).
-  - Odom de roda **superestima yaw no giro** (patinagem).
-  - Flow cospe lixo na EMI da manobra.
-- Rodar sim **sempre com `--pi`** pra bater o tuning do campo.
-- Régua de aceitação: o que funcionar no sim **valida no real** numa janela curta de bateria.
+### 🎯 ANÁLISE DE LACUNAS sim vs real (06-24) — fechar do mais impactante pro menos
+Decisão do dono: **deixar tudo igual** (sim = real), 1 gap por vez.
+
+| # | Gap | Impacto | Esforço | Status |
+|---|-----|---------|---------|--------|
+| 1 | **Config Nav2 era OUTRA** — sim usava `nav2_params.yaml` (DWB puro, sem RotationShim, max_vel_theta 0.8); real usa `nav2_params_pi.yaml` (RotationShim, theta 6.0, /scan_safe, obstacle_layer) | 🔴 enorme | trivial | ✅ **FEITO** — `launch.sh` agora faz `--sim --nav2` usar `nav2_params_pi.yaml` |
+| 2 | **Zona-morta + assimetria do giro** — real não gira <1,7 rad/s, satura ~2,5 (sim já capa 2,5 ✓, mas SEM zona-morta nem assimetria). Provável causa do "congela perto do goal" | 🔴 alto | médio | ⬜ a fazer |
+| 3 | **Odom ideal no sim** (DiffDrive perfeito) vs real (pose_estimator funde roda+IMU+flow, superestima yaw na patinagem). Sim nem roda o pose_estimator | 🟠 alto | grande | ⬜ a fazer |
+| 4 | **LiDAR limpo** vs LD06 com fantasmas <0,15m + ruído (os fantasmas que envenenam o `front_gap` do unstuck) | 🟠 médio | médio | ⬜ a fazer |
+
+Régua de aceitação: o que funcionar no sim **valida no real** numa janela curta de bateria.
+Dados reais medidos pra calibrar o sim: IMU ~99%; giro ≈ `0,6·(cmd−1,7)`, satura ~2,5, não gira
+<1,7, direita gira mais (3% a 4–6 rad/s, 30% a 2 rad/s); odom de roda superestima yaw; flow cospe
+lixo na EMI.
 
 > ⚠️ `./launch.sh --sim` completo precisa `sudo apt install ros-jazzy-twist-mux` (faltava na dev).
 > Mundo atual = sala-caixa 6×6 (`empty.sdf` customizado). Geometria do robô já é a REAL
