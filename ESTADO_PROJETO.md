@@ -62,14 +62,29 @@
 - **Bateria acaba rápido** → trava os avanços de campo (motivador da estratégia de sim).
 - **BMS do hoverboard desarma** sob stall/rotor bloqueado (39V→6V); botão de emergência reseta.
   Monitor de tensão (CSV 10Hz + chip na UI) já implantado na Pi — **falta ler o CSV no próximo desarme**.
+  ⚠️ **06-24: desarmou DE NOVO "do nada" e não voltava** → tive que desligar no meio do teste do
+  congelamento; bateria foi pra carga. (mais um caso pro CSV do power_monitor).
 - **MEGA trava o firmware no I²C** sob EMI (já mitigado: `Wire.setWireTimeout` + watchdog WDTO_2S
   no firmware + guarda `wheel_fresh` no Python). Validado, mas monitorar.
 
 ### Navegação / software
-- **NAV2 "burro"** (🔜 prioridade pós-door): vira cedo/forte, faz curva em tangente em vez de
-  ir reto no corredor e girar 90° no lugar → chega de cara/paralelo na parede, precisa de 2 rés
-  pra sair. Acontece **sempre no caminho padrão**. Skid-steer **não faz arco** — realinhar tem
-  que ser **giro no lugar** com autoridade alta (~6.0) + malha fechada no yaw da IMU.
+- **🔴 ATIVO — robô CONGELA perto do goal (investigando 06-24):** ele para pertíssimo do ponto,
+  dá ré do unstuck, volta, repete (não é 100% das vezes). **Causa raiz = ele NÃO se mexe sob o
+  nav** (nas janelas de `monitoring` a pose não muda: `1.99,-0.24`→`1.99,-0.24`). O unstuck é
+  só **agravante** (empurra ele pra lá e pra cá), não a origem. Dois bugs confirmados no
+  `unstuck_supervisor`: (1) lê o `/scan` CRU, não `/scan_safe` → `front_gap` pega fantasma <0,15m
+  (pisca `0.10↔2.72`) → escolhe ré em vez de cutucar pra frente; (2) só conhece `goal_active`,
+  não a distância ao goal → dispara recovery durante a aproximação final legítima.
+  **Falta provar o PORQUÊ do congelamento:** nav comanda giro e odom≈0 (zona-morta/collision
+  congela) OU nav comanda ~0 (ponto inalcançável/colado em parede). Coletor `freeze_capture`
+  (nó no `nav2.launch.py`, grava `controle_web/logs/freeze_capture.csv` a cadeia
+  cmd_vel_nav/nav_vel/cmd_vel/odom) **deployado na Pi `4f8b306` mas NÃO validado — bateria do
+  hover cortou antes de reproduzir.** Próxima sessão real: religar → `./launch.sh --nav2` →
+  reproduzir o congelamento → eu leio o CSV.
+- **NAV2 "burro"** (mesmo tema do congelamento acima): vira cedo/forte, faz curva em tangente
+  em vez de ir reto no corredor e girar 90° no lugar → chega de cara/paralelo na parede, precisa
+  de 2 rés pra sair. Skid-steer **não faz arco** — realinhar tem que ser **giro no lugar** com
+  autoridade alta (~6.0) + malha fechada no yaw da IMU.
 - **Viz do boneco atrasada** na UI web (lag de transporte/socketio). Diagnóstico instrumentado
   (CSV em `logs/scan_lag` na Pi) — **falta ler e achar a causa**.
 - **#2 porta no SLAM** sem ser removida (limpar o mapa).
@@ -110,6 +125,8 @@
 7. Definir **loop de trabalho:** iterar no sim → soltar o real só pra validar em janelas curtas.
 
 ### Pendências de validação de campo (quando o robô estiver ligado)
+- **Reproduzir o congelamento perto do goal e ler o `freeze_capture.csv`** (deployado `4f8b306`,
+  bateria cortou antes). É o teste que decide a causa raiz do "robô burro".
 - Validar travessia da door com o mapa novo `sala` (bateria morreu antes — `a39e4b7` deployado).
 - Validar ré do recovery contextual (ré aos 2s em parede mapeada).
 - Teste de **odometria linear** (ficou pra depois).
