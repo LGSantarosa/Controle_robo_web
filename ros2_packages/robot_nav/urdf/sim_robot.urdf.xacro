@@ -47,12 +47,16 @@
     </inertial>
   </link>
 
+  <!-- Mancal de 3.5cm entre o fundo do chassi e o eixo: a roda fica 0.0175
+       (meio mancal) abaixo do fundo do chassi. Bate com o sim_robot.sdf. -->
+  <xacro:property name="mancal_h" value="0.035"/>
+
   <!-- Macro de roda — eixo de giro alinhado a Y (rpy -pi/2 em X), igual ao real -->
   <xacro:macro name="wheel" params="name x y">
     <joint name="${name}_joint" type="continuous">
       <parent link="base_link"/>
       <child link="${name}"/>
-      <origin xyz="${x} ${y} ${-body_height/2}" rpy="${-pi/2} 0 0"/>
+      <origin xyz="${x} ${y} ${-(body_height/2 + mancal_h/2)}" rpy="${-pi/2} 0 0"/>
       <axis xyz="0 0 1"/>
     </joint>
     <link name="${name}">

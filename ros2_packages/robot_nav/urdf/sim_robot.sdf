@@ -4,28 +4,31 @@
   Medidas reais do chassi (2026-06-24, confirmadas pelo usuário):
     chassi 0.37 (frente-trás) x 0.35 (esq-dir) x 0.16 (altura)
     roda  raio 0.085 m (diâmetro 0.17), largura 0.06 m
-    ponta-a-ponta das rodas = 0.50 m nas DUAS direções (extremidade externa
-      de uma roda até a da outra) -> centros (track) = 0.50-0.06 = 0.44 (esq-dir)
-                                  -> centros (wheelbase) = 0.50-0.17 = 0.33 (F-R)
-    eixo preso na parte inferior do chassi, mancal de 0.035, eixo no meio dele
-    LiDAR assentado no TOPO do chassi (sem mastro)
+    ponta-a-ponta das rodas = 0.50 m nas DUAS direções -> centros:
+      track (esq-dir)   = 0.50 - largura 0.06   = 0.44  (wheel y = ±0.22)
+      wheelbase (F-R)   = 0.50 - diâmetro 0.17   = 0.33  (wheel x = ±0.165)
+    Mancal 3.5cm: TOPO preso na parte inferior do chassi, eixo da roda no MEIO
+      dele. Logo o eixo fica 0.0175 abaixo do fundo do chassi -> o base_link
+      sobe: z = raio(0.085) + mancal/2(0.0175) + body_height/2(0.08) = 0.1825.
+    Eixo curto liga o mancal à roda (a roda fica POR FORA do mancal).
+    LiDAR assentado no TOPO do chassi (sem mastro), z=0.10 acima do base_link.
 
-  Skid-steer = DiffDrive com 2 left_joint + 2 right_joint (truque gz). O giro no
-  lugar acontece por derrapagem lateral das 4 rodas; mu2 é o knob do giro.
+  Skid-steer = DiffDrive c/ 2 left_joint + 2 right_joint. Giro no lugar por
+  derrapagem: fdir1=(1 0 0) (direção de rolagem) + mu2 baixo (lateral escorrega).
   Nomes de links/juntas batem com sim_robot.urdf.xacro (robot_state_publisher).
-  Tópicos ROS (via bridge): /cmd_vel, /odom, /scan, /tf, /joint_states
+  Tópicos ROS (bridge): /cmd_vel, /odom, /scan, /tf, /joint_states
 -->
 <sdf version="1.9">
   <model name="sim_robot">
-    <!-- base_link (centro do chassi) = wheel_radius + body_height/2
-         = 0.085 + 0.08 = 0.165 -> rodas tocam o chão (centro em z=0.085=raio) -->
-    <pose>0 0 0.165 0 0 0</pose>
+    <!-- base_link (centro do chassi). z=0.1825 -> rodas tocam o chão
+         (centro da roda em z=0.085=raio; mancal 3.5cm entre chassi e eixo). -->
+    <pose>0 0 0.1825 0 0 0</pose>
 
     <!-- ====== base_link (chassi 0.37 x 0.35 x 0.16) ====== -->
     <link name="base_link">
       <inertial>
         <mass>15.46</mass>
-        <!-- Caixa 0.37×0.35×0.16, m=15.46: ixx=m(W²+H²)/12 etc. -->
+        <!-- Caixa 0.37×0.35×0.16, m=15.46 -->
         <inertia>
           <ixx>0.19</ixx><iyy>0.21</iyy><izz>0.33</izz>
           <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
@@ -49,54 +52,54 @@
         <material><ambient>0.9 0.45 0 1</ambient><diffuse>1 0.5 0 1</diffuse></material>
       </visual>
 
-      <!-- ====== Eixos + mancais (visuais, na parte inferior do chassi) ======
-           Ligam cada roda ao chassi pra NÃO parecer que a roda flutua.
-           z = -body_height/2 = -0.08 (mesma altura do centro da roda).
-           Eixo = cilindro fino ao longo de Y; mancal = bloco 0.035 na raiz. -->
-      <!-- dianteira esquerda -->
-      <visual name="axle_fl"><pose>0.165 0.13 -0.08 -1.5707 0 0</pose>
-        <geometry><cylinder><radius>0.016</radius><length>0.20</length></cylinder></geometry>
-        <material><diffuse>0.3 0.3 0.3 1</diffuse></material></visual>
-      <visual name="mancal_fl"><pose>0.165 0.155 -0.08 0 0 0</pose>
-        <geometry><box><size>0.05 0.035 0.05</size></box></geometry>
+      <!-- ====== Mancais + eixos (visuais) ======
+           Mancal: bloco 3.5cm com o TOPO no fundo do chassi (z_rel -0.08),
+             centro em z_rel -0.0975 (= altura do eixo da roda), inboard (y=±0.16).
+           Eixo: cilindro CURTO ao longo de Y, do mancal até a roda (y=±0.185).
+           Roda fica POR FORA (y=±0.22). x = ±0.165 (mesmo das rodas). -->
+      <!-- frente-esq -->
+      <visual name="mancal_fl"><pose>0.165 0.16 -0.0975 0 0 0</pose>
+        <geometry><box><size>0.04 0.04 0.035</size></box></geometry>
         <material><diffuse>0.2 0.2 0.2 1</diffuse></material></visual>
-      <!-- dianteira direita -->
-      <visual name="axle_fr"><pose>0.165 -0.13 -0.08 -1.5707 0 0</pose>
-        <geometry><cylinder><radius>0.016</radius><length>0.20</length></cylinder></geometry>
+      <visual name="axle_fl"><pose>0.165 0.185 -0.0975 -1.5707 0 0</pose>
+        <geometry><cylinder><radius>0.012</radius><length>0.05</length></cylinder></geometry>
         <material><diffuse>0.3 0.3 0.3 1</diffuse></material></visual>
-      <visual name="mancal_fr"><pose>0.165 -0.155 -0.08 0 0 0</pose>
-        <geometry><box><size>0.05 0.035 0.05</size></box></geometry>
+      <!-- frente-dir -->
+      <visual name="mancal_fr"><pose>0.165 -0.16 -0.0975 0 0 0</pose>
+        <geometry><box><size>0.04 0.04 0.035</size></box></geometry>
         <material><diffuse>0.2 0.2 0.2 1</diffuse></material></visual>
-      <!-- traseira esquerda -->
-      <visual name="axle_rl"><pose>-0.165 0.13 -0.08 -1.5707 0 0</pose>
-        <geometry><cylinder><radius>0.016</radius><length>0.20</length></cylinder></geometry>
+      <visual name="axle_fr"><pose>0.165 -0.185 -0.0975 -1.5707 0 0</pose>
+        <geometry><cylinder><radius>0.012</radius><length>0.05</length></cylinder></geometry>
         <material><diffuse>0.3 0.3 0.3 1</diffuse></material></visual>
-      <visual name="mancal_rl"><pose>-0.165 0.155 -0.08 0 0 0</pose>
-        <geometry><box><size>0.05 0.035 0.05</size></box></geometry>
+      <!-- trás-esq -->
+      <visual name="mancal_rl"><pose>-0.165 0.16 -0.0975 0 0 0</pose>
+        <geometry><box><size>0.04 0.04 0.035</size></box></geometry>
         <material><diffuse>0.2 0.2 0.2 1</diffuse></material></visual>
-      <!-- traseira direita -->
-      <visual name="axle_rr"><pose>-0.165 -0.13 -0.08 -1.5707 0 0</pose>
-        <geometry><cylinder><radius>0.016</radius><length>0.20</length></cylinder></geometry>
+      <visual name="axle_rl"><pose>-0.165 0.185 -0.0975 -1.5707 0 0</pose>
+        <geometry><cylinder><radius>0.012</radius><length>0.05</length></cylinder></geometry>
         <material><diffuse>0.3 0.3 0.3 1</diffuse></material></visual>
-      <visual name="mancal_rr"><pose>-0.165 -0.155 -0.08 0 0 0</pose>
-        <geometry><box><size>0.05 0.035 0.05</size></box></geometry>
+      <!-- trás-dir -->
+      <visual name="mancal_rr"><pose>-0.165 -0.16 -0.0975 0 0 0</pose>
+        <geometry><box><size>0.04 0.04 0.035</size></box></geometry>
         <material><diffuse>0.2 0.2 0.2 1</diffuse></material></visual>
+      <visual name="axle_rr"><pose>-0.165 -0.185 -0.0975 -1.5707 0 0</pose>
+        <geometry><cylinder><radius>0.012</radius><length>0.05</length></cylinder></geometry>
+        <material><diffuse>0.3 0.3 0.3 1</diffuse></material></visual>
     </link>
 
     <!-- ====== 4 rodas (skid-steer) ======
-         z = -body_height/2 = -0.08 (centro da roda em world z=0.085=raio)
-         x = ±wheelbase/2 = ±0.165 | y = ±track/2 = ±0.22
+         z_rel = -0.0975 (centro em world z=0.085=raio) | x=±0.165 | y=±0.22
          rpy -1.5707 0 0 + axis 0 0 1 => roda gira em torno de Y (rola em +x)
-    -->
+         friction: fdir1=(1 0 0)=rolagem, mu alto (grip) / mu2 baixo (derrapa) -->
     <link name="front_left_wheel">
-      <pose>0.165 0.22 -0.08 -1.5707 0 0</pose>
+      <pose>0.165 0.22 -0.0975 -1.5707 0 0</pose>
       <inertial><mass>1.5</mass>
         <inertia><ixx>0.005</ixx><iyy>0.005</iyy><izz>0.009</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
       </inertial>
       <visual name="v"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
         <material><diffuse>0.1 0.1 0.1 1</diffuse></material></visual>
       <collision name="c"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
-        <surface><friction><ode><mu>1.0</mu><mu2>0.4</mu2></ode></friction></surface></collision>
+        <surface><friction><ode><mu>1.2</mu><mu2>0.1</mu2><fdir1>1 0 0</fdir1></ode></friction></surface></collision>
     </link>
     <joint name="front_left_wheel_joint" type="revolute">
       <parent>base_link</parent><child>front_left_wheel</child>
@@ -104,14 +107,14 @@
     </joint>
 
     <link name="front_right_wheel">
-      <pose>0.165 -0.22 -0.08 -1.5707 0 0</pose>
+      <pose>0.165 -0.22 -0.0975 -1.5707 0 0</pose>
       <inertial><mass>1.5</mass>
         <inertia><ixx>0.005</ixx><iyy>0.005</iyy><izz>0.009</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
       </inertial>
       <visual name="v"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
         <material><diffuse>0.1 0.1 0.1 1</diffuse></material></visual>
       <collision name="c"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
-        <surface><friction><ode><mu>1.0</mu><mu2>0.4</mu2></ode></friction></surface></collision>
+        <surface><friction><ode><mu>1.2</mu><mu2>0.1</mu2><fdir1>1 0 0</fdir1></ode></friction></surface></collision>
     </link>
     <joint name="front_right_wheel_joint" type="revolute">
       <parent>base_link</parent><child>front_right_wheel</child>
@@ -119,14 +122,14 @@
     </joint>
 
     <link name="rear_left_wheel">
-      <pose>-0.165 0.22 -0.08 -1.5707 0 0</pose>
+      <pose>-0.165 0.22 -0.0975 -1.5707 0 0</pose>
       <inertial><mass>1.5</mass>
         <inertia><ixx>0.005</ixx><iyy>0.005</iyy><izz>0.009</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
       </inertial>
       <visual name="v"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
         <material><diffuse>0.1 0.1 0.1 1</diffuse></material></visual>
       <collision name="c"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
-        <surface><friction><ode><mu>1.0</mu><mu2>0.4</mu2></ode></friction></surface></collision>
+        <surface><friction><ode><mu>1.2</mu><mu2>0.1</mu2><fdir1>1 0 0</fdir1></ode></friction></surface></collision>
     </link>
     <joint name="rear_left_wheel_joint" type="revolute">
       <parent>base_link</parent><child>rear_left_wheel</child>
@@ -134,14 +137,14 @@
     </joint>
 
     <link name="rear_right_wheel">
-      <pose>-0.165 -0.22 -0.08 -1.5707 0 0</pose>
+      <pose>-0.165 -0.22 -0.0975 -1.5707 0 0</pose>
       <inertial><mass>1.5</mass>
         <inertia><ixx>0.005</ixx><iyy>0.005</iyy><izz>0.009</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
       </inertial>
       <visual name="v"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
         <material><diffuse>0.1 0.1 0.1 1</diffuse></material></visual>
       <collision name="c"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
-        <surface><friction><ode><mu>1.0</mu><mu2>0.4</mu2></ode></friction></surface></collision>
+        <surface><friction><ode><mu>1.2</mu><mu2>0.1</mu2><fdir1>1 0 0</fdir1></ode></friction></surface></collision>
     </link>
     <joint name="rear_right_wheel_joint" type="revolute">
       <parent>base_link</parent><child>rear_right_wheel</child>
@@ -149,7 +152,7 @@
     </joint>
 
     <!-- ====== LiDAR 2D, assentado no TOPO do chassi ======
-         z = body_height/2 + meia-altura-do-lidar = 0.08 + 0.02 = 0.10 -->
+         z_rel = body_height/2 + meia-altura-do-lidar = 0.08 + 0.02 = 0.10 -->
     <link name="base_laser">
       <pose>0 0 0.10 0 0 0</pose>
       <inertial><mass>0.1</mass>
@@ -223,8 +226,6 @@
       <publish_visual_pose>false</publish_visual_pose>
       <publish_nested_model_pose>false</publish_nested_model_pose>
       <use_pose_vector_msg>true</use_pose_vector_msg>
-      <!-- static_publisher=false: o robot_state_publisher já cobre os TFs
-           estáticos via URDF; com true o GZ duplicava base_link→rodas/laser. -->
       <static_publisher>false</static_publisher>
       <static_update_frequency>1</static_update_frequency>
     </plugin>
