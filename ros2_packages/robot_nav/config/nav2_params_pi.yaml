@@ -24,6 +24,9 @@
 amcl:
   ros__parameters:
     use_sim_time: false
+    # 2026-06-23: REVERTIDO pra 0.2 (eram 0.1 num beco sem saída — a pose torta
+    # era do MAPA SKEWED, resolvida por re-SLAM, não do alpha). Com mapa bom o
+    # lidar acerta; voltar a 0.2 deixa o scan corrigir o yaw normalmente.
     alpha1: 0.2
     alpha2: 0.2
     alpha3: 0.2
@@ -51,8 +54,12 @@ amcl:
     # Alinhado com DWB e behaviors em 0.5 — antes AMCL=1.0 e DWB=0.2,
     # com erros transientes de TF quando AMCL atualizava map→odom devagar.
     transform_tolerance: 0.5
-    update_min_a: 0.2
-    update_min_d: 0.25
+    # 2026-06-23: 0.2/0.25 -> 0.1/0.10. AMCL só usa o laser (corrige a pose)
+    # depois do robô se mover esse tanto; com mapa bom o lidar está certo, então
+    # baixar faz a pose re-encaixar com MENOS movimento (era "só ajusta depois
+    # de andar"). ~0.1 rad (5.7°) / 0.10 m. Custa um pouco mais de CPU.
+    update_min_a: 0.1
+    update_min_d: 0.10
     resample_interval: 1
     do_beamskip: true
     beam_skip_distance: 0.5
@@ -99,7 +106,14 @@ controller_server:
       movement_time_allowance: 8.0
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.40
+      # 2026-06-19 PORTA: 0.40 -> 0.15. O ponto-pré-porta fica a 1.0 m do centro
+      # da porta; o robô entra na zona do door_crossing a 1.2 m (0.2 m do ponto).
+      # Com 0.40 o nav2 dava o ponto por "alcançado" a 0.2 m e JÁ curvava pro
+      # destino do outro lado -> puxava o robô pra fora do eixo bem quando o door
+      # assumia -> crossing torto -> roda no batente (campo 2026-06-19). Com 0.15
+      # (< 0.2 m) o nav2 segue reto pro ponto no eixo até o door assumir. Seguro:
+      # na travessia o robô passa pelo ponto de 1.0 m -> goal cumprido -> segue.
+      xy_goal_tolerance: 0.15
       yaw_goal_tolerance: 0.35
       stateful: true
     FollowPath:
@@ -129,7 +143,10 @@ controller_server:
       # = ±250, fraco demais). 2026-06-12: o rotate_to_heading usa 4.2 — o giro
       # do shim é CONTÍNUO (já vencido o atrito estático, fica mais fino); o
       # piso de 6.0 segue valendo pro arranque parado do teleop/unstuck.
-      rotate_to_heading_angular_vel: 4.2
+      # 2026-06-19: 4.2 -> 4.0. As fitas nas rodas deram grip -> o giro no lugar
+      # passava do alvo (overshoot ~14°/ciclo a 10Hz). Passo pequeno pra testar;
+      # o spin_calib indica que dá pra ir até ~3.0 (gira de rest, ~4.5°/ciclo).
+      rotate_to_heading_angular_vel: 4.0
       max_angular_accel: 10.0
       rotate_to_goal_heading: true        # também gira p/ encarar o yaw final do goal
       simulate_ahead_time: 1.0
@@ -235,7 +252,13 @@ local_costmap:
         enabled: true
         observation_sources: scan
         scan:
-          topic: /scan
+          # 2026-06-23: /scan -> /scan_safe. Com /scan cru e obstacle_min_range
+          # 0.0, os fantasmas <0.15 m do LD06 (a porta dispara) viravam obstaculo
+          # letal colado no robo -> DWB "Failed to make progress" e robo fincado
+          # >1 min na porta + re do unstuck "no nada". O scan_sanitizer ja dropa
+          # esses fantasmas em /scan_safe (so o collision_monitor usava). Aqui o
+          # costmap passa a usar o mesmo scan limpo.
+          topic: /scan_safe
           data_type: "LaserScan"
           marking: true
           clearing: true
@@ -279,7 +302,9 @@ global_costmap:
         enabled: true
         observation_sources: scan
         scan:
-          topic: /scan
+          # 2026-06-23: /scan -> /scan_safe (idem ao local). Fantasma <0.15 m do
+          # LD06 nao entra mais como obstaculo no costmap global.
+          topic: /scan_safe
           max_obstacle_height: 2.0
           clearing: true
           marking: true
@@ -461,7 +486,10 @@ collision_monitor:
     # 0.35 m/s ele projeta ~0.5 m à frente e para com folga, e a PolygonSlow segue
     # desacelerando na aproximação.
     # SEGURANÇA agora mora em time_before_collision (não no tamanho da caixa):
-    # começo conservador 1.5 s; TUNAR em campo (baixar se ficar medroso).
+    # 1.5 -> 1.0 em 2026-06-22: no corredor APERTADO pós-porta o approach projetava
+    # o footprint longe demais, encostava na parede e freava sem parar ("obstáculo
+    # invisível"; só destravava dirigindo no controle, que fura o collision). 1.0 s
+    # projeta menos à frente. TUNAR em campo (frontal ainda coberto pela PolygonSlow).
     # ROLLBACK p/ caixa estática:
     #   action_type: "stop"; points "[[0.45,0.30],[0.45,-0.30],[-0.40,-0.30],[-0.40,0.30]]";
     #   remover time_before_collision / simulation_time_step.
@@ -472,7 +500,7 @@ collision_monitor:
       # frenagem vem do TEMPO abaixo, não do tamanho.
       points: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
       action_type: "approach"
-      time_before_collision: 1.5
+      time_before_collision: 1.0
       simulation_time_step: 0.1
       min_points: 2
       visualize: True

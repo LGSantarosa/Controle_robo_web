@@ -69,13 +69,26 @@ def crossing_yaw(g: DoorGeom, side: int) -> float:
     return math.atan2(side * g.ny, side * g.nx)
 
 
-def fit_lat(g: DoorGeom, robot_half_width: float, fit_margin: float) -> float:
-    """Folga lateral (m) pra passar RETO sem encostar nos batentes: meia-largura
-    do vão MARCADO menos a meia-largura do robô menos uma margem. 'Dá pra ir reto
-    daqui sem bater?' = |offset lateral| <= fit_lat. Auto-ajusta à porta: vão
-    largo relaxa (não precisa do meio exato), vão apertado exige mais centro.
-    Nunca negativo (porta mais estreita que o robô -> 0 = só dead-center)."""
-    return max(0.0, g.half_width - robot_half_width - fit_margin)
+def will_clear(g: DoorGeom, s: float, d: float, yaw_err: float, side: int,
+               robot_half_width: float, fit_margin: float) -> bool:
+    """True se o robô PASSA reto pela porta a partir de onde está (trava
+    "passo aqui?"). GEOMÉTRICO, sem LiDAR.
+
+    Projeta a linha de heading ATUAL (offset lateral `d`, erro de ângulo
+    `yaw_err` vs o eixo) até o plano dos batentes (s=0) e compara com a folga
+    útil. Inclui o YAW (não só o lateral): foi o yaw que falhou em campo
+    2026-06-19 (lateral OK, mas apontando pro batente).
+
+      lat_no_batente = d + s * side * tan(yaw_err)   # s<0 na aproximação
+      fit            = half_width - robot_half_width - fit_margin
+
+    s>=0 já passou do ponto mais estreito -> sempre passa. O termo `s*side`
+    dá o braço de alavanca (quanto mais longe e mais torto, mais desvia)."""
+    if s >= 0.0:
+        return True
+    lat = d + s * side * math.tan(yaw_err)
+    fit = g.half_width - robot_half_width - fit_margin
+    return abs(lat) <= fit
 
 
 def nav_engaging(linear_x: float, nav_move_lin: float) -> bool:
@@ -148,42 +161,17 @@ def gap_ahead(ranges, angle_min: float, angle_increment: float,
     return float(x[sel].min())
 
 
-def _ccw(a, b, c) -> float:
-    """Produto vetorial (orientação) de a->b vs a->c. >0 esq, <0 dir."""
-    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-
-
-def _segments_cross(p1, p2, p3, p4) -> bool:
-    """True se os segmentos p1-p2 e p3-p4 se cruzam de verdade (não conta só
-    encostar nas pontas/colinear — quer um cruzamento claro)."""
-    d1, d2 = _ccw(p3, p4, p1), _ccw(p3, p4, p2)
-    d3, d4 = _ccw(p1, p2, p3), _ccw(p1, p2, p4)
-    return ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0))
-
-
-def plan_crosses_door(plan, a, b) -> bool:
-    """True se a rota planejada (lista de (x,y) no frame do mapa) atravessa o
-    vão da porta (segmento entre os 2 batentes a e b).
-
-    É o sinal de arming robusto (achado 2026-06-17): o gate antigo por bearing
-    (porta "na frente" do robô) só fechava DEPOIS do Nav2 curvar o robô pra
-    porta -> o door assumia tarde, colado/torto. O plano cruzar a porta diz
-    'o goal é do outro lado DESTA porta' independente de pra onde o nariz aponta
-    -> arma cedo e reto, antes da curva. E não dá falso-positivo (porta que o
-    robô só passa do lado: o plano não a cruza)."""
-    if not plan or len(plan) < 2:
-        return False
-    for i in range(len(plan) - 1):
-        if _segments_cross(plan[i], plan[i + 1], a, b):
-            return True
-    return False
-
-
 # ---- máquina de estados pura ------------------------------------------------
 
 @dataclass
 class DoorCrossConfig:
-    zone_radius: float = 1.2        # m — distância do centro que arma a manobra
+    # 2026-06-19: 1.2 -> 0.9 -> 1.1. O ponto-pré-porta fica a 1.0 m do centro.
+    # 1.2 armava 0.2 m ANTES do ponto -> pegava o robô torto (apontava pra parede).
+    # 0.9 (< 1.0) foi LONGE demais: o robô parava NO ponto (1.0 m), FORA da zona,
+    # e o door nunca pegava (só armava se o robô continuasse entrando, com atraso
+    # enorme/"não ativou"). A zona TEM que ser >= standoff. 1.1 arma só 0.1 m antes
+    # do ponto, com o robô já vindo centrado pelo xy_goal_tolerance=0.15 do nav2.
+    zone_radius: float = 1.1        # m — distância do centro que arma a manobra (>= standoff 1.0)
     approach_bearing: float = math.radians(70)  # porta tem que estar "na frente"
     # 2026-06-15: experimento "girar mais longe" (0.6 -> 1.0) REVERTIDO pra 0.6.
     # Com 1.0 o ponto de staging caía num ângulo que exigia GIRAR NO LUGAR pra
@@ -195,56 +183,46 @@ class DoorCrossConfig:
     stage_tol: float = 0.10         # m — chegou no staging
     stage_speed: float = 0.20       # m/s — aproximação (0.12->0.20 em 2026-06-16: a 0.12 patinava sem vencer o atrito estático; régua = ré do unstuck 0.25, validada em campo)
     stage_k_heading: float = 1.8    # ganho P do heading no staging
-    align_lat: float = 0.08         # m — DEPRECATED: era o gate de "no eixo" (8cm,
-    # apertado demais -> ping-pong staging<->rotating). O gate de "pronto pra
-    # cruzar" virou o fit_lat geométrico (2026-06-17); não entra mais na decisão.
-    align_yaw: float = math.radians(5.0)   # rad — |erro de yaw| máximo. APERTADO
-    # de propósito: o corredor pós-porta é só um tiquinho mais largo que ela, então
-    # a travessia tem que ser RETA. Quem deixa o robô reto é o point-turn do
-    # rotating, NUNCA um arco dentro do vão. NÃO afrouxar.
-    robot_half_width: float = 0.25  # m — meia-largura do robô (footprint 0.5) p/ fit_lat
-    fit_margin: float = 0.05        # m — folga de segurança subtraída do vão no fit_lat
-    cross_yaw_rate_max: float = 0.5  # rad/s — só ATRAVESSA quando o robô PAROU de
-    # girar (taxa de yaw real entre ticks abaixo disto). Sem isto, no meio de um
-    # point-turn rápido (rot_speed 4.0) um tick caía na banda de ±align_yaw e
-    # ativava o crossing; a inércia angular levava o robô torto pra dentro do vão
-    # -> batia no batente (2026-06-17). "Alinhou E parou, aí passa."
-    align_stable: int = 2           # DEPRECATED (2026-06-17): a transição pro
-    # crossing virou a checagem universal "passo reto daqui?" (todo tick, sem
-    # esperar N ticks estáveis — era o "alinhou e voltou a caçar o meio"). Mantido
-    # só pra não quebrar quem seta o param; não entra mais na decisão.
+    align_lat: float = 0.08         # m — |offset lateral| máximo pra "tô no eixo"
+    align_yaw: float = math.radians(3.0)   # rad — |erro de yaw| máximo (5°->3° em 2026-06-19: 5° numa porta de ~11cm de folga desvia ~9cm no fim -> apontava pro batente; 3° alinha mais reto)
+    align_stable: int = 5           # ticks consecutivos dentro da tolerância
     # 2026-06-15: experimento 15 -> 600 REVERTIDO pra 15. O 600 não fazia o robô
     # "tentar mais" — transformava um STALL (ver stage_dist) num FREEZE de 10
     # min. O "não desistir do ponto" real era o timeout do MapBridge web (120 ->
     # 3600), já resolvido. Aqui 15s é a rede de segurança: se não alinhar,
     # aborta e devolve pro nav2 em vez de congelar.
     align_timeout: float = 15.0     # s — STAGING+ROTATING juntos
-    rot_speed: float = 4.0          # rad/s — giro no lugar (point-turn forte; 3->4 em 2026-06-16, sobe a 6.0 ao vivo se patinar; NUNCA arco)
-    # As rodas pegam pior girando pra ESQUERDA -> boost de FORÇA nesse lado
-    # (mesmo 1.4 do unstuck spin, validado em campo). Com as rodas ruins na
-    # DIAGONAL (RL+FR), esq/dir é simétrico, então este boost é só paridade com
-    # o unstuck — live-tunable (zerar p/ simétrico se o campo pedir).
-    rot_left_boost: float = 1.4
-    # FREIO do giro perto do alvo (2026-06-17, 3ª rodada): a velocidade cheia (4.0
-    # = 11.5°/tick) PASSAVA DIRETO da banda de ±align_yaw e oscilava esq/dir ->
-    # bateu no batente. Longe do alvo (|yaw_err| > rot_brake_angle) gira cheia
-    # (quebra o atrito); dentro do rot_brake_angle desacelera pra rot_brake_speed
-    # (~5°/tick) pra ENCAIXAR sem overshoot. Não é o "proporcional" reprovado (que
-    # abaixava o giro inteiro): aqui só os últimos graus, e o robô JÁ está girando
-    # (atrito quebrado) -> não stalla. Sem boost no freio (não precisa).
-    rot_brake_angle: float = math.radians(12.0)  # rad — a partir daqui, freia
-    rot_brake_speed: float = 2.0    # rad/s — velocidade do giro dentro do freio
+    rot_speed: float = 3.0          # rad/s — TETO do giro no lugar (4->3 em 2026-06-19: giro estava forte/passando do alvo pós-fitas nas rodas; proporcional rot_k/piso rot_min seguem; NUNCA arco)
+    rot_k: float = 6.0              # ganho P do giro: desacelera perto do alvo (2026-06-16; bang-bang passava da janela ±5° e ficava caçando dir/esq)
+    rot_min: float = 2.5            # rad/s — PISO do giro: abaixo disso o skid-steer não vira (atrito); nunca desacelera além disso
     cross_speed: float = 0.22       # m/s — travessia (0.15->0.22 em 2026-06-16: vencer o atrito estático sem patinar)
     cross_k_lat: float = 1.5        # corrige offset lateral durante a travessia
     cross_k_yaw: float = 2.0        # corrige heading durante a travessia
     cross_wz_max: float = 0.8       # rad/s — teto da micro-correção (NÃO girar)
+    # 2026-06-19: passado o centro (s >= cross_lat_off_s) PARA de corrigir lateral.
+    # A correção lateral persegue o eixo dos 2 cliques (doors.json), NÃO o corredor
+    # real -> no fim da travessia dava uma curvinha desnecessária que deixava o robô
+    # anguladinho no corredor pós-porta (relato de campo). Antes do centro corrige
+    # (pra cruzar centrado no batente); depois sai RETO, só segurando o yaw.
+    cross_lat_off_s: float = 0.0    # m — progresso (s) a partir do qual zera a correção lateral (0 = centro)
+    # Trava "passo aqui?" geométrica com yaw (2026-06-22, pendência A; volta do
+    # backup door-redesign-0618 + projeção do yaw). will_clear projeta a
+    # trajetória reta até o plano dos batentes; se não passa, re-estagia.
+    robot_half_width: float = 0.25  # m — meia-largura do robô (0.50 medido roda-a-roda)
+    fit_margin: float = 0.05        # m — folga subtraída do vão no will_clear (fit = half_width - robot_half_width - fit_margin). KNOB DE CAMPO nº1: re-estagia à toa -> DIMINUIR fit_margin (afrouxa a trava). 2026-06-23: 0.13->0.05 (re-estagiava de LONGE por yaw de 1-2° amplificado pela alavanca da distância -> priorizava o eixo em vez de atravessar; porta larga 1.09m, sobra muito)
+    # Ponto de não-retorno (2026-06-22, capengada de campo): nos últimos cm antes
+    # do plano (s>commit_s) o robô já está com >metade do corpo no vão; o braço de
+    # alavanca do will_clear some (lat≈d) e um offset lateral residual irrelevante
+    # disparava a ré a meia-travessia (saía de um lugar que JÁ estava passando bem).
+    # A partir daqui PARA de re-checar e COMITA pra frente — dar ré meio-atravessado
+    # é mais arriscado que terminar. commit_s=-0.15: para-choque (front_head_x~0.25)
+    # já ~0.10 m além do plano. A trava segue inteira longe da porta (onde importa).
+    commit_s: float = -0.15         # m — progresso (s) a partir do qual não re-checa o will_clear (commit)
     gap_min: float = 0.45           # m — vão mínimo à frente pra seguir
     exit_margin: float = 0.5        # m — além do centro pra soltar
     total_timeout: float = 40.0     # s — manobra inteira (revertido de 600; ver align_timeout)
     retrigger_cooldown: float = 3.0  # s — após abort, não rearmar na hora
-    success_cooldown: float = 2.0   # s — após ATRAVESSAR limpo, não rearmar (cobre
-    # o /plan defasado ~1Hz que ainda mostra a rota velha cruzando a porta -> sem
-    # isso o robô re-armava, invertia o `side` e tentava voltar pra porta)
+    crossing_cooldown: float = 8.0   # s — após CRUZAR, não re-armar (campo 06-22: a ré pós-porta trazia o robô de volta pra zona e re-armava a door — sendo que ele já estava do OUTRO lado)
     # Ré de ESCAPE (2026-06-16): sem a ré do unstuck (calado na região da
     # porta), o door_crossing precisa se reajustar sozinho — senão fica
     # morto-preso de nariz na parede (e stalla o motor -> desarma o BMS, já que
@@ -284,27 +262,21 @@ class DoorCrossing:
         self.geom: Optional[DoorGeom] = None
         self.side = 0             # +1/-1 — de que lado o robô aproximou
         self.t_start = 0.0
-        self._last_yaw = None     # yaw do tick anterior (p/ medir a taxa de giro)
-        self._last_now = 0.0
-        # diagnóstico (lido pelo nó p/ log de campo): erro de yaw, offset lateral
-        # e taxa de giro do último tick ativo.
-        self.dbg_yaw_err = 0.0
-        self.dbg_d = 0.0
-        self.dbg_yaw_rate = 0.0
+        self._stable = 0
         self._cooldown_until = 0.0
         self._escape_count = 0          # rés de escape NESTA travessia
-        self._rot_dir = 0               # sentido do giro do episódio atual (+1 esq/-1 dir/0 livre)
         self._align_t0 = 0.0            # início do "tentando alinhar" (sub-timeout)
         self._align_anchor = (0.0, 0.0)  # posição de referência do substuck
         self._esc_start = (0.0, 0.0)    # pose (x,y) no começo da ré atual
         self._esc_target = 0.0          # quanto recuar nesta ré
+        self._cleared: set = set()      # ids de portas com o pré-porta cumprido (pendência C)
 
     # -- helpers ------------------------------------------------------------
     def _abort(self, now: float) -> Cmd:
         self.state = 'idle'
         self.door = None
         self.geom = None
-        self._rot_dir = 0
+        self._stable = 0
         self._cooldown_until = now + self.cfg.retrigger_cooldown
         return Cmd('idle', 0.0, 0.0, None)
 
@@ -336,6 +308,14 @@ class DoorCrossing:
         need = front_block or substuck
         if not need:
             return None
+        return self._enter_reverse(now, pos, rear_gap)
+
+    def _enter_reverse(self, now, pos, rear_gap) -> Cmd:
+        """Entra na ré RETA de re-aproximação (nunca arco), limitada pelo vão
+        traseiro. Compartilhada pela ré de escape (_maybe_escape) e pela trava
+        'passo aqui?' (re-estágio). Sem vão atrás útil ou estourado o
+        escape_max_count -> ABORTA pro nav2 (último recurso)."""
+        cfg = self.cfg
         if self._escape_count >= cfg.escape_max_count:
             return self._abort(now)
         target = min(cfg.escape_reverse_dist, rear_gap - cfg.escape_rear_margin)
@@ -347,45 +327,50 @@ class DoorCrossing:
         self._esc_target = target
         return Cmd('reversing', -cfg.escape_reverse_speed, 0.0, self.door['id'])
 
-    def _pick_door(self, pose, doors, plan=None):
-        """Escolhe a porta a cruzar entre as marcadas na zona. Critério primário
-        = o /plan ATRAVESSA a porta (desacopla o arming do heading -> assume
-        antes da curva do Nav2). Sem /plan disponível, cai no bearing antigo
-        (compat). Empate -> a mais próxima."""
+    def _pick_door(self, pose, doors):
         x, y, yaw = pose
-        best, best_dist = None, None
         for d in doors:
+            # pendência C: só assume porta cujo ponto pré-porta já foi cumprido
+            # (senão a door agarrava na aproximação, antes do robô chegar no
+            # standoff, e brigava com o nav2 — freeze de campo 06-22).
+            if d['id'] not in self._cleared:
+                continue
             g = door_geometry(tuple(d['a']), tuple(d['b']))
             dist = math.hypot(x - g.cx, y - g.cy)
             if dist > self.cfg.zone_radius:
                 continue
-            if plan:
-                # tem rota: só arma se ela cruza ESTA porta (sem falso-positivo)
-                if not plan_crosses_door(plan, tuple(d['a']), tuple(d['b'])):
-                    continue
-            else:
-                # sem rota (/plan não chegou): "na frente" = QUALQUER parte do
-                # vão dentro do cone (centro ou batente).
-                bearing = min(
-                    abs(_wrap(math.atan2(py - y, px - x) - yaw))
-                    for px, py in ((g.cx, g.cy), tuple(d['a']), tuple(d['b'])))
-                if bearing > self.cfg.approach_bearing:
-                    continue
-            if best_dist is None or dist < best_dist:
-                best, best_dist = (d, g), dist
-        return best if best is not None else (None, None)
+            # "na frente" = QUALQUER parte do vão dentro do cone (centro ou
+            # batente); na zona (<=1.2 m) a aproximação pode vir torta e o
+            # centro sozinho cair fora do cone com o vão ainda visível.
+            bearing = min(
+                abs(_wrap(math.atan2(py - y, px - x) - yaw))
+                for px, py in ((g.cx, g.cy), tuple(d['a']), tuple(d['b'])))
+            if bearing > self.cfg.approach_bearing:
+                continue
+            return d, g
+        return None, None
 
     # -- tick -----------------------------------------------------------------
     def update(self, now, pose, doors, goal_active, nav_forward, gap,
                scan_fresh, front_gap=math.inf, rear_gap=math.inf,
-               plan=None) -> Cmd:
+               goal_succeeded=False) -> Cmd:
         cfg = self.cfg
+
+        # pendência C — "pré-porta cumprido": um goal do nav2 termina (succeeded)
+        # com o robô na zona de uma porta => libera o arme dela. Sai da zona de
+        # todas => esquece (próxima aproximação exige cumprir o pré-porta de novo).
+        if pose is not None and doors:
+            nd = nearest_door_in_zone(pose, doors, cfg.zone_radius)
+            if nd is None:
+                self._cleared.clear()
+            elif goal_succeeded:
+                self._cleared.add(nd['id'])
 
         if self.state == 'idle':
             if (pose is None or not goal_active or not nav_forward
                     or now < self._cooldown_until or not doors):
                 return Cmd('idle', 0.0, 0.0, None)
-            door, geom = self._pick_door(pose, doors, plan)
+            door, geom = self._pick_door(pose, doors)
             if door is None:
                 return Cmd('idle', 0.0, 0.0, None)
             x, y, _ = pose
@@ -393,14 +378,18 @@ class DoorCrossing:
             raw_s = ((x - geom.cx) * geom.nx + (y - geom.cy) * geom.ny)
             self.side = -1 if raw_s > 0 else +1
             self.door, self.geom = door, geom
-            self.state = 'staging'
+            # 2026-06-19: a web (nav2 via ponto-pré-porta) já entrega o robô
+            # centrado na frente da porta. Arma DIRETO no rotating (só alinha o
+            # ângulo) e cruza — NÃO faz staging (não persegue o centro do vão,
+            # que era o "buscando eixo" que estragava a posição já boa). O
+            # staging fica só como recuperação pós-escape (reversing).
+            self.state = 'rotating'
             self.t_start = now
+            self._stable = 0
             self._escape_count = 0
             self._align_t0 = now
             self._align_anchor = (x, y)
-            # cai no fluxo já neste tick; a checagem universal "passo reto daqui?"
-            # (logo abaixo) atravessa NA HORA se já estiver alinhado — inclusive
-            # já no tick de armar (era o "veio reto, passa").
+            # cai no fluxo de rotating já neste tick
 
         # guardas comuns a qualquer estado ativo
         if pose is None or not goal_active or not scan_fresh:
@@ -414,60 +403,22 @@ class DoorCrossing:
         yaw_des = crossing_yaw(g, self.side)
         yaw_err = _wrap(yaw - yaw_des)
 
-        # taxa de giro REAL (entre ticks): saber se o robô PAROU de girar antes de
-        # commitar a travessia (a inércia faz "mandar parar" != "estar parado").
-        # Sem histórico válido (1º tick, ou gap grande do idle) -> inf = "girando"
-        # (não cruza ainda; assenta no tick seguinte). dt limitado p/ não usar uma
-        # referência velha do maneuver anterior.
-        dt = now - self._last_now
-        if self._last_yaw is not None and 0.0 < dt <= 0.25:
-            yaw_rate = abs(_wrap(yaw - self._last_yaw)) / dt
-        else:
-            yaw_rate = math.inf
-        self._last_yaw, self._last_now = yaw, now
-        self.dbg_yaw_err, self.dbg_d, self.dbg_yaw_rate = yaw_err, d, yaw_rate
-
         if self.state in ('staging', 'rotating'):
             if now - self.t_start > cfg.align_timeout:
                 return self._abort(now)
-            # SEGURANÇA (2026-06-17): obstáculo (não-batente) no vão à frente
-            # DURANTE a aproximação -> larga pro nav2, que passa pelo collision
-            # monitor e freia. Como door_vel fura o collision, a aproximação
-            # precisa da própria checagem. Usa o `gap` COM máscara de batente (a
-            # porta não dispara) e gap_min (0.45) < stage_dist (0.6+) -> a parede
-            # da porta fica SEMPRE além do limiar, então só intruso de verdade
-            # aborta (sem falso-positivo na parede). A travessia (crossing), que
-            # fura o collision no vão estreito, já tinha essa checagem.
-            if gap < cfg.gap_min:
-                return self._abort(now)
-            # A TODO MOMENTO: "passo reto daqui?" ATRAVESSA quando: já está RETO
-            # (yaw apertado) E CABE pelo vão (fit_lat geométrico) E PAROU de girar
-            # (taxa de yaw baixa). Roda em qualquer fase (staging OU rotating). É O
-            # OBJETIVO — sem isto o robô alinhava e voltava a CAÇAR o meio em vez de
-            # passar. A trava de taxa evita commitar no meio do giro rápido (inércia
-            # -> entrava torto -> batia). O vão já foi garantido (gap>=gap_min).
-            fit = fit_lat(g, cfg.robot_half_width, cfg.fit_margin)
-            if (abs(yaw_err) <= cfg.align_yaw and abs(d) <= fit
-                    and yaw_rate <= cfg.cross_yaw_rate_max):
-                self.state = 'crossing'
-                return Cmd('crossing', cfg.cross_speed, 0.0, self.door['id'])
 
         if self.state == 'staging':
             esc = self._maybe_escape(now, (x, y), front_gap, rear_gap)
             if esc is not None:
                 return esc
-            if abs(d) <= fit:
-                # JÁ NO EIXO: não persegue o ponto exato de staging — vai alinhar
-                # NO LUGAR (rotating). Era o "fica se enrolando indo pro eixo
-                # sendo que já está no meio" (2026-06-17). Cai no rotating abaixo.
+            # alvo: ponto no eixo, stage_dist antes do centro
+            tgx = g.cx - g.nx * self.side * cfg.stage_dist
+            tgy = g.cy - g.ny * self.side * cfg.stage_dist
+            dist = math.hypot(tgx - x, tgy - y)
+            if dist <= cfg.stage_tol:
                 self.state = 'rotating'
-                self._rot_dir = 0          # episódio de giro novo
+                self._stable = 0
             else:
-                # FORA do eixo: dirige PRO eixo (mira o ponto de staging, no eixo
-                # a stage_dist antes do centro). Quando |d| entrar no fit (acima)
-                # -> vira rotating, em qualquer distância.
-                tgx = g.cx - g.nx * self.side * cfg.stage_dist
-                tgy = g.cy - g.ny * self.side * cfg.stage_dist
                 head = math.atan2(tgy - y, tgx - x)
                 err = _wrap(head - yaw)
                 wz = max(-cfg.rot_speed, min(cfg.rot_speed,
@@ -480,48 +431,35 @@ class DoorCrossing:
                                      allow_substuck=False)
             if esc is not None:
                 return esc
-            # Aqui já sabemos que NÃO dá pra passar reto (a checagem universal
-            # acima não disparou). Se está genuinamente FORA do vão (não cabe ir
-            # reto daqui), volta pro staging reaproximar do eixo. Com fit_lat
-            # (folga real, não os 8cm fixos) isso só dispara quando precisa, não a
-            # cada drift de giro = sem ping-pong "caçando o meio".
-            if abs(d) > fit:
-                self.state = 'staging'
-                self._rot_dir = 0
-                return Cmd('staging', 0.0, 0.0, self.door['id'])
-            if abs(yaw_err) <= cfg.align_yaw:
-                # JÁ está reto, só não cruzou ainda (a checagem universal exige
-                # também a taxa de giro baixa). Não gira mais — comanda parar e
-                # ASSENTA; quando a taxa cair, a universal acima atravessa. Sem
-                # isto o robô daria mais um giro e perderia o alinhamento (era
-                # parte do "girou demais e bateu").
-                self._rot_dir = 0
+            # Alinha SÓ o ângulo (yaw) no lugar. NÃO exige estar no eixo
+            # (|lat|): o nav2 já entregou centrado e o offset lateral residual é
+            # corrigido aos poucos ANDANDO no crossing (cross_k_lat) — nunca
+            # girando atrás do centro do vão.
+            aligned = abs(yaw_err) <= cfg.align_yaw
+            if aligned:
+                self._stable += 1
+                if self._stable >= cfg.align_stable:
+                    # trava "passo aqui?": alinhou, mas se a projeção (lateral +
+                    # yaw) bate no batente, NÃO commita -> re-estagia (recua reto,
+                    # re-aproxima). Não atravessa torto (pendência A, campo 06-19).
+                    if not will_clear(g, s, d, yaw_err, self.side,
+                                      cfg.robot_half_width, cfg.fit_margin):
+                        return self._enter_reverse(now, (x, y), rear_gap)
+                    self.state = 'crossing'
+                    return Cmd('crossing', cfg.cross_speed, 0.0,
+                               self.door['id'])
                 return Cmd('rotating', 0.0, 0.0, self.door['id'])
-            # GIRO LIMPO (igual ao spin do unstuck): escolhe o lado UMA vez e
-            # gira forte até CRUZAR o alvo, sem inverter a cada tick. O bang-bang
-            # antigo (±rot_speed recalculado todo tick) oscilava em torno do
-            # alvo -> cada vai-e-volta arrastava o lateral -> estourava o gate
-            # -> ping-pong com o staging. O yaw aqui vem do TF (já fundido c/
-            # IMU pelo pose_estimator), então é "malha fechada na IMU" de graça.
-            want = -1 if yaw_err > 0 else 1     # lado que reduz o yaw_err
-            if self._rot_dir == 0 or want == self._rot_dir:
-                # ainda não cruzou o alvo -> segue no MESMO sentido
-                self._rot_dir = want
-                if abs(yaw_err) > cfg.rot_brake_angle:
-                    # LONGE do alvo: velocidade cheia (quebra o atrito)
-                    speed = cfg.rot_speed
-                    if want > 0:
-                        speed *= cfg.rot_left_boost   # esquerda escorrega: + força
-                else:
-                    # PERTO do alvo: freia pra ENCAIXAR na banda sem passar direto
-                    # (mata a oscilação esq/dir). Já está girando -> não stalla.
-                    speed = cfg.rot_brake_speed
-                return Cmd('rotating', 0.0, want * speed, self.door['id'])
-            # o lado necessário INVERTEU => cruzou o alvo (overshoot < 1 tick).
-            # PARA e assenta; re-avalia no próximo tick em vez de reverter
-            # girando (é isto que mata o limit cycle do bang-bang).
-            self._rot_dir = 0
-            return Cmd('rotating', 0.0, 0.0, self.door['id'])
+            self._stable = 0
+            # GIRO PROPORCIONAL (validado em campo, 3b40817): rápido longe,
+            # DEVAGAR perto do alvo -> não passa da janela ±5° e fica caçando
+            # dir/esq (era o bang-bang a ~11°/tick com 4 rad/s @20Hz que voltou
+            # no revert 46ec8ab; o sentido-único do 1a0fe30 também girava a vel.
+            # cheia e seguia chacoalhando -> relato de campo 2026-06-19). Piso
+            # rot_min pra não parar de girar (atrito do skid-steer). O yaw vem
+            # do TF (já fundido c/ IMU) -> malha fechada na IMU de graça.
+            mag = max(cfg.rot_min, min(cfg.rot_speed, cfg.rot_k * abs(yaw_err)))
+            wz = mag if yaw_err < 0 else -mag
+            return Cmd('rotating', 0.0, wz, self.door['id'])
 
         if self.state == 'reversing':
             if rear_gap <= cfg.escape_rear_margin:
@@ -544,17 +482,27 @@ class DoorCrossing:
             if gap < cfg.gap_min:
                 return self._abort(now)
             if s > cfg.exit_margin:
-                # atravessou: solta com success_cooldown (2026-06-17). NÃO é falha,
-                # mas o /plan (~1Hz) ainda mostra por ~1s a rota velha cruzando a
-                # porta -> sem cooldown o robô re-armava, invertia o `side` e
-                # tentava voltar pra porta que já passou. O cooldown segura até o
-                # plano atualizar e o robô sair de vez.
+                # atravessou: solta e ARMA cooldown pra não re-armar com a ré
+                # pós-porta (que traz o robô de volta pra zona, já do outro lado).
+                self._cleared.discard(self.door['id'])   # cruzou -> exige pré-porta de novo
                 self.state = 'idle'
                 self.door = None
                 self.geom = None
-                self._cooldown_until = now + cfg.success_cooldown
+                self._cooldown_until = now + cfg.crossing_cooldown
                 return Cmd('idle', 0.0, 0.0, None)
-            wz = -cfg.cross_k_lat * d - cfg.cross_k_yaw * yaw_err
+            # trava "passo aqui?" no meio: se a projeção (lateral + yaw) deriva e
+            # passa a bater no batente antes de cruzar (s<0), re-estagia em vez de
+            # raspar. Passado o estreito (s>=0) will_clear já devolve True. Mas só
+            # re-checa ATÉ o ponto de não-retorno (s<=commit_s): nos últimos cm o
+            # robô já está comprometido no vão e a ré custa mais que terminar.
+            if s <= cfg.commit_s and not will_clear(
+                    g, s, d, yaw_err, self.side,
+                    cfg.robot_half_width, cfg.fit_margin):
+                return self._enter_reverse(now, (x, y), rear_gap)
+            # corrige lateral SÓ até o centro; depois sai reto (só segura o yaw)
+            # pra não sair anguladinho perseguindo o eixo dos cliques (campo 06-19)
+            k_lat = cfg.cross_k_lat if s < cfg.cross_lat_off_s else 0.0
+            wz = -k_lat * d - cfg.cross_k_yaw * yaw_err
             wz = max(-cfg.cross_wz_max, min(cfg.cross_wz_max, wz))
             return Cmd('crossing', cfg.cross_speed, wz, self.door['id'])
 
@@ -570,8 +518,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                            qos_profile_sensor_data)
     from action_msgs.msg import GoalStatusArray
     from geometry_msgs.msg import Twist
-    from nav_msgs.msg import Path
-    from rcl_interfaces.msg import SetParametersResult
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import String
     from tf2_ros import Buffer, TransformListener, TransformException
@@ -580,6 +526,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
     from .unstuck_supervisor import front_min_gap, rear_min_gap
 
     ACTIVE = {1, 2, 3}  # ACCEPTED, EXECUTING, CANCELING (igual unstuck)
+    SUCCEEDED = 4       # GoalStatus.STATUS_SUCCEEDED
 
     latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                          durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
@@ -592,18 +539,16 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 # 2026-06-15: REVERTIDO pros valores de 06-12 (validados: o robô
                 # atravessou a porta). O experimento stage_dist 1.0 + timeout 600
                 # travava o robô girando fraco no lugar. Ver DoorCrossConfig.
-                ('zone_radius', 1.2), ('stage_dist', 0.6),
-                ('align_lat', 0.08), ('align_yaw_deg', 5.0),
-                ('align_timeout', 15.0), ('rot_speed', 4.0),
-                ('rot_left_boost', 1.4),
+                ('zone_radius', 1.1), ('stage_dist', 0.6),
+                ('align_lat', 0.08), ('align_yaw_deg', 3.0),
+                ('align_timeout', 15.0), ('rot_speed', 3.0),
+                ('rot_k', 6.0), ('rot_min', 2.5),
                 ('cross_speed', 0.22), ('stage_speed', 0.20),
+                ('cross_lat_off_s', 0.0),
+                ('robot_half_width', 0.25), ('fit_margin', 0.05),
+                ('commit_s', -0.15),
                 ('escape_reverse_speed', 0.25), ('gap_min', 0.45),
                 ('exit_margin', 0.5), ('rate_hz', 20.0),
-                # 2026-06-17 (atravessar reto): folga geométrica + cooldown +
-                # trava de taxa de giro (só cruza quando parou de girar)
-                ('robot_half_width', 0.25), ('fit_margin', 0.05),
-                ('success_cooldown', 2.0), ('cross_yaw_rate_max', 0.5),
-                ('rot_brake_deg', 12.0), ('rot_brake_speed', 2.0),
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
                 ('rear_tail_x', -0.25), ('rear_half_width', 0.30),
                 ('front_head_x', 0.25), ('lidar_x', 0.0),
@@ -616,16 +561,13 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 align_lat=g['align_lat'],
                 align_yaw=math.radians(g['align_yaw_deg']),
                 align_timeout=g['align_timeout'], rot_speed=g['rot_speed'],
-                rot_left_boost=g['rot_left_boost'],
+                rot_k=g['rot_k'], rot_min=g['rot_min'],
                 cross_speed=g['cross_speed'], stage_speed=g['stage_speed'],
-                escape_reverse_speed=g['escape_reverse_speed'],
-                gap_min=g['gap_min'], exit_margin=g['exit_margin'],
+                cross_lat_off_s=g['cross_lat_off_s'],
                 robot_half_width=g['robot_half_width'],
-                fit_margin=g['fit_margin'],
-                success_cooldown=g['success_cooldown'],
-                cross_yaw_rate_max=g['cross_yaw_rate_max'],
-                rot_brake_angle=math.radians(g['rot_brake_deg']),
-                rot_brake_speed=g['rot_brake_speed'])
+                fit_margin=g['fit_margin'], commit_s=g['commit_s'],
+                escape_reverse_speed=g['escape_reverse_speed'],
+                gap_min=g['gap_min'], exit_margin=g['exit_margin'])
             self.sup = DoorCrossing(self.cfg)
             self.scan_stale = g['scan_stale']
             self.nav_move_lin = g['nav_move_lin']
@@ -636,17 +578,10 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             # hardcoded se o sensor sair do centro um dia.
             self.lidar_x = g['lidar_x']
 
-            # Live-tuning: o nó lia os params SÓ no boot -> `ros2 param set` não
-            # pegava no nó rodando (achado 2026-06-17 afinando a porta em campo).
-            # O DoorCrossConfig é mutável e a máquina de estados guarda a MESMA
-            # referência (self.sup.cfg is self.cfg) relendo cfg todo tick, então
-            # o callback só muta os campos -> pega no tick seguinte, sem restart.
-            self.add_on_set_parameters_callback(self._on_set_params)
-
             self.doors = []
             self._goal_active = {}
+            self._goal_succeeded_edge = False  # pulso de 1 tick: goal terminou OK
             self._nav_forward = False
-            self._plan = []            # rota planejada [(x,y), ...] no frame map
             self._scan = None          # (ranges, angle_min, inc)
             self._scan_t = None
             self._last_zone = None     # dedup do /door_zone
@@ -661,7 +596,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             be = qos_profile_sensor_data
             self.create_subscription(LaserScan, 'scan', self._on_scan, be)
             self.create_subscription(Twist, 'nav_vel_raw', self._on_nav, 10)
-            self.create_subscription(Path, 'plan', self._on_plan, 10)
             for topic in ('navigate_to_pose/_action/status',
                           'navigate_through_poses/_action/status'):
                 self.create_subscription(
@@ -671,38 +605,10 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self.create_timer(1.0 / g['rate_hz'], self._tick)
             self._publish_zone('idle', None)
             self.get_logger().info(
-                'door_crossing ativo: zona %.1fm, reto |yaw|<%.0f° + cabe pelo '
-                'vão (robô %.2fm, margem %.2fm), atravessa %.2fm/s' % (
-                    self.cfg.zone_radius, math.degrees(self.cfg.align_yaw),
-                    2 * self.cfg.robot_half_width, self.cfg.fit_margin,
-                    self.cfg.cross_speed))
-
-        # campos do DoorCrossConfig afináveis ao vivo (mutados na MESMA ref que
-        # a máquina de estados relê todo tick); rate_hz fica de fora (o timer é
-        # criado no boot).
-        _CFG_PARAMS = ('zone_radius', 'stage_dist', 'align_lat',
-                       'align_timeout', 'rot_speed', 'rot_left_boost',
-                       'cross_speed', 'stage_speed', 'escape_reverse_speed',
-                       'gap_min', 'exit_margin', 'robot_half_width',
-                       'fit_margin', 'success_cooldown', 'cross_yaw_rate_max',
-                       'rot_brake_speed')
-        _NODE_PARAMS = ('scan_stale', 'nav_move_lin', 'rear_tail_x',
-                        'rear_half_width', 'front_head_x', 'lidar_x')
-
-        def _on_set_params(self, params):
-            for p in params:
-                if p.name == 'align_yaw_deg':
-                    self.cfg.align_yaw = math.radians(p.value)
-                elif p.name == 'rot_brake_deg':
-                    self.cfg.rot_brake_angle = math.radians(p.value)
-                elif p.name in self._CFG_PARAMS:
-                    setattr(self.cfg, p.name, p.value)
-                elif p.name in self._NODE_PARAMS:
-                    setattr(self, p.name, p.value)
-                elif p.name == 'rate_hz':
-                    self.get_logger().warn(
-                        'rate_hz só muda com restart do nó (timer fixo no boot)')
-            return SetParametersResult(successful=True)
+                'door_crossing ativo: zona %.1fm, alinhar |lat|<%.2fm '
+                '|yaw|<%.0f°, atravessa %.2fm/s' % (
+                    self.cfg.zone_radius, self.cfg.align_lat,
+                    math.degrees(self.cfg.align_yaw), self.cfg.cross_speed))
 
         def _on_doors(self, msg):
             try:
@@ -720,14 +626,14 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             # door_crossing armado quando o nav quer GIRAR pra alinhar (linear≈0).
             self._nav_forward = nav_engaging(msg.linear.x, self.nav_move_lin)
 
-        def _on_plan(self, msg):
-            # rota global do Nav2 -> sinal de arming (atravessa a porta?).
-            self._plan = [(p.pose.position.x, p.pose.position.y)
-                          for p in msg.poses]
-
         def _on_status(self, topic, msg):
-            self._goal_active[topic] = any(
-                st.status in ACTIVE for st in msg.status_list)
+            active = any(st.status in ACTIVE for st in msg.status_list)
+            # borda: estava ativo e agora terminou COM SUCESSO (pré-porta cumprido,
+            # pendência C). Pulso de 1 tick consumido no _tick.
+            if (self._goal_active.get(topic, False) and not active
+                    and any(st.status == SUCCEEDED for st in msg.status_list)):
+                self._goal_succeeded_edge = True
+            self._goal_active[topic] = active
 
         def _pose_map(self):
             try:
@@ -752,10 +658,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             fresh = (self._scan_t is not None
                      and now - self._scan_t <= self.scan_stale)
             gap = math.inf
-            # gap COM máscara de batente: no crossing (vão estreito) e também no
-            # staging/rotating (aborto-de-segurança da aproximação, 2026-06-17).
-            if (fresh and pose is not None and self.sup.door is not None
-                    and self.sup.state in ('staging', 'rotating', 'crossing')):
+            if (fresh and pose is not None and self.sup.state == 'crossing'
+                    and self.sup.door is not None):
                 ranges, amin, ainc = self._scan
                 jambs = [tuple(self.sup.door['a']), tuple(self.sup.door['b'])]
                 gap = gap_ahead(ranges, amin, ainc, pose, jambs, 0.30)
@@ -773,24 +677,15 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 rear_gap = rear_min_gap(arr, amin, ainc, self.lidar_x,
                                         self.rear_tail_x, self.rear_half_width)
 
+            goal_succeeded = self._goal_succeeded_edge
+            self._goal_succeeded_edge = False     # consome o pulso
             prev = self.sup.state
             cmd = self.sup.update(now, pose, self.doors, goal,
                                   self._nav_forward, gap, fresh,
-                                  front_gap, rear_gap, plan=self._plan)
-            # diagnóstico de campo (2026-06-17): yaw_err/lat/taxa/gaps na transição
-            # E estrangulado durante a manobra (~2 Hz), p/ achar a causa do "bateu
-            # no batente" sem adivinhar (overshoot do giro? lateral? cruzou torto?).
-            dbg = ('yaw_err=%+.1f° lat=%+.0fcm taxa=%.1f vx=%+.2f wz=%+.2f '
-                   'gap=%.2f front=%.2f' % (
-                       math.degrees(self.sup.dbg_yaw_err), self.sup.dbg_d * 100,
-                       self.sup.dbg_yaw_rate, cmd.vx, cmd.wz, gap, front_gap))
+                                  front_gap, rear_gap,
+                                  goal_succeeded=goal_succeeded)
             if cmd.state != prev:
-                self.get_logger().info(
-                    f'door_crossing: {prev} -> {cmd.state} | {dbg}')
-            elif cmd.state in ('staging', 'rotating', 'crossing', 'reversing'):
-                self._dbg_tick = getattr(self, '_dbg_tick', 0) + 1
-                if self._dbg_tick % 10 == 0:        # ~2 Hz a 20 Hz de loop
-                    self.get_logger().info(f'door_crossing[{cmd.state}] | {dbg}')
+                self.get_logger().info(f'door_crossing: {prev} -> {cmd.state}')
             # /door_zone: a manobra ativa manda; senão, se há porta marcada na
             # zona com goal ativo, publica 'approaching' (gate do standdown do
             # unstuck). 'approaching' NÃO comanda door_vel — só sinaliza a região.

@@ -7,7 +7,6 @@ from robot_nav.door_crossing import (
     door_geometry,
     door_progress_lateral,
     crossing_yaw,
-    plan_crosses_door,
 )
 
 
@@ -98,12 +97,11 @@ def mk():
     return DoorCrossing(CFG)
 
 
-def step(dc, t, pose, goal=True, nav=True, gap=math.inf, fresh=True):
-    return dc.update(t, pose, [DOOR], goal, nav, gap, fresh)
-
-
-def step_plan(dc, t, pose, plan, goal=True, nav=True, gap=math.inf, fresh=True):
-    return dc.update(t, pose, [DOOR], goal, nav, gap, fresh, plan=plan)
+def step(dc, t, pose, goal=True, nav=True, gap=math.inf, fresh=True, cleared=True):
+    # cleared=True simula "ponto pré-porta cumprido" (libera o arme — pendência C).
+    # Default True pra os testes da máquina de estados seguirem armando.
+    return dc.update(t, pose, [DOOR], goal, nav, gap, fresh,
+                     goal_succeeded=cleared)
 
 
 def test_idle_sem_goal_ou_fora_da_zona():
@@ -116,38 +114,58 @@ def test_idle_sem_goal_ou_fora_da_zona():
     assert step(dc, 0.2, None).state == 'idle'
 
 
-def test_arma_e_vai_pro_staging():
+def test_arma_e_vai_pro_rotating():
+    # 2026-06-19: a web (nav2 via ponto-pré-porta) entrega o robô centrado na
+    # frente da porta -> o door arma DIRETO no rotating (só alinha o ângulo),
+    # sem staging (que perseguia o centro do vão e estragava a posição boa).
     dc = mk()
-    # FORA do eixo (|d|>fit) -> staging dirige pro eixo. (usa /plan p/ armar sem
-    # depender do bearing nessa pose lateral)
-    plan = [(1.85, 1.0), (1.85, 3.0)]
-    c = step_plan(dc, 0.0, (1.85, 1.0, math.pi/2), plan)
-    assert c.state == 'staging'
+    c = step(dc, 0.0, (1.5, 1.0, math.pi/2))
+    assert c.state == 'rotating'
     assert c.door_id == 1
     assert dc.side == +1
 
 
 def test_staging_converge_e_rotaciona():
+    # staging não é mais o caminho do arme; só é alcançado como recuperação
+    # pós-escape. Testado direto aqui (força o estado).
     dc = mk()
-    plan = [(1.85, 1.0), (1.85, 3.0)]
-    pose = (1.85, 1.2, 0.0)   # fora do eixo, yaw errado
-    c = step_plan(dc, 0.0, pose, plan)
-    assert c.state == 'staging'
-    # entra no eixo (|d|<=fit): vira ROTATING (não persegue o ponto exato)
+    step(dc, 0.0, (1.7, 1.2, 0.0))     # arma -> rotating
+    dc.state = 'staging'               # recuperação: staging
+    dc._align_t0 = 0.0
+    dc._align_anchor = (1.7, 1.2)
+    c = step(dc, 0.5, (1.7, 1.2, 0.0))
+    assert c.state == 'staging'        # ainda indo pro ponto no eixo
+    # teleporta pro ponto de staging (simula chegada): vira ROTATING
     stage_y = 2.0 - CFG.stage_dist
-    c = step_plan(dc, 1.0, (1.5, stage_y, 0.0), plan)
+    c = step(dc, 1.0, (1.5, stage_y, 0.0))
     assert c.state == 'rotating'
     assert c.vx == pytest.approx(0.0)
     assert c.wz != 0.0   # girando pra encarar pi/2
 
 
+def test_rotating_estavel_vira_crossing():
+    dc = mk()
+    stage_y = 2.0 - CFG.stage_dist
+    step(dc, 0.0, (1.5, stage_y - 0.3, math.pi/2))    # arma (staging)
+    step(dc, 0.1, (1.5, stage_y, math.pi/2))          # chegou -> rotating
+    # já alinhado: precisa de align_stable ticks estáveis pra promover
+    t = 0.2
+    for _ in range(CFG.align_stable):
+        c = step(dc, t, (1.5, stage_y, math.pi/2))
+        t += 0.05
+    assert c.state == 'crossing'
+
+
 def _ate_crossing(dc):
     stage_y = 2.0 - CFG.stage_dist
-    step(dc, 0.0, (1.5, stage_y - 0.3, math.pi/2 - 0.3))  # arma torto -> rotating
-    step(dc, 0.1, (1.5, stage_y, math.pi/2))              # reto, mas taxa alta
-    c = step(dc, 0.15, (1.5, stage_y, math.pi/2))         # assentou (taxa~0) -> crossing
+    step(dc, 0.0, (1.5, stage_y - 0.3, math.pi/2))
+    step(dc, 0.1, (1.5, stage_y, math.pi/2))
+    t = 0.2
+    for _ in range(CFG.align_stable):
+        c = step(dc, t, (1.5, stage_y, math.pi/2))
+        t += 0.05
     assert c.state == 'crossing'
-    return 0.15
+    return t
 
 
 def test_crossing_anda_reto_e_solta_depois_da_porta():
@@ -158,6 +176,20 @@ def test_crossing_anda_reto_e_solta_depois_da_porta():
     # passou do centro + exit_margin -> solta
     c = step(dc, t + 1.0, (1.5, 2.0 + CFG.exit_margin + 0.05, math.pi/2))
     assert c.state == 'idle'
+
+
+def test_crossing_para_correcao_lateral_apos_o_centro():
+    # 2026-06-19: a correção lateral persegue o EIXO dos 2 cliques (doors.json),
+    # não o corredor real -> dava uma curvinha no fim que deixava o robô torto no
+    # corredor pós-porta. Antes do centro (s<0) corrige lateral; depois (s>=0) NÃO.
+    dc = mk()
+    _ate_crossing(dc)                              # side=+1, centro da porta (1.5,2.0)
+    # offset lateral d=0.1, AINDA antes do centro (s=-0.1) -> corrige (wz!=0)
+    c = step(dc, 1.0, (1.6, 1.9, math.pi/2))
+    assert c.state == 'crossing' and c.wz < 0.0
+    # mesmo offset, PASSADO o centro (s=+0.1) -> NÃO corrige lateral; yaw alinhado -> wz~0
+    c = step(dc, 1.1, (1.6, 2.1, math.pi/2))
+    assert c.state == 'crossing' and c.wz == pytest.approx(0.0)
 
 
 def test_crossing_aborta_se_vao_fecha_ou_goal_morre():
@@ -171,16 +203,14 @@ def test_crossing_aborta_se_vao_fecha_ou_goal_morre():
 
 def test_align_timeout_aborta_e_respeita_cooldown():
     dc = mk()
-    plan = [(1.85, 1.0), (1.85, 3.0)]
-    p = (1.85, 1.0, math.pi/2)                                 # fora do eixo: staging
-    step_plan(dc, 0.0, p, plan)                                # arma
-    c = step_plan(dc, CFG.align_timeout + 0.1, p, plan)
+    step(dc, 0.0, (1.5, 1.0, math.pi/2))                       # arma
+    c = step(dc, CFG.align_timeout + 0.1, (1.5, 1.0, math.pi/2))
     assert c.state == 'idle'
     # cooldown: tick seguinte ainda não rearma
-    assert step_plan(dc, CFG.align_timeout + 0.2, p, plan).state == 'idle'
+    assert step(dc, CFG.align_timeout + 0.2, (1.5, 1.0, math.pi/2)).state == 'idle'
     # passado o cooldown, rearma
     t = CFG.align_timeout + CFG.retrigger_cooldown + 0.3
-    assert step_plan(dc, t, p, plan).state == 'staging'
+    assert step(dc, t, (1.5, 1.0, math.pi/2)).state == 'rotating'
 
 
 def test_scan_velho_aborta_crossing():
@@ -189,164 +219,37 @@ def test_scan_velho_aborta_crossing():
     assert step(dc, t, (1.5, 1.9, math.pi/2), fresh=False).state == 'idle'
 
 
-def test_default_rot_speed_is_4():
-    # 2026-06-16: 3.0 -> 4.0. Point-turn mais forte pra vencer o atrito do
-    # skid-steer parado, sem ser agressivo a ponto de passar do |yaw|<5° (6.0
-    # passava). NUNCA arco. Param ROS, sobe pra 6.0 ao vivo se patinar.
-    assert DoorCrossConfig().rot_speed == 4.0
+def test_default_rot_speed_is_3():
+    # 2026-06-19: 4.0 -> 3.0. As fitas nas rodas deram grip; a 4.0 o giro passava
+    # do alvo (apontava pro batente). Teto do proporcional (rot_k/rot_min seguem).
+    assert DoorCrossConfig().rot_speed == 3.0
 
 
-def test_default_rot_left_boost():
-    # paridade com o spin do unstuck (spin_left_boost=1.4).
-    assert DoorCrossConfig().rot_left_boost == 1.4
-
-
-def test_cfg_mutation_is_live():
-    # o callback de param do nó (2026-06-17) muta self.cfg em runtime; isto
-    # garante o mecanismo: a máquina de estados guarda a MESMA referência e relê
-    # cfg todo tick, então o valor novo pega sem reconstruir o objeto.
-    # cfg PRÓPRIO (não o CFG compartilhado) — esta mutação pode poluir os outros.
-    cfg = DoorCrossConfig(zone_radius=1.2, stage_dist=0.6, align_timeout=15.0,
-                          total_timeout=40.0)
-    dc = DoorCrossing(cfg)
-    pose = (1.5, 1.0, math.pi / 2 - 0.15)         # centrado (no eixo), 8.6° torto
-    dc.update(0.0, pose, [DOOR], True, True, math.inf, True)      # arma -> rotating
-    c = dc.update(0.05, pose, [DOOR], True, True, math.inf, True)  # 8.6°>5° -> rotating
+def test_rotating_is_proportional_slows_near_target():
+    # 2026-06-16 (3b40817), re-aplicado 2026-06-19: o giro no lugar era bang-bang
+    # (sempre rot_speed) -> a ~11.5°/tick passava da janela de ±5° e ficava
+    # caçando direita/esquerda ("doidinho na frente da porta", relato de campo).
+    # O sentido-único do 1a0fe30 também girava a vel. cheia -> seguia caçando.
+    # Agora é proporcional: teto longe, desacelera perto, piso pra não stallar.
+    dc = mk()
+    c = step(dc, 0.0, (1.5, 1.0, math.pi))               # arma -> rotating
+    # LONGE do alvo (yaw_des=pi/2) -> velocidade no teto
+    c = step(dc, 0.1, (1.5, 1.0, math.pi/2 - 1.0))
     assert c.state == 'rotating'
-    cfg.align_yaw = math.radians(15.0)            # afrouxa o yaw AO VIVO
-    # MESMA pose, parado (taxa~0): agora 8.6° < 15° -> "passo reto daqui?" passa ->
-    # crossing. Prova que a mutação pegou (mesma ref de cfg, relida todo tick).
-    c = dc.update(0.10, pose, [DOOR], True, True, math.inf, True)
-    assert c.state == 'crossing'
+    assert abs(c.wz) == pytest.approx(CFG.rot_speed)
+    # PERTO do alvo -> proporcional, mais devagar que o teto, mas >= piso.
+    # Banda proporcional = err em (rot_min/rot_k, rot_speed/rot_k) = (0.417, 0.5)
+    # com rot_speed=3, rot_k=6, rot_min=2.5 -> uso 0.45 (mag=2.7).
+    c = step(dc, 0.2, (1.5, 1.0, math.pi/2 - 0.45))
+    assert CFG.rot_min <= abs(c.wz) < CFG.rot_speed
+    # MUITO perto (mas fora de align_yaw) -> piso (não para de girar)
+    c = step(dc, 0.3, (1.5, 1.0, math.pi/2 - 0.1))
+    assert abs(c.wz) == pytest.approx(CFG.rot_min)
 
 
-# --- arming pelo /plan (2026-06-17): o gate de bearing fechava só DEPOIS da
-# curva do Nav2 -> door assumia tarde/torto. Agora arma se a ROTA cruza a porta,
-# independente de pra onde o nariz aponta. -------------------------------------
-
-def test_plan_crosses_door_geometria():
-    a, b = (1.0, 2.0), (2.0, 2.0)                 # vão em y=2, x∈[1,2]
-    assert plan_crosses_door([(1.5, 1.0), (1.5, 3.0)], a, b) is True
-    assert plan_crosses_door([(1.5, 1.0), (1.5, 1.8)], a, b) is False  # não chega
-    assert plan_crosses_door([(3.0, 1.0), (3.0, 3.0)], a, b) is False  # cruza a parede FORA do vão
-    assert plan_crosses_door([], a, b) is False
-    assert plan_crosses_door([(1.5, 1.0)], a, b) is False
-
-
-def test_sem_plano_de_costas_nao_arma():
-    # baseline: de costas pra porta e sem /plan -> o bearing barra (>70°).
-    dc = mk()
-    assert step(dc, 0.0, (1.5, 1.0, -math.pi / 2)).state == 'idle'
-
-
-def test_arma_pelo_plano_mesmo_de_costas():
-    # MESMA pose de costas, mas com /plan cruzando a porta -> arma (desacoplado
-    # do heading; assume antes da curva do Nav2). No eixo (|d|=0) + de costas
-    # (yaw bem torto) -> vai pro rotating alinhar no lugar.
-    dc = mk()
-    plan = [(1.5, 1.0), (1.5, 3.0)]
-    c = step_plan(dc, 0.0, (1.5, 1.0, -math.pi / 2), plan)
-    assert c.state == 'rotating'
-
-
-def test_plano_que_nao_cruza_nao_arma_nem_encarando():
-    # anti-falso-positivo: encarando a porta, mas a ROTA não a cruza -> NÃO
-    # rouba o volante (porta que ele só passa do lado).
-    dc = mk()
-    plan = [(1.5, 1.0), (1.5, 1.8)]
-    c = step_plan(dc, 0.0, (1.5, 1.0, math.pi / 2), plan)
-    assert c.state == 'idle'
-
-
-# --- aborto-de-segurança na aproximação (2026-06-17): door_vel fura o collision
-# monitor, então staging/rotating precisam largar pro nav2 se um obstáculo (não
-# o batente) aparece na frente. -------------------------------------------------
-
-def test_staging_aborta_se_obstaculo_na_aproximacao():
-    dc = mk()
-    plan = [(1.85, 1.0), (1.85, 3.0)]
-    c = step_plan(dc, 0.0, (1.85, 1.0, math.pi / 2), plan)  # fora do eixo -> staging
-    assert c.state == 'staging'
-    # algo (não-batente) entra na frente durante a aproximação (gap < gap_min):
-    c = step_plan(dc, 0.1, (1.85, 1.05, math.pi / 2), plan, gap=0.3)
-    assert c.state == 'idle'
-
-
-def test_staging_segue_sem_obstaculo():
-    # sem obstáculo (gap=inf) a aproximação segue normal.
-    dc = mk()
-    plan = [(1.85, 1.0), (1.85, 3.0)]
-    step_plan(dc, 0.0, (1.85, 1.0, math.pi / 2), plan)
-    c = step_plan(dc, 0.1, (1.85, 1.05, math.pi / 2), plan)  # gap default = inf
-    assert c.state == 'staging'
-
-
-def test_rotating_aborta_se_obstaculo_na_frente():
-    dc = mk()
-    stage_y = 2.0 - CFG.stage_dist
-    yaw = math.pi / 2 - 0.3                               # torto: fica no rotating
-    step(dc, 0.0, (1.5, stage_y - 0.3, yaw))             # arma (staging)
-    c = step(dc, 0.1, (1.5, stage_y, yaw))               # chega -> rotating
-    assert c.state == 'rotating'
-    c = step(dc, 0.2, (1.5, stage_y, 0.0), gap=0.3)      # obstáculo na frente -> abort
-    assert c.state == 'idle'
-
-
-# --- giro limpo no rotating (2026-06-17): troca o bang-bang por um giro de
-# sentido único que PARA ao cruzar o alvo (mata o limit cycle que arrastava o
-# lateral -> ping-pong staging<->rotating). ------------------------------------
-
-def _into_rotating(dc, yaw, t0=0.0):
-    """Arma a porta (facing) e teleporta pro ponto de staging com `yaw` -> cai
-    no rotating no MESMO tick (staging->rotating é fall-through). Devolve o Cmd
-    do rotating já com o yaw_err desejado."""
-    stage_y = 2.0 - CFG.stage_dist
-    plan = [(1.85, 1.0), (1.85, 3.0)]
-    step_plan(dc, t0, (1.85, stage_y, math.pi / 2), plan)  # arma FORA do eixo (staging)
-    return step(dc, t0 + 0.1, (1.5, stage_y, yaw))    # entra no eixo -> rotating fresh
-
-
-def test_rotating_gira_um_lado_so_nao_inverte():
-    dc = mk()
-    stage_y = 2.0 - CFG.stage_dist
-    cA = _into_rotating(dc, 0.0)                # yaw_err=-pi/2 -> gira p/ esq (+)
-    assert cA.state == 'rotating' and cA.wz > 0
-    # ainda do mesmo lado do alvo (yaw_err ainda <0): NÃO inverte o sentido
-    cB = step(dc, 0.2, (1.5, stage_y, 0.3))
-    assert cB.state == 'rotating' and cB.wz > 0
-
-
-def test_rotating_para_ao_cruzar_o_alvo():
-    dc = mk()
-    stage_y = 2.0 - CFG.stage_dist
-    cA = _into_rotating(dc, 0.0)               # gira p/ esquerda (wz>0)
-    assert cA.wz > 0
-    # passou do alvo (yaw > pi/2, fora do band de 5°): PARA, não reverte girando
-    cB = step(dc, 0.2, (1.5, stage_y, math.pi / 2 + 0.2))
-    assert cB.state == 'rotating' and cB.wz == pytest.approx(0.0)
-
-
-def test_rotating_boost_a_esquerda_nao_a_direita():
-    # giro à esquerda (want=+1) leva o boost; à direita (want=-1), não.
-    dc = mk()
-    cL = _into_rotating(dc, 0.0)               # yaw_err=-pi/2 -> esquerda
-    assert cL.wz == pytest.approx(CFG.rot_speed * CFG.rot_left_boost)
-    dc2 = mk()
-    cR = _into_rotating(dc2, math.pi / 2 + 0.5)  # yaw_err=+0.5 -> direita
-    assert cR.wz == pytest.approx(-CFG.rot_speed)
-
-
-def test_giro_freia_perto_do_alvo():
-    # 2026-06-17 (3ª rodada): o giro a velocidade cheia (4.0 = 11.5°/tick) passava
-    # direto da banda de ±5° e oscilava esq/dir -> bateu no batente. Agora: LONGE do
-    # alvo = velocidade cheia (quebra o atrito); PERTO (< rot_brake_angle) = freio
-    # (~2 rad/s, ~5°/tick) pra ENCAIXAR sem overshoot.
-    dc = mk()
-    cFar = _into_rotating(dc, 0.0)                    # yaw_err=-pi/2 (longe) -> cheia
-    assert abs(cFar.wz) == pytest.approx(CFG.rot_speed * CFG.rot_left_boost)
-    dc2 = mk()
-    cNear = _into_rotating(dc2, math.pi / 2 - 0.15)   # yaw_err=-0.15 (8.6°) -> freio
-    assert abs(cNear.wz) == pytest.approx(CFG.rot_brake_speed)  # freio, SEM boost
+def test_default_rot_k_e_rot_min():
+    assert DoorCrossConfig().rot_k == 6.0
+    assert DoorCrossConfig().rot_min == 2.5
 
 
 from robot_nav.door_crossing import nav_engaging
@@ -394,27 +297,31 @@ def test_nearest_door_in_zone_picks_closest():
 
 ECFG = DoorCrossConfig(zone_radius=1.2, stage_dist=0.6, align_timeout=15.0,
                        total_timeout=40.0)
-P_STAGE = (1.85, 1.0, math.pi / 2)   # na zona, FORA do eixo (|d|>fit) -> staging
-P_PLAN = [(1.85, 1.0), (1.85, 3.0)]  # /plan cruza a porta (arma sem depender do bearing)
+P_STAGE = (1.5, 1.0, math.pi / 2)   # na zona, encarando a porta (centro 1.5,2.0)
 
 
 def estep(dc, t, pose, front_gap=math.inf, rear_gap=math.inf,
-          goal=True, nav=True, gap=math.inf, fresh=True):
+          goal=True, nav=True, gap=math.inf, fresh=True, cleared=True):
     return dc.update(t, pose, [DOOR], goal, nav, gap, fresh, front_gap, rear_gap,
-                     plan=P_PLAN)
+                     goal_succeeded=cleared)
 
 
 def test_escape_reverse_on_front_block():
     dc = DoorCrossing(ECFG)
-    assert estep(dc, 0.0, P_STAGE).state == 'staging'         # arma
+    assert estep(dc, 0.0, P_STAGE).state == 'rotating'        # arma -> rotating
     c = estep(dc, 0.1, P_STAGE, front_gap=0.10)               # parede perto -> ré
     assert c.state == 'reversing'
     assert c.vx < 0.0 and c.wz == pytest.approx(0.0)          # ré RETA, nunca arco
 
 
 def test_escape_reverse_on_substuck_timeout():
+    # substuck (parado sem progredir) só vale no staging (recuperação); no
+    # rotating é giro no lugar e NÃO conta como travado.
     dc = DoorCrossing(ECFG)
-    estep(dc, 0.0, P_STAGE)                                   # arma (align_t0=0)
+    estep(dc, 0.0, P_STAGE)            # arma -> rotating
+    dc.state = 'staging'               # recuperação: staging
+    dc._align_t0 = 0.0
+    dc._align_anchor = (P_STAGE[0], P_STAGE[1])
     c = estep(dc, ECFG.escape_substuck_time + 0.1, P_STAGE)   # não progrediu -> ré
     assert c.state == 'reversing'
 
@@ -469,31 +376,30 @@ def test_escape_max_count_then_abort():
 
 
 def test_moving_approach_does_not_trigger_substuck():
-    # aproximação LEGÍTIMA: o robô se desloca a cada tick por > substuck_time
-    # total -> a âncora de progresso reseta o relógio, NÃO dispara a ré.
+    # aproximação LEGÍTIMA no staging (recuperação): o robô se desloca a cada
+    # tick -> a âncora de progresso reseta o relógio, NÃO dispara a ré.
     dc = DoorCrossing(ECFG)
-    # FORA do eixo (x=1.75, |d|=0.25>fit) o tempo todo -> fica no staging, que é
-    # onde o substuck por tempo poderia disparar.
-    assert estep(dc, 0.0, (1.75, 1.0, math.pi / 2)).state == 'staging'  # arma
+    estep(dc, 0.0, (1.5, 1.0, math.pi / 2))   # arma -> rotating
+    dc.state = 'staging'                        # recuperação: staging
+    dc._align_t0 = 0.0
+    dc._align_anchor = (1.5, 1.0)
     # caminha de 1.0 -> 1.35 em y, ao longo de 7 s (bem além do substuck de 5 s)
     t, y = 0.5, 1.0
     last = None
     while t <= 7.0:
         y = min(1.35, y + 0.03)
-        last = estep(dc, t, (1.75, y, math.pi / 2))
+        last = estep(dc, t, (1.5, y, math.pi / 2))
         t += 0.5
     assert last.state != 'reversing'   # nunca deu ré de escape durante o avanço
-    assert last.state == 'staging'     # seguiu aproximando, off-axis
 
 
 def test_escape_from_rotating_on_front_block():
     dc = DoorCrossing(ECFG)
     stage_y = 2.0 - ECFG.stage_dist
-    yaw = math.pi / 2 - 0.3                              # torto: fica no rotating
-    estep(dc, 0.0, (1.5, stage_y - 0.3, yaw))           # arma (staging)
-    c = estep(dc, 0.1, (1.5, stage_y, yaw))             # chegou -> rotating
+    estep(dc, 0.0, (1.5, stage_y - 0.3, math.pi / 2))   # arma (staging)
+    c = estep(dc, 0.1, (1.5, stage_y, math.pi / 2))     # chegou -> rotating
     assert c.state == 'rotating'
-    c = estep(dc, 0.2, (1.5, stage_y, yaw), front_gap=0.10)  # parede perto
+    c = estep(dc, 0.2, (1.5, stage_y, math.pi / 2), front_gap=0.10)  # parede perto
     assert c.state == 'reversing'
     assert c.wz == pytest.approx(0.0)                   # ré RETA, nunca arco
 
@@ -514,95 +420,180 @@ def test_no_substuck_escape_while_rotating():
     assert c.state == 'rotating'
 
 
-# --- A: "passo reto daqui?" todo tick, mas SÓ quando PAROU de girar (2026-06-17)
-# A travessia ativa quando: reto (|yaw|<=align_yaw) E cabe (|lat|<=fit_lat) E o robô
-# PAROU de girar (taxa de yaw ~0). Sem a trava de taxa, no meio de um giro rápido um
-# tick caía na banda -> ativava crossing -> inércia levava o robô torto -> batia.
+# ---- trava "passo aqui?" geométrica com yaw (2026-06-22, pendência A) ---------
 
-def test_nao_atravessa_girando_rapido_so_quando_assenta():
+from robot_nav.door_crossing import will_clear
+
+# DOOR tem vão 1.0 m -> half_width=0.5. Com robot_half_width=0.25, fit_margin=0.13
+# a folga lateral útil (fit) = 0.5 - 0.25 - 0.13 = 0.12 m.
+WC_DOOR = door_geometry((1.0, 2.0), (2.0, 2.0))
+
+
+def test_will_clear_centered_and_straight_passes():
+    assert will_clear(WC_DOOR, s=-1.0, d=0.0, yaw_err=0.0, side=+1,
+                      robot_half_width=0.25, fit_margin=0.13) is True
+
+
+def test_will_clear_angled_into_jamb_fails():
+    # centrado AGORA, mas apontando 10° -> projetado 1 m à frente desvia
+    # 1.0*tan(10°)=0.176 > fit 0.12 -> não passa (era a falha de campo: lat OK, yaw ruim)
+    assert will_clear(WC_DOOR, s=-1.0, d=0.0, yaw_err=math.radians(10), side=+1,
+                      robot_half_width=0.25, fit_margin=0.13) is False
+
+
+def test_will_clear_lateral_offset_too_big_fails():
+    assert will_clear(WC_DOOR, s=-0.2, d=0.20, yaw_err=0.0, side=+1,
+                      robot_half_width=0.25, fit_margin=0.13) is False
+
+
+def test_will_clear_past_jamb_always_passes():
+    # s>=0 já passou do ponto mais estreito -> sempre "passa"
+    assert will_clear(WC_DOOR, s=0.1, d=5.0, yaw_err=math.radians(40), side=+1,
+                      robot_half_width=0.25, fit_margin=0.13) is True
+
+
+def test_will_clear_yaw_can_compensate_offset():
+    # offset d=+0.1 mas apontando de volta pro eixo: a 1 m a projeção fecha em ~0
+    # -> PASSA. Prova que é projeção real, não só |d| nem só |yaw|.
+    assert will_clear(WC_DOOR, s=-1.0, d=0.10, yaw_err=math.radians(5.71), side=+1,
+                      robot_half_width=0.25, fit_margin=0.13) is True
+
+
+def test_will_clear_side_minus_one():
+    # aproximando de cima (side=-1): mesma projeção, sinal coerente
+    assert will_clear(WC_DOOR, s=-1.0, d=0.0, yaw_err=math.radians(10), side=-1,
+                      robot_half_width=0.25, fit_margin=0.13) is False
+
+
+# ---- re-estágio quando "não passo" (2026-06-22) ------------------------------
+
+def test_restage_when_aligned_but_wont_fit():
+    # alinhado no YAW mas MUITO descentrado (d=0.3 > fit 0.20) -> NÃO commita a
+    # travessia: recua reto pra re-estagiar (não atravessa torto).
+    dc = DoorCrossing(CFG)
+    estep(dc, 0.0, (1.8, 1.4, math.pi / 2))            # arma -> rotating (d=0.3)
+    t, last = 0.1, None
+    for _ in range(CFG.align_stable + 1):
+        last = estep(dc, t, (1.8, 1.4, math.pi / 2))
+        t += 0.05
+    assert last.state == 'reversing'
+    assert last.wz == pytest.approx(0.0)               # ré RETA, nunca arco
+
+
+def test_crossing_restages_on_yaw_drift_before_jamb():
+    # no meio da travessia (s<0) o yaw deriva e a projeção bate no batente ->
+    # re-estágio em vez de raspar.
     dc = mk()
-    stage_y = 2.0 - CFG.stage_dist
-    step(dc, 0.0, (1.5, stage_y, math.pi / 2 - 0.4))   # arma torto, no eixo -> rotating
-    # alinhado, MAS vindo de um yaw bem diferente (girando rápido) -> NÃO cruza
-    c = step(dc, 0.05, (1.5, stage_y, math.pi / 2))
-    assert c.state == 'rotating'
-    # assentou (mesmo yaw 2 ticks -> taxa ~0) -> agora cruza
-    c = step(dc, 0.10, (1.5, stage_y, math.pi / 2))
-    assert c.state == 'crossing'
+    _ate_crossing(dc)                                  # centrado, side=+1
+    c = step(dc, 1.0, (1.8, 1.7, math.pi / 2))         # s=-0.3, d=0.3 > fit 0.20
+    assert c.state == 'reversing'
 
 
-def test_veio_reto_e_parado_atravessa():
-    # reto e centrado, sem girar: cruza assim que tem leitura de taxa (~0).
+def test_restage_gives_up_to_nav2_after_max_escapes():
+    # esgotou as re-tentativas -> larga pro nav2 (idle), não fica eterno
     dc = mk()
-    step(dc, 0.0, (1.5, 1.0, math.pi / 2))             # arma; sem histórico de yaw
-    c = step(dc, 0.05, (1.5, 1.05, math.pi / 2))        # reto e parado -> crossing
-    assert c.state == 'crossing'
-    assert c.vx == pytest.approx(CFG.cross_speed)
-
-
-def test_no_eixo_vai_direto_pro_rotating_sem_perseguir_ponto():
-    # já centrado (no eixo) mas torto: vai alinhar NO LUGAR, não persegue o ponto
-    # exato de staging (era o "se enrolando no indo-pro-eixo").
-    dc = mk()
-    c = step(dc, 0.0, (1.5, 1.0, math.pi / 2 - 0.3))    # |d|=0, yaw torto
-    assert c.state == 'rotating'
-    assert c.vx == pytest.approx(0.0)                   # point-turn, não dirige pro ponto
-
-
-def test_fora_do_eixo_vai_pro_staging():
-    # fora do eixo (|d|>fit): aí sim staging dirige PRO eixo.
-    dc = mk()
-    plan = [(1.85, 1.0), (1.85, 3.0)]                   # cruza em x=1.85
-    c = step_plan(dc, 0.0, (1.85, 1.0, math.pi / 2), plan)  # |d|=0.35 > fit
-    assert c.state == 'staging'
-    assert c.vx == pytest.approx(CFG.stage_speed)       # dirige pro eixo
-
-
-def test_passo_reto_respeita_gap_na_frente():
-    # reto e centrado, MAS obstáculo no vão (gap < gap_min) -> aborta, não fura.
-    dc = mk()
-    c = step(dc, 0.0, (1.5, 1.0, math.pi / 2), gap=0.3)
+    _ate_crossing(dc)
+    dc._escape_count = CFG.escape_max_count            # já gastou todas
+    c = step(dc, 1.0, (1.8, 1.7, math.pi / 2))         # s=-0.3, d=0.3 > fit 0.20
     assert c.state == 'idle'
 
 
-# --- B: folga geométrica (fit_lat) + fim do ping-pong (2026-06-17) ------------
-
-from robot_nav.door_crossing import fit_lat
-
-
-def test_fit_lat_porta_larga_relaxa_apertada_exige():
-    cfg = DoorCrossConfig()                       # robot_half_width=0.25, margin=0.05
-    larga = door_geometry((0.0, 0.0), (0.93, 0.0))
-    apertada = door_geometry((0.0, 0.0), (0.70, 0.0))
-    assert fit_lat(larga, cfg.robot_half_width, cfg.fit_margin) == pytest.approx(0.165)
-    assert fit_lat(apertada, cfg.robot_half_width, cfg.fit_margin) == pytest.approx(0.05)
-
-
-def test_rotating_drift_pequeno_nao_volta_pro_staging():
-    # antes (align_lat=0.08) um drift de 10 cm jogava de volta pro staging =
-    # ping-pong "caçando o meio". Agora o gate é fit_lat (0.20 nesta porta) ->
-    # drift dentro da folga segue no rotating, sem bouncing.
-    dc = mk()
-    stage_y = 2.0 - CFG.stage_dist
-    _into_rotating(dc, 0.0)
-    c = step(dc, 0.3, (1.5 + 0.10, stage_y, 0.3))   # d=0.10 (<0.20), ainda torto
-    assert c.state == 'rotating'
-
-
-# --- C: trava pós-travessia (cooldown 2 s) (2026-06-17) -----------------------
-
-def test_cooldown_pos_travessia_nao_rearma_de_volta():
+def test_crossing_centered_still_crosses():
+    # regressão: centrado e reto NÃO re-estagia (segue cruzando)
     dc = mk()
     t = _ate_crossing(dc)
-    t_exit = t + 1.0
-    # passou do centro + exit_margin -> solta
-    assert step(dc, t_exit, (1.5, 2.0 + CFG.exit_margin + 0.05, math.pi / 2)).state == 'idle'
-    # DENTRO do cooldown: mesmo de volta na aproximação, NÃO rearma (era o bug do
-    # /plan defasado -> invertia o side -> voltava pra porta).
-    assert step(dc, t_exit + 1.0, (1.5, 1.0, math.pi / 2)).state == 'idle'
-    # passado o success_cooldown: rearma normal (reto+centrado, parado: 1 tick
-    # sem histórico de taxa, no 2º assenta -> crossing).
-    t2 = t_exit + CFG.success_cooldown + 0.2
-    step(dc, t2, (1.5, 1.0, math.pi / 2))                  # rearma -> rotating
-    c = step(dc, t2 + 0.05, (1.5, 1.0, math.pi / 2))       # assentou -> crossing
+    c = step(dc, t, (1.5, 1.9, math.pi / 2))
     assert c.state == 'crossing'
+
+
+# ---- ponto de não-retorno / commit_s (capengada de campo 2026-06-22) ---------
+
+def test_crossing_commits_in_final_stretch_despite_offset():
+    # CAPENGADA: >metade do corpo no vão (s passou de commit_s) mas com offset
+    # lateral residual que o will_clear reprovaria -> NÃO dá ré, COMITA pra frente.
+    dc = mk()
+    _ate_crossing(dc)                                  # centrado, side=+1
+    # s=-0.1 (> commit_s=-0.15), d=0.3 (> fit 0.20, will_clear reprovaria)
+    c = step(dc, 1.0, (1.8, 1.9, math.pi / 2))
+    assert c.state == 'crossing'
+
+
+def test_crossing_still_restages_before_commit_point():
+    # regressão: ANTES do commit_s (s bem negativo) a trava segue valendo -> ré.
+    dc = mk()
+    _ate_crossing(dc)
+    c = step(dc, 1.0, (1.8, 1.7, math.pi / 2))         # s=-0.3 (< commit_s), d=0.3
+    assert c.state == 'reversing'
+
+
+# ---- C: armar só DEPOIS do ponto pré-porta cumprido (campo 2026-06-22) --------
+
+def test_nao_arma_sem_pre_porta_cumprido():
+    # O BUG DE CAMPO: porta na zona, todos os gates ok, MAS o ponto pré-porta
+    # ainda não foi cumprido -> a door NÃO assume (fica idle), deixa o nav2 levar.
+    dc = mk()
+    c = step(dc, 0.0, (1.5, 1.1, math.pi / 2), cleared=False)
+    assert c.state == 'idle'
+
+
+def test_pre_porta_cumprido_libera_e_arma():
+    # goal do nav2 deu succeeded com o robô na zona (= pré-porta cumprido) -> arma
+    dc = mk()
+    c = step(dc, 0.0, (1.5, 1.1, math.pi / 2), cleared=True)
+    assert c.state == 'rotating'
+    assert DOOR['id'] in dc._cleared
+
+
+def test_succeeded_fora_da_zona_nao_libera():
+    dc = mk()
+    # succeeded longe da porta (fora da zona) -> não libera nada
+    step(dc, 0.0, (1.5, -1.5, math.pi / 2), cleared=True)   # dist 3.5 > zona
+    assert DOOR['id'] not in dc._cleared
+    # chega na zona SEM novo succeeded -> não arma
+    c = step(dc, 0.1, (1.5, 1.1, math.pi / 2), cleared=False)
+    assert c.state == 'idle'
+
+
+def test_cleared_reseta_ao_cruzar():
+    dc = mk()
+    t = _ate_crossing(dc)
+    assert DOOR['id'] in dc._cleared
+    c = step(dc, t + 1.0, (1.5, 2.0 + CFG.exit_margin + 0.05, math.pi / 2),
+             cleared=False)
+    assert c.state == 'idle'
+    assert DOOR['id'] not in dc._cleared        # cruzou -> exige pré-porta de novo
+
+
+def test_cleared_reseta_ao_sair_da_zona():
+    dc = mk()
+    step(dc, 0.0, (1.5, 1.1, math.pi / 2), cleared=True)   # libera
+    assert DOOR['id'] in dc._cleared
+    step(dc, 0.1, (1.5, -1.5, 0.0), cleared=False)         # saiu da zona
+    assert DOOR['id'] not in dc._cleared
+
+
+# ---- não re-armar após cruzar / cooldown pós-travessia (campo 2026-06-22) -----
+
+def test_no_rearm_right_after_crossing():
+    # #2: depois de cruzar, a ré pós-porta trazia o robô de volta pra zona com a
+    # porta na frente -> re-armava indevidamente (estava do outro lado!). Agora a
+    # travessia bem-sucedida arma um cooldown -> NÃO re-arma logo em seguida.
+    dc = mk()
+    t = _ate_crossing(dc)
+    c = step(dc, t + 1.0, (1.5, 2.0 + CFG.exit_margin + 0.05, math.pi / 2))
+    assert c.state == 'idle'                            # cruzou e soltou
+    # ré pós-porta: volta pra zona (s<0), porta na frente -> SEM o cooldown re-armaria
+    c = step(dc, t + 1.2, (1.5, 1.7, math.pi / 2))
+    assert c.state == 'idle'
+
+
+def test_rearm_allowed_after_crossing_cooldown_expires():
+    # regressão: o cooldown é temporário — passado ele, re-aproximar re-arma normal
+    # (ex.: viagem de volta cruzando a mesma porta no outro sentido).
+    dc = mk()
+    t = _ate_crossing(dc)
+    step(dc, t + 1.0, (1.5, 2.0 + CFG.exit_margin + 0.05, math.pi / 2))   # cruzou
+    c = step(dc, t + 1.0 + CFG.crossing_cooldown + 0.5, (1.5, 1.4, math.pi / 2))
+    assert c.state == 'rotating'                        # cooldown expirou -> re-arma
+
+

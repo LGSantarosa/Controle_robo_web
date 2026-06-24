@@ -46,6 +46,45 @@ def _norm_angle(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
 
+class MapGrid(NamedTuple):
+    """Recorte leve do nav_msgs/OccupancyGrid pra lookup puro (sem ROS)."""
+    data: List[int]      # row-major, 0-100 (ocupação) ou -1 (desconhecido)
+    width: int
+    height: int
+    resolution: float    # m/célula
+    origin_x: float      # canto (0,0) do grid no frame do mapa
+    origin_y: float
+
+
+def map_occupied(grid: MapGrid, x: float, y: float, neighborhood: float,
+                 occ_threshold: int) -> bool:
+    """True se alguma célula dentro de `neighborhood` (m) do ponto (x,y) está
+    OCUPADA (valor >= occ_threshold) no mapa estático. Recovery contextual
+    (2026-06-22): só dá ré rápida se o bloqueio à frente coincide com parede já
+    MAPEADA. Célula desconhecida (-1) ou fora dos limites = NÃO ocupada (não
+    encurta o timeout — fallback seguro)."""
+    res = grid.resolution
+    if res <= 0.0:
+        return False
+    cr = int(neighborhood / res) + 1     # raio de busca em células
+    col0 = int((x - grid.origin_x) / res)
+    row0 = int((y - grid.origin_y) / res)
+    for dr in range(-cr, cr + 1):
+        for dc in range(-cr, cr + 1):
+            r, c = row0 + dr, col0 + dc
+            if not (0 <= r < grid.height and 0 <= c < grid.width):
+                continue
+            v = grid.data[r * grid.width + c]
+            if v < occ_threshold:        # -1 (desconhecido) e livres caem aqui
+                continue
+            # centro da célula no frame do mapa
+            cx = grid.origin_x + (c + 0.5) * res
+            cy = grid.origin_y + (r + 0.5) * res
+            if math.hypot(cx - x, cy - y) <= neighborhood:
+                return True
+    return False
+
+
 def rear_min_gap(ranges, angle_min: float, angle_increment: float,
                  lidar_x: float, tail_x: float, half_width: float) -> float:
     """Menor vão livre (m) entre o PARA-CHOQUE traseiro e o que o /scan vê
@@ -109,6 +148,48 @@ def front_min_gap(ranges, angle_min: float, angle_increment: float,
     return float((x[sel] - head_x).min())
 
 
+def front_block_point(ranges, angle_min, angle_increment, lidar_x, head_x,
+                      half_width):
+    """(x,y) em base_link do retorno mais próximo à FRENTE — a "parte que
+    travou". Mesmo corredor do `front_min_gap` (x>head_x, |y|<=half_width), mas
+    devolve o PONTO (com o offset lateral real), não só a distância. None se o
+    corredor está livre. Campo 2026-06-22: o robô encosta torto, então o contato
+    NÃO está reto à frente — projetar reto errava a parede no mapa."""
+    if angle_increment == 0.0:
+        return None
+    r = np.asarray(ranges, dtype=np.float64)
+    if r.size == 0:
+        return None
+    ok = np.isfinite(r) & (r > 0.0)
+    r = np.where(ok, r, 0.0)                          # evita inf*cos (warning/nan)
+    a = angle_min + np.arange(r.size) * angle_increment
+    x = lidar_x + r * np.cos(a)
+    y = r * np.sin(a)
+    sel = ok & (x > head_x) & (np.abs(y) <= half_width)
+    if not sel.any():
+        return None
+    i = int(np.argmin(np.where(sel, x, np.inf)))    # o mais próximo (menor x)
+    return (float(x[i]), float(y[i]))
+
+
+def block_point_mapped(grid, position, yaw, bp, head_x, block_range,
+                       neighborhood, occ_threshold) -> bool:
+    """True se o ponto de contato `bp` (x,y em base_link, do `front_block_point`)
+    coincide com parede MAPEADA. Transforma bp pro frame do MAPA com a rotação
+    2D COMPLETA (preserva o offset lateral — era o bug: projetava só reto à
+    frente) e consulta a vizinhança. Gated pela distância frontal ao para-choque
+    (bx-head_x <= block_range). Sem grid/contato -> False."""
+    if grid is None or bp is None:
+        return False
+    bx_r, by_r = bp
+    if (bx_r - head_x) > block_range:
+        return False
+    c, s = math.cos(yaw), math.sin(yaw)
+    mx = position[0] + bx_r * c - by_r * s
+    my = position[1] + bx_r * s + by_r * c
+    return map_occupied(grid, mx, my, neighborhood, occ_threshold)
+
+
 def freer_side(ranges, angle_min: float, angle_increment: float) -> int:
     """+1 se o setor frontal ESQUERDO (20°..90°) tem mais espaço, -1 se o direito.
 
@@ -145,6 +226,13 @@ def door_zone_active(state: str) -> bool:
 @dataclass
 class UnstuckConfig:
     stuck_timeout: float = 10.0
+    # Recovery contextual (2026-06-22): se o bloqueio à frente coincide com
+    # parede JÁ MAPEADA (não vai sair andando), dá ré bem antes dos 10 s. Os
+    # mesmos segundos servem de mini-confirmação (mapeado contínuo por esse
+    # tempo) pra não reagir a um frame solto de mapa/pose. Obstáculo NOVO (só no
+    # LiDAR, livre no /map) segue o stuck_timeout cheio. Ver
+    # docs/superpowers/specs/2026-06-22-unstuck-recovery-contextual-design.md
+    stuck_timeout_mapped: float = 2.0
     stuck_radius: float = 0.05     # deslocou menos que isso = "parado"
     reverse_distance: float = 0.30
     reverse_speed: float = 0.25
@@ -208,6 +296,7 @@ class UnstuckSupervisor:
     state: str = _MONITORING
     anchor: Optional[Tuple[float, float]] = None  # última posição "nova"
     anchor_t: float = 0.0
+    mapped_since: Optional[float] = None  # desde quando o bloqueio à frente é parede mapeada
     maneuver_start_t: float = 0.0
     maneuver_start_pos: Tuple[float, float] = (0.0, 0.0)
     reverse_target: float = 0.0    # quanto recuar NESTA manobra (<= reverse_distance)
@@ -225,7 +314,8 @@ class UnstuckSupervisor:
                front_gap: float = math.inf,
                goal_active: Optional[bool] = None,
                open_side: int = 1, yaw: float = 0.0,
-               door_active: bool = False) -> Command:
+               door_active: bool = False,
+               obstacle_mapped: bool = False) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
         if door_active:
@@ -241,10 +331,11 @@ class UnstuckSupervisor:
             # volta a poder agir.
             self.state = _MONITORING
             self.anchor = None
+            self.mapped_since = None
             return _IDLE
         if self.state == _MONITORING:
             return self._monitoring(now, position, rear_gap, front_gap,
-                                    goal_active, open_side)
+                                    goal_active, open_side, obstacle_mapped)
         if self.state == _REVERSING:
             return self._reversing(now, position, yaw, rear_gap)
         if self.state == _ADVANCING:
@@ -258,7 +349,7 @@ class UnstuckSupervisor:
     # -- estados --
 
     def _monitoring(self, now, position, rear_gap, front_gap, goal_active,
-                    open_side) -> Command:
+                    open_side, obstacle_mapped=False) -> Command:
         if goal_active is not None:
             # status do action server do nav2 disponível: é AUTORITATIVO.
             # Mata a "ré póstuma" (goal cancelado mas flag de nav_vel_raw
@@ -273,14 +364,32 @@ class UnstuckSupervisor:
         if not nav_gate:
             # sem goal ativo: parado aqui é normal (goal atingido/cancelado)
             self.anchor = None
+            self.mapped_since = None
             return _IDLE
+        # continuidade do "bloqueio à frente é parede mapeada" (recovery
+        # contextual): rastreado a cada tick com goal ativo. Zera assim que
+        # deixa de ser mapeado (a janela de confirmação recomeça do zero).
+        if obstacle_mapped:
+            if self.mapped_since is None:
+                self.mapped_since = now
+        else:
+            self.mapped_since = None
         # âncora de deslocamento: só re-ancora quando o robô REALMENTE sai do
         # raio — micro-mexidas (tentando girar, ruído de odom) não resetam.
         if self.anchor is None or self._dist(position, self.anchor) > self.cfg.stuck_radius:
             self.anchor = position
             self.anchor_t = now
             return _IDLE
-        if now - self.anchor_t < self.cfg.stuck_timeout:
+        # dispara a recovery: pelo timeout cheio (obstáculo novo/desconhecido)
+        # OU, se o bloqueio à frente é parede MAPEADA confirmada por
+        # stuck_timeout_mapped contínuos, bem antes. O guard `stuck >=
+        # stuck_timeout_mapped` evita disparar logo após re-ancorar com um
+        # mapped_since antigo.
+        stuck = now - self.anchor_t
+        mapped_fire = (self.mapped_since is not None
+                       and now - self.mapped_since >= self.cfg.stuck_timeout_mapped
+                       and stuck >= self.cfg.stuck_timeout_mapped)
+        if stuck < self.cfg.stuck_timeout and not mapped_fire:
             return _IDLE
         # Escolha de DIREÇÃO pelo vão de cada lado. Ré é PREFERIDA quando há
         # vão atrás (caso comum: obstáculo na frente -> recua). Sem vão útil
@@ -403,7 +512,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                            QoSDurabilityPolicy)
     from action_msgs.msg import GoalStatusArray
     from geometry_msgs.msg import Twist
-    from nav_msgs.msg import Odometry
+    from nav_msgs.msg import Odometry, OccupancyGrid
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import String
     try:
@@ -421,6 +530,17 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             super().__init__("unstuck_supervisor")
             p = self.declare_parameters("", [
                 ("stuck_timeout", 10.0),
+                # Recovery contextual (2026-06-22): obstáculo à frente que bate
+                # no /map (parede mapeada) -> ré após stuck_timeout_mapped (não
+                # os 10 s). block_range = front_gap acima disso não conta como
+                # bloqueio à frente. Lookup no /map cru (sem inflação).
+                ("stuck_timeout_mapped", 2.0),
+                ("block_range", 0.5),
+                ("map_occ_threshold", 65),
+                # 0.22 (não 0.15): absorve o offset de registro pose↔mapa (~0.2 m
+                # medido em campo 2026-06-22 — a leitura do LiDAR cai ~0.2 m antes
+                # da parede do /map).
+                ("map_neighborhood", 0.22),
                 ("stuck_radius", 0.05),
                 ("reverse_distance", 0.30),
                 ("reverse_speed", 0.25),
@@ -458,6 +578,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             g = {n.name: n.value for n in p}
             self.cfg = UnstuckConfig(
                 stuck_timeout=g["stuck_timeout"],
+                stuck_timeout_mapped=g["stuck_timeout_mapped"],
                 stuck_radius=g["stuck_radius"],
                 reverse_distance=g["reverse_distance"],
                 reverse_speed=g["reverse_speed"],
@@ -483,6 +604,9 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self.rear_tail_x = g["rear_tail_x"]
             self.rear_half_width = g["rear_half_width"]
             self.front_head_x = g["front_head_x"]
+            self.block_range = g["block_range"]
+            self.map_occ_threshold = g["map_occ_threshold"]
+            self.map_neighborhood = g["map_neighborhood"]
             self.scan_stale = g["scan_stale"]
             self.nav_move_lin = g["nav_move_lin"]
             self.nav_move_ang = g["nav_move_ang"]
@@ -499,6 +623,11 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._goal_active = {}  # por tópico de status; None até a 1ª msg
             self._stop_active = False  # só pra log
             self._door_active = False  # door_crossing conduzindo? -> standdown
+            self._map = None           # MapGrid do /map estático (None até a 1ª msg)
+            self._front_bp = None      # ponto de contato à frente (x,y base_link)
+            self._near_r = math.inf    # DEBUG: retorno LiDAR mais próximo (m)
+            self._near_deg = 0.0       # DEBUG: ângulo desse retorno (graus)
+            self._dbg_t = 0.0          # DEBUG: throttle do log
             self._last_state = self.sup.state
 
             be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -519,6 +648,10 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             # prio 30 sabota a manobra prio 20 e a porta nunca fecha).
             self.create_subscription(
                 String, "door_zone", self._on_door_zone, latched)
+            # /map estático do SLAM (latched/transient_local): recovery
+            # contextual — bloqueio à frente que bate aqui = parede mapeada.
+            self.create_subscription(
+                OccupancyGrid, "map", self._on_map, latched)
             # Status dos goals do bt_navigator: gate AUTORITATIVO (mata a
             # "ré póstuma" após cancel e cobre o BT em recovery c/ controller
             # mudo). Sem msg ainda -> cai no fallback por nav_latch.
@@ -565,6 +698,18 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 self.rear_lidar_x, self.front_head_x, self.rear_half_width)
             self._open_side = freer_side(
                 ranges, msg.angle_min, msg.angle_increment)
+            # ponto de contato à frente (base_link) pra recovery contextual:
+            # a "parte que travou", com o offset lateral real (não reto à frente).
+            self._front_bp = front_block_point(
+                ranges, msg.angle_min, msg.angle_increment,
+                self.rear_lidar_x, self.front_head_x, self.rear_half_width)
+            # DEBUG temporário (2026-06-22): retorno mais próximo (dist+ângulo).
+            finite = np.isfinite(ranges) & (ranges > 0.0)
+            if finite.any():
+                i = int(np.argmin(np.where(finite, ranges, np.inf)))
+                self._near_r = float(ranges[i])
+                self._near_deg = math.degrees(
+                    _norm_angle(msg.angle_min + i * msg.angle_increment))
 
         def _on_goal_status(self, topic, msg):
             self._goal_active[topic] = any(
@@ -580,6 +725,22 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 st = "idle"
             self._door_active = door_zone_active(st)
 
+        def _on_map(self, msg):
+            self._map = MapGrid(
+                data=msg.data, width=msg.info.width, height=msg.info.height,
+                resolution=msg.info.resolution,
+                origin_x=msg.info.origin.position.x,
+                origin_y=msg.info.origin.position.y)
+
+        def _obstacle_mapped(self):
+            """True se o ponto de contato à frente coincide com parede MAPEADA.
+            Usa o (x,y) REAL do contato (front_block_point) com o offset lateral,
+            transformado pro frame do mapa — não a projeção reto à frente."""
+            return block_point_mapped(
+                self._map, self._position, self._yaw, self._front_bp,
+                self.front_head_x, self.block_range, self.map_neighborhood,
+                self.map_occ_threshold)
+
         def _tick(self):
             now = time.monotonic()
             # scan velho (LiDAR caiu?) -> trata traseira como BLOQUEADA
@@ -592,11 +753,30 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             # status visto em algum tópico? OR entre eles; nunca visto -> None
             goal_active = (any(self._goal_active.values())
                            if self._goal_active else None)
+            obstacle_mapped = self._obstacle_mapped() if scan_fresh else False
             cmd = self.sup.update(
                 now, nav_wants_move=self._nav_wants_move,
                 position=self._position, rear_gap=gap, front_gap=front_gap,
                 goal_active=goal_active, open_side=self._open_side,
-                yaw=self._yaw, door_active=self._door_active)
+                yaw=self._yaw, door_active=self._door_active,
+                obstacle_mapped=obstacle_mapped)
+            # DEBUG temporário (2026-06-22): diagnóstico da recovery contextual.
+            if (self.sup.state == "monitoring" and self._nav_wants_move
+                    and now - self._dbg_t >= 1.0):
+                self._dbg_t = now
+                if self._front_bp is not None:
+                    bx_r, by_r = self._front_bp
+                    c, s = math.cos(self._yaw), math.sin(self._yaw)
+                    mx = self._position[0] + bx_r * c - by_r * s
+                    my = self._position[1] + bx_r * s + by_r * c
+                else:
+                    mx = my = float('nan')
+                self.get_logger().warn(
+                    "DBG recov: front_gap=%.2f map=%s mapped=%s near=%.2fm@%.0f° "
+                    "blk=(%.2f,%.2f) anchor_t=%.1f" % (
+                        front_gap, self._map is not None, obstacle_mapped,
+                        self._near_r, self._near_deg, mx, my,
+                        now - self.sup.anchor_t if self.sup.anchor else -1))
             if self.sup.state != self._last_state:
                 self.get_logger().warn(
                     "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s vao_re=%.2f)" % (

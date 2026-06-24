@@ -22,6 +22,7 @@
   let robotPose = null;    // { x, y, yaw }
   let plan = [];           // [{ x, y }]
   let lastGoal = null;     // { x, y }
+  let scan = null;         // { xs:[], ys:[] } — /scan ao vivo em coords do mapa
 
   // Waypoints
   let waypoints  = [];     // [{x, y, yaw}]
@@ -35,9 +36,25 @@
 
   // Portas marcadas (travessia door_crossing)
   let doorMode = false;          // modo "marcar porta"
-  let doorFirst = null;          // 1º batente clicado {x, y}
+  let doorDrag = null;           // arraste atual: {ax,ay,cx,cy,curX,curY,curWorld,shift}
   let doors = [];                // [{id, a:[x,y], b:[x,y]}]
   let doorZone = null;           // {state, door_id} vindo do robô
+
+  // Trava anti-torto: gruda a linha no múltiplo de 45° mais próximo (em coords do
+  // mapa) quando o arraste está a menos de ~12° dele. Porta torta não existe — o
+  // erro é de mão na hora de clicar. Shift segura -> ângulo livre (porta diagonal).
+  function snapDoorEnd(ax, ay, bx, by, freeAngle) {
+    const dx = bx - ax, dy = by - ay;
+    const len = Math.hypot(dx, dy);
+    if (freeAngle || len < 1e-6) return { x: bx, y: by };
+    let ang = Math.atan2(dy, dx);
+    const step = Math.PI / 4;                 // 45°
+    const snapped = Math.round(ang / step) * step;
+    let diff = ang - snapped;
+    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+    if (Math.abs(diff) < (12 * Math.PI / 180)) ang = snapped;
+    return { x: ax + len * Math.cos(ang), y: ay + len * Math.sin(ang) };
+  }
   const btnDoor = document.getElementById('map-btn-door');
   const doorChip = document.getElementById('map-door-chip');
 
@@ -140,6 +157,19 @@
 
     socket.on('plan_update', (data) => {
       plan = (data && data.points) || [];
+      render();
+    });
+
+    socket.on('scan_update', (data) => {
+      // Pontos + pose do boneco NO MESMO frame (mesmo stamp do scan): o robot_pose
+      // separado (10Hz, TF "agora") chegava em outro momento e o boneco descolava
+      // dos pontos (lidar parecia "na frente" do desenho). Aqui os dois andam
+      // colados. O robot_pose ao vivo segue como fallback quando o scan para.
+      scan = { xs: data.xs, ys: data.ys };
+      if (data.rx !== undefined) {
+        robotPose = { x: data.rx, y: data.ry, yaw: data.ryaw };
+        poseEl.textContent = `robô: x=${data.rx.toFixed(2)} y=${data.ry.toFixed(2)} yaw=${(data.ryaw * 180 / Math.PI).toFixed(0)}°`;
+      }
       render();
     });
 
@@ -298,10 +328,10 @@
     // --- Portas (travessia door_crossing) ---
     if (btnDoor) btnDoor.addEventListener('click', () => {
       doorMode = !doorMode;
-      doorFirst = null;
+      doorDrag = null;
       btnDoor.classList.toggle('active', doorMode);
       statusEl.textContent = doorMode
-        ? 'modo porta: clique no 1º batente (clique numa porta p/ apagar)'
+        ? 'modo porta: arraste de um batente até o outro (clique numa porta p/ apagar)'
         : '';
       render();
     });
@@ -343,6 +373,10 @@
         return;
       }
       wpMouseDown = { cx, cy, world };
+      if (doorMode) {
+        doorDrag = { ax: world.x, ay: world.y, cx, cy, curX: cx, curY: cy,
+                     curWorld: world, shift: ev.shiftKey };
+      }
       if (wpMode) {
         wpDrag = { worldX: world.x, worldY: world.y, canvasX: cx, canvasY: cy, curX: cx, curY: cy };
       }
@@ -353,6 +387,15 @@
         const p = eventToCanvasPx(ev);
         setPoseDrag.curX = p.cx;
         setPoseDrag.curY = p.cy;
+        render();
+        return;
+      }
+      if (doorMode && doorDrag) {
+        const { cx, cy } = eventToCanvasPx(ev);
+        const world = canvasToWorld(cx, cy);
+        doorDrag.curX = cx; doorDrag.curY = cy;
+        if (world) doorDrag.curWorld = world;
+        doorDrag.shift = ev.shiftKey;
         render();
         return;
       }
@@ -382,28 +425,30 @@
         return;
       }
 
-      // Modo porta: 1º clique = batente A, 2º = batente B; clique perto de
-      // porta existente = apagar. Tem precedência sobre waypoint/goal.
-      if (doorMode && wpMouseDown) {
-        const world = wpMouseDown.world;
+      // Modo porta: ARRASTA de um batente até o outro (linha reta com snap
+      // anti-torto). Clique curtinho em cima de porta existente = apagar. Tem
+      // precedência sobre waypoint/goal.
+      if (doorMode && doorDrag) {
+        const start = { x: doorDrag.ax, y: doorDrag.ay };
+        const endRaw = canvasToWorld(cx, cy) || doorDrag.curWorld;
+        const movedPx = Math.hypot(cx - doorDrag.cx, cy - doorDrag.cy);
         const NEAR = 0.35;
         const hit = doors.find(d => {
           const mx = (d.a[0] + d.b[0]) / 2, my = (d.a[1] + d.b[1]) / 2;
-          return Math.hypot(world.x - mx, world.y - my) < NEAR;
+          return Math.hypot(start.x - mx, start.y - my) < NEAR;
         });
-        if (hit) {
+        if (movedPx <= DRAG_THRESHOLD && hit) {
           socket.emit('door_cmd', { del: hit.id });
           statusEl.textContent = `porta ${hit.id} apagada`;
-        } else if (!doorFirst) {
-          doorFirst = world;
-          statusEl.textContent = 'agora clique no 2º batente';
-        } else {
+        } else if (movedPx > DRAG_THRESHOLD) {
+          const end = snapDoorEnd(start.x, start.y, endRaw.x, endRaw.y, ev.shiftKey);
           socket.emit('door_cmd', {
-            add: { a: [doorFirst.x, doorFirst.y], b: [world.x, world.y] } });
-          doorFirst = null;
+            add: { a: [start.x, start.y], b: [end.x, end.y] } });
           statusEl.textContent = 'porta marcada';
+        } else {
+          statusEl.textContent = 'arraste de um batente até o outro (Shift = ângulo livre)';
         }
-        wpDrag = null; wpMouseDown = null;
+        doorDrag = null; wpDrag = null; wpMouseDown = null;
         render();
         return;
       }
@@ -545,6 +590,16 @@
     ctx.lineWidth = 1;
     ctx.strokeRect(r.dx, r.dy, r.dw, r.dh);
 
+    // Scan do LiDAR ao vivo (pontos azuis) — debug de localização
+    if (scan && scan.xs && scan.xs.length) {
+      ctx.fillStyle = '#1e90ff';
+      for (let i = 0; i < scan.xs.length; i++) {
+        const c = worldToCanvas(scan.xs[i], scan.ys[i]);
+        if (!c) continue;
+        ctx.fillRect(c.x - 1.5, c.y - 1.5, 3, 3);
+      }
+    }
+
     // Trajetória planejada (Nav2)
     if (plan && plan.length > 1) {
       ctx.strokeStyle = '#4af';
@@ -579,11 +634,21 @@
       ctx.textBaseline = 'alphabetic';
       ctx.fillText(`🚪${d.id}`, (a.x + b.x) / 2 + 6, (a.y + b.y) / 2 - 6);
     });
-    if (doorMode && doorFirst) {
-      const p = worldToCanvas(doorFirst.x, doorFirst.y);
-      if (p) {
+    if (doorMode && doorDrag) {
+      const aPx = worldToCanvas(doorDrag.ax, doorDrag.ay);
+      const end = snapDoorEnd(doorDrag.ax, doorDrag.ay,
+                              doorDrag.curWorld.x, doorDrag.curWorld.y,
+                              doorDrag.shift);
+      const bPx = worldToCanvas(end.x, end.y);
+      if (aPx && bPx) {
+        ctx.strokeStyle = '#0aa'; ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath(); ctx.moveTo(aPx.x, aPx.y); ctx.lineTo(bPx.x, bPx.y); ctx.stroke();
+        ctx.setLineDash([]);
         ctx.fillStyle = '#0aa';
-        ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 2 * Math.PI); ctx.fill();
+        [aPx, bPx].forEach(p => {
+          ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 2 * Math.PI); ctx.fill();
+        });
       }
     }
 

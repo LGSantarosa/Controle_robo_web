@@ -82,11 +82,16 @@ controller_server:
       movement_time_allowance: 15.0
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      # Folga pra ambiente dinâmico — se uma cadeira estiver atrapalhando
-      # o ponto exato, robô considera que chegou a até 40 cm / ~20° do alvo.
       # Distinto do FollowPath.xy_goal_tolerance (0.07): este é o critério de
       # "cheguei no goal"; o do DWB é a tolerância interna de parada na trajetória.
-      xy_goal_tolerance: 0.40
+      # 2026-06-19 PORTA: 0.40 -> 0.15. O ponto-pré-porta fica a 1.0 m do centro
+      # da porta; o robô entra na zona do door_crossing a 1.2 m (0.2 m do ponto).
+      # Com 0.40 o nav2 dava o ponto por "alcançado" a 0.2 m e JÁ curvava pro
+      # destino do outro lado -> puxava o robô pra fora do eixo bem quando o door
+      # assumia -> crossing torto -> roda no batente (campo 2026-06-19). Com 0.15
+      # (< 0.2 m) o nav2 segue reto pro ponto no eixo até o door assumir. Seguro:
+      # na travessia o robô passa pelo ponto de 1.0 m -> goal cumprido -> segue.
+      xy_goal_tolerance: 0.15
       yaw_goal_tolerance: 0.35
       stateful: true
     FollowPath:
@@ -337,7 +342,7 @@ collision_monitor:
       type: "polygon"
       points: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
       action_type: "approach"
-      time_before_collision: 1.5
+      time_before_collision: 1.0   # 1.5->1.0 em 2026-06-22 (corredor apertado: approach freava sem parar; ver nav2_params_pi.yaml)
       simulation_time_step: 0.1
       min_points: 2
       visualize: True

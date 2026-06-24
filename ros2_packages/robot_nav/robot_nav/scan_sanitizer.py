@@ -10,10 +10,12 @@ LD06 publica range_min=0.02 e a PolygonStop do collision monitor tem
 min_points=2, dois pontinhos fantasmas congelavam o robô — inclusive parado no
 meio da PORTA (17 dos 22 freezes da captura).
 
-O nó troca esses retornos por +inf (sem retorno) e republica. SÓ o collision
-monitor consome /scan_safe (nav2_params_pi.yaml); SLAM, costmaps e
-cone_detector seguem no /scan cru — eles já têm range_min próprio e usam o
-scan pra geometria, não pra reflexo de freio.
+O nó troca esses retornos por +inf (sem retorno) e republica. O collision
+monitor E os costmaps do nav2 (local/global) consomem /scan_safe
+(nav2_params_pi.yaml) — 2026-06-23: o costmap usava /scan cru com
+obstacle_min_range 0.0, então os fantasmas <0.15 m viravam obstáculo letal e
+fincavam o robô (ver comentário no yaml). SLAM e cone_detector seguem no /scan
+cru — eles já têm range_min próprio e usam o scan pra geometria.
 
 A lógica pura (sanitize_ranges) é testável sem ROS; o nó embaixo é só cola de
 I/O — mesmo padrão do unstuck_supervisor.
