@@ -124,7 +124,20 @@ def generate_launch_description():
         name='twist_mux',
         output='screen',
         parameters=[twist_mux_cfg, {'use_sim_time': True}],
-        remappings=[('cmd_vel_out', 'cmd_vel')],
+        # FIDELIDADE SIM=REAL (gap#2): a saída do mux NÃO vai direto pro DiffDrive.
+        # Passa por /cmd_vel_raw → sim_actuator_model (curva do giro real) → /cmd_vel.
+        remappings=[('cmd_vel_out', 'cmd_vel_raw')],
+    )
+
+    # Modelo do motor real: aplica zona-morta/ganho/saturação do GIRO medidos no
+    # spin_calib. Sem isso o DiffDrive gira ideal e o "congela perto do goal" não
+    # reproduz no sim. Ver ESTADO_PROJETO.md (gap#2).
+    sim_actuator_model = Node(
+        package='robot_nav',
+        executable='sim_actuator_model',
+        name='sim_actuator_model',
+        output='screen',
+        parameters=[{'use_sim_time': True}],
     )
 
     return LaunchDescription([
@@ -138,4 +151,5 @@ def generate_launch_description():
         spawn_robot,
         rsp,
         twist_mux,
+        sim_actuator_model,
     ])

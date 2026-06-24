@@ -34,6 +34,7 @@ setup(
             'scan_sanitizer = robot_nav.scan_sanitizer:main',
             'door_crossing = robot_nav.door_crossing:main',
             'freeze_capture = robot_nav.freeze_capture:main',
+            'sim_actuator_model = robot_nav.sim_actuator_model:main',
         ],
     },
 )
