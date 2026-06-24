@@ -104,6 +104,29 @@ lixo na EMI.
   (`plan_rel_deg`) × obstáculo à frente (`/scan`, ±15°) + último `cmd_vel_nav`. Prova
   "planner manda contornar X° e o robô aponta reto na parede". Achado parcial no sim: andando,
   o DWB só pede giro <0.55 rad/s (zona-morta mata) → reto; giro forte só parado (point-turn).
+
+  **🔬 RODADA AUTÔNOMA NO SIM 06-24 (eu sozinho, sem o usuário) — BURRO REPRODUZIDO+CAPTURADO:**
+  Mundo `sala.sdf`, mapa `sim_sala` (SLAM autônomo), goal (-2.8,-1.4) atrás do cilindro. Log:
+  `controller_server: Failed to make progress` repetido (= assinatura do real). Dado do
+  `freeze_diag.csv` (310 amostras, robô engajado) — **CSVs preservados em
+  `controle_web/logs/sim_burro_2026-06-24/`**:
+  - `plan_rel`: mediana **−24°**, máx **104°** → o planner pede curva forte o tempo todo.
+  - **Andando (vx>0.05, 137 amostras): |wz| mediana 0.55 rad/s** (abaixo da zona-morta 1.7 → o
+    modelo zera → vai RETO). **Girando forte (|wz|>1.7, 141 amostras): vx≈0** (point-turn parado).
+  - Ou seja: **reto OU giro-no-lugar, NUNCA arco coordenado.** Ex. t+18s: plan pede −18°, robô
+    `vx=0.35 wz=−0.55` (giro morto) indo num obstáculo a 0.82 m → aproxima, point-turna, dá ré
+    (unstuck vx=−0.15), passa do goal (chegou a y=−2.44, goal y=−1.4), não converge → aborta.
+  - ⚠️ **CAVEAT honesto:** esse "não faz arco" é EM PARTE imposto pelo meu `sim_actuator_model`
+    (apliquei a zona-morta do giro-PARADO também ao arco). O `spin_calib` só mediu giro parado.
+    **Validar no real:** o robô arqueia andando com wz baixo, ou é morto igual ao sim?
+  - **Direção do fix (discutir, NÃO aplicar):** skid-steer com zona-morta não esterça andando →
+    DWB (arcos suaves) é incompatível. Opções: (a) baixar a zona-morta no controle/firmware p/
+    o arco existir; (b) controlador que faça reto+point-turn deliberado; (c) tunar p/ commitar no
+    point-turn cedo. Ver [[feedback_no_arc_turns]] e [[project_nav2_recovery_nao_dispara]].
+  - **Pendência do método:** o SLAM autônomo saiu offset/pequeno (só canto inf-esq, x≤1.96 y≤0.64)
+    → goal fora dos bounds = planner aborta sem mexer (NÃO confundir com o bug). P/ testar a PORTA
+    (sala direita) preciso de mapa cobrindo tudo: melhorar o tour OU gerar o mapa da geometria do SDF.
+  - ✅ Instrumento `freeze_diag.csv` (heading×plan×obstáculo) FUNCIONOU — provou a assinatura.
 - **NAV2 "burro"** (mesmo tema do congelamento acima): vira cedo/forte, faz curva em tangente
   em vez de ir reto no corredor e girar 90° no lugar → chega de cara/paralelo na parede, precisa
   de 2 rés pra sair. Skid-steer **não faz arco** — realinhar tem que ser **giro no lugar** com
