@@ -170,6 +170,19 @@
         robotPose = { x: data.rx, y: data.ry, yaw: data.ryaw };
         poseEl.textContent = `robô: x=${data.rx.toFixed(2)} y=${data.ry.toFixed(2)} yaw=${(data.ryaw * 180 / Math.PI).toFixed(0)}°`;
       }
+      // DIAG lag (2026-06-24): _age = sensor->emit (TF/CPU na Pi);
+      // transp = emit->browser (rede/transporte); _fb = usou yaw velho
+      // (fallback de TF -> arrasto da nuvem no giro). Throttle ~1Hz no console.
+      if (data._sts !== undefined) {
+        const transp = (Date.now() / 1000) - data._sts;
+        const fb = data._fb ? ' FALLBACK' : '';
+        poseEl.textContent += `  [age=${(data._age * 1000).toFixed(0)}ms transp=${(transp * 1000).toFixed(0)}ms${fb}]`;
+        const t = Date.now();
+        if (!window._lagLogT || t - window._lagLogT > 1000) {
+          window._lagLogT = t;
+          console.log(`[LAG] age(sensor->emit)=${(data._age * 1000).toFixed(0)}ms  transp(emit->browser)=${(transp * 1000).toFixed(0)}ms  tf_fallback=${data._fb}`);
+        }
+      }
       render();
     });
 

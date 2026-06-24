@@ -436,6 +436,12 @@ class MapBridge:
         now = time.time()
         if now - self._last_scan_emit < 1.0 / self.SCAN_PUBLISH_HZ:
             return
+        # DIAG lag (2026-06-24): idade do scan no emit + se caiu no fallback de
+        # TF (yaw velho -> arrasto da nuvem no giro). Vai no payload p/ a UI
+        # mostrar; some quando fechar o diagnóstico. NÃO logar no rosout.
+        stamp_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        scan_age = now - stamp_sec
+        tf_fallback = False
         try:
             # TF no INSTANTE do scan (não o atual): em giro rápido o scan é de
             # alguns ms atrás; usar o stamp dele alinha os pontos com a pose da
@@ -451,6 +457,7 @@ class MapBridge:
                 'map', 'base_link', msg.header.stamp
             )
         except Exception:
+            tf_fallback = True
             try:
                 tf = self._tf_buffer.lookup_transform(
                     'map', msg.header.frame_id, rclpy.time.Time()
@@ -460,6 +467,11 @@ class MapBridge:
                 )
             except Exception:
                 return  # sem TF ainda -> sem overlay
+        diag = {
+            '_age': round(scan_age, 3),     # s: sensor->emit (TF/CPU)
+            '_fb': tf_fallback,             # True = usou yaw velho (fallback)
+            '_sts': now,                    # server_ts p/ medir transporte
+        }
         lx = tf.transform.translation.x
         ly = tf.transform.translation.y
         lyaw = _quat_to_yaw(
@@ -487,13 +499,13 @@ class MapBridge:
         self._last_scan_emit = now
         if not sel.any():
             # Sem pontos válidos, mas ainda manda a pose pro boneco acompanhar.
-            self._sock.emit('scan_update', {'xs': [], 'ys': [], **pose},
+            self._sock.emit('scan_update', {'xs': [], 'ys': [], **pose, **diag},
                             namespace='/')
             return
         rr = ranges[sel]
         xs = (lx + rr * np.cos(ang[sel])).round(3).tolist()
         ys = (ly + rr * np.sin(ang[sel])).round(3).tolist()
-        self._sock.emit('scan_update', {'xs': xs, 'ys': ys, **pose},
+        self._sock.emit('scan_update', {'xs': xs, 'ys': ys, **pose, **diag},
                         namespace='/')
 
     # ---- Folga do ponto-pré-porta (option A 2026-06-23) -------------------
