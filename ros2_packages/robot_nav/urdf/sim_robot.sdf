@@ -1,130 +1,123 @@
 <?xml version="1.0"?>
 <!--
-  Robô diferencial para simulação no Gazebo Harmonic (Jazzy).
+  Robô skid-steer 4 RODAS simulado no Gazebo Harmonic.
+  Dimensões batem 1:1 com o robô REAL (robot.urdf.xacro):
+    corpo 0.50 x 0.50 x 0.26 m | massa 15.46 kg
+    roda  raio 0.085 m, largura 0.06 m
+    bitola (esq-dir) 0.50 m | entre-eixos (F-R) 0.37 m
+    LiDAR no CENTRO, 0.25 m acima do base_link
 
-  Dimensões batem com o URDF real (track_width=0.50, wheel_radius=0.085)
-  para que os tunings de slam_toolbox/Nav2 transfiram razoavelmente.
+  Skid-steer = DiffDrive com 2 left_joint + 2 right_joint (truque padrão do
+  gz-sim). O giro no lugar acontece por derrapagem lateral das 4 rodas; o
+  atrito lateral (mu2) é o knob principal pra ajustar o giro.
 
-  Tópicos publicados pelos plugins:
-    - /cmd_vel  (consumido pela DiffDrive)
-    - /odom     (publicado pela DiffDrive a 30 Hz)
-    - /tf       (odom → base_link via DiffDrive)
-    - /scan     (LiDAR GPU, frame_id=base_laser, ~10 Hz)
+  Nomes de links/juntas batem com sim_robot.urdf.xacro (robot_state_publisher).
+  Tópicos ROS (via bridge): /cmd_vel, /odom, /scan, /tf, /joint_states
 -->
 <sdf version="1.9">
   <model name="sim_robot">
-    <pose>0 0 0.12 0 0 0</pose>
+    <!-- base_link center = wheel_radius + body_height/2 = 0.085 + 0.13 = 0.215 -->
+    <pose>0 0 0.215 0 0 0</pose>
 
-    <!-- ====== base_link (corpo principal) ====== -->
+    <!-- ====== base_link (chassi) ====== -->
     <link name="base_link">
       <inertial>
-        <mass>10.0</mass>
+        <mass>15.46</mass>
         <inertia>
-          <ixx>0.2</ixx><iyy>0.2</iyy><izz>0.2</izz>
+          <ixx>0.41</ixx><iyy>0.41</iyy><izz>0.64</izz>
           <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
         </inertia>
       </inertial>
       <visual name="body_visual">
-        <geometry><box><size>0.50 0.45 0.10</size></box></geometry>
+        <geometry><box><size>0.50 0.50 0.26</size></box></geometry>
         <material>
-          <ambient>0.3 0.3 0.35 1</ambient>
-          <diffuse>0.5 0.5 0.55 1</diffuse>
+          <ambient>0.5 0.5 0.5 1</ambient>
+          <diffuse>0.55 0.55 0.55 1</diffuse>
+          <specular>0.2 0.2 0.2 1</specular>
         </material>
       </visual>
       <collision name="body_collision">
-        <geometry><box><size>0.50 0.45 0.10</size></box></geometry>
+        <geometry><box><size>0.50 0.50 0.26</size></box></geometry>
       </collision>
+      <!-- Marca da frente (+x): faixa laranja pra enxergar a orientação -->
+      <visual name="front_marker">
+        <pose>0.22 0 0.131 0 0 0</pose>
+        <geometry><box><size>0.06 0.50 0.005</size></box></geometry>
+        <material><ambient>0.9 0.45 0 1</ambient><diffuse>1 0.5 0 1</diffuse></material>
+      </visual>
     </link>
 
-    <!-- ====== Rodas ====== -->
-    <link name="left_wheel">
-      <pose>0 0.225 -0.05 -1.5707 0 0</pose>
-      <inertial>
-        <mass>1.5</mass>
-        <inertia>
-          <ixx>0.005</ixx><iyy>0.005</iyy><izz>0.009</izz>
-          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
-        </inertia>
+    <!-- ====== 4 rodas (skid-steer) ======
+         z = -body_height/2 = -0.13 (centro da roda em world z=0.085=raio)
+         x = ±wheelbase/2 = ±0.185 | y = ±track/2 = ±0.25
+         rpy -1.5707 0 0 + axis 0 0 1 => roda gira em torno de Y (rola em +x)
+    -->
+    <link name="front_left_wheel">
+      <pose>0.185 0.25 -0.13 -1.5707 0 0</pose>
+      <inertial><mass>1.5</mass>
+        <inertia><ixx>0.005</ixx><iyy>0.005</iyy><izz>0.009</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
       </inertial>
-      <visual name="left_wheel_visual">
-        <geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
-        <material><diffuse>0.1 0.1 0.1 1</diffuse></material>
-      </visual>
-      <collision name="left_wheel_collision">
-        <geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
-        <surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface>
-      </collision>
+      <visual name="v"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
+        <material><diffuse>0.1 0.1 0.1 1</diffuse></material></visual>
+      <collision name="c"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
+        <surface><friction><ode><mu>1.0</mu><mu2>0.4</mu2></ode></friction></surface></collision>
     </link>
-    <joint name="left_wheel_joint" type="revolute">
-      <parent>base_link</parent>
-      <child>left_wheel</child>
-      <axis>
-        <xyz>0 0 1</xyz>
-        <limit><lower>-1e16</lower><upper>1e16</upper></limit>
-      </axis>
+    <joint name="front_left_wheel_joint" type="revolute">
+      <parent>base_link</parent><child>front_left_wheel</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis>
     </joint>
 
-    <link name="right_wheel">
-      <pose>0 -0.225 -0.05 1.5707 0 0</pose>
-      <inertial>
-        <mass>1.5</mass>
-        <inertia>
-          <ixx>0.005</ixx><iyy>0.005</iyy><izz>0.009</izz>
-          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
-        </inertia>
+    <link name="front_right_wheel">
+      <pose>0.185 -0.25 -0.13 -1.5707 0 0</pose>
+      <inertial><mass>1.5</mass>
+        <inertia><ixx>0.005</ixx><iyy>0.005</iyy><izz>0.009</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
       </inertial>
-      <visual name="right_wheel_visual">
-        <geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
-        <material><diffuse>0.1 0.1 0.1 1</diffuse></material>
-      </visual>
-      <collision name="right_wheel_collision">
-        <geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
-        <surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface>
-      </collision>
+      <visual name="v"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
+        <material><diffuse>0.1 0.1 0.1 1</diffuse></material></visual>
+      <collision name="c"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
+        <surface><friction><ode><mu>1.0</mu><mu2>0.4</mu2></ode></friction></surface></collision>
     </link>
-    <joint name="right_wheel_joint" type="revolute">
-      <parent>base_link</parent>
-      <child>right_wheel</child>
-      <axis>
-        <xyz>0 0 1</xyz>
-        <limit><lower>-1e16</lower><upper>1e16</upper></limit>
-      </axis>
+    <joint name="front_right_wheel_joint" type="revolute">
+      <parent>base_link</parent><child>front_right_wheel</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis>
     </joint>
 
-    <!-- ====== Caster esférico traseiro (estabilidade) ====== -->
-    <link name="caster">
-      <pose>-0.20 0 -0.07 0 0 0</pose>
-      <inertial>
-        <mass>0.1</mass>
-        <inertia>
-          <ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz>
-          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
-        </inertia>
+    <link name="rear_left_wheel">
+      <pose>-0.185 0.25 -0.13 -1.5707 0 0</pose>
+      <inertial><mass>1.5</mass>
+        <inertia><ixx>0.005</ixx><iyy>0.005</iyy><izz>0.009</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
       </inertial>
-      <visual name="caster_visual">
-        <geometry><sphere><radius>0.035</radius></sphere></geometry>
-      </visual>
-      <collision name="caster_collision">
-        <geometry><sphere><radius>0.035</radius></sphere></geometry>
-        <surface>
-          <friction><ode><mu>0.0</mu><mu2>0.0</mu2></ode></friction>
-        </surface>
-      </collision>
+      <visual name="v"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
+        <material><diffuse>0.1 0.1 0.1 1</diffuse></material></visual>
+      <collision name="c"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
+        <surface><friction><ode><mu>1.0</mu><mu2>0.4</mu2></ode></friction></surface></collision>
     </link>
-    <joint name="caster_joint" type="fixed">
-      <parent>base_link</parent>
-      <child>caster</child>
+    <joint name="rear_left_wheel_joint" type="revolute">
+      <parent>base_link</parent><child>rear_left_wheel</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis>
     </joint>
 
-    <!-- ====== LiDAR ====== -->
+    <link name="rear_right_wheel">
+      <pose>-0.185 -0.25 -0.13 -1.5707 0 0</pose>
+      <inertial><mass>1.5</mass>
+        <inertia><ixx>0.005</ixx><iyy>0.005</iyy><izz>0.009</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+      </inertial>
+      <visual name="v"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
+        <material><diffuse>0.1 0.1 0.1 1</diffuse></material></visual>
+      <collision name="c"><geometry><cylinder><radius>0.085</radius><length>0.06</length></cylinder></geometry>
+        <surface><friction><ode><mu>1.0</mu><mu2>0.4</mu2></ode></friction></surface></collision>
+    </link>
+    <joint name="rear_right_wheel_joint" type="revolute">
+      <parent>base_link</parent><child>rear_right_wheel</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis>
+    </joint>
+
+    <!-- ====== LiDAR 2D centralizado ======
+         z = body_height/2 + lidar_z = 0.13 + 0.12 = 0.25 rel ao base_link -->
     <link name="base_laser">
-      <pose>0.10 0 0.17 0 0 0</pose>
-      <inertial>
-        <mass>0.1</mass>
-        <inertia>
-          <ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz>
-          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
-        </inertia>
+      <pose>0 0 0.25 0 0 0</pose>
+      <inertial><mass>0.1</mass>
+        <inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
       </inertial>
       <visual name="lidar_visual">
         <geometry><cylinder><radius>0.038</radius><length>0.04</length></cylinder></geometry>
@@ -139,7 +132,7 @@
         <lidar>
           <scan>
             <horizontal>
-              <samples>360</samples>
+              <samples>455</samples>
               <resolution>1</resolution>
               <min_angle>-3.14159</min_angle>
               <max_angle>3.14159</max_angle>
@@ -159,11 +152,12 @@
     </joint>
 
     <!-- ====== Plugins ====== -->
-    <!-- Diferencial: consome /cmd_vel, publica /odom e TF odom->base_link -->
+    <!-- Skid-steer: 2 juntas de cada lado. wheel_separation = bitola real. -->
     <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
-      <left_joint>left_wheel_joint</left_joint>
-      <right_joint>right_wheel_joint</right_joint>
-      <!-- Alinhado com robot.urdf.xacro (track_width=0.50 m). -->
+      <left_joint>front_left_wheel_joint</left_joint>
+      <left_joint>rear_left_wheel_joint</left_joint>
+      <right_joint>front_right_wheel_joint</right_joint>
+      <right_joint>rear_right_wheel_joint</right_joint>
       <wheel_separation>0.50</wheel_separation>
       <wheel_radius>0.085</wheel_radius>
       <odom_publish_frequency>30</odom_publish_frequency>
@@ -172,19 +166,19 @@
       <frame_id>odom</frame_id>
       <child_frame_id>base_link</child_frame_id>
       <tf_topic>/tf</tf_topic>
-      <max_linear_acceleration>1.0</max_linear_acceleration>
-      <max_angular_acceleration>2.0</max_angular_acceleration>
+      <max_linear_acceleration>1.5</max_linear_acceleration>
+      <max_angular_acceleration>3.0</max_angular_acceleration>
     </plugin>
 
-    <!-- Publica estados das juntas (rodas girando na visualização) -->
     <plugin filename="gz-sim-joint-state-publisher-system"
             name="gz::sim::systems::JointStatePublisher">
       <topic>joint_states</topic>
-      <joint_name>left_wheel_joint</joint_name>
-      <joint_name>right_wheel_joint</joint_name>
+      <joint_name>front_left_wheel_joint</joint_name>
+      <joint_name>front_right_wheel_joint</joint_name>
+      <joint_name>rear_left_wheel_joint</joint_name>
+      <joint_name>rear_right_wheel_joint</joint_name>
     </plugin>
 
-    <!-- Publica pose de todos os links para os TFs estáticos secundários -->
     <plugin filename="gz-sim-pose-publisher-system"
             name="gz::sim::systems::PosePublisher">
       <publish_link_pose>true</publish_link_pose>
@@ -193,8 +187,8 @@
       <publish_visual_pose>false</publish_visual_pose>
       <publish_nested_model_pose>false</publish_nested_model_pose>
       <use_pose_vector_msg>true</use_pose_vector_msg>
-      <!-- false: o robot_state_publisher já publica os TFs estáticos a partir
-           do URDF. Com true, o PosePublisher do GZ duplicaria esses TFs. -->
+      <!-- static_publisher=false: o robot_state_publisher já cobre os TFs
+           estáticos via URDF; com true o GZ duplicava base_link→rodas/laser. -->
       <static_publisher>false</static_publisher>
       <static_update_frequency>1</static_update_frequency>
     </plugin>

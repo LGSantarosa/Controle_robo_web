@@ -1,0 +1,94 @@
+<?xml version="1.0"?>
+<!--
+  Robô skid-steer 4 rodas (URDF de apoio do SIM) — dimensões batem 1:1 com o
+  robô REAL (robot.urdf.xacro) e com o sim_robot.sdf simulado no Gazebo.
+
+  O robot_state_publisher usa esta árvore pra fornecer os TFs estáticos que o
+  slam_toolbox e o Nav2 consomem (principalmente base_link → base_laser) e pra
+  animar as 4 rodas a partir do /joint_states do Gazebo.
+
+  IMPORTANTE: o odom → base_link vem do plugin DiffDrive do Gazebo, então
+  base_link NÃO pode ter outro pai aqui (SEM base_footprint — senão o base_link
+  fica com dois pais no TF). É por isso que NÃO usamos o robot.urdf.xacro real
+  direto: ele tem base_footprint. Dimensões idênticas, só a raiz muda.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="sim_robot">
+
+  <!-- Dimensões medidas no chassi real (2026-05-11) — iguais ao robot.urdf.xacro -->
+  <xacro:property name="wheel_radius"  value="0.085"/>
+  <xacro:property name="wheel_width"   value="0.06"/>
+  <xacro:property name="track_width"   value="0.50"/>   <!-- bitola esq-dir -->
+  <xacro:property name="wheelbase"     value="0.37"/>   <!-- entre-eixos F-R -->
+
+  <xacro:property name="body_length"   value="0.50"/>
+  <xacro:property name="body_width"    value="0.50"/>
+  <xacro:property name="body_height"   value="0.26"/>
+
+  <!-- LiDAR no CENTRO (2026-06-11: o 0.10 antigo era falso). Offset em z bate
+       com o real: body_height/2 + lidar_z = 0.13 + 0.12 = 0.25 acima do base_link. -->
+  <xacro:property name="lidar_x"       value="0.0"/>
+  <xacro:property name="lidar_z"       value="0.12"/>
+
+  <link name="base_link">
+    <visual>
+      <geometry><box size="${body_length} ${body_width} ${body_height}"/></geometry>
+      <material name="grey"><color rgba="0.5 0.5 0.5 1.0"/></material>
+    </visual>
+    <collision>
+      <geometry><box size="${body_length} ${body_width} ${body_height}"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="15.46"/>
+      <inertia ixx="0.41" ixy="0" ixz="0" iyy="0.41" iyz="0" izz="0.64"/>
+    </inertial>
+  </link>
+
+  <!-- Macro de roda — eixo de giro alinhado a Y (rpy -pi/2 em X), igual ao real -->
+  <xacro:macro name="wheel" params="name x y">
+    <joint name="${name}_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${name}"/>
+      <origin xyz="${x} ${y} ${-body_height/2}" rpy="${-pi/2} 0 0"/>
+      <axis xyz="0 0 1"/>
+    </joint>
+    <link name="${name}">
+      <visual>
+        <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+        <material name="black"><color rgba="0.1 0.1 0.1 1.0"/></material>
+      </visual>
+      <collision>
+        <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+      </collision>
+      <inertial>
+        <mass value="1.5"/>
+        <inertia ixx="0.005" ixy="0" ixz="0" iyy="0.005" iyz="0" izz="0.009"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <xacro:wheel name="front_left_wheel"  x="${ wheelbase/2}" y="${ track_width/2}"/>
+  <xacro:wheel name="front_right_wheel" x="${ wheelbase/2}" y="${-track_width/2}"/>
+  <xacro:wheel name="rear_left_wheel"   x="${-wheelbase/2}" y="${ track_width/2}"/>
+  <xacro:wheel name="rear_right_wheel"  x="${-wheelbase/2}" y="${-track_width/2}"/>
+
+  <!-- LiDAR (base_laser) — TF estático consumido por SLAM/Nav2/viz -->
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="base_laser"/>
+    <origin xyz="${lidar_x} 0 ${body_height/2 + lidar_z}" rpy="0 0 0"/>
+  </joint>
+  <link name="base_laser">
+    <visual>
+      <geometry><cylinder radius="0.038" length="0.04"/></geometry>
+      <material name="blue"><color rgba="0.0 0.3 0.8 1.0"/></material>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.038" length="0.04"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+</robot>
