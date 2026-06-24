@@ -252,12 +252,12 @@ A flag `--sim` troca tudo que é hardware por simulação:
 | LiDAR | `ldlidar_stl_ros2` em `/dev/lidar` (LD06) | sensor `gpu_lidar` na SDF do robô |
 | IMU | MPU6050 (via MEGA) | (não simulado) |
 | Optical flow | PMW3901 (via MEGA) | (não simulado) |
-| Corpo do robô | URDF (`robot.urdf.xacro` — 4 rodas) | URDF + SDF (`husky.sdf` — 2 rodas, diff drive simplificado) |
+| Corpo do robô | URDF (`robot.urdf.xacro` — 4 rodas) | SDF (`sim_robot.sdf` — 4 rodas skid-steer, geometria REAL 0.37×0.35) |
 | `/scan`, `/odom`, `/tf` | tópicos reais | via `ros_gz_bridge` (GZ → ROS) |
 
 O servidor web, o `map_service.py` e a UI são exatamente os mesmos.
 
-> **Sobre o modelo simulado:** ainda é uma URDF/SDF estilo "husky" com **2 rodas + caster**, herdada da versão anterior do robô. Funciona perfeitamente para validar a stack Nav2 e SLAM, mas é cinematicamente diferente do robô real de 4 rodas. Um SDF 4-wheel skid-steer pode entrar numa próxima iteração — por enquanto a divergência é intencional para manter o sim leve.
+> **Sobre o modelo simulado:** desde 2026-06-24 o sim usa `urdf/sim_robot.sdf`, um robô **4 rodas skid-steer fiel ao real** — dimensões reais (chassi 0.37×0.35, rodas r=0.085 com eixo/mancal, LiDAR no topo), tração skid-steer via dois plugins `DiffDrive` (2+2 juntas). Validado no Gazebo Harmonic (anda, gira e o LiDAR enxerga). Os arquivos `husky.sdf`/`husky.urdf.xacro` ficaram como **legado órfão** (não são mais carregados). Knob do giro = `mu2` do contato das rodas (≈0.4). O que ainda NÃO é simulado: IMU, optical flow e os erros do real (zona-morta do giro, patinagem de yaw, ruído de sensor) — modelar isso é o próximo passo pra usar o sim como régua do real (ver `ESTADO_PROJETO.md`).
 
 ### Instalando o Gazebo e o bridge ROS↔GZ
 
@@ -1137,9 +1137,10 @@ Controle_robo_web/
 │       │   └── navigate_w_backup_first_recovery.xml  # BT custom: ré ANTES do spin
 │       ├── urdf/
 │       │   ├── robot.urdf.xacro       # URDF do robô 4 rodas (real, sensores no centro)
-│       │   ├── husky.urdf.xacro       # URDF do robô simulado (2 rodas, sim legacy)
-│       │   ├── husky.sdf              # SDF do robô simulado (default atual do sim)
-│       │   └── sim_robot.sdf          # SDF 4-wheel diff-drive (WIP)
+│       │   ├── sim_robot.sdf          # SDF do robô simulado 4 rodas skid-steer (DEFAULT do --sim)
+│       │   ├── sim_robot.urdf.xacro   # URDF do robô simulado (TF/robot_state_publisher)
+│       │   ├── husky.urdf.xacro       # legado órfão (sim antigo 2 rodas — não carregado)
+│       │   └── husky.sdf              # legado órfão (sim antigo 2 rodas — não carregado)
 │       ├── config/
 │       │   ├── nav2_params.yaml       # Tuning Nav2 (notebook x86_64)
 │       │   ├── nav2_params_pi.yaml    # Perfil da Raspberry Pi (--pi) — O QUE RODA NO ROBÔ
@@ -1266,7 +1267,7 @@ tail -f controle_web/logs/lidar.log
 - **Ambientes muito simétricos.** Corredor longo de paredes lisas: scan-matching do SLAM e AMCL sofrem sem features. *Mitigação:* mapear com móveis e variação.
 - **Sem câmera.** O sistema funciona 100% com LiDAR. Voltar com câmera implica reintroduzir um `camera_bridge.py` e pointcloud no costmap.
 - **Bateria das placas.** Sem 39 V a MEGA até liga, mas as placas não respondem — a UI funciona, o robô não anda (e o firmware corta o reporte de rodas: RODAS ficam "stale" com a MEGA viva).
-- **Modelo simulado divergente.** O `husky.sdf` do `--sim` é um diff-drive 2-rodas; o robô real é 4-rodas skid-steer. Existe `urdf/sim_robot.sdf` 4-wheel, ainda não conectado ao `sim.launch.py`. Serve pra validar a stack, não a dinâmica.
+- **Modelo simulado fiel, física ainda não.** O `--sim` carrega `urdf/sim_robot.sdf` (4 rodas skid-steer, dimensões reais) — bom pra validar a stack Nav2/SLAM e a cinemática. Mas o sim ainda NÃO reproduz a física/erros do real (zona-morta do giro, patinagem de yaw, ruído de IMU/flow, EMI). Pra usar o sim como régua do real, falta injetar esses erros (ver `ESTADO_PROJETO.md`).
 - **Mapa golden é a régua.** `mapa_golden_2026-06-10.*` = melhor SLAM já feito (pose "perfeita"). Não retunar slam/pose_estimator/odometria sem comparar contra ele.
 
 ---

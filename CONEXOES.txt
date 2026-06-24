@@ -1,0 +1,116 @@
+==============================================================================
+ CONEXÕES DO ROBÔ 4 RODAS — Arduino MEGA 2560 + Raspberry Pi
+ Fonte da verdade: firmware/mega_bridge/ (src/main.cpp, include/io_signals.h)
+ Atualizado: 2026-06-24
+==============================================================================
+
+Visão geral do fluxo:
+  Raspberry Pi  --USB-->  Arduino MEGA 2560  --2x UART-->  2 placas hoverboard
+                  \--USB-->  LiDAR LD06
+  Todos os sensores (IMU, flow) e atuadores de sinalização ficam na MEGA.
+  A Pi NÃO tem fiação GPIO — ela só conversa USB com a MEGA e com o LiDAR.
+
+
+==============================================================================
+ 1) ARDUINO MEGA 2560 — PINAGEM
+==============================================================================
+(pinos decididos em 2026-05-11; NÃO trocar sem refiação)
+
+  UARTs (seriais de hardware)
+  ---------------------------------------------------------------------------
+  Serial0 (USB)        pinos 0/1 (reservados)   -> Raspberry Pi / PC
+                                                   protocolo agregado, frames
+                                                   0xAA 0x55, 230400 baud
+  Serial1              TX=18, RX=19             -> placa hoverboard FRENTE (FL+FR)
+                                                   115200 baud, SerialCommand 0xABCD
+  Serial2              TX=16, RX=17             -> placa hoverboard TRÁS  (RL+RR)
+                                                   115200 baud, SerialCommand 0xABCD
+  Serial3              TX=14, RX=15             -> reserva / debug
+
+  Barramento I²C  (IMU)
+  ---------------------------------------------------------------------------
+  SDA=20, SCL=21                                -> MPU6050 (IMU 6 eixos: gyro+accel)
+                                                   * yaw integrado do gyro Z
+                                                   * protegido por Wire.setWireTimeout
+                                                     + watchdog WDTO_2S (EMI travava a TWI)
+                                                   (OBS: NÃO é BNO055 — doc antiga errava)
+
+  Barramento SPI  (optical flow)
+  ---------------------------------------------------------------------------
+  MISO=50, MOSI=51, SCK=52                      -> PMW3901 (optical flow)
+  CS (chip select) = pino 10                       via conversor de nível 5V<->3.3V
+                                                   (shifter MOSFET marginal = EMI no giro)
+
+  GPIOs de sinalização
+  ---------------------------------------------------------------------------
+  pino 7  (saída)                              -> relé da luz
+  pino 8  (saída)                              -> LED de sinalização do marco
+  pino 9  (entrada, PULL-UP interno)           -> botão de partida (liga a GND)
+  pino 5  (saída, NEOPIXEL/FastLED)            -> DATA da fita de LED de status
+                                                   (anel WS2812 ABANDONADO — curto no
+                                                    DIN; hoje fita de 3 LEDs; pino foi
+                                                    6 -> 5 em 2026-05-27)
+
+  Alimentação
+  ---------------------------------------------------------------------------
+  Vin (ou jack DC) <- 12 V da bateria principal
+  GND              <- GND lógico comum (Wago)
+  5V de saída da MEGA: NÃO usar p/ sensor pesado (usar step-down externo)
+
+  Watchdog de comando: se o PC parar de mandar setpoint por >500 ms,
+  a MEGA ZERA os motores (fail-safe). SETPOINT_TIMEOUT_MS = 500.
+
+
+==============================================================================
+ 2) CABO DA PLACA HOVERBOARD (4 fios; usa-se 3)
+==============================================================================
+Cada placa expõe TX, RX, GND e VCC. Cores DESTE robô (confirmadas em campo):
+
+  Cor na placa   Função                 Conecta em (MEGA)
+  ---------------------------------------------------------------------------
+  Verde          RX da placa (escuta)   TX da MEGA -> pino 18 (frente, Serial1)
+                                                      pino 16 (trás,   Serial2)
+  Azul           TX da placa (feedback) RX da MEGA -> pino 19 (frente, Serial1)
+                                                      pino 17 (trás,   Serial2)
+  Preto          GND                    GND da MEGA (OBRIGATÓRIO — referência comum;
+                                          sem ele TX/RX flutuam e não há comunicação)
+  (4º fio: VCC)  saída de alimentação   NÃO conectar (conflito de regulador).
+                                          Só no Vin se for alimentar a MEGA pela placa
+                                          (e aí USB desplugada).
+
+  Mnemônica: TX da MEGA sempre no fio VERDE, RX da MEGA sempre no fio AZUL.
+  Se inverter não queima — só não comunica (UI sobe, robô parado, RPM 0 nas 4 rodas).
+
+  Particularidade da placa de TRÁS (fiação real deste robô):
+    motores invertidos + cabos L/R TROCADOS -> tratado em software:
+      comando:  rear_invert_speed=True, rear_steer=False
+      feedback: normalizado no mega_bridge._fb_map
+    (FL=+, FR=-, RR=+, RL=- por causa do swap). NÃO julgar rotação pelo
+    sinal cru do feedback.
+
+
+==============================================================================
+ 3) RASPBERRY PI — CONEXÕES
+==============================================================================
+A Pi é só o computador de bordo (ROS2 Jazzy). Sem GPIO fiado.
+
+  USB
+  ---------------------------------------------------------------------------
+  USB  -> Arduino MEGA 2560     symlink /dev/mega   (ttyACM0 oficial ou ttyUSB0 CH340)
+  USB  -> LiDAR LDROBOT LD06    symlink /dev/lidar  (ttyUSB1)
+       (symlinks fixos por porta física via setup_udev.sh -> 99-robot-usb.rules)
+
+  Energia / rede
+  ---------------------------------------------------------------------------
+  Alimentação: fonte da Pi (recomendado bootar de SSD USB3, não microSD)
+  Rede: WiFi -> achável como robo-desktop.local (mDNS/avahi)
+  Acesso headless: ssh robo@robo-desktop.local
+
+  Observações
+  ---------------------------------------------------------------------------
+  - O LiDAR vai DIRETO na USB da Pi (não passa pela MEGA).
+  - Não há câmera RGB-D nesta versão.
+  - Toda telemetria (rodas, IMU, flow, tensão das placas) chega à Pi pela
+    ÚNICA USB da MEGA (stream agregado). Nunca falar direto com as placas.
+
+==============================================================================
