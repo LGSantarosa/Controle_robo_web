@@ -99,6 +99,11 @@ lixo na EMI.
   cmd_vel_nav/nav_vel/cmd_vel/odom) **deployado na Pi `4f8b306` mas NÃO validado — bateria do
   hover cortou antes de reproduzir.** Próxima sessão real: religar → `./launch.sh --nav2` →
   reproduzir o congelamento → eu leio o CSV.
+  **06-24 (sim): `freeze_capture` turbinado** — além da cadeia de velocidade, grava
+  `freeze_diag.csv` (5 Hz): heading do robô (TF map→base_link) × direção do `/plan` a 0.5 m
+  (`plan_rel_deg`) × obstáculo à frente (`/scan`, ±15°) + último `cmd_vel_nav`. Prova
+  "planner manda contornar X° e o robô aponta reto na parede". Achado parcial no sim: andando,
+  o DWB só pede giro <0.55 rad/s (zona-morta mata) → reto; giro forte só parado (point-turn).
 - **NAV2 "burro"** (mesmo tema do congelamento acima): vira cedo/forte, faz curva em tangente
   em vez de ir reto no corredor e girar 90° no lugar → chega de cara/paralelo na parede, precisa
   de 2 rés pra sair. Skid-steer **não faz arco** — realinhar tem que ser **giro no lugar** com
