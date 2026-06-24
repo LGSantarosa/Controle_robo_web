@@ -15,6 +15,13 @@
   `git fetch && git reset --hard origin/main` → `colcon build` (do pacote alterado, ex. `robot_nav`).
   Acesso: `ssh robo@robo-desktop.local` (a Pi troca de IP toda hora; usar `robo-desktop.local`
   e fazer retry até conectar). ROS = **jazzy**.
+- Pi deployada e buildada em `4f8b306` (com o nó `freeze_capture`). Dev/GitHub à frente só com
+  docs (README atualizado + `CONEXOES.txt`).
+
+**Arquivos de referência no repo (qualquer PC):**
+- `ESTADO_PROJETO.md` (este) — estado vivo: BOs, avanços, TODO.
+- `CONEXOES.txt` — pinagem MEGA + cabo hoverboard + USB da Pi (fonte = firmware).
+- `README.md` — guia completo (sim/real, setup, modos, tuning).
 
 ---
 
