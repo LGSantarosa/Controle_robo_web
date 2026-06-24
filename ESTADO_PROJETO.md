@@ -58,10 +58,11 @@ Decisão do dono: **deixar tudo igual** (sim = real), 1 gap por vez.
 | 4 | **LiDAR limpo** vs LD06 com fantasmas <0,15m + ruído (os fantasmas que envenenam o `front_gap` do unstuck) | 🟠 médio | médio | ⬜ a fazer |
 
 **🎉 MARCO 06-24:** com #1+#2 o sim já reproduz o robô "burro" do real ("é o mesmo código").
-Próximo enabler pra debugar o BO de verdade = **pôr obstáculos/paredes no mundo do sim**
-(`empty.sdf` é vazio) pra reproduzir "vira cedo na parede / congela perto do goal" e atacar com
-o `freeze_capture` lendo o CSV local. Régua: o que funcionar no sim **valida no real** em janela
-curta de bateria.
+✅ **Mundo com obstáculos criado** (`worlds/sala.sdf`, agora DEFAULT do `--sim`; `empty.sdf` =
+template vazio): sala 8×6 dividida por uma parede com **porta de 0,93 m** (igual à real) +
+caixas/cilindro. Robô spawna em (0,0) encarando a porta. Pronto pra reproduzir "vira cedo na
+parede / congela perto do goal / travessia de porta" e atacar com o `freeze_capture` (CSV local,
+sem ssh). Régua: o que funcionar no sim **valida no real** em janela curta de bateria.
 Dados reais medidos pra calibrar o sim: IMU ~99%; giro ≈ `0,6·(cmd−1,7)`, satura ~2,5, não gira
 <1,7, direita gira mais (3% a 4–6 rad/s, 30% a 2 rad/s); odom de roda superestima yaw; flow cospe
 lixo na EMI.

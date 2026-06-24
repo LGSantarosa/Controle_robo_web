@@ -34,7 +34,7 @@ WEB_TELEOP="off"                  # off = web só visualização; --web-teleop r
 MAP_FILE="$SCRIPT_DIR/maps/sala.yaml"
 PI_PROFILE=false
 SIM=false
-WORLD_FILE="$SCRIPT_DIR/worlds/empty.sdf"
+WORLD_FILE="$SCRIPT_DIR/worlds/sala.sdf"   # default: sala c/ paredes+obstáculos+porta 0.93m (empty.sdf = template vazio)
 SPAWN_X="2.0"
 SPAWN_Y="2.5"
 SPAWN_Z="0.2"
