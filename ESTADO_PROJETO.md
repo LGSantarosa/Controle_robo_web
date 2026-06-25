@@ -116,10 +116,22 @@ lixo na EMI.
   - Ou seja: **reto OU giro-no-lugar, NUNCA arco coordenado.** Ex. t+18s: plan pede −18°, robô
     `vx=0.35 wz=−0.55` (giro morto) indo num obstáculo a 0.82 m → aproxima, point-turna, dá ré
     (unstuck vx=−0.15), passa do goal (chegou a y=−2.44, goal y=−1.4), não converge → aborta.
-  - ⚠️ **CAVEAT honesto:** esse "não faz arco" é EM PARTE imposto pelo meu `sim_actuator_model`
-    (apliquei a zona-morta do giro-PARADO também ao arco). O `spin_calib` só mediu giro parado.
-    **Validar no real:** o robô arqueia andando com wz baixo, ou é morto igual ao sim?
-  - **Direção do fix (discutir, NÃO aplicar):** skid-steer com zona-morta não esterça andando →
+  - ✅ **CAVEAT RESOLVIDO COM DADO REAL (06-25, `arc_calib.py`):** o caveat era "será que o
+    'não arqueia' é artefato do meu sim_actuator_model?". Esclarecido pelo dono: o sim está
+    CERTO — o real nunca arqueou, foi **decisão dele** mandar parar de arquear (arco saía fraco
+    demais) e só girar no lugar. Mas faltava PROVAR se o HW é incapaz ou se só não tunamos.
+    Rodei o `arc_calib` (mede giro ANDANDO, vx=0,25 fixo, 1 wz por play, lê /odom fundida).
+    **wz comandado → efetivo (% do comando):** 0,3→3% | 0,5→3% | 0,8→2% | 1,2→3% (=RETO com
+    ruído) | 1,7→7% | **2,5→19% (0,47 rad/s, raio 0,53 m)**. Ele **SEMPRE sub-vira andando**,
+    nunca passa de 19%. Andar a 2,5 dá ~0,47 rad/s = IGUAL ao giro PARADO a 2,5 → andar quase
+    não muda a autoridade. **VEREDITO: o robô REALMENTE não arqueia — é FÍSICO (diferencial
+    pequeno não vence a patinagem lateral do skid-steer), não tuning. DWB é incompatível.**
+    Usar SÓ o arco do 2,5 como primitivo foi REJEITADO (tudo-ou-nada, beira da saturação =
+    pior assimetria + gatilho do BMS, só 19% fiel). `cmd_vel_to_wheels` confirmado SEM
+    zona-morta no SW (cinemática pura) → a zona-morta é firmware+físico. Ver [[feedback_no_arc_turns]].
+    Script `f6ebda8`, CSVs `/tmp/arc_calib*.csv` na Pi.
+  - **Direção do fix (decidida):** reto no corredor + **giro 90° no lugar** (autoridade alta +
+    malha fechada no yaw da IMU, igual ao spin do unstuck). skid-steer com zona-morta não esterça andando →
     DWB (arcos suaves) é incompatível. Opções: (a) baixar a zona-morta no controle/firmware p/
     o arco existir; (b) controlador que faça reto+point-turn deliberado; (c) tunar p/ commitar no
     point-turn cedo. Ver [[feedback_no_arc_turns]] e [[project_nav2_recovery_nao_dispara]].
