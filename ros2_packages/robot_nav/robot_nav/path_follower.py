@@ -104,6 +104,7 @@ class DecisiveFollower:
     def __init__(self, cfg: FollowConfig):
         self.cfg = cfg
         self.state = 'idle'
+        self.dbg = {}        # diagnóstico do último update (logado pelo nó)
 
     def _turn_cmd(self, herr: float) -> float:
         """giro no lugar pelo MENOR ângulo: sinal = sinal do erro; magnitude P
@@ -144,6 +145,10 @@ class DecisiveFollower:
 
         bearing = math.atan2(ay - y, ax - x)
         herr = wrap(bearing - yaw)
+        dist_aim = math.hypot(ax - x, ay - y)
+        self.dbg = {'i0': i0, 'ci': ci, 'n': len(path), 'ax': ax, 'ay': ay,
+                    'herr_deg': math.degrees(herr), 'dist_aim': dist_aim,
+                    'dist_goal': dist_goal}
 
         # 3) não está de frente -> GIRA no lugar (reto só depois de alinhar)
         if abs(herr) > c.turn_tol:
@@ -151,7 +156,6 @@ class DecisiveFollower:
             return Cmd(0.0, self._turn_cmd(herr), 'turning')
 
         # 4) de frente -> anda RETO (wz=0). Freia perto do alvo.
-        dist_aim = math.hypot(ax - x, ay - y)
         speed = c.forward_speed
         if dist_aim < c.slow_radius:
             speed = max(c.min_speed, c.forward_speed * dist_aim / c.slow_radius)
@@ -221,6 +225,16 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                     lambda m, t=topic: self._on_status(t, m), 10)
 
             self._last_state = None
+            # CSV de diagnóstico (eu, assistente, leio depois — não ao vivo).
+            import csv as _csv
+            import os as _os
+            d = 'controle_web/logs'
+            _os.makedirs(d, exist_ok=True)
+            self._csv_f = open(_os.path.join(d, 'follow_debug.csv'), 'w', newline='')
+            self._csv = _csv.writer(self._csv_f)
+            self._csv.writerow(['t', 'state', 'x', 'y', 'yaw_deg', 'i0', 'ci', 'n',
+                                'aim_x', 'aim_y', 'herr_deg', 'dist_aim',
+                                'dist_goal', 'vx', 'wz', 'goal'])
             self.create_timer(1.0 / g['rate_hz'], self._tick)
             self.get_logger().info(
                 'path_follower ativo: reto %.2fm/s, gira |err|>%.0f°, '
@@ -250,12 +264,15 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             return (t.x, t.y, quat_to_yaw(q.x, q.y, q.z, q.w))
 
         def _tick(self):
+            import time as _t
             goal = any(self._goal_active.values()) if self._goal_active else False
             pose = self._pose_map()
             cmd = self.fol.update(pose, self._path, goal, self._goal_yaw)
-            # só publica quando há comando ativo; idle/arrived -> não publica
-            # (deixa o mux cair pra baixo e o robô parar/ceder).
-            if cmd.state not in ('idle', 'arrived'):
+
+            # SEGURA O MUX: enquanto há goal ativo, SEMPRE publica (mesmo parado),
+            # pra prio 15 nunca expirar e o controller_server (prio 10) assumir e
+            # brigar. Sem goal -> silencia (mux cai e o robô fica livre).
+            if goal:
                 m = Twist()
                 m.linear.x = cmd.vx
                 m.angular.z = cmd.wz
@@ -263,6 +280,23 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             if cmd.state != self._last_state:
                 self._last_state = cmd.state
                 self.pub_state.publish(String(data=cmd.state))
+
+            # log (só quando há goal, pra não encher de idle)
+            if goal:
+                d = self.fol.dbg
+                x = pose[0] if pose else float('nan')
+                y = pose[1] if pose else float('nan')
+                yd = math.degrees(pose[2]) if pose else float('nan')
+                self._csv.writerow([
+                    round(_t.time(), 3), cmd.state, round(x, 3), round(y, 3),
+                    round(yd, 1), d.get('i0', ''), d.get('ci', ''), d.get('n', ''),
+                    round(d.get('ax', float('nan')), 3),
+                    round(d.get('ay', float('nan')), 3),
+                    round(d.get('herr_deg', float('nan')), 1),
+                    round(d.get('dist_aim', float('nan')), 3),
+                    round(d.get('dist_goal', float('nan')), 3),
+                    round(cmd.vx, 3), round(cmd.wz, 3), int(goal)])
+                self._csv_f.flush()
 
     rclpy.init(args=args)
     node = PathFollowerNode()
