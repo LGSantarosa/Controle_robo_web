@@ -33,6 +33,7 @@ setup(
             'unstuck_supervisor = robot_nav.unstuck_supervisor:main',
             'scan_sanitizer = robot_nav.scan_sanitizer:main',
             'door_crossing = robot_nav.door_crossing:main',
+            'path_follower = robot_nav.path_follower:main',
             'freeze_capture = robot_nav.freeze_capture:main',
             'sim_actuator_model = robot_nav.sim_actuator_model:main',
         ],

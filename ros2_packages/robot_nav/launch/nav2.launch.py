@@ -130,6 +130,15 @@ def generate_launch_description():
             name='freeze_capture', output=nav_output,
             parameters=[sim_time_param],
         ),
+        # Seguidor decisivo (2026-06-25): segue o /plan (Theta*) como RETO+giro-no-
+        # lugar — o robô NÃO arqueia (arc_calib), então o tracking do
+        # controller_server (DWB/RotationShim) derivava/zigzagueava. Publica
+        # follow_vel (prio 15 no twist_mux, > nav_vel: ignora o controller_server).
+        Node(
+            package='robot_nav', executable='path_follower',
+            name='path_follower', output=nav_output,
+            parameters=[sim_time_param],
+        ),
         # Travessia de porta: alinha no eixo de porta MARCADA e atravessa
         # reto vigiando o vão (door_vel, prio 20 no twist_mux). Publica
         # /door_zone = gate da máscara de batente no scan_sanitizer.
