@@ -538,7 +538,14 @@ case "$MODE" in
             echo "[3/4] Modo NAV2 — subindo Nav2 com mapa $MAP_FILE..."
         fi
         NAV2_LOG="$LOG_DIR/nav2.log"
-        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG > "$NAV2_LOG" 2>&1 &
+        # SIM: o spawn é fixo e conhecido → o AMCL já nasce localizado lá
+        # (set_initial_pose), sem ter que setar /initialpose toda vez. No real fica off.
+        INIT_POSE_ARG=""
+        if [ "$SIM" = true ]; then
+            INIT_POSE_ARG="set_initial_pose:=true init_x:=$SPAWN_X init_y:=$SPAWN_Y init_yaw:=0.0"
+            echo "      [SIM] AMCL nasce em ($SPAWN_X, $SPAWN_Y, yaw 0) — sem setar pose na mão"
+        fi
+        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG $INIT_POSE_ARG > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
         # Nav2 demora pra ativar todos os lifecycle nodes; espera o costmap global.

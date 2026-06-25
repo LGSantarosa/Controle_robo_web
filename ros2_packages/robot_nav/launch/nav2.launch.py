@@ -14,6 +14,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -37,9 +38,28 @@ def generate_launch_description():
         'params_file', default_value=default_params,
         description='Caminho do YAML de params Nav2 (use nav2_params_pi.yaml na Pi)',
     )
+    # Pose inicial do AMCL (SÓ no sim, onde o spawn é fixo e conhecido — assim o
+    # robô já nasce localizado, sem ter que setar /initialpose toda vez). No REAL
+    # fica desligado (set_initial_pose=false) e a pose vem do /initialpose (web).
+    init_pose_arg = DeclareLaunchArgument('set_initial_pose', default_value='false')
+    init_x_arg = DeclareLaunchArgument('init_x', default_value='0.0')
+    init_y_arg = DeclareLaunchArgument('init_y', default_value='0.0')
+    init_yaw_arg = DeclareLaunchArgument('init_yaw', default_value='0.0')
+
     map_yaml = LaunchConfiguration('map')
     use_sim_time = LaunchConfiguration('use_sim_time')
     params_file = LaunchConfiguration('params_file')
+    amcl_init = {
+        'set_initial_pose': ParameterValue(
+            LaunchConfiguration('set_initial_pose'), value_type=bool),
+        'initial_pose.x': ParameterValue(
+            LaunchConfiguration('init_x'), value_type=float),
+        'initial_pose.y': ParameterValue(
+            LaunchConfiguration('init_y'), value_type=float),
+        'initial_pose.z': 0.0,
+        'initial_pose.yaw': ParameterValue(
+            LaunchConfiguration('init_yaw'), value_type=float),
+    }
 
     lifecycle_nodes = [
         'map_server',
@@ -71,7 +91,7 @@ def generate_launch_description():
         ),
         Node(
             package='nav2_amcl', executable='amcl', name='amcl',
-            output=nav_output, parameters=[params_file, sim_time_param],
+            output=nav_output, parameters=[params_file, sim_time_param, amcl_init],
         ),
         Node(
             package='nav2_controller', executable='controller_server',
@@ -222,4 +242,6 @@ def generate_launch_description():
         ),
     ]
 
-    return LaunchDescription([map_arg, use_sim_time_arg, params_arg, *nodes])
+    return LaunchDescription([map_arg, use_sim_time_arg, params_arg,
+                              init_pose_arg, init_x_arg, init_y_arg, init_yaw_arg,
+                              *nodes])
