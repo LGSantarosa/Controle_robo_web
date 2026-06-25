@@ -75,11 +75,20 @@ planner_server:
   ros__parameters:
     use_sim_time: false
     planner_plugins: ["GridBased"]
+    # RETO+POINT-TURN (2026-06-25): troca NavFn → Theta* (any-angle).
+    # NavFn traçava caminho CURVO (segue gradiente do costmap, abraça a inflação)
+    # → o robô (que não arqueia) tentava seguir a curva e zigzagueava. Theta* traça
+    # RETAS longas com cantos esparsos → no reto o RotationShim só anda, no canto faz
+    # UM giro decisivo no lugar. (Theta* já foi testado com ARCO e deu "pulinhos"; o
+    # par certo é com reto+point-turn.) Reverter = voltar o bloco NavfnPlanner.
     GridBased:
-      plugin: "nav2_navfn_planner::NavfnPlanner"
-      tolerance: 0.30
-      use_astar: true
+      plugin: "nav2_theta_star_planner::ThetaStarPlanner"
+      how_many_corners: 8           # 8 = vizinhança completa (cantos a 45°); 4 = só ortogonal
+      w_euc_cost: 1.0               # peso da distância euclidiana (caminho curto)
+      w_traversal_cost: 2.0         # peso de fugir de células caras (longe de parede)
+      w_heuristic_cost: 1.0
       allow_unknown: true
+      use_final_approach_orientation: false
 
 controller_server:
   ros__parameters:
@@ -135,7 +144,11 @@ controller_server:
       # fina de porta agora é do door_crossing (alinha |lat|<8cm |yaw|<5° em
       # malha fechada no TF e atravessa reto) — o shim não precisa mais dela.
       angular_dist_threshold: 0.30    # ≈17° — acima disso, gira no lugar antes
-      forward_sampling_distance: 0.5      # ponto do caminho p/ medir o heading-alvo
+      # RETO+POINT-TURN (2026-06-25, arc_calib provou que o robô NÃO arqueia):
+      # olha 1.2 m à frente (era 0.5) p/ mirar a direção do CORREDOR lá na frente
+      # e girar DECIDIDO no canto, em vez de seguir a curvinha local de 0.5 m
+      # (= o "vira em tangente / cedo"). Casa com vtheta_samples:1 (DWB só reto).
+      forward_sampling_distance: 1.2      # ponto do caminho p/ medir o heading-alvo
       # 6.0 rad/s CASA com o manual (teleop_ps4.yaml scale_angular=6.0,
       # BASE_ANGULAR_SPEED=6.0). Este chassi 4 rodas só vence a patinagem a ~6.0:
       # via cmd_vel_to_wheels (±100·ω) isso é ±600 unid/roda; abaixo disso as rodas
@@ -191,7 +204,12 @@ controller_server:
       # apertada — e mesmo aí 12×12=144 trajetórias é mais que suficiente).
       vx_samples: 12
       vy_samples: 1
-      vtheta_samples: 12
+      # RETO+POINT-TURN (2026-06-25): vtheta_samples 12 → 1 = o DWB só considera
+      # trajetórias RETAS (wz=0), nunca arqueia. Antes ele gastava o comando num
+      # arco fraco (wz~0.55) que o robô vira só 3% (arc_calib) = ia reto pra cima
+      # do obstáculo. Agora TODO giro é point-turn do RotationShim (autoridade 4.0,
+      # acima da zona-morta 1.7). Se DWB reclamar de trajetória, reavaliar.
+      vtheta_samples: 1
       # PI: sim_time 1.5 → 1.2. Cada trajetória integrada por 1.2 s em vez
       # de 1.5 s. Olha menos pra frente; com nossa v_max baixa (0.35 m/s)
       # 1.2 s já cobre 42 cm — suficiente pra escolher.
@@ -340,7 +358,13 @@ global_costmap:
         # 2026-06-10, que passava porta E melhorou o planner ao vivo.
         # Centralizar corredor SEM engordar a porta fica pra outra abordagem.
         cost_scaling_factor: 3.0
-        inflation_radius: 0.35
+        # 2026-06-25 EXPERIMENTO: 0.35 -> 0.45. O 0.40 foi reprovado em 06-11
+        # porque ENGORDAVA A PORTA (plano global não threadava o vão). MAS agora
+        # quem atravessa a porta é o door_crossing — o plano global só precisa
+        # CHEGAR perto da porta, não passar por dentro. Logo a folga de 0.45 (que
+        # tira o robô de cima do box3: 0.45 da borda = ~0.20 m de folga real)
+        # deve ser OK. SE a porta parar de engatar no sim -> reverter pra 0.35.
+        inflation_radius: 0.45
       # PI: false — diffs em vez do mapa inteiro.
       always_send_full_costmap: false
 
