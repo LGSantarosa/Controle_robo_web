@@ -83,8 +83,10 @@ origin/feat/reto-mais-point-turn` → `colcon build robot_nav`; web entra no rel
   Conversor novo `Costmap(0..255)→OccupancyGrid` reusa a conversão PNG testada. Front-end inalterado.
   `controle_web/map_service.py` + testes (8 ✓). **Validado ao vivo no sim** (get_costmap 160×120 +
   overlay funcional). ⏳ Falta validar no real (mesmo caminho).
-- 🟡 **sim não modela zona-morta LINEAR** (só a do giro) → não reproduz o "congela no goal".
-  Adicionar ao `sim_actuator_model` pra o sim ficar fiel.
+- ✅ **sim modela zona-morta LINEAR (2026-06-26):** o `sim_actuator_model` agora aplica zona-morta
+  no `linear.x` (param `linear_deadzone`, default 0.15 — entre o 0.11 que trava e o 0.25 que anda;
+  nunca medida). Lógica extraída em funções puras `model_linear`/`model_theta` + 7 testes. Agora o
+  sim reproduz o "congela no goal" por comando linear pequeno. ⏳ medir o limiar real algum dia.
 
 ### ⏭️ Próximo
 1. **Validar o `min_speed=0.22`** (finaliza os pontos sem empurrão?).
