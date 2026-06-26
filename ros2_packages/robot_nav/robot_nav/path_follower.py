@@ -214,11 +214,14 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             self.tf_buffer = Buffer()
             self.tf_listener = TransformListener(self.tf_buffer, self)
 
-            # 2026-06-26: publica follow_vel_raw (NÃO follow_vel). O collision_monitor
-            # consome follow_vel_raw, freia/para se for colidir e republica follow_vel
-            # (prio 15 no twist_mux). Antes publicava follow_vel direto e furava o
-            # collision. Ver nav2_params_pi.yaml collision_monitor cmd_vel_in/out_topic.
-            self.pub = self.create_publisher(Twist, 'follow_vel_raw', 10)
+            # publica follow_vel DIRETO no twist_mux (prio 15). 2026-06-26: tentei
+            # rotear pelo collision (follow_vel_raw -> collision -> follow_vel) p/ o
+            # reflexo proteger o seguidor, mas isso criou PONTO ÚNICO DE FALHA: quando
+            # o bringup do Nav2 aborta antes de ativar o collision_monitor (bond
+            # timeout do velocity_smoother na Pi lenta), o follow_vel não era
+            # republicado e a NAV INTEIRA MORRIA (robô só andava no controle/unstuck).
+            # Revertido: o seguidor não depende do collision pra dirigir.
+            self.pub = self.create_publisher(Twist, 'follow_vel', 10)
             self.pub_state = self.create_publisher(String, 'follow_state', latched)
 
             self.create_subscription(Path, 'plan', self._on_plan,

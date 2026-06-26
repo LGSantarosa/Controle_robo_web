@@ -467,15 +467,16 @@ collision_monitor:
     use_sim_time: false
     base_frame_id: "base_link"
     odom_frame_id: "odom"
-    # 2026-06-26: repontado nav_vel_raw/nav_vel -> follow_vel_raw/follow_vel.
-    # O path_follower (prio 15) é quem DIRIGE a nav e antes publicava follow_vel
-    # DIRETO no twist_mux, FURANDO o collision (que só filtrava o nav_vel do
-    # controller, prio 10, que está morto durante a nav). Agora o seguidor publica
-    # follow_vel_raw -> collision_monitor projeta o footprint pela velocidade e,
-    # se a trajetória real for colidir, FREIA/PARA -> publica follow_vel. Assim o
-    # reflexo de segurança volta a valer pro seguidor (igual o robô precisa no real).
-    cmd_vel_in_topic: "follow_vel_raw"
-    cmd_vel_out_topic: "follow_vel"
+    # nav_vel_raw -> nav_vel (filtra o controller_server). 2026-06-26: tentei
+    # repontar p/ follow_vel_raw/follow_vel (collision protege o seguidor), mas isso
+    # fez a NAV depender do collision estar ATIVO: quando o bringup aborta antes de
+    # ativar o collision_monitor (bond timeout do velocity_smoother na Pi), o
+    # follow_vel não era republicado e o robô não andava sob nav. REVERTIDO — o
+    # seguidor publica follow_vel direto. (Proteger o seguidor com collision sem
+    # criar ponto único de falha = pôr o collision no cmd_vel FINAL pós-twist_mux,
+    # ou o seguidor ler /scan. Fica pra depois.)
+    cmd_vel_in_topic: "nav_vel_raw"
+    cmd_vel_out_topic: "nav_vel"
     state_topic: "collision_monitor_state"
     transform_tolerance: 0.5
     # Scan do LD06 é ~10 Hz; 1 s = 10 scans de tolerância antes de considerar
