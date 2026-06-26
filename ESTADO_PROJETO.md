@@ -26,9 +26,15 @@ origin/feat/reto-mais-point-turn` → `colcon build robot_nav`; web entra no rel
   mais livre) ficaram inertes — REVER se religar o door.
 
 ### Mudanças aplicadas (commits 69bc9ac → 2ca7e96)
-- **collision_monitor filtra o seguidor:** repontado `nav_vel_raw/nav_vel → follow_vel_raw/
-  follow_vel`. Antes o `follow_vel` furava o collision (que só filtrava o `nav_vel` morto do
-  controller). Agora o reflexo anti-atropelamento freia QUEM DIRIGE.
+- ~~collision_monitor filtra o seguidor~~ **REVERTIDO (`7a6de77`):** repontei o collision p/
+  `follow_vel_raw→follow_vel` pra proteger o seguidor, MAS isso criou **PONTO ÚNICO DE FALHA** —
+  quando o bringup do Nav2 aborta antes de ativar o collision_monitor (bond timeout do
+  `velocity_smoother` na Pi lenta), ninguém republicava o `follow_vel` e a **NAV INTEIRA MORRIA**
+  (robô só andava no controle/unstuck, que furam o collision). Seguidor voltou a publicar
+  `follow_vel` DIRETO. Proteger o seguidor com collision SEM SPOF = pôr o collision no `cmd_vel`
+  FINAL pós-twist_mux, ou o seguidor ler `/scan`. **TODO.** ⚠️ BO subjacente: **bringup do Nav2
+  é flaky na Pi** (velocity_smoother bond timeout 4s) → às vezes collision_monitor nem ativa (sem
+  reflexo anti-atropelamento). Tunar `bond_timeout` do lifecycle_manager.
 - **local costmap inflation 0.25 → 0.35**; **global mantido 0.45** (folga de obstáculo).
 - **w_traversal_cost do Theta\*: testei 2.0→0.5 (menos contorno), REPROVADO** (enfiava o plano
   em vão IMPOSSÍVEL parede-obstáculo) → revertido 2.0. Lição: w_traversal só troca "volta larga"
