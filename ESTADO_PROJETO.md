@@ -1,13 +1,76 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-06-24**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-06-26**.
+
+---
+
+## 🆕 2026-06-26 — MARCO: path_follower no real + Nav2 ATRAVESSA A PORTA SOZINHO
+
+**Git:** trabalho na branch **`feat/reto-mais-point-turn`** (HEAD `2ca7e96`), **NÃO mergeada na
+main** (a main nem tem o `path_follower`). Deployada na Pi (`git fetch && git reset --hard
+origin/feat/reto-mais-point-turn` → `colcon build robot_nav`; web entra no relançamento).
+
+### 🏆 Marco maior
+- **`path_follower` VALIDADO no real** — seguidor reto+giro-no-lugar que segue o `/plan` do
+  Theta\* e ignora o tracking do controller_server (publica `follow_vel`, prio 15). Dono:
+  **"visivelmente melhor" e "igual ao sim, chega a ser engraçado".** Sim≈real provado.
+- **🚪 Nav2/path_follower ATRAVESSA A PORTA NATIVAMENTE — 4/4 no real**, com a porta DELETADA
+  do mapa, sem ponto pré-porta, nos 2 sentidos (inclusive do ângulo que antes dava "merda
+  total"). O DWB velho não threadava o vão (era POR ISSO que o `door_crossing` existia); o
+  seguidor vai reto pelo vão + giro decidido = threada sozinho. **→ `door_crossing` virou
+  OBSOLETO e foi DESATIVADO** (comentado no `nav2.launch.py`; re-habilitar = descomentar +
+  colcon). Bug do arme dele (caçado à toa): provado por log que `goal_succeeded` do
+  `navigate_through_poses` nunca dispara no ponto intermediário → `cleared=False` sempre → não
+  arma. MOOT agora. Meus fixes de pré-porta (busca 2D, zone cap 1.0, folga 0.50, fallback no
+  mais livre) ficaram inertes — REVER se religar o door.
+
+### Mudanças aplicadas (commits 69bc9ac → 2ca7e96)
+- **collision_monitor filtra o seguidor:** repontado `nav_vel_raw/nav_vel → follow_vel_raw/
+  follow_vel`. Antes o `follow_vel` furava o collision (que só filtrava o `nav_vel` morto do
+  controller). Agora o reflexo anti-atropelamento freia QUEM DIRIGE.
+- **local costmap inflation 0.25 → 0.35**; **global mantido 0.45** (folga de obstáculo).
+- **w_traversal_cost do Theta\*: testei 2.0→0.5 (menos contorno), REPROVADO** (enfiava o plano
+  em vão IMPOSSÍVEL parede-obstáculo) → revertido 2.0. Lição: w_traversal só troca "volta larga"
+  por "buraco impossível", NUNCA vira a "L" (reta→canto→reta) que o dono quer — Theta\* é
+  any-angle de menor distância (corta diagonal). **Fix do contorno = simplificador no
+  path_follower (reusar plano seguro do Nav2 e dirigir em retas) — TODO, NÃO feito.**
+- **Web:** overlay opcional do `/global_costmap` no mapa (botão 🗺️ Costmap, PNG RGBA translúcido).
+
+### Regressões achadas + corrigidas
+- **Pose inicial (commit 57c8b13 quebrou):** `set_initial_pose` no launch tinha default `false` →
+  no REAL o AMCL nascia NÃO-localizado (antes auto-localizava em (0,0,0) pelo yaml). E SEM pose
+  o ponto pré-porta nem saía. Fix: default `'true'`. Sim ainda passa spawn explícito.
+- **🔴 NÃO FINALIZA OS PONTOS (resolvido) — era ZONA-MORTA LINEAR:** o robô chegava ~0.17 m do
+  goal e CONGELAVA (`vx=0.11 wz=0`, pose travada) — não girava pra finalizar; precisava empurrar
+  no controle. Causa: o ramp de aproximação do `path_follower` baixava p/ `min_speed=0.10` ≈ 0.11
+  m/s, **abaixo da zona-morta linear do robô pesado** (manda 0.11 e não anda). **Fix: `min_speed
+  0.10 → 0.22`** (0.11 trava, 0.25 cruise anda → zona-morta no meio). ⏳ FALTA VALIDAR; se ainda
+  rastejar, subir p/ 0.25. **A zona-morta LINEAR nunca foi medida** (só a do giro=1.7) e o
+  `sim_actuator_model` só modela o giro → o sim NÃO pegava esse trava.
+
+### BOs novos
+- 🟡 **Overlay do Costmap global parou de aparecer na web** (botão 🗺️) — provável o web app não
+  reiniciou com o `map_service` novo, ou o toggle/subscription. Código OK (15 testes passam).
+  NÃO corrigir agora (pedido do dono).
+- 🟡 **sim não modela zona-morta LINEAR** (só a do giro) → não reproduz o "congela no goal".
+  Adicionar ao `sim_actuator_model` pra o sim ficar fiel.
+
+### ⏭️ Próximo
+1. **Validar o `min_speed=0.22`** (finaliza os pontos sem empurrão?).
+2. Validar travessia da porta SEM door em mais cenários (já 4/4).
+3. **Simplificador do contorno** (a "L" reta+canto+reta) no path_follower.
+4. Reativar/revalidar o costmap na web; modelar zona-morta linear no sim.
 
 ---
 
 ## 0. Onde estamos (git)
 
-- Branch de trabalho agora: **`main`** (decidimos consolidar tudo nela).
+- Branch de trabalho agora: **`feat/reto-mais-point-turn`** (HEAD `2ca7e96`, deployada na Pi) —
+  ver a seção 🆕 2026-06-26 no topo. **NÃO mergeada na main ainda** (validar mais antes). A main
+  tem o estado anterior (sem `path_follower`).
+- ~~Branch de trabalho: `main`~~ (era a decisão até 06-24; o trabalho do path_follower abriu a
+  branch nova e ainda não voltou pra main).
 - A branch `feat/door-para-pra-pessoa` foi merjada na main (PR #1 no GitHub `feb1be9`),
   e os 7 commits que ficaram de fora do PR (sim 4-rodas + diagnóstico de scan-lag) foram
   trazidos pra main no merge `686c57f`.
@@ -86,6 +149,10 @@ lixo na EMI.
   no firmware + guarda `wheel_fresh` no Python). Validado, mas monitorar.
 
 ### Navegação / software
+- **🟢 ATUALIZAÇÃO 06-26 — o congelamento perto do goal com o `path_follower` era ZONA-MORTA
+  LINEAR** (`min_speed=0.10` ≈ 0.11 m/s, abaixo do limiar do robô pesado) → fix `min_speed 0.10
+  → 0.22` (ver seção 🆕 no topo, ⏳ validar). O abaixo é a investigação 06-24 na era DWB/unstuck
+  (outro controlador) — manter como histórico; a raiz pode ser diferente entre os dois.
 - **🔴 ATIVO — robô CONGELA perto do goal (investigando 06-24):** ele para pertíssimo do ponto,
   dá ré do unstuck, volta, repete (não é 100% das vezes). **Causa raiz = ele NÃO se mexe sob o
   nav** (nas janelas de `monitoring` a pose não muda: `1.99,-0.24`→`1.99,-0.24`). O unstuck é
