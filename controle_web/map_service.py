@@ -280,6 +280,12 @@ class MapBridge:
                                 # não chega. 2026-06-26: 0.30 -> 0.50 (a inflação
                                 # subiu p/ 0.45; o ponto pré-porta colava na parede
                                 # lateral). A busca 2D abaixo acha esse ponto.
+    PRE_DOOR_ZONE_CAP = 1.00    # m — o ponto deslocado tem que ficar a <= isto do
+                                # CENTRO da porta, senão sai da zona de arme do
+                                # door_crossing (zone_radius=1.1) e a porta NÃO ARMA
+                                # quando o robô chega (campo 2026-06-26: a busca 2D
+                                # jogava o ponto p/ ~1.1-1.17m e o door demorava/não
+                                # ativava). Mantém < zone_radius com folga.
 
     def __init__(self, socketio, mode: str, maps_dir: str):
         self._sock = socketio
@@ -739,6 +745,8 @@ class MapBridge:
                 nx, ny = wx + r * math.cos(th), wy + r * math.sin(th)
                 if (nx - cx) * sx + (ny - cy) * sy <= 0.1:   # mantém no lado do robô
                     continue
+                if math.hypot(nx - cx, ny - cy) > self.PRE_DOOR_ZONE_CAP:
+                    continue                                 # fora da zona de arme
                 clr = self._point_clearance(nx, ny, cap)
                 if clr > free_cl:
                     free_best, free_cl = (nx, ny), clr

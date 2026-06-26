@@ -9,6 +9,7 @@ from map_service import MapBridge
 
 class _Stub:
     PRE_DOOR_CLEARANCE = MapBridge.PRE_DOOR_CLEARANCE
+    PRE_DOOR_ZONE_CAP = MapBridge.PRE_DOOR_ZONE_CAP
     _point_clear = MapBridge._point_clear
     _point_clearance = MapBridge._point_clearance
     _clear_pre_door_point = MapBridge._clear_pre_door_point
@@ -70,6 +71,15 @@ def _stub_corridor(half=0.3):
     s._grid = grid
     s._grid_meta = (res, ox, oy, w, h)
     return s
+
+
+def test_ponto_deslocado_fica_dentro_da_zona_de_arme():
+    # o ponto escapado NUNCA passa de PRE_DOOR_ZONE_CAP do centro da porta (0,0),
+    # senão sai da zona de arme do door_crossing e a porta não ativa.
+    import math
+    s = _stub_with_wall_above(0.3)
+    nx, ny = s._clear_pre_door_point(DOOR, 1.0, 0.0)
+    assert math.hypot(nx, ny) <= _Stub.PRE_DOOR_ZONE_CAP + 1e-9
 
 
 def test_sem_folga_ideal_cai_no_mais_livre_nao_no_original():

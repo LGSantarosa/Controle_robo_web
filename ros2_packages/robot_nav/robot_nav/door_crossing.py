@@ -581,6 +581,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self.doors = []
             self._goal_active = {}
             self._goal_succeeded_edge = False  # pulso de 1 tick: goal terminou OK
+            self._dbg_t = 0.0                  # DIAG arme (REMOVER): throttle manual
             self._nav_forward = False
             self._scan = None          # (ranges, angle_min, inc)
             self._scan_t = None
@@ -686,6 +687,23 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                                   goal_succeeded=goal_succeeded)
             if cmd.state != prev:
                 self.get_logger().info(f'door_crossing: {prev} -> {cmd.state}')
+            # DIAG 2026-06-26 (REMOVER após confirmar a zona): por que não arma?
+            # idle com porta perto -> loga distC/cleared/goal_succ. Throttle manual
+            # (NÃO usar throttle do rclpy aqui — lição do log que matou o door).
+            if cmd.state == 'idle' and goal and self.doors and pose is not None:
+                nd_c, nd_d = None, math.inf
+                for d in self.doors:
+                    g = door_geometry(tuple(d['a']), tuple(d['b']))
+                    dd = math.hypot(pose[0] - g.cx, pose[1] - g.cy)
+                    if dd < nd_d:
+                        nd_c, nd_d = d, dd
+                if nd_c is not None and nd_d < 1.8 and (now - self._dbg_t) > 1.0:
+                    self._dbg_t = now
+                    self.get_logger().info(
+                        f'door DIAG idle: porta {nd_c["id"]} distC={nd_d:.2f} '
+                        f'zone={self.cfg.zone_radius:.2f} '
+                        f'cleared={nd_c["id"] in self.sup._cleared} '
+                        f'goal_succ={goal_succeeded} nav_fwd={self._nav_forward}')
             # /door_zone: a manobra ativa manda; senão, se há porta marcada na
             # zona com goal ativo, publica 'approaching' (gate do standdown do
             # unstuck). 'approaching' NÃO comanda door_vel — só sinaliza a região.
