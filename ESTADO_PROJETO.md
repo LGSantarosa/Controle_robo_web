@@ -11,6 +11,26 @@
 main** (a main nem tem o `path_follower`). Deployada na Pi (`git fetch && git reset --hard
 origin/feat/reto-mais-point-turn` → `colcon build robot_nav`; web entra no relançamento).
 
+### 🤖 Sessão autônoma 06-26 (eu sozinho, dono ausente) — resumo
+Trabalhei a lista de BOs de software/sim (hardware ficou pro dono). Tudo na branch
+`feat/reto-mais-point-turn`, commitado/pushado, **validado no sim onde deu**:
+1. ✅ **2-mux** (collision protege TODA a autonomia, sem SPOF) + **bond_timeout 4→20s** — validado no
+   sim (anda+collision freia o seguidor+unstuck fura). [`25d12e9`,`2091635`,`7c6d9a0`]
+2. ✅ **Costmap web intermitente** → service call `get_costmap` (entrega garantida) — validado ao
+   vivo. [`edffefa`]
+3. ✅ **Zona-morta linear no sim** (`sim_actuator_model`) — 7 testes. [`7bf8c8b`]
+4. 🟡 **Boneco atrasado (scan_lag)** — hipótese websocket DERRUBADA (está no venv); consertei o bug
+   `age_ms` (sim-time) + criei `measure_web_lag.py`; **causa raiz NÃO fechada** (server off + robô
+   off → sem dado ao vivo). [`d8c04ad`]
+5. ⏸️ **#2 porta SLAM** — NÃO mexi (mapa ativo + ambíguo; `sala.pgm` parece sim que sobrescreveu o
+   real). Deixei pra você. [`d7adb30`]
+6. ⏸️ **Contorno em "L"** — NÃO implementei (driver validado, checkpoint prometido). Spec de decisão
+   pronto: `docs/.../2026-06-26-contorno-em-L-design.md` (recomendo opção A→C).
+
+**Pendências que precisam de VOCÊ / hardware:** validar 2-mux + min_speed=0.22 + costmap no REAL;
+rodar `measure_web_lag` com server no ar p/ fechar o scan_lag; decidir o #2-porta (mapa real perdido?);
+escolher a abordagem do "L". Detalhes em cada BO abaixo (seção 2) e nos "Próximos passos" (seção 4).
+
 ### 🏆 Marco maior
 - **`path_follower` VALIDADO no real** — seguidor reto+giro-no-lugar que segue o `/plan` do
   Theta\* e ignora o tracking do controller_server (publica `follow_vel`, prio 15). Dono:
@@ -91,7 +111,14 @@ origin/feat/reto-mais-point-turn` → `colcon build robot_nav`; web entra no rel
 ### ⏭️ Próximo
 1. **Validar o `min_speed=0.22`** (finaliza os pontos sem empurrão?).
 2. Validar travessia da porta SEM door em mais cenários (já 4/4).
-3. **Simplificador do contorno** (a "L" reta+canto+reta) no path_follower.
+3. **Contorno em "L"** (reta→canto→reta) — ⚠️ **DECISÃO PENDENTE DO DONO** (spec
+   `docs/superpowers/specs/2026-06-26-contorno-em-L-design.md`). Sessão autônoma 06-26 mapeou: NÃO é
+   "só um simplificador" (Theta* é any-angle → o contorno já É uma diagonal; juntar colineares
+   mantém a diagonal). Pra virar "L" muda a ROTA (axis-aligned). Opções: **(A)** `how_many_corners
+   8→4` no Theta* (1 linha, testar primeiro, talvez o LOS ainda corte); **(C)** trocar planner p/
+   grid-A*/Smac 2D 4-conn (fix estrutural, não toca o driver validado); **(B)** Manhattan-izar no
+   path_follower (evitar — precisa costmap, risco no driver). Recomendação: A→C. NÃO implementei
+   (checkpoint prometido antes de tocar o driver ativo).
 4. Reativar/revalidar o costmap na web; modelar zona-morta linear no sim.
 
 ---
