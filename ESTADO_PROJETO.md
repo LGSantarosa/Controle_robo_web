@@ -260,7 +260,15 @@ lixo na EMI.
     crescente (backpressure) = transporte/payload (downsample do scan, taxa, websocket de fato); se
     baixa = é front-end (render/easing no `map.js`). No real, sobre wifi, medir tb. NÃO fechei a causa
     raiz: server estava fora do ar e robô desligado nesta sessão.
-- **#2 porta no SLAM** sem ser removida (limpar o mapa).
+- **#2 porta no SLAM** — **NÃO mexi (sessão autônoma 06-26): risco alto + ambíguo, deixei pra você.**
+  Inspecionei `maps/sala.pgm` (renderizei): vejo **UMA** porta na divisória (vão único no meio), não
+  duas → não localizei o "#2 fantasma" com confiança. ⚠️ **Achado preocupante:** o `sala.pgm`
+  atual (06-26 15:53) tem os **obstáculos do SIM baixados** (3 caixas + cilindro do `sim_sala.sdf`)
+  e geometria 8×6 → parece um mapa do SIM que pode ter **SOBRESCRITO** o mapa real re-SLAMado de
+  06-23; reforça: `sala.posegraph`/`sala.data` ainda são de **Abr-24** (inconsistente com `.pgm`/`.yaml`
+  de 06-26), e `sala.doors.json` está vazio. **Não editei** (mapa binário ativo afeta localização +
+  não dá pra verificar sem você + talvez seja o mapa errado). **Pra você:** confirmar se o `sala`
+  real foi perdido (restaurar do `mapa_golden_*` ou re-SLAM no real) e apontar qual é a "#2 porta".
 - **Logs de DEBUG ainda no código** pra remover após validação:
   - `DBG recov:` no unstuck (recovery contextual).
   - ⚠️ Lição: **nunca alternar throttle na mesma chamada de log** — um log DBG meu já matou o
