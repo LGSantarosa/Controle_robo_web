@@ -38,10 +38,13 @@ def generate_launch_description():
         'params_file', default_value=default_params,
         description='Caminho do YAML de params Nav2 (use nav2_params_pi.yaml na Pi)',
     )
-    # Pose inicial do AMCL (SÓ no sim, onde o spawn é fixo e conhecido — assim o
-    # robô já nasce localizado, sem ter que setar /initialpose toda vez). No REAL
-    # fica desligado (set_initial_pose=false) e a pose vem do /initialpose (web).
-    init_pose_arg = DeclareLaunchArgument('set_initial_pose', default_value='false')
+    # Pose inicial do AMCL. SIM passa o spawn explícito (init_x/y/yaw). REAL não
+    # passa nada -> cai no default 'true' + (0,0,0), restaurando a auto-localização
+    # na ORIGEM que existia antes do 57c8b13 (regressão: com default 'false' o real
+    # nascia NÃO-localizado e o /initialpose precisava ser setado na mão toda vez,
+    # e sem pose o ponto pré-porta nem saía). Quem quiser nascer off passa
+    # set_initial_pose:=false e seta a pose pela web.
+    init_pose_arg = DeclareLaunchArgument('set_initial_pose', default_value='true')
     init_x_arg = DeclareLaunchArgument('init_x', default_value='0.0')
     init_y_arg = DeclareLaunchArgument('init_y', default_value='0.0')
     init_yaw_arg = DeclareLaunchArgument('init_yaw', default_value='0.0')

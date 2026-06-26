@@ -687,6 +687,28 @@ class MapBridge:
         dc = (cc + c0 - col) * res
         return bool(np.all(dr * dr + dc * dc > clearance * clearance))
 
+    def _point_clearance(self, x: float, y: float, cap: float) -> float:
+        """Distância (m) até a célula OCUPADA mais próxima, limitada a `cap`
+        (retorna `cap` se nada ocupado dentro de `cap`). Pra ranquear o ponto
+        'mais livre' quando nenhum atinge a folga ideal."""
+        if self._grid is None:
+            return cap
+        res, ox, oy, w, h = self._grid_meta
+        col = int((x - ox) / res)
+        row = int((y - oy) / res)
+        rad = int(math.ceil(cap / res))
+        r0, r1 = max(0, row - rad), min(h, row + rad + 1)
+        c0, c1 = max(0, col - rad), min(w, col + rad + 1)
+        if r0 >= r1 or c0 >= c1:
+            return cap
+        occ = self._grid[r0:r1, c0:c1] >= 50
+        if not occ.any():
+            return cap
+        rr, cc = np.nonzero(occ)
+        dr = (rr + r0 - row) * res
+        dc = (cc + c0 - col) * res
+        return float(min(cap, math.sqrt(float((dr * dr + dc * dc).min()))))
+
     def _clear_pre_door_point(self, door, wx, wy):
         """Se o ponto-pré-porta caiu colado em parede (parede LATERAL aperta o
         skid-steer), procura o ponto livre mais PRÓXIMO do ideal — busca 2D (anéis
@@ -705,29 +727,37 @@ class MapBridge:
         if snorm < 1e-6:
             return wx, wy
         sx, sy = sx / snorm, sy / snorm
-        step, max_r = 0.05, 0.60
+        step, max_r, cap = 0.05, 0.60, 0.90
+        free_best, free_cl = None, -1.0      # ponto de MAIOR folga (fallback)
         r_i = 1
         while r_i * step <= max_r:
             r = r_i * step
-            best, best_d2 = None, None
+            meet, meet_d2 = None, None        # ponto que ATINGE cl, mais perto do ideal
             n = max(8, int(2 * math.pi * r / step))
             for k in range(n):
                 th = 2 * math.pi * k / n
                 nx, ny = wx + r * math.cos(th), wy + r * math.sin(th)
                 if (nx - cx) * sx + (ny - cy) * sy <= 0.1:   # mantém no lado do robô
                     continue
-                if self._point_clear(nx, ny, cl):
+                clr = self._point_clearance(nx, ny, cap)
+                if clr > free_cl:
+                    free_best, free_cl = (nx, ny), clr
+                if clr > cl:        # estrito, casa com _point_clear (> cl²)
                     d2 = (nx - wx) ** 2 + (ny - wy) ** 2
-                    if best_d2 is None or d2 < best_d2:
-                        best, best_d2 = (nx, ny), d2
-            if best is not None:
-                log.info(f"[MapBridge] ponto-pré-porta colado em parede -> "
-                         f"deslocado {r:.2f}m p/ o lado aberto "
-                         f"({best[0]:.2f},{best[1]:.2f})")
-                return best
+                    if meet_d2 is None or d2 < meet_d2:
+                        meet, meet_d2 = (nx, ny), d2
+            if meet is not None:                # achou folga ideal -> usa o mais perto
+                log.info(f"[MapBridge] ponto-pré-porta colado -> deslocado {r:.2f}m "
+                         f"p/ o lado aberto ({meet[0]:.2f},{meet[1]:.2f})")
+                return meet
             r_i += 1
-        log.warning("[MapBridge] ponto-pré-porta sem folga em 0.6m; "
-                    "mantido original")
+        # nenhum ponto atinge a folga ideal em 0.6m -> cai no MAIS LIVRE achado
+        # (NUNCA volta pro original colado, que já sabemos dar errado).
+        if free_best is not None:
+            log.warning(f"[MapBridge] ponto-pré-porta sem folga {cl:.2f} em 0.6m -> "
+                        f"caiu no mais livre ({free_best[0]:.2f},{free_best[1]:.2f}), "
+                        f"folga {free_cl:.2f}m")
+            return free_best
         return wx, wy
 
     # ---- API pública ----

@@ -10,6 +10,7 @@ from map_service import MapBridge
 class _Stub:
     PRE_DOOR_CLEARANCE = MapBridge.PRE_DOOR_CLEARANCE
     _point_clear = MapBridge._point_clear
+    _point_clearance = MapBridge._point_clearance
     _clear_pre_door_point = MapBridge._clear_pre_door_point
 
 
@@ -54,3 +55,28 @@ def test_nao_cruza_pra_dentro_da_porta():
     # o ponto escapado nunca pula pro lado -x (atravessar a porta)
     nx, ny = s._clear_pre_door_point(DOOR, 1.0, 0.0)
     assert nx > 0.0   # continua do lado do robô (+x)
+
+
+def _stub_corridor(half=0.3):
+    """Corredor estreito: paredes em y>=half E y<=-half. Nenhum ponto atinge
+    0.50 de folga -> testa o fallback 'mais livre'."""
+    res, ox, oy, w, h = 0.05, -1.0, -1.0, 60, 40
+    grid = np.zeros((h, w), dtype=np.int8)
+    for row in range(h):
+        y = oy + row * res
+        if y >= half or y <= -half:
+            grid[row, :] = 100
+    s = _Stub()
+    s._grid = grid
+    s._grid_meta = (res, ox, oy, w, h)
+    return s
+
+
+def test_sem_folga_ideal_cai_no_mais_livre_nao_no_original():
+    s = _stub_corridor(0.3)   # corredor 0.6m: max folga ~0.3 < 0.50
+    ideal = (1.0, 0.2)        # colado na parede de cima (folga ~0.1)
+    assert not s._point_clear(*ideal, _Stub.PRE_DOOR_CLEARANCE)
+    out = s._clear_pre_door_point(DOOR, *ideal)
+    # NÃO volta pro original colado; vai pro mais livre (centro do corredor)
+    assert out != ideal
+    assert s._point_clearance(*out, 0.9) > s._point_clearance(*ideal, 0.9)
