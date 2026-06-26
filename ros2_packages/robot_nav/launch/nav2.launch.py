@@ -166,11 +166,16 @@ def generate_launch_description():
         # reto vigiando o vão (door_vel, prio 20 no twist_mux). Publica
         # /door_zone = gate da máscara de batente no scan_sanitizer.
         # Spec: docs/superpowers/specs/2026-06-12-zonas-de-porta-design.md
-        Node(
-            package='robot_nav', executable='door_crossing',
-            name='door_crossing', output=nav_output,
-            parameters=[sim_time_param],
-        ),
+        # 2026-06-26 DESATIVADO TEMPORARIAMENTE: o path_follower atravessa a porta
+        # NATIVAMENTE (reto+giro-no-lugar pelo /plan do Theta*) — validado 4/4 no
+        # real, com a porta deletada do mapa, sem ponto pré-porta. O door_crossing
+        # era gambiarra pro DWB velho (que não threadava o vão) e virou obsoleto.
+        # Re-habilitar = descomentar este bloco (e colcon build robot_nav).
+        # Node(
+        #     package='robot_nav', executable='door_crossing',
+        #     name='door_crossing', output=nav_output,
+        #     parameters=[sim_time_param],
+        # ),
         # Collision Monitor: lê /scan_safe (sanitizado acima) e freia
         # nav_vel_raw -> nav_vel ANTES do twist_mux. Topicos in/out definidos
         # no YAML (cmd_vel_in/out_topic; fonte scan no nav2_params_pi.yaml).
