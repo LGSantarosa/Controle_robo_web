@@ -14,7 +14,12 @@
 # auto_vel some e a autonomia não anda (collision OBRIGATÓRIO), mas o humano segue.
 #
 # Mantém a ordem relativa que existia no mux único: door (20) > seguidor (15) > nav (10).
-twist_mux:
+#
+# ⚠️ A chave de topo DEVE ser o NOME DO NÓ (twist_mux_auto), não "twist_mux": o ROS
+# casa params pelo nome do nó. Com a chave errada o nó sobe com DEFAULTS (sem
+# topics -> não assina nada; use_stamped default -> publica TwistStamped) e a
+# autonomia inteira morre silenciosamente.
+twist_mux_auto:
   ros__parameters:
     use_sim_time: false
     use_stamped: false
