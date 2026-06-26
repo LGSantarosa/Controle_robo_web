@@ -245,7 +245,11 @@ def generate_launch_description():
                 'use_sim_time': use_sim_time,
                 'autostart': True,
                 'node_names': lifecycle_nodes,
-                'bond_timeout': 4.0,
+                # Pi lenta: o velocity_smoother demora >4s pra confirmar o bond e o
+                # lifecycle_manager derrubava a stack INTEIRA no meio do bringup
+                # (collision_monitor às vezes nem ativava → nav sobe pela metade,
+                # comportamento muda, parece bug). Folga grande p/ bringup atômico.
+                'bond_timeout': 20.0,
             }],
         ),
     ]
