@@ -42,6 +42,7 @@ from nav2_msgs.action import (
     NavigateToPose,
     NavigateThroughPoses,
 )
+from nav2_msgs.srv import GetCostmap
 from nav_msgs.msg import OccupancyGrid, Path
 from sensor_msgs.msg import LaserScan
 from rclpy.qos import qos_profile_sensor_data
@@ -110,6 +111,34 @@ def _costmap_to_png_rgba_b64(grid: OccupancyGrid) -> str:
     buf = BytesIO()
     pil.save(buf, format='PNG', optimize=True)
     return base64.b64encode(buf.getvalue()).decode('ascii')
+
+
+def _costmap_msg_to_occupancy_grid(costmap) -> OccupancyGrid:
+    """Converte um nav2_msgs/Costmap (resposta do serviço get_costmap) em
+    nav_msgs/OccupancyGrid, pra reusar _costmap_to_png_rgba_b64/_grid_info.
+
+    O serviço devolve o custo CRU do costmap_2d (0..255): 0 livre, 1..252
+    gradiente de inflação, 253 inscrito, 254 letal, 255 desconhecido. O resto
+    do código (conversão PNG) fala a escala do OccupancyGrid publicado (-1
+    desconhecido, 0 livre, 1..98 inflação, 99 inscrito, 100 letal), então
+    remapeamos aqui — mesma tradução que o Costmap2DPublisher do Nav2 faz.
+    """
+    raw = np.asarray(costmap.data, dtype=np.uint8)
+    out = np.zeros(raw.shape, dtype=np.int16)            # 0 = livre (default)
+    out[raw == 255] = -1                                  # desconhecido
+    out[raw == 254] = 100                                 # letal
+    out[raw == 253] = 99                                  # inscrito
+    infl = (raw >= 1) & (raw <= 252)                      # 1..252 -> 1..98
+    out[infl] = 1 + (raw[infl].astype(np.int32) - 1) * 97 // 251
+
+    grid = OccupancyGrid()
+    grid.header = costmap.header
+    grid.info.width = costmap.metadata.size_x
+    grid.info.height = costmap.metadata.size_y
+    grid.info.resolution = costmap.metadata.resolution
+    grid.info.origin = costmap.metadata.origin
+    grid.data = out.astype(np.int8).tolist()
+    return grid
 
 
 def _grid_info(grid: OccupancyGrid) -> dict:
@@ -317,17 +346,18 @@ class MapBridge:
         self._node.create_subscription(
             OccupancyGrid, '/map', self._on_map, map_qos
         )
-        # Costmap global (inflação) — overlay opcional no mapa da web. O nó
-        # publica latched (transient_local), igual ao /map. Só EMITE pro front
-        # quando a camada está ligada (set_costmap_layer) — costmap colorido é
-        # pesado e o front só precisa quando o usuário quer ver. Mesmo frame
-        # 'map', então alinha direto com o /map.
+        # Costmap global (inflação) — overlay opcional no mapa da web. ANTES era
+        # uma subscription em /global_costmap/costmap, mas com
+        # always_send_full_costmap:false (perfil da Pi) o grid CHEIO sai latched
+        # UMA vez na ativação e a entrega transient_local pra quem chega depois
+        # FALHA → overlay aparecia "uma hora sim, outra não" (dependia da ordem
+        # de boot web×nav). Como o costmap global é ESTÁTICO no nav2, trocamos por
+        # um service call sob demanda (get_costmap) = pega 1 vez, com garantia de
+        # entrega (request/response), quando o usuário liga a camada. Cacheia.
         self._costmap_global_on = False
         self._last_costmap_global_payload = None
-        self._node.create_subscription(
-            OccupancyGrid, '/global_costmap/costmap',
-            self._on_global_costmap, map_qos
-        )
+        self._get_global_costmap_cli = self._node.create_client(
+            GetCostmap, '/global_costmap/get_costmap')
         self._node.create_subscription(
             Path, '/plan', self._on_plan, 10
         )
@@ -544,31 +574,44 @@ class MapBridge:
         except Exception as e:
             log.warning(f"[MapBridge] erro convertendo /map: {e}")
 
-    def _on_global_costmap(self, msg: OccupancyGrid):
-        # Sempre cacheia (pra emitir na hora que ligar a camada); só transmite
-        # quando ligada, pra não pesar o socket à toa.
+    def _request_global_costmap(self):
+        """Pede o costmap global ao serviço get_costmap (1 vez, garantido) e,
+        na resposta, converte→cacheia→emite. Não bloqueia o executor: a resposta
+        chega via done_callback na thread do nó."""
+        cli = self._get_global_costmap_cli
+        if not cli.wait_for_service(timeout_sec=2.0):
+            log.warning("[MapBridge] get_costmap indisponível (nav2 no ar?)")
+            return
+        future = cli.call_async(GetCostmap.Request())
+        future.add_done_callback(self._on_global_costmap_response)
+
+    def _on_global_costmap_response(self, future):
         try:
+            grid = _costmap_msg_to_occupancy_grid(future.result().map)
             payload = {
-                'info': _grid_info(msg),
-                'png_b64': _costmap_to_png_rgba_b64(msg),
+                'info': _grid_info(grid),
+                'png_b64': _costmap_to_png_rgba_b64(grid),
             }
             self._last_costmap_global_payload = payload
             if self._costmap_global_on:
                 self._sock.emit('global_costmap_update', payload, namespace='/')
         except Exception as e:
-            log.warning(f"[MapBridge] erro convertendo global_costmap: {e}")
+            log.warning(f"[MapBridge] erro no get_costmap global: {e}")
 
     def set_costmap_layer(self, layer: str, on: bool) -> dict:
-        """Liga/desliga a transmissão de uma camada de costmap pro front.
-        Ao LIGAR, reemite o último costmap cacheado na hora (sem esperar 1 Hz).
-        """
+        """Liga/desliga o overlay de costmap no front. Ao LIGAR: se já tem o
+        costmap cacheado, reemite na hora; senão, pede 1 vez via get_costmap
+        (mapa estático → busca única, com garantia de entrega)."""
         on = bool(on)
         if layer == 'global':
             self._costmap_global_on = on
-            if on and self._last_costmap_global_payload is not None:
-                self._sock.emit('global_costmap_update',
-                                self._last_costmap_global_payload,
-                                namespace='/')
+            if on:
+                if self._last_costmap_global_payload is not None:
+                    self._sock.emit('global_costmap_update',
+                                    self._last_costmap_global_payload,
+                                    namespace='/')
+                else:
+                    self._request_global_costmap()
             return {'ok': True, 'layer': 'global', 'on': on}
         return {'ok': False, 'error': f'camada desconhecida: {layer}'}
 

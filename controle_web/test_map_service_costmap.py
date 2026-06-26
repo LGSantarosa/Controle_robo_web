@@ -4,8 +4,13 @@ from io import BytesIO
 import numpy as np
 from PIL import Image
 from nav_msgs.msg import OccupancyGrid
+from nav2_msgs.msg import Costmap
 
-from map_service import _costmap_to_png_rgba_b64, _grid_info
+from map_service import (
+    _costmap_msg_to_occupancy_grid,
+    _costmap_to_png_rgba_b64,
+    _grid_info,
+)
 
 
 def _grid(values, w, h, res=0.05, ox=0.0, oy=0.0):
@@ -67,3 +72,42 @@ def test_grid_info_origin_and_resolution():
     assert abs(info['origin_x'] - (-1.5)) < 1e-9
     assert abs(info['origin_y'] - 2.0) < 1e-9
     assert abs(info['origin_yaw']) < 1e-9
+
+
+def _costmap_msg(values, w, h, res=0.05, ox=0.0, oy=0.0):
+    c = Costmap()
+    c.metadata.size_x = w
+    c.metadata.size_y = h
+    c.metadata.resolution = res
+    c.metadata.origin.position.x = ox
+    c.metadata.origin.position.y = oy
+    c.metadata.origin.orientation.w = 1.0
+    c.data = bytes(values)
+    return c
+
+
+def test_costmap_msg_maps_raw_costs_to_occupancy_scale():
+    # custo cru do costmap_2d (0..255) -> escala OccupancyGrid (-1/0..100)
+    # 0 livre, 255 desconhecido, 254 letal, 253 inscrito, 1..252 inflação(1..98)
+    c = _costmap_msg([0, 255, 254, 253], 2, 2)
+    g = _costmap_msg_to_occupancy_grid(c)
+    assert list(g.data) == [0, -1, 100, 99]
+
+
+def test_costmap_msg_inflation_gradient_in_range():
+    # extremos da inflação caem em 1..98 (o que a conversão PNG espera)
+    c = _costmap_msg([1, 252], 2, 1)
+    g = _costmap_msg_to_occupancy_grid(c)
+    assert g.data[0] == 1 and g.data[1] == 98
+
+
+def test_costmap_msg_preserves_metadata():
+    c = _costmap_msg([0] * 6, 3, 2, res=0.1, ox=-2.0, oy=1.0)
+    g = _costmap_msg_to_occupancy_grid(c)
+    assert g.info.width == 3 and g.info.height == 2
+    assert abs(g.info.resolution - 0.1) < 1e-9
+    assert abs(g.info.origin.position.x - (-2.0)) < 1e-9
+    assert abs(g.info.origin.position.y - 1.0) < 1e-9
+    # encadeia com _grid_info/_costmap_to_png_rgba_b64 sem erro
+    info = _grid_info(g)
+    assert info['width'] == 3 and info['height'] == 2

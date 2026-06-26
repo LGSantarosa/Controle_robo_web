@@ -72,9 +72,17 @@ origin/feat/reto-mais-point-turn` → `colcon build robot_nav`; web entra no rel
   `sim_actuator_model` só modela o giro → o sim NÃO pegava esse trava.
 
 ### BOs novos
-- 🟡 **Overlay do Costmap global parou de aparecer na web** (botão 🗺️) — provável o web app não
-  reiniciou com o `map_service` novo, ou o toggle/subscription. Código OK (15 testes passam).
-  NÃO corrigir agora (pedido do dono).
+- ✅ **Overlay do Costmap global intermitente na web (botão 🗺️) — RESOLVIDO (2026-06-26).** Causa
+  raiz (provada): com `always_send_full_costmap: false` (perfil Pi) o `/global_costmap/costmap` sai
+  **latched UMA vez** na ativação e a entrega transient_local pra late-join **falha** (testado:
+  3/3 não recebe); o web só assinava o grid cheio (ignorava os diffs de `costmap_updates`) → o
+  overlay só aparecia se o web estivesse assinado no instante do one-shot → intermitente pela ordem
+  de boot web×nav. No sim PURO funcionava porque o perfil default usa `true` (republica sempre).
+  **Fix:** trocado a subscription frágil por **service call `get_costmap`** sob demanda ao ligar a
+  camada (request/response = entrega garantida; mapa global é estático → busca única + cache).
+  Conversor novo `Costmap(0..255)→OccupancyGrid` reusa a conversão PNG testada. Front-end inalterado.
+  `controle_web/map_service.py` + testes (8 ✓). **Validado ao vivo no sim** (get_costmap 160×120 +
+  overlay funcional). ⏳ Falta validar no real (mesmo caminho).
 - 🟡 **sim não modela zona-morta LINEAR** (só a do giro) → não reproduz o "congela no goal".
   Adicionar ao `sim_actuator_model` pra o sim ficar fiel.
 
