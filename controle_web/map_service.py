@@ -635,7 +635,12 @@ class MapBridge:
         # TF (yaw velho -> arrasto da nuvem no giro). Vai no payload p/ a UI
         # mostrar; some quando fechar o diagnóstico. NÃO logar no rosout.
         stamp_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        scan_age = now - stamp_sec
+        # age = idade do scan no domínio de relógio DO STAMP. No sim o stamp é
+        # sim-time (/clock) e `now=time.time()` é wall-clock → a subtração dava
+        # número astronômico (age_ms inútil no sim). Usar o relógio do nó (que
+        # respeita use_sim_time) casa os dois domínios — válido em sim E real.
+        ros_now = self._node.get_clock().now().nanoseconds * 1e-9
+        scan_age = ros_now - stamp_sec
         tf_fallback = False
         try:
             # TF no INSTANTE do scan (não o atual): em giro rápido o scan é de

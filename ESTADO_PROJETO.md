@@ -242,8 +242,24 @@ lixo na EMI.
   em vez de ir reto no corredor e girar 90° no lugar → chega de cara/paralelo na parede, precisa
   de 2 rés pra sair. Skid-steer **não faz arco** — realinhar tem que ser **giro no lugar** com
   autoridade alta (~6.0) + malha fechada no yaw da IMU.
-- **Viz do boneco atrasada** na UI web (lag de transporte/socketio). Diagnóstico instrumentado
-  (CSV em `logs/scan_lag` na Pi) — **falta ler e achar a causa**.
+- **🟡 Viz do boneco atrasada** na UI web (lag de transporte/socketio). **INVESTIGADO 06-26 (sessão
+  autônoma), AINDA ABERTO — precisa de dado ao vivo pra fechar:**
+  - ❌ Hipótese "falta `simple-websocket` → preso em long-polling" **DERRUBADA**: está instalado no
+    venv (`.venv`, `simple-websocket==1.1.0`) → o upgrade pra websocket PODE ocorrer. (Cuidado: no
+    python do SISTEMA falta — só o venv conta.)
+  - 🐞 **Bug no próprio diagnóstico (corrigido):** o `age_ms` do `scan_lag.csv` era LIXO no sim — comparava
+    o stamp do scan (sim-time, /clock) com `now=time.time()` (wall) → ~1.78e12 ms. Fix: usar
+    `self._node.get_clock().now()` (respeita use_sim_time) pra o age. Agora o age é válido em sim E real.
+  - 📊 Dos CSVs (sim): emit ~7 Hz (throttle SCAN_PUBLISH_HZ=10), **tf_fallback 71%** (a TF no stamp
+    exato do scan quase nunca está no buffer → cai no "latest"; investigar se é artefato de sim-time
+    ou desync real de TF). age era inútil (bug acima).
+  - 🔧 **Ferramenta nova pronta:** `controle_web/measure_web_lag.py` — cliente socketio que mede o
+    atraso REAL de transporte (`recv − _sts`) + qual transporte o engineio negociou + taxa. **Rodar
+    com o server no ar:** `controle_web/.venv/bin/python controle_web/measure_web_lag.py`.
+  - **PRÓXIMO (precisa server no ar / robô):** rodar o `measure_web_lag` → se a latência for alta e/ou
+    crescente (backpressure) = transporte/payload (downsample do scan, taxa, websocket de fato); se
+    baixa = é front-end (render/easing no `map.js`). No real, sobre wifi, medir tb. NÃO fechei a causa
+    raiz: server estava fora do ar e robô desligado nesta sessão.
 - **#2 porta no SLAM** sem ser removida (limpar o mapa).
 - **Logs de DEBUG ainda no código** pra remover após validação:
   - `DBG recov:` no unstuck (recovery contextual).
