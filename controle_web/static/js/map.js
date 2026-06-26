@@ -23,6 +23,8 @@
   let plan = [];           // [{ x, y }]
   let lastGoal = null;     // { x, y }
   let scan = null;         // { xs:[], ys:[] } — /scan ao vivo em coords do mapa
+  let costmapGlobal = null;     // { img, info } — overlay do /global_costmap
+  let showGlobalCostmap = false; // camada ligada/desligada (toggle na toolbar)
 
   // Waypoints
   let waypoints  = [];     // [{x, y, yaw}]
@@ -57,6 +59,7 @@
   }
   const btnDoor = document.getElementById('map-btn-door');
   const doorChip = document.getElementById('map-door-chip');
+  const btnCostmap = document.getElementById('map-btn-costmap');
 
   // Espera o socket de client.js existir. client.js cria `window.robotSocket`.
   function waitForSocket(cb) {
@@ -149,6 +152,14 @@
       img.src = 'data:image/png;base64,' + data.png_b64;
     });
 
+    socket.on('global_costmap_update', (data) => {
+      if (!data || !data.info || !data.png_b64) return;
+      const info = data.info;
+      const img = new Image();
+      img.onload = () => { costmapGlobal = { img, info }; render(); };
+      img.src = 'data:image/png;base64,' + data.png_b64;
+    });
+
     socket.on('robot_pose', (data) => {
       robotPose = data;
       poseEl.textContent = `robô: x=${data.x.toFixed(2)} y=${data.y.toFixed(2)} yaw=${(data.yaw * 180 / Math.PI).toFixed(0)}°`;
@@ -224,6 +235,13 @@
     });
 
     // --- Botões de waypoints ---
+    if (btnCostmap) btnCostmap.addEventListener('click', () => {
+      showGlobalCostmap = !showGlobalCostmap;
+      btnCostmap.classList.toggle('active', showGlobalCostmap);
+      socket.emit('set_costmap_layer', { layer: 'global', on: showGlobalCostmap });
+      if (!showGlobalCostmap) { costmapGlobal = null; }
+      render();
+    });
     if (btnWpMode) btnWpMode.addEventListener('click', () => setWpMode(!wpMode));
     if (btnSetPose) btnSetPose.addEventListener('click', () => setSetPoseMode(!setPoseMode));
     socket.on('set_pose_ack', (data) => {
@@ -597,6 +615,17 @@
     }
     const r = getDrawRect();
     ctx.drawImage(mapImage, r.dx, r.dy, r.dw, r.dh);
+
+    // Overlay do costmap global (inflação) — translúcido, sob o plano/robô.
+    // Posicionado pela origem/resolução PRÓPRIA dele (mesmo frame 'map'), então
+    // pode ter tamanho/origem diferentes do /map.
+    if (showGlobalCostmap && costmapGlobal) {
+      const ci = costmapGlobal.info;
+      const tl = worldToCanvas(ci.origin_x, ci.origin_y + ci.height * ci.resolution);
+      const mpp = r.scale / mapInfo.resolution;   // px do canvas por metro
+      ctx.drawImage(costmapGlobal.img, tl.x, tl.y,
+                    ci.width * ci.resolution * mpp, ci.height * ci.resolution * mpp);
+    }
 
     // Borda do mapa
     ctx.strokeStyle = '#555';

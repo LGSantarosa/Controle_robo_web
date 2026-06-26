@@ -346,6 +346,17 @@ def handle_door_cmd(data):
     emit('door_ack', result)
 
 
+@socketio.on('set_costmap_layer')
+def handle_set_costmap_layer(data):
+    """Liga/desliga overlay de costmap no mapa (ex.: global)."""
+    if map_bridge is None:
+        emit('costmap_layer_ack', {'ok': False, 'error': 'sem mapa neste modo'})
+        return
+    layer = (data or {}).get('layer', 'global')
+    on = (data or {}).get('on', False)
+    emit('costmap_layer_ack', map_bridge.set_costmap_layer(layer, on))
+
+
 @socketio.on('start_waypoints')
 def handle_start_waypoints(data):
     if map_bridge is None:

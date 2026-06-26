@@ -85,6 +85,13 @@ planner_server:
       plugin: "nav2_theta_star_planner::ThetaStarPlanner"
       how_many_corners: 8           # 8 = vizinhança completa (cantos a 45°); 4 = só ortogonal
       w_euc_cost: 1.0               # peso da distância euclidiana (caminho curto)
+      # 2026-06-26: testei 2.0 -> 0.5 p/ reduzir o contorno. REPROVADO em campo-sim:
+      # com traversal baixo o planner ACEITA pagar o custo alto da inflacao p/
+      # encurtar => enfia o plano num vao IMPOSSIVEL entre parede e obstaculo (centro
+      # caro mas nao-letal) onde o robo nao cabe. Achamos o PISO do knob. Revertido
+      # p/ 2.0 (respeita os vaos). Conclusao: w_traversal NAO resolve o contorno (so
+      # troca "volta larga" por "buraco impossivel") -> o fix do contorno vai pelo
+      # simplificador no path_follower (reusa o plano seguro do Nav2 e dirige reto).
       w_traversal_cost: 2.0         # peso de fugir de células caras (longe de parede)
       w_heuristic_cost: 1.0
       allow_unknown: true
@@ -299,7 +306,9 @@ local_costmap:
         # falhava "Failed to create plan" e o robô desistia). Risco de raspar a
         # quina volta; aceitável pra não travar a navegação.
         cost_scaling_factor: 3.5
-        inflation_radius: 0.25
+        # 2026-06-26: 0.25 -> 0.35 (bump pedido — afastar mais do obstáculo perto).
+        # Reverter = 0.25.
+        inflation_radius: 0.35
       # PI: false → só publica diffs. Reduz bandwidth pro web bridge.
       always_send_full_costmap: false
 
@@ -458,8 +467,15 @@ collision_monitor:
     use_sim_time: false
     base_frame_id: "base_link"
     odom_frame_id: "odom"
-    cmd_vel_in_topic: "nav_vel_raw"
-    cmd_vel_out_topic: "nav_vel"
+    # 2026-06-26: repontado nav_vel_raw/nav_vel -> follow_vel_raw/follow_vel.
+    # O path_follower (prio 15) é quem DIRIGE a nav e antes publicava follow_vel
+    # DIRETO no twist_mux, FURANDO o collision (que só filtrava o nav_vel do
+    # controller, prio 10, que está morto durante a nav). Agora o seguidor publica
+    # follow_vel_raw -> collision_monitor projeta o footprint pela velocidade e,
+    # se a trajetória real for colidir, FREIA/PARA -> publica follow_vel. Assim o
+    # reflexo de segurança volta a valer pro seguidor (igual o robô precisa no real).
+    cmd_vel_in_topic: "follow_vel_raw"
+    cmd_vel_out_topic: "follow_vel"
     state_topic: "collision_monitor_state"
     transform_tolerance: 0.5
     # Scan do LD06 é ~10 Hz; 1 s = 10 scans de tolerância antes de considerar

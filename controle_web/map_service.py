@@ -82,6 +82,54 @@ def _occupancy_to_png_b64(grid: OccupancyGrid) -> str:
     return base64.b64encode(buf.getvalue()).decode('ascii')
 
 
+def _costmap_to_png_rgba_b64(grid: OccupancyGrid) -> str:
+    """Converte um costmap (OccupancyGrid do Nav2) em PNG RGBA translúcido.
+
+    Overlay pra ver a INFLAÇÃO no mapa. Convenção do costmap_2d publicado:
+    -1 desconhecido, 0 livre, 1..98 gradiente de inflação, 99 inscrito,
+    100 letal. Livre/desconhecido ficam TRANSPARENTES (alpha 0) pra não tampar
+    o mapa; a inflação vira rampa ciano→vermelho translúcida; inscrito = laranja;
+    letal = magenta (o obstáculo de verdade). Assim dá pra ver o halo crescer.
+    """
+    w = grid.info.width
+    h = grid.info.height
+    arr = np.array(grid.data, dtype=np.int16).reshape((h, w))
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    # inflação 1..98 — rampa ciano(0,180,255) -> vermelho(255,0,0)
+    infl = (arr >= 1) & (arr <= 98)
+    t = (arr[infl].astype(np.float32) / 98.0)
+    rgba[infl, 0] = (t * 255).astype(np.uint8)
+    rgba[infl, 1] = (180 * (1.0 - t)).astype(np.uint8)
+    rgba[infl, 2] = (255 * (1.0 - t)).astype(np.uint8)
+    rgba[infl, 3] = 110
+    rgba[arr == 99] = [255, 140, 0, 170]      # raio inscrito
+    rgba[arr == 100] = [255, 0, 255, 210]     # letal (obstáculo)
+    # livre (0) e desconhecido (-1): alpha 0 (transparente)
+    rgba = np.flipud(rgba)
+    pil = Image.fromarray(rgba, mode='RGBA')
+    buf = BytesIO()
+    pil.save(buf, format='PNG', optimize=True)
+    return base64.b64encode(buf.getvalue()).decode('ascii')
+
+
+def _grid_info(grid: OccupancyGrid) -> dict:
+    """Metadados de posicionamento de um OccupancyGrid (origem/resolução)."""
+    return {
+        'width': grid.info.width,
+        'height': grid.info.height,
+        'resolution': grid.info.resolution,
+        'origin_x': grid.info.origin.position.x,
+        'origin_y': grid.info.origin.position.y,
+        'origin_yaw': _quat_to_yaw(
+            grid.info.origin.orientation.x,
+            grid.info.origin.orientation.y,
+            grid.info.origin.orientation.z,
+            grid.info.origin.orientation.w,
+        ),
+        'stamp': time.time(),
+    }
+
+
 def _quat_to_yaw(qx: float, qy: float, qz: float, qw: float) -> float:
     """Converte quaternion (xyzw) em yaw (radianos)."""
     siny_cosp = 2.0 * (qw * qz + qx * qy)
@@ -258,6 +306,17 @@ class MapBridge:
 
         self._node.create_subscription(
             OccupancyGrid, '/map', self._on_map, map_qos
+        )
+        # Costmap global (inflação) — overlay opcional no mapa da web. O nó
+        # publica latched (transient_local), igual ao /map. Só EMITE pro front
+        # quando a camada está ligada (set_costmap_layer) — costmap colorido é
+        # pesado e o front só precisa quando o usuário quer ver. Mesmo frame
+        # 'map', então alinha direto com o /map.
+        self._costmap_global_on = False
+        self._last_costmap_global_payload = None
+        self._node.create_subscription(
+            OccupancyGrid, '/global_costmap/costmap',
+            self._on_global_costmap, map_qos
         )
         self._node.create_subscription(
             Path, '/plan', self._on_plan, 10
@@ -474,6 +533,34 @@ class MapBridge:
             )
         except Exception as e:
             log.warning(f"[MapBridge] erro convertendo /map: {e}")
+
+    def _on_global_costmap(self, msg: OccupancyGrid):
+        # Sempre cacheia (pra emitir na hora que ligar a camada); só transmite
+        # quando ligada, pra não pesar o socket à toa.
+        try:
+            payload = {
+                'info': _grid_info(msg),
+                'png_b64': _costmap_to_png_rgba_b64(msg),
+            }
+            self._last_costmap_global_payload = payload
+            if self._costmap_global_on:
+                self._sock.emit('global_costmap_update', payload, namespace='/')
+        except Exception as e:
+            log.warning(f"[MapBridge] erro convertendo global_costmap: {e}")
+
+    def set_costmap_layer(self, layer: str, on: bool) -> dict:
+        """Liga/desliga a transmissão de uma camada de costmap pro front.
+        Ao LIGAR, reemite o último costmap cacheado na hora (sem esperar 1 Hz).
+        """
+        on = bool(on)
+        if layer == 'global':
+            self._costmap_global_on = on
+            if on and self._last_costmap_global_payload is not None:
+                self._sock.emit('global_costmap_update',
+                                self._last_costmap_global_payload,
+                                namespace='/')
+            return {'ok': True, 'layer': 'global', 'on': on}
+        return {'ok': False, 'error': f'camada desconhecida: {layer}'}
 
     def _on_plan(self, msg: Path):
         try:

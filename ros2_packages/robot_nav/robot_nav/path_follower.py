@@ -206,7 +206,11 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             self.tf_buffer = Buffer()
             self.tf_listener = TransformListener(self.tf_buffer, self)
 
-            self.pub = self.create_publisher(Twist, 'follow_vel', 10)
+            # 2026-06-26: publica follow_vel_raw (NÃO follow_vel). O collision_monitor
+            # consome follow_vel_raw, freia/para se for colidir e republica follow_vel
+            # (prio 15 no twist_mux). Antes publicava follow_vel direto e furava o
+            # collision. Ver nav2_params_pi.yaml collision_monitor cmd_vel_in/out_topic.
+            self.pub = self.create_publisher(Twist, 'follow_vel_raw', 10)
             self.pub_state = self.create_publisher(String, 'follow_state', latched)
 
             self.create_subscription(Path, 'plan', self._on_plan,
@@ -226,6 +230,12 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                                 'aim_x', 'aim_y', 'herr_deg', 'dist_aim',
                                 'dist_goal', 'vx', 'wz'])
             self._plan_path = _os.path.join(d, 'follow_plan_last.csv')
+            # Snapshot do PRIMEIRO plano longo de cada goal (a FORMA do contorno —
+            # o last.csv vira stub coladinho no goal). Resetado quando um novo goal
+            # fica ativo (_on_status).
+            self._plan_first_path = _os.path.join(d, 'follow_plan_first.csv')
+            self._plan_snapped = False
+            self._goal_active_any = False
             self._time = _time
             self.create_timer(1.0 / g['rate_hz'], self._tick)
             self.get_logger().info(
@@ -249,10 +259,29 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                         w.writerows(self._path)
                 except OSError:
                     pass
+                # primeiro plano LONGO do goal (>=0.5 m) -> grava 1x a forma do
+                # contorno num arquivo que NÃO é sobrescrito pelo stub final
+                if not self._plan_snapped and len(self._path) >= 2:
+                    plen = sum(((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+                               for a, b in zip(self._path, self._path[1:]))
+                    if plen >= 0.5:
+                        try:
+                            with open(self._plan_first_path, 'w', newline='') as f:
+                                w = _csv.writer(f)
+                                w.writerow(['x', 'y'])
+                                w.writerows(self._path)
+                            self._plan_snapped = True
+                        except OSError:
+                            pass
 
         def _on_status(self, topic, msg):
             self._goal_active[topic] = any(st.status in ACTIVE
                                            for st in msg.status_list)
+            active = any(self._goal_active.values())
+            if active and not self._goal_active_any:
+                # novo goal -> libera o snapshot do primeiro plano longo
+                self._plan_snapped = False
+            self._goal_active_any = active
 
         def _pose_map(self):
             try:
