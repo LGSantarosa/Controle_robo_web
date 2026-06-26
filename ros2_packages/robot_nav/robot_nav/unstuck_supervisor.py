@@ -641,7 +641,11 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
 
             self.pub = self.create_publisher(Twist, "unstuck_vel", 10)
             self.create_subscription(Odometry, "odom", self._on_odom, 10)
-            self.create_subscription(Twist, "nav_vel_raw", self._on_nav_raw, 10)
+            # 2026-06-26 (2-mux): "nav_vel_raw" virou "nav_vel" (saída do smoother).
+            # É o MESMO sinal de antes (intenção do controller, pré-collision); só o
+            # nome mudou — o collision saiu de cima do smoother e foi pro mux de
+            # autonomia. Continua sendo a intenção do nav p/ o gate _nav_wants_move.
+            self.create_subscription(Twist, "nav_vel", self._on_nav_raw, 10)
             self.create_subscription(LaserScan, "scan", self._on_scan, be)
             # Standdown durante a travessia de porta: enquanto o door_crossing
             # está staging/rotating/crossing, o unstuck fica quieto (senão a ré

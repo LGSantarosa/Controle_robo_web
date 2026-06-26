@@ -26,15 +26,25 @@ origin/feat/reto-mais-point-turn` → `colcon build robot_nav`; web entra no rel
   mais livre) ficaram inertes — REVER se religar o door.
 
 ### Mudanças aplicadas (commits 69bc9ac → 2ca7e96)
-- ~~collision_monitor filtra o seguidor~~ **REVERTIDO (`7a6de77`):** repontei o collision p/
-  `follow_vel_raw→follow_vel` pra proteger o seguidor, MAS isso criou **PONTO ÚNICO DE FALHA** —
-  quando o bringup do Nav2 aborta antes de ativar o collision_monitor (bond timeout do
-  `velocity_smoother` na Pi lenta), ninguém republicava o `follow_vel` e a **NAV INTEIRA MORRIA**
-  (robô só andava no controle/unstuck, que furam o collision). Seguidor voltou a publicar
-  `follow_vel` DIRETO. Proteger o seguidor com collision SEM SPOF = pôr o collision no `cmd_vel`
-  FINAL pós-twist_mux, ou o seguidor ler `/scan`. **TODO.** ⚠️ BO subjacente: **bringup do Nav2
-  é flaky na Pi** (velocity_smoother bond timeout 4s) → às vezes collision_monitor nem ativa (sem
-  reflexo anti-atropelamento). Tunar `bond_timeout` do lifecycle_manager.
+- ~~collision_monitor filtra o seguidor~~ **REVERTIDO (`7a6de77`) → RESOLVIDO de vez com 2-MUX
+  (2026-06-26, ⏳ validar):** o revert virou band-aid. Causa raiz do SPOF era o **bringup flaky**.
+  Dois passos:
+  - **Passo 1 (`25d12e9`): `bond_timeout` do `lifecycle_manager_navigation` 4.0 → 20.0s.** A Pi
+    lenta demorava >4s pra confirmar o bond do `velocity_smoother` → o lifecycle derrubava a stack
+    INTEIRA no meio (collision às vezes nem ativava → nav subia pela metade, "parecia bug"). Agora
+    bringup atômico/confiável.
+  - **Passo 2 (2-MUX): collision protege TODA a autonomia, sem SPOF.** Pipeline novo:
+    `smoother(nav_vel)/path_follower(follow_vel)/door(door_vel)` → **`twist_mux_auto`** →
+    `auto_vel_raw` → **`collision_monitor`** → `auto_vel` → **twist_mux FINAL** (prio 10) →
+    `cmd_vel`. O **unstuck (30) e o humano (web/PS4)** entram no mux FINAL, A JUSANTE do collision
+    → seguem furando (resgate/override sempre funcionam). **Collision agora é OBRIGATÓRIO:** sem
+    ele, `auto_vel` some e a autonomia não anda (mas o humano dirige). Antes só `nav_vel` era
+    filtrado e o seguidor (driver atual) furava → **buraco de segurança fechado.** Arquivos:
+    novo `config/twist_mux_auto.yaml`, `twist_mux.yaml` (agora `autonomy`/auto_vel + unstuck +
+    humano), `nav2_params*.yaml` (collision in/out = auto_vel_raw/auto_vel), `nav2.launch.py`
+    (smoother→nav_vel + nó twist_mux_auto), `unstuck`/`door` (tap `nav_vel_raw`→`nav_vel`, rename
+    puro), `freeze_capture` (loga auto_vel_raw/auto_vel). 166 testes ✅. **⏳ FALTA validar no SIM
+    (`--sim --pi --nav2`) e no real** — ver Verificação no plano. Plano: `goofy-kindling-hopcroft`.
 - **local costmap inflation 0.25 → 0.35**; **global mantido 0.45** (folga de obstáculo).
 - **w_traversal_cost do Theta\*: testei 2.0→0.5 (menos contorno), REPROVADO** (enfiava o plano
   em vão IMPOSSÍVEL parede-obstáculo) → revertido 2.0. Lição: w_traversal só troca "volta larga"

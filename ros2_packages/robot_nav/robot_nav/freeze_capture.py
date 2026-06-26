@@ -8,10 +8,12 @@ DEPOIS — nunca ao vivo:
 
 1) freeze_capture.csv — a CADEIA de velocidade + odom, 1 linha por msg:
      t_wall, topic, vx, wz, px, py
-     cmd_vel_nav : o que o controller (DWB/RotationShim) QUER (pré-smoother)
-     nav_vel     : o que sobra DEPOIS do collision_monitor
-     cmd_vel     : o que vai pro motor (pós twist_mux / modelo de giro no sim)
-     odom        : o que o robô FAZ (twist) + pose (px,py)
+     cmd_vel_nav  : o que o controller (DWB/RotationShim) QUER (pré-smoother)
+     nav_vel      : saída do smoother (entra no mux de autonomia; PRÉ-collision)
+     auto_vel_raw : nav+seguidor+porta arbitrados pelo mux de autonomia (PRÉ-collision)
+     auto_vel     : o que SOBRA depois do collision_monitor (autonomia gated)
+     cmd_vel      : o que vai pro motor (pós twist_mux FINAL / modelo de giro no sim)
+     odom         : o que o robô FAZ (twist) + pose (px,py)
 
 2) freeze_diag.csv — métricas DERIVADAS a ~5 Hz pra provar planner-vs-controller:
      t_wall, px, py, yaw_deg, plan_rel_deg, front_obst_m, cmd_nav_vx, cmd_nav_wz
@@ -62,7 +64,7 @@ class FreezeCapture(Node):
 
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          history=HistoryPolicy.KEEP_LAST, depth=20)
-        for topic in ('cmd_vel_nav', 'nav_vel', 'cmd_vel'):
+        for topic in ('cmd_vel_nav', 'nav_vel', 'auto_vel_raw', 'auto_vel', 'cmd_vel'):
             self.create_subscription(Twist, topic, self._mk_twist(topic), qos)
         self.create_subscription(Odometry, 'odom', self._on_odom, qos)
         self.create_subscription(Path, 'plan', self._on_plan, qos)

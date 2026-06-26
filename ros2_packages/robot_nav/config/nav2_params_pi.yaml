@@ -454,29 +454,33 @@ velocity_smoother:
     odom_duration: 0.1
 
 # Collision Monitor (MEDROSO 2026-06-05) — reflexo de segurança de última linha.
-# Lê o /scan CRU (independe de pose/costmap/planner) e freia o cmd_vel ANTES
+# Lê o /scan CRU (independe de pose/costmap/planner) e freia o comando ANTES
 # de chegar nos motores. É o que garante "nunca bater": mesmo que o costmap
 # tenha perdido a perna fina da cadeira, se QUALQUER ponto do laser entra na
-# zona, ele para. Fica no pipeline ENTRE o velocity_smoother e o twist_mux:
-#   controller -> cmd_vel_nav -> smoother -> nav_vel_raw -> [collision_monitor]
-#                 -> nav_vel -> twist_mux(prio 10) -> cmd_vel -> rodas
-# Como só filtra o ramo nav_vel, o PS4/web (prioridade maior no mux) seguem
-# mandando por cima — o humano no controle continua soberano.
+# zona, ele para.
+# 2026-06-26 — PIPELINE DE 2-MUX: o collision agora filtra TODA a autonomia
+# (nav+seguidor+porta), não só o controller_server. Fica ENTRE o mux de
+# autonomia e o mux final:
+#   smoother(nav_vel)/path_follower(follow_vel)/door(door_vel)
+#     -> [twist_mux_auto] -> auto_vel_raw -> [collision_monitor]
+#     -> auto_vel -> twist_mux FINAL(prio 10) -> cmd_vel -> rodas
+# unstuck (prio 30) e humano (web/PS4) entram no mux FINAL, A JUSANTE do
+# collision -> seguem furando o reflexo (resgate e override sempre funcionam).
+# Se o collision não sobe/cai, auto_vel some e a autonomia NÃO anda (collision
+# OBRIGATÓRIO), mas o humano continua soberano.
 collision_monitor:
   ros__parameters:
     use_sim_time: false
     base_frame_id: "base_link"
     odom_frame_id: "odom"
-    # nav_vel_raw -> nav_vel (filtra o controller_server). 2026-06-26: tentei
-    # repontar p/ follow_vel_raw/follow_vel (collision protege o seguidor), mas isso
-    # fez a NAV depender do collision estar ATIVO: quando o bringup aborta antes de
-    # ativar o collision_monitor (bond timeout do velocity_smoother na Pi), o
-    # follow_vel não era republicado e o robô não andava sob nav. REVERTIDO — o
-    # seguidor publica follow_vel direto. (Proteger o seguidor com collision sem
-    # criar ponto único de falha = pôr o collision no cmd_vel FINAL pós-twist_mux,
-    # ou o seguidor ler /scan. Fica pra depois.)
-    cmd_vel_in_topic: "nav_vel_raw"
-    cmd_vel_out_topic: "nav_vel"
+    # 2-mux (2026-06-26): filtra a saída do mux de AUTONOMIA (auto_vel_raw, já
+    # arbitrado entre nav+seguidor+porta) -> auto_vel, que entra no mux FINAL.
+    # Assim o collision protege TODA a autonomia (antes só o controller_server; o
+    # seguidor furava). Collision OBRIGATÓRIO: sem ele, auto_vel some e a nav não
+    # anda — mas unstuck/humano entram pós-collision e seguem furando. O SPOF do
+    # bringup foi resolvido subindo o bond_timeout do lifecycle_manager (4->20s).
+    cmd_vel_in_topic: "auto_vel_raw"
+    cmd_vel_out_topic: "auto_vel"
     state_topic: "collision_monitor_state"
     transform_tolerance: 0.5
     # Scan do LD06 é ~10 Hz; 1 s = 10 scans de tolerância antes de considerar

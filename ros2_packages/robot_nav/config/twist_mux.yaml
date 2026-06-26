@@ -1,4 +1,10 @@
-# Arbitragem de /cmd_vel — twist_mux (PLANO_HEADLESS_2026-05-22, Fase 1).
+# Arbitragem FINAL de /cmd_vel — twist_mux (PLANO_HEADLESS_2026-05-22, Fase 1).
+#
+# 2º estágio do pipeline de 2-mux (2026-06-26). As fontes autônomas (nav, seguidor,
+# porta) NÃO entram mais aqui direto: elas são arbitradas no twist_mux_auto.yaml e
+# passam pelo collision_monitor antes, chegando aqui como uma fonte só (auto_vel).
+# Assim o collision protege TODA a autonomia num ponto só. O unstuck e o humano
+# ficam AQUI, A JUSANTE do collision -> continuam furando o reflexo.
 #
 # Quem vence quando duas fontes mandam ao mesmo tempo: a de maior priority.
 # Se uma fonte para de publicar por mais de `timeout` s, o mux a ignora e
@@ -8,7 +14,8 @@
 #   PS4  (joy_vel, prio 100) — controle humano direto; sempre vence
 #   WASD (key_vel, prio  90) — publicado por bin/robot-key em terminal SSH separado
 #   web  (web_vel, prio  50) — só se WEB_TELEOP=on (controle_web/app.py)
-#   Nav2/trekking (nav_vel, prio 10) — autonomia só dirige quando ninguém manual
+#   unstuck (unstuck_vel, prio 30) — desencalhe; fura o collision (entra pós-collision)
+#   autonomia (auto_vel, prio 10) — nav+seguidor+porta JÁ filtrados pelo collision
 #
 # Resolve o achado B20 da AUDITORIA_2026-05-18 (vários publishers direto no
 # /cmd_vel). Sem locks ainda — sem botão de e-stop dedicado no protocolo.
@@ -36,17 +43,9 @@ twist_mux:
       unstuck:
         topic: unstuck_vel   # publicado pelo unstuck_supervisor (desencalhe)
         timeout: 0.5
-        priority: 30         # > nav_vel (fura o collision na ré/giro), < web/PS4
-      door:
-        topic: door_vel      # publicado pelo door_crossing (travessia de porta)
-        timeout: 0.5
-        priority: 20         # > nav_vel (assume a manobra), < unstuck (resgate vence)
-      follower:
-        topic: follow_vel    # publicado pelo path_follower (reto+giro decisivo)
-        timeout: 0.5
-        priority: 15         # > nav_vel (ignora o tracking do controller_server),
-                             # < door (20, assume a porta) e < unstuck (30, resgate)
-      navigation:
-        topic: nav_vel       # publicado por velocity_smoother / trekking_runner
+        priority: 30         # fura o collision na ré/giro (entra pós-collision), < web/PS4
+      autonomy:
+        topic: auto_vel      # saída do collision_monitor (nav+seguidor+porta já arbitrados
+                             # no twist_mux_auto e filtrados pelo reflexo de colisão)
         timeout: 0.5
         priority: 10

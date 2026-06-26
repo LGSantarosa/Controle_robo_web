@@ -1,0 +1,33 @@
+# Mux de AUTONOMIA — 1º estágio do pipeline de 2-mux (2026-06-26).
+#
+# Arbitra SÓ as fontes autônomas (nav2/controller, seguidor, porta) e entrega
+# UM comando (cmd_vel_out -> auto_vel_raw no launch) que vai pro collision_monitor:
+#
+#   smoother(nav_vel) / path_follower(follow_vel) / door_crossing(door_vel)
+#     -> [twist_mux_auto] -> auto_vel_raw -> [collision_monitor] -> auto_vel
+#     -> [twist_mux FINAL] (prio 10) -> cmd_vel -> rodas
+#
+# Por que 2 muxes: o collision passa a proteger TODA a autonomia num ponto só
+# (antes só filtrava nav_vel; o seguidor furava). O unstuck e o humano NÃO entram
+# aqui — eles entram no mux FINAL, A JUSANTE do collision, então continuam furando
+# o reflexo (resgate e override sempre funcionam). Se o collision não sobe/cai,
+# auto_vel some e a autonomia não anda (collision OBRIGATÓRIO), mas o humano segue.
+#
+# Mantém a ordem relativa que existia no mux único: door (20) > seguidor (15) > nav (10).
+twist_mux:
+  ros__parameters:
+    use_sim_time: false
+    use_stamped: false
+    topics:
+      door:
+        topic: door_vel      # door_crossing (travessia de porta) — assume a manobra
+        timeout: 0.5
+        priority: 20
+      follower:
+        topic: follow_vel    # path_follower (reto+giro decisivo) — ignora o controller_server
+        timeout: 0.5
+        priority: 15
+      navigation:
+        topic: nav_vel       # velocity_smoother / controller_server / trekking_runner
+        timeout: 0.5
+        priority: 10

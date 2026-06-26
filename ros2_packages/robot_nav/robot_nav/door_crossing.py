@@ -596,7 +596,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self.create_subscription(String, 'doors', self._on_doors, latched)
             be = qos_profile_sensor_data
             self.create_subscription(LaserScan, 'scan', self._on_scan, be)
-            self.create_subscription(Twist, 'nav_vel_raw', self._on_nav, 10)
+            # 2026-06-26 (2-mux): "nav_vel_raw" -> "nav_vel" (saída do smoother, mesmo
+            # sinal de antes; o collision saiu de cima do smoother). Intenção do nav.
+            self.create_subscription(Twist, 'nav_vel', self._on_nav, 10)
             for topic in ('navigate_to_pose/_action/status',
                           'navigate_through_poses/_action/status'):
                 self.create_subscription(

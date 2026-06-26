@@ -298,9 +298,11 @@ velocity_smoother:
     odom_duration: 0.1
 
 # Collision Monitor (MEDROSO 2026-06-05) — reflexo de segurança de última linha.
-# Lê o /scan CRU e freia o cmd_vel ANTES dos motores, independente de
-# pose/costmap/planner. Fica entre o velocity_smoother e o twist_mux:
-#   smoother -> nav_vel_raw -> [collision_monitor] -> nav_vel -> twist_mux.
+# Lê o /scan CRU e freia o comando ANTES dos motores, independente de
+# pose/costmap/planner. 2-mux (2026-06-26): filtra a saída do mux de AUTONOMIA:
+#   smoother(nav_vel)/follower(follow_vel)/door(door_vel)
+#     -> [twist_mux_auto] -> auto_vel_raw -> [collision_monitor]
+#     -> auto_vel -> twist_mux FINAL -> cmd_vel. unstuck/humano furam pós-collision.
 # NOTA: este perfil (notebook/sim) está mais defasado que o nav2_params_pi.yaml,
 # que é o que roda no robô. O bloco abaixo é igual ao da Pi pra a launch não
 # quebrar quando rodada sem --pi.
@@ -309,8 +311,8 @@ collision_monitor:
     use_sim_time: false
     base_frame_id: "base_link"
     odom_frame_id: "odom"
-    cmd_vel_in_topic: "nav_vel_raw"
-    cmd_vel_out_topic: "nav_vel"
+    cmd_vel_in_topic: "auto_vel_raw"
+    cmd_vel_out_topic: "auto_vel"
     state_topic: "collision_monitor_state"
     transform_tolerance: 0.5
     source_timeout: 1.0

@@ -25,6 +25,9 @@ def generate_launch_description():
     # behavior_trees/navigate_w_backup_first_recovery.xml. Caminho via share dir
     # (não-hardcoded). Override do default_nav_to_pose_bt_xml no bt_navigator.
     bt_xml = os.path.join(pkg, 'behavior_trees', 'navigate_w_backup_first_recovery.xml')
+    # Mux de AUTONOMIA (1º estágio do 2-mux): arbitra nav_vel/follow_vel/door_vel
+    # numa fonte só (auto_vel_raw) que entra no collision_monitor.
+    twist_mux_auto_cfg = os.path.join(pkg, 'config', 'twist_mux_auto.yaml')
 
     map_arg = DeclareLaunchArgument(
         'map', default_value='',
@@ -128,12 +131,11 @@ def generate_launch_description():
             package='nav2_velocity_smoother', executable='velocity_smoother',
             name='velocity_smoother', output=nav_output,
             parameters=[params_file, sim_time_param],
-            # Saída do smoother vai pra nav_vel_raw, que entra no collision_monitor
-            # (reflexo de segurança). O collision_monitor é quem publica nav_vel
-            # (entrada de menor prioridade do twist_mux em robot.launch.py E em
-            # sim.launch.py) — assim o PS4 (joy_vel) e o web (web_vel) podem
-            # assumir por cima da navegação.
-            remappings=[('cmd_vel', 'cmd_vel_nav'), ('cmd_vel_smoothed', 'nav_vel_raw')],
+            # 2-mux (2026-06-26): a saída do smoother (nav_vel) entra no mux de
+            # AUTONOMIA (twist_mux_auto) junto com follow_vel/door_vel; o
+            # collision_monitor filtra a SAÍDA desse mux (auto_vel_raw->auto_vel).
+            # Antes o collision filtrava só a saída do smoother (nav_vel_raw).
+            remappings=[('cmd_vel', 'cmd_vel_nav'), ('cmd_vel_smoothed', 'nav_vel')],
         ),
         # Sanitizador do scan PRA O COLLISION MONITOR: o LD06 cospe retornos
         # fantasmas <15 cm (dentro do chassi!) em ~2% dos scans e, com
@@ -176,9 +178,20 @@ def generate_launch_description():
         #     name='door_crossing', output=nav_output,
         #     parameters=[sim_time_param],
         # ),
+        # Mux de AUTONOMIA (1º estágio do 2-mux, 2026-06-26): arbitra as fontes
+        # autônomas (nav_vel, follow_vel, door_vel) numa fonte só, auto_vel_raw,
+        # que entra no collision_monitor. unstuck/humano NÃO entram aqui — eles
+        # ficam no mux FINAL (robot/sim.launch.py), a jusante do collision.
+        Node(
+            package='twist_mux', executable='twist_mux',
+            name='twist_mux_auto', output=nav_output,
+            parameters=[twist_mux_auto_cfg, sim_time_param],
+            remappings=[('cmd_vel_out', 'auto_vel_raw')],
+        ),
         # Collision Monitor: lê /scan_safe (sanitizado acima) e freia
-        # nav_vel_raw -> nav_vel ANTES do twist_mux. Topicos in/out definidos
-        # no YAML (cmd_vel_in/out_topic; fonte scan no nav2_params_pi.yaml).
+        # auto_vel_raw -> auto_vel ANTES do mux FINAL. Agora protege TODA a
+        # autonomia (nav+seguidor+porta), não só o controller_server. Topicos
+        # in/out definidos no YAML (cmd_vel_in/out_topic; fonte scan nos params).
         Node(
             package='nav2_collision_monitor', executable='collision_monitor',
             name='collision_monitor', output=nav_output,
