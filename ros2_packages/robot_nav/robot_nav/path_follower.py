@@ -74,7 +74,15 @@ class FollowConfig:
     rot_min: float = 2.0            # rad/s — piso do giro (vence a zona-morta 1.7)
     rot_max: float = 4.5            # rad/s — teto do giro
     slow_radius: float = 0.4        # m — começa a frear o avanço perto do goal
-    min_speed: float = 0.10         # m/s — avanço mínimo (não rastejar)
+    # 2026-06-26: 0.10 -> 0.22. CAMPO: perto do goal o ramp baixava p/ ~0.10-0.11
+    # m/s, ABAIXO da zona-morta linear do robô real (pesado) -> mandava 0.11 e NÃO
+    # ANDAVA = congelava sem finalizar nenhum ponto (precisava empurrar no controle).
+    # 0.11 trava, 0.25 (cruise) anda -> a zona-morta tá no meio; 0.22 fica bem acima.
+    # Overshoot a 20Hz ~1cm, irrelevante vs goal_xy_tol 0.15. Se AINDA rastejar/
+    # travar, subir p/ 0.25; se passar do ponto, descer. (Zona-morta linear NUNCA
+    # foi medida — só a do giro=1.7; o sim_actuator_model tb só modela o giro, por
+    # isso o sim não pegava esse trava.)
+    min_speed: float = 0.22         # m/s — avanço mínimo (acima da zona-morta)
 
 
 @dataclass
@@ -184,7 +192,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 ('turn_enter_deg', 12.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.0), ('rot_max', 4.5),
-                ('slow_radius', 0.4), ('min_speed', 0.10), ('rate_hz', 20.0),
+                ('slow_radius', 0.4), ('min_speed', 0.22), ('rate_hz', 20.0),
             ):
                 self.declare_parameter(name, default)
                 g[name] = self.get_parameter(name).value
