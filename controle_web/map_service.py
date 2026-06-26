@@ -274,8 +274,12 @@ class MapBridge:
 
     POSE_PUBLISH_HZ = 10.0
     SCAN_PUBLISH_HZ = 10.0
-    PRE_DOOR_CLEARANCE = 0.30   # m — folga mínima do ponto-pré-porta até parede
-                                # (> inflation_radius 0.25 p/ o planner não recusar)
+    PRE_DOOR_CLEARANCE = 0.50   # m — folga mínima do ponto-pré-porta até parede.
+                                # > inflation_radius GLOBAL (0.45) senão o ponto
+                                # cai no halo de inflação = inalcançável e o robô
+                                # não chega. 2026-06-26: 0.30 -> 0.50 (a inflação
+                                # subiu p/ 0.45; o ponto pré-porta colava na parede
+                                # lateral). A busca 2D abaixo acha esse ponto.
 
     def __init__(self, socketio, mode: str, maps_dir: str):
         self._sock = socketio
@@ -685,27 +689,44 @@ class MapBridge:
 
     def _clear_pre_door_point(self, door, wx, wy):
         """Se o ponto-pré-porta caiu colado em parede (parede LATERAL aperta o
-        skid-steer), desliza EM DIREÇÃO À PORTA ao longo do eixo até achar folga
-        (a garganta do vão é mais aberta). Mantém original se nada servir."""
+        skid-steer), procura o ponto livre mais PRÓXIMO do ideal — busca 2D (anéis
+        crescentes), não só no eixo da porta, pra escapar pro lado ABERTO. Fica do
+        lado do robô (não cruza a porta). Mantém o original se nada servir."""
         cl = self.PRE_DOOR_CLEARANCE
         if self._point_clear(wx, wy, cl):
             return wx, wy
         ax, ay = door['a']
         bx, by = door['b']
         cx, cy = (ax + bx) / 2.0, (ay + by) / 2.0
-        dist = math.hypot(cx - wx, cy - wy)
-        if dist < 1e-6:
+        # normal centro-da-porta -> ponto ideal = "lado do robô" (candidato tem
+        # que ficar deste lado, senão pularia pra dentro/através do vão).
+        sx, sy = wx - cx, wy - cy
+        snorm = math.hypot(sx, sy)
+        if snorm < 1e-6:
             return wx, wy
-        ux, uy = (cx - wx) / dist, (cy - wy) / dist
-        d, step, min_standoff = 0.05, 0.05, 0.3
-        while d <= dist - min_standoff:
-            nx, ny = wx + ux * d, wy + uy * d
-            if self._point_clear(nx, ny, cl):
+        sx, sy = sx / snorm, sy / snorm
+        step, max_r = 0.05, 0.60
+        r_i = 1
+        while r_i * step <= max_r:
+            r = r_i * step
+            best, best_d2 = None, None
+            n = max(8, int(2 * math.pi * r / step))
+            for k in range(n):
+                th = 2 * math.pi * k / n
+                nx, ny = wx + r * math.cos(th), wy + r * math.sin(th)
+                if (nx - cx) * sx + (ny - cy) * sy <= 0.1:   # mantém no lado do robô
+                    continue
+                if self._point_clear(nx, ny, cl):
+                    d2 = (nx - wx) ** 2 + (ny - wy) ** 2
+                    if best_d2 is None or d2 < best_d2:
+                        best, best_d2 = (nx, ny), d2
+            if best is not None:
                 log.info(f"[MapBridge] ponto-pré-porta colado em parede -> "
-                         f"deslocado {d:.2f}m p/ a porta ({nx:.2f},{ny:.2f})")
-                return nx, ny
-            d += step
-        log.warning("[MapBridge] ponto-pré-porta sem folga no eixo; "
+                         f"deslocado {r:.2f}m p/ o lado aberto "
+                         f"({best[0]:.2f},{best[1]:.2f})")
+                return best
+            r_i += 1
+        log.warning("[MapBridge] ponto-pré-porta sem folga em 0.6m; "
                     "mantido original")
         return wx, wy
 
