@@ -43,8 +43,14 @@ origin/feat/reto-mais-point-turn` → `colcon build robot_nav`; web entra no rel
     novo `config/twist_mux_auto.yaml`, `twist_mux.yaml` (agora `autonomy`/auto_vel + unstuck +
     humano), `nav2_params*.yaml` (collision in/out = auto_vel_raw/auto_vel), `nav2.launch.py`
     (smoother→nav_vel + nó twist_mux_auto), `unstuck`/`door` (tap `nav_vel_raw`→`nav_vel`, rename
-    puro), `freeze_capture` (loga auto_vel_raw/auto_vel). 166 testes ✅. **⏳ FALTA validar no SIM
-    (`--sim --pi --nav2`) e no real** — ver Verificação no plano. Plano: `goofy-kindling-hopcroft`.
+    puro), `freeze_capture` (loga auto_vel_raw/auto_vel). 166 testes ✅. Plano:
+    `goofy-kindling-hopcroft`. Commits `25d12e9` (bond) + `2091635` (2-mux) + `7c6d9a0` (fix).
+  - **✅ VALIDADO NO SIM (2026-06-26, dev):** anda sob nav, o collision FREIA o seguidor (antes
+    furava), e o unstuck ainda fura o collision. ⏳ **FALTA validar no real.**
+  - 🐞 **Bug pego no sim (corrigido `7c6d9a0`):** o `twist_mux_auto.yaml` tinha a chave de topo
+    `twist_mux:` mas o nó chama `twist_mux_auto` → o ROS casa params pelo NOME DO NÓ → subiu com
+    DEFAULTS (não assinava os vels + publicava TwistStamped que o collision não consome) → a nav
+    morreu igual ao revert. **Lição: chave do YAML = nome do nó; testes unitários NÃO pegam isso.**
 - **local costmap inflation 0.25 → 0.35**; **global mantido 0.45** (folga de obstáculo).
 - **w_traversal_cost do Theta\*: testei 2.0→0.5 (menos contorno), REPROVADO** (enfiava o plano
   em vão IMPOSSÍVEL parede-obstáculo) → revertido 2.0. Lição: w_traversal só troca "volta larga"
