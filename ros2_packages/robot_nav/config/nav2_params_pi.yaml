@@ -81,18 +81,21 @@ planner_server:
     # RETAS longas com cantos esparsos → no reto o RotationShim só anda, no canto faz
     # UM giro decisivo no lugar. (Theta* já foi testado com ARCO e deu "pulinhos"; o
     # par certo é com reto+point-turn.) Reverter = voltar o bloco NavfnPlanner.
+    # CONTORNO-EM-L — TODAS as 3 opções REPROVADAS (2026-06-27). Mantido Theta* (diagonal
+    # suave, que o path_follower dirige como reto+point-turn) — é o melhor que temos.
+    #   A) Theta* how_many_corners 8->4: line-of-sight costura diagonal -> 4≈8 (sem L).
+    #   C) SmacPlanner2D (grid A*): 8-conn (Moore) FIXO, sem param de 4-conn; smoother off
+    #      -> escada de 45° (curva 765°); on -> diagonal. Pior que Theta*.
+    #   B) plan_manhattanizer (pós-processa o /plan em pernas ortogonais): forma certa no
+    #      teste estático, mas ao DIRIGIR ficou PIOR (robô para-gira-anda seco; dono: "tá
+    #      uma merda, o anterior tava bem melhor"). REVERTIDO (nó/testes/wiring removidos).
+    # NÃO re-tentar A/B/C. Forçar o canto-90 piora; a diagonal suave é melhor de dirigir.
+    #   Ver docs/superpowers/specs/2026-06-26-contorno-em-L-design.md
     GridBased:
       plugin: "nav2_theta_star_planner::ThetaStarPlanner"
-      how_many_corners: 8           # 8 = vizinhança completa (cantos a 45°); 4 = só ortogonal
-      w_euc_cost: 1.0               # peso da distância euclidiana (caminho curto)
-      # 2026-06-26: testei 2.0 -> 0.5 p/ reduzir o contorno. REPROVADO em campo-sim:
-      # com traversal baixo o planner ACEITA pagar o custo alto da inflacao p/
-      # encurtar => enfia o plano num vao IMPOSSIVEL entre parede e obstaculo (centro
-      # caro mas nao-letal) onde o robo nao cabe. Achamos o PISO do knob. Revertido
-      # p/ 2.0 (respeita os vaos). Conclusao: w_traversal NAO resolve o contorno (so
-      # troca "volta larga" por "buraco impossivel") -> o fix do contorno vai pelo
-      # simplificador no path_follower (reusa o plano seguro do Nav2 e dirige reto).
-      w_traversal_cost: 2.0         # peso de fugir de células caras (longe de parede)
+      how_many_corners: 8          # opção A (4) reprovada — line-of-sight costura diagonal
+      w_euc_cost: 1.0
+      w_traversal_cost: 2.0        # 06-26: piso do knob; <2.0 enfia em vão impossível
       w_heuristic_cost: 1.0
       allow_unknown: true
       use_final_approach_orientation: false

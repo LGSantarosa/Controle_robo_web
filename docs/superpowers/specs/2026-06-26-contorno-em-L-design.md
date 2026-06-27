@@ -58,4 +58,46 @@ canto, reto até o goal (sem a diagonal/volta larga). Comparar A vs C lado a lad
 Régua final = validar no real em janela curta.
 
 ## Decisão do dono
-> (preencher quando voltar: A, C, ou B — e eu implemento)
+> Dono escolheu testar **A** e depois **C** (2026-06-27).
+
+## RESULTADOS no sim (2026-06-27) — A e C REPROVADAS
+Mapa `sim_sala` construído (tour autônomo, cobre a sala). Forma medida via action
+`ComputePathToPose` (start+goal fixos, contorno do box1), sem dirigir.
+
+- **A) Theta\* `how_many_corners` 8→4: REPROVADA.** 4 vs 8 deram caminho quase idêntico
+  (mesmo comprimento +25%, curva-total 122° vs 150°, forma visual igual). O passo de
+  **line-of-sight** do Theta\* costura diagonal entre nós não-adjacentes → restringir a
+  4-vizinhos não cria o canto-90.
+- **C) `SmacPlanner2D` (grid A\*): REPROVADA.** O 2D do nav2 é **8-conectado (Moore) FIXO**
+  — não há param de 4-conn (VON_NEUMANN); o enum `motion_model_for_search` só aceita `"2D"`.
+  Com `smoother.max_iterations: 0` o plano vira **escada de 45°** (17 cantos, curva-total
+  765°) — pior que o Theta\*; com smoother on vira diagonal. Nenhum dos dois é o "L".
+
+**Conclusão:** nenhum **planner stock** do nav2 entrega o "L" axis-aligned (todos minimizam
+distância → diagonal/escada; o "L" é deliberadamente mais longo). Mantido o Theta\* (diagonal
+suave, que o `path_follower` já dirige como reto+point-turn). Caminhos restantes pro "L":
+- **B) pós-processar o /plan em pernas ortogonais** (Manhattan-izar) com checagem de costmap.
+  Era de-priorizado por exigir leitura de costmap + testes fortes — mas é a via realista que sobrou.
+- **D) planner custom com turn-penalty** (penaliza mudança de direção não-axis-aligned).
+- **E) reavaliar se o "L" vale o custo** vs aceitar a diagonal suave do Theta\* (que o
+  path_follower já discretiza em reto+point-turn).
+
+## B TENTADA E REPROVADA (2026-06-27) ❌ — REVERTIDA
+Dono escolheu **B** e eu implementei: nó `plan_manhattanizer` (assina `/plan` Theta* +
+`/global_costmap/costmap`; **RDP** colapsava a diagonal ondulada nos cantos reais, depois
+trocava cada diagonal por um "L" axis-aligned checando o costmap por perna, fallback =
+diagonal; `path_follower` remapeado pra ler `plan_manhattan`). A **forma** ficou certa no
+teste estático (contorno do box1: 2 cantos de 90° limpos, livre de colisão; 186 testes ok).
+
+**MAS ao DIRIGIR no sim ficou pior que o anterior** — veredito do dono: "tá uma merda, o
+anterior tava bem melhor". O L rígido faz o robô parar-girar-andar-parar-girar (muitos
+point-turns secos) em vez de fluir; a diagonal suave do Theta* dirigida pelo `path_follower`
+(reto+point-turn discretizado) era visivelmente melhor. **REVERTIDO 2026-06-27**: removidos
+o nó `plan_manhattanizer`, os testes, o entry no setup.py e o wiring/remap no `nav2.launch.py`.
+Voltou ao estado anterior (Theta* `how_many_corners=8` + path_follower lendo `/plan` direto).
+
+**LIÇÃO (todas as 3 opções de "L" forçado falharam):** A=Theta* 4-conn (line-of-sight
+costura diagonal), C=Smac2D (8-conn fixo, escada 45°), B=Manhattan-izar o /plan (forma certa
+mas dirige feio). **A diagonal suave do Theta* + path_follower é o melhor que temos** — o "L"
+explícito/forçado piora a experiência. Se um dia revisitar, é a opção **E** (aceitar a
+diagonal) que vale, não forçar o canto. Não re-tentar A/B/C.
