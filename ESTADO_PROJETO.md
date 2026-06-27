@@ -1,7 +1,60 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-06-26**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-06-27**.
+
+---
+
+## 🆕 2026-06-27 — Consolidação na main + L reprovado + maze de teste + BOs novos do path_follower
+
+### Git: TUDO consolidado na `main`
+- A branch `feat/reto-mais-point-turn` (path_follower validado + 2-mux + porta nativa + 24 commits)
+  foi **fast-forward pra `main`** (`6bc8dea`→`5ad05d6`, sem conflito) e **pushada** pro origin.
+  `main == origin/main == branch`. ⚠️ Próximo `git reset --hard origin/main` na Pi traz mudança
+  GRANDE de uma vez (path_follower no lugar do fluxo antigo) — já validado em campo, mas testar curto.
+
+### CONTORNO-EM-L: A, B e C TODAS REPROVADAS → revertido, mantido Theta* diagonal
+- **A** (Theta* how_many_corners 8→4): line-of-sight costura diagonal, 4≈8. ❌
+- **C** (SmacPlanner2D): 8-conn fixo (Moore), sem 4-conn → escada de 45°. ❌
+- **B** (nó `plan_manhattanizer`: pós-processa o /plan em pernas ortogonais com RDP+checagem de
+  costmap): **forma certa** no teste estático (2 cantos de 90° limpos), MAS **ao DIRIGIR ficou pior**
+  (para-gira-anda seco) — dono: "tá uma merda, o anterior tava bem melhor". **REVERTIDO** (nó/testes/
+  wiring/entry removidos). ❌
+- **Lição:** nenhum jeito de forçar o "L" melhorou; a **diagonal suave do Theta* + path_follower é o
+  melhor que temos**. NÃO re-tentar A/B/C. Commit `5ad05d6` + spec `2026-06-26-contorno-em-L-design.md`
+  têm o detalhe. **nav2 funcionalmente IDÊNTICO ao de antes** (provado: diff e548395→HEAD = só comentário).
+
+### Assets de SIM novos (untracked, NÃO commitados)
+- `worlds/sala_grande.sdf` + `maps/sala_grande.{pgm,yaml}` — **maze 16×10 DIFÍCIL**: serpentina de 3
+  portas 0.93m + 2 chicanes + pinch de 0.75m + 9 obstáculos + dead-end decoy. Mapa gerado do SDF
+  (frame==mundo, localiza de cara). Rodar: `./launch.sh --sim --nav2 --world=worlds/sala_grande.sdf
+  --map=maps/sala_grande.yaml`. Plano start→goal = 23.3m (resolvível).
+- `worlds/educacao_criativa.sdf` + `worlds/meshes/` (6.6MB) — **recuperado** do `7ce1cac^` (foi removido
+  pra economizar espaço). `launch.sh` ganhou `GZ_SIM_RESOURCE_PATH=worlds/` (senão mesh não resolve).
+- `maps/sim_sala.*` — mapa SLAM do `sala.sdf` que fiz no tour autônomo (frame alinhado ao mundo).
+- Tools em scratchpad (NÃO no repo): `map2world.py` (occupancy→SDF), `world2map.py` (SDF→occupancy).
+- ⚠️ **Mapa real perdido no dev:** o `golden` (06-10) é o único mapa real no git; o `sala.*` local é
+  uma caixa 6×6 VAZIA (sobrescrita). O último SLAM bom do robô (melhor que golden) está SÓ na Pi —
+  puxar quando a Pi voltar (`ssh robo@robo-desktop.local`, offline agora).
+
+### 🔴 BOs NOVOS — path_follower no maze apertado (dono testando sala_grande 06-27, NÃO atacados)
+Reproduzidos no `sala_grande`. O nav2 não mudou — apareceram porque o maze é apertado vs inflação 0.45.
+1. **🔴 Robô vira ANTES da linha do plano e EM CIMA do batente** — atravessando a porta, ele corta o
+   canto cedo: o `/plan` foge certo da parede/batente, mas o robô vira sobre o batente, **entra no
+   costmap**, e o collision_monitor PARA ele dentro da porta. Devia **sair TODO de entre os batentes
+   antes de virar**, aí girar tranquilo. **FIX pedido pelo dono: deixar o robô mais RÍGIDO em seguir
+   os limites do costmap / a linha do plano** (não cortar canto, não virar cedo). Mexer no
+   `path_follower` (lookahead/carrot, histerese de giro, ou condicionar o giro a estar fora da zona
+   de inflação). Robô também **lento demais**.
+2. **🔴 unstuck ativando DO NADA** — o robô está **girando** e começa a **dar ré do unstuck** sem
+   motivo, fodendo o nav2. Investigar `unstuck_supervisor` (provável: confunde giro-no-lugar com
+   "travado" / lê front_gap errado / dispara recovery durante manobra legítima). Já tinha 2 bugs
+   conhecidos (lê /scan cru não /scan_safe; só conhece goal_active não distância) — ver §2 abaixo.
+
+**PRÓXIMO PASSO (retomar aqui):** atacar BO#1 (path_follower mais rígido, não cortar canto/virar dentro
+do batente — 1 mudança por vez) e BO#2 (unstuck disparando no giro). Opcional: afrouxar o sala_grande
+(portas→1.2m, pinch→≥1.0m) se quiser separar "robô" de "maze apertado". Validar no sim (`sala_grande`),
+depois no real. NÃO mexer no tuning do nav2 que é o do robô real sem necessidade.
 
 ---
 
