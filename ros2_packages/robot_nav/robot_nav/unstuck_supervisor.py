@@ -202,6 +202,37 @@ def front_block_point(ranges, angle_min, angle_increment, lidar_x, head_x,
     return (float(x[i]), float(y[i]))
 
 
+def side_clearance(ranges, angle_min: float, angle_increment: float,
+                   lidar_x: float, x_lo: float, x_hi: float,
+                   half_width: float) -> float:
+    """Menor folga lateral LIVRE (m) além do corpo, considerando os DOIS lados,
+    na faixa longitudinal [x_lo, x_hi] ao redor do robô. Cada lado = menor
+    (|y| - half_width) dos retornos nessa faixa; devolve o min(esq, dir) (o lado
+    mais apertado = o pinch). inf se nenhum lado vê nada.
+
+    Avanço adaptativo (2026-06-28): o robô trava no batente da porta com a FRENTE
+    LIVRE — o que prende é o aperto LATERAL. Esta medida é o "quão apertado estou":
+    estreita no vão, ABRE depois de passar o batente -> sinal de 'saí do obstáculo'
+    pra o avanço parar (em vez de uma reta fixa). Clampa em 0 (retorno dentro do
+    corpo = colado)."""
+    if angle_increment == 0.0:
+        return math.inf
+    r = np.asarray(ranges, dtype=np.float64)
+    if r.size == 0:
+        return math.inf
+    ok = np.isfinite(r) & (r > 0.0)
+    r = np.where(ok, r, 0.0)                          # evita inf*cos (warning/nan)
+    a = angle_min + np.arange(r.size) * angle_increment
+    x = lidar_x + r * np.cos(a)
+    y = r * np.sin(a)
+    band = ok & (x >= x_lo) & (x <= x_hi)
+    left = band & (y > 0.0)
+    right = band & (y < 0.0)
+    cl = float(y[left].min()) - half_width if left.any() else math.inf
+    cr = float((-y[right]).min()) - half_width if right.any() else math.inf
+    return max(0.0, min(cl, cr))
+
+
 def block_point_mapped(grid, position, yaw, bp, head_x, block_range,
                        neighborhood, occ_threshold) -> bool:
     """True se o ponto de contato `bp` (x,y em base_link, do `front_block_point`)
@@ -302,9 +333,19 @@ class UnstuckConfig:
     # ele atropelou alguém em 06-08): mais devagar e mais curto que a ré, e
     # gated pelo front_min_gap (aborta se a frente fechar). A ré segue PREFERIDA
     # quando há vão atrás (caso comum: obstáculo na frente -> recua).
-    forward_distance: float = 0.20  # avanço mais curto que a ré (0.30)
+    forward_distance: float = 0.20  # avanço MÍNIMO (nudge) — mais curto que a ré (0.30)
     forward_speed: float = 0.15     # mais devagar que a ré (0.25)
     forward_time_cap: float = 6.0
+    # Avanço ADAPTATIVO (2026-06-28, pedido do dono "ande o suficiente pra SAIR do
+    # obstáculo, não uma reta fixa"): o robô trava no batente com a FRENTE LIVRE ->
+    # o que prende é o aperto LATERAL. Depois do nudge mínimo, se havia pinch
+    # (folga lateral apertada no início), CONTINUA avançando até a folga lateral
+    # ABRIR (cresceu side_open_delta vs o início, OU já estava aberta >= side_open),
+    # com teto forward_distance_max. Sempre gap-gated (front_min_gap aborta se algo
+    # aparecer à frente). Sem pinch no início -> só o nudge (comportamento antigo).
+    forward_distance_max: float = 0.6   # teto de segurança do avanço adaptativo
+    side_open: float = 0.40             # folga lateral >= isto = "não é pinch" (não estende)
+    side_open_delta: float = 0.15       # folga lateral cresceu isto vs início = "saiu do pinch"
     front_stop_margin: float = 0.10  # nunca chega a menos disso do obstáculo à frente
     forward_min: float = 0.10        # vão frontal mínimo pra valer o avanço
     # 2026-06-28 OPÇÃO A ("vai bater de verdade?"): com a frente LIVRE a parada
@@ -356,6 +397,7 @@ class UnstuckSupervisor:
     maneuver_start_pos: Tuple[float, float] = (0.0, 0.0)
     reverse_target: float = 0.0    # quanto recuar NESTA manobra (<= reverse_distance)
     forward_target: float = 0.0    # quanto avançar NESTA manobra (<= forward_distance)
+    advance_side0: float = math.inf  # folga lateral no INÍCIO do avanço (mede o pinch)
     grace_start: float = 0.0
     last_nav_t: Optional[float] = None
     escalated: bool = False    # esta manobra termina em giro forte?
@@ -371,7 +413,8 @@ class UnstuckSupervisor:
                open_side: int = 1, yaw: float = 0.0,
                door_active: bool = False,
                obstacle_mapped: bool = False,
-               near_mapped: bool = False) -> Command:
+               near_mapped: bool = False,
+               side_clear: float = math.inf) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
         if door_active:
@@ -392,11 +435,11 @@ class UnstuckSupervisor:
         if self.state == _MONITORING:
             return self._monitoring(now, position, rear_gap, front_gap,
                                     goal_active, open_side, obstacle_mapped, yaw,
-                                    near_mapped)
+                                    near_mapped, side_clear)
         if self.state == _REVERSING:
             return self._reversing(now, position, yaw, rear_gap)
         if self.state == _ADVANCING:
-            return self._advancing(now, position, front_gap)
+            return self._advancing(now, position, front_gap, side_clear)
         if self.state == _SPINNING:
             return self._spinning(now, yaw)
         if self.state == _GRACE:
@@ -407,7 +450,7 @@ class UnstuckSupervisor:
 
     def _monitoring(self, now, position, rear_gap, front_gap, goal_active,
                     open_side, obstacle_mapped=False, yaw=0.0,
-                    near_mapped=False) -> Command:
+                    near_mapped=False, side_clear=math.inf) -> Command:
         if goal_active is not None:
             # status do action server do nav2 disponível: é AUTORITATIVO.
             # Mata a "ré póstuma" (goal cancelado mas flag de nav_vel_raw
@@ -478,18 +521,21 @@ class UnstuckSupervisor:
         #   o batente = loop de ré (o BO que o dono viu). A frente livre É o caminho.
         # - FRENTE BLOQUEADA: ré PREFERIDA se há vão atrás (clássico: parede na frente);
         #   sem vão atrás mas frente parcial -> avança o que dá; encurralado -> segura.
-        forward_target = min(self.cfg.forward_distance,
+        # CAP do avanço = teto adaptativo (forward_distance_max) limitado pelo vão
+        # frontal real (nunca avança em cima de obstáculo). O _advancing pode parar
+        # ANTES disso (nudge mínimo feito + pinch lateral abriu); este é o teto.
+        forward_target = min(self.cfg.forward_distance_max,
                              front_gap - self.cfg.front_stop_margin)
         if front_gap > self.cfg.front_clear:
             if forward_target >= self.cfg.forward_min:
-                return self._begin_advance(now, position, forward_target)
+                return self._begin_advance(now, position, forward_target, side_clear)
             return _IDLE
         rear_target = min(self.cfg.reverse_distance,
                           rear_gap - self.cfg.rear_stop_margin)
         if rear_target >= self.cfg.reverse_min:
             return self._begin_reverse(now, position, open_side, rear_target)
         if forward_target >= self.cfg.forward_min:
-            return self._begin_advance(now, position, forward_target)
+            return self._begin_advance(now, position, forward_target, side_clear)
         return _IDLE
 
     def _begin_reverse(self, now, position, open_side, target) -> Command:
@@ -510,11 +556,12 @@ class UnstuckSupervisor:
         self.reverse_target = target
         return Command(-self.cfg.reverse_speed, 0.0, True)
 
-    def _begin_advance(self, now, position, target) -> Command:
+    def _begin_advance(self, now, position, target, side_clear=math.inf) -> Command:
         self.state = _ADVANCING
         self.maneuver_start_t = now
         self.maneuver_start_pos = position
-        self.forward_target = target
+        self.forward_target = target        # teto (cap) gap-limitado deste avanço
+        self.advance_side0 = side_clear     # folga lateral inicial = tamanho do pinch
         return Command(self.cfg.forward_speed, 0.0, True)
 
     def _spin_cmd(self) -> Command:
@@ -549,7 +596,7 @@ class UnstuckSupervisor:
             return Command(0.0, 0.0, True)
         return Command(-self.cfg.reverse_speed, 0.0, True)
 
-    def _advancing(self, now, position, front_gap) -> Command:
+    def _advancing(self, now, position, front_gap, side_clear=math.inf) -> Command:
         if front_gap <= self.cfg.front_stop_margin:
             # algo entrou/apareceu na FRENTE durante o avanço -> STOP imediato.
             # É o "respeitar o collision" do escape: nunca avança em cima de
@@ -558,8 +605,18 @@ class UnstuckSupervisor:
             self.grace_start = now
             return Command(0.0, 0.0, True)
         dist = self._dist(position, self.maneuver_start_pos)
-        if (dist >= self.forward_target
-                or now - self.maneuver_start_t >= self.cfg.forward_time_cap):
+        # ADAPTATIVO (2026-06-28): depois do nudge mínimo (forward_distance), para
+        # assim que o PINCH lateral abriu — ou já estava aberto no início (não era
+        # pinch -> só o nudge, = comportamento antigo). Se continua apertado, segue
+        # avançando até o teto (forward_target, já gap-limitado). "Saiu do obstáculo
+        # que o travava" em vez de uma reta fixa. nudge limitado ao teto p/ o caso
+        # de vão curto (aí o teto já para antes).
+        nudged = dist >= min(self.cfg.forward_distance, self.forward_target)
+        pinch_open = (self.advance_side0 >= self.cfg.side_open
+                      or side_clear >= self.advance_side0 + self.cfg.side_open_delta)
+        if (dist >= self.forward_target                       # teto (cap)
+                or now - self.maneuver_start_t >= self.cfg.forward_time_cap
+                or (nudged and pinch_open)):                  # saiu do pinch
             self.state = _GRACE
             self.grace_start = now
             return Command(0.0, 0.0, True)  # STOP explícito (mesmo motivo da ré)
@@ -655,6 +712,14 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("forward_distance", 0.20),
                 ("forward_speed", 0.15),
                 ("forward_time_cap", 6.0),
+                # Avanço adaptativo (2026-06-28): teto + limiares do pinch lateral.
+                # side_x_lo/hi = faixa longitudinal (ao redor do corpo) onde mede a
+                # folga lateral; reusa a meia-largura da ré (0.30).
+                ("forward_distance_max", 0.6),
+                ("side_open", 0.40),
+                ("side_open_delta", 0.15),
+                ("side_x_lo", -0.25),
+                ("side_x_hi", 0.25),
                 ("front_stop_margin", 0.10),
                 ("forward_min", 0.10),
                 ("front_clear", 0.40),
@@ -689,6 +754,9 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 forward_distance=g["forward_distance"],
                 forward_speed=g["forward_speed"],
                 forward_time_cap=g["forward_time_cap"],
+                forward_distance_max=g["forward_distance_max"],
+                side_open=g["side_open"],
+                side_open_delta=g["side_open_delta"],
                 front_stop_margin=g["front_stop_margin"],
                 forward_min=g["forward_min"],
                 front_clear=g["front_clear"],
@@ -700,6 +768,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self.rear_tail_x = g["rear_tail_x"]
             self.rear_half_width = g["rear_half_width"]
             self.front_head_x = g["front_head_x"]
+            self.side_x_lo = g["side_x_lo"]  # faixa long. da folga lateral (avanço adaptativo)
+            self.side_x_hi = g["side_x_hi"]
             self.block_range = g["block_range"]
             self.map_occ_threshold = g["map_occ_threshold"]
             self.map_neighborhood = g["map_neighborhood"]
@@ -715,6 +785,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._yaw = 0.0
             self._rear_gap = math.inf
             self._front_gap = math.inf
+            self._side_clear = math.inf  # folga lateral (pinch) p/ o avanço adaptativo
             self._open_side = 1  # +1 esq / -1 dir (lado mais livre na frente)
             self._scan_t = None  # quando o último /scan chegou
             self._goal_active = {}  # por tópico de status; None até a 1ª msg
@@ -797,6 +868,12 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._front_gap = front_min_gap(
                 ranges, msg.angle_min, msg.angle_increment,
                 self.rear_lidar_x, self.front_head_x, self.rear_half_width)
+            # folga lateral (aperto do pinch) p/ o avanço adaptativo saber quando
+            # "saiu do obstáculo" — mede dos dois lados ao redor do corpo.
+            self._side_clear = side_clearance(
+                ranges, msg.angle_min, msg.angle_increment,
+                self.rear_lidar_x, self.side_x_lo, self.side_x_hi,
+                self.rear_half_width)
             self._open_side = freer_side(
                 ranges, msg.angle_min, msg.angle_increment)
             # ponto de contato à frente (base_link) pra recovery contextual:
@@ -851,6 +928,9 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             gap = self._rear_gap if scan_fresh else 0.0
             # scan velho -> frente também BLOQUEADA (não avança cego, igual à ré)
             front_gap = self._front_gap if scan_fresh else 0.0
+            # scan velho -> folga lateral 0 (pinch "apertado") -> avanço não para cedo
+            # pelo pinch (mas o front_gap=0 já aborta o avanço; é só consistência).
+            side_clear = self._side_clear if scan_fresh else 0.0
             # status visto em algum tópico? OR entre eles; nunca visto -> None
             goal_active = (any(self._goal_active.values())
                            if self._goal_active else None)
@@ -866,7 +946,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 position=self._position, rear_gap=gap, front_gap=front_gap,
                 goal_active=goal_active, open_side=self._open_side,
                 yaw=self._yaw, door_active=self._door_active,
-                obstacle_mapped=obstacle_mapped, near_mapped=near_mapped)
+                obstacle_mapped=obstacle_mapped, near_mapped=near_mapped,
+                side_clear=side_clear)
             # DEBUG temporário (2026-06-22): diagnóstico da recovery contextual.
             if (self.sup.state == "monitoring" and self._nav_wants_move
                     and now - self._dbg_t >= 1.0):
@@ -886,12 +967,12 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                     self.map_occ_threshold) if self._map is not None
                     else float('inf'))
                 self.get_logger().warn(
-                    "DBG recov: front_gap=%.2f map=%s mapped=%s near=%.2fm@%.0f° "
-                    "near_mapped=%s wall=%.2fm(raio=%.2f) blk=(%.2f,%.2f) "
-                    "anchor_t=%.1f" % (
-                        front_gap, self._map is not None, obstacle_mapped,
-                        self._near_r, self._near_deg, near_mapped, wall,
-                        self.mapped_near_radius, mx, my,
+                    "DBG recov: front_gap=%.2f side=%.2f map=%s mapped=%s "
+                    "near=%.2fm@%.0f° near_mapped=%s wall=%.2fm(raio=%.2f) "
+                    "blk=(%.2f,%.2f) anchor_t=%.1f" % (
+                        front_gap, side_clear, self._map is not None,
+                        obstacle_mapped, self._near_r, self._near_deg,
+                        near_mapped, wall, self.mapped_near_radius, mx, my,
                         now - self.sup.anchor_t if self.sup.anchor else -1))
             if self.sup.state != self._last_state:
                 self.get_logger().warn(

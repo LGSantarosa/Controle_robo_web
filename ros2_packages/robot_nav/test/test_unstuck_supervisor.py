@@ -8,6 +8,7 @@ from robot_nav.unstuck_supervisor import (
     freer_side,
     front_min_gap,
     rear_min_gap,
+    side_clearance,
 )
 
 
@@ -396,6 +397,72 @@ def test_advance_stops_after_time_cap():
     _tick(sup, 10.1, gap=0.05, front_gap=0.35)  # entra em AVANÇO (frente parcial)
     cmd = _tick(sup, 16.3, pos=(0.0, 0.0), gap=0.05, front_gap=0.35)  # cap sem andar
     assert cmd.active is True and cmd.lin == pytest.approx(0.0)  # STOP explícito
+
+
+# ---- avanço ADAPTATIVO (2026-06-28): folga lateral abre -> saiu do pinch ------
+
+def test_side_clearance_measures_tightest_side():
+    # obstáculo a 0.40 m do centro do lado ESQUERDO, dentro da faixa do corpo
+    # -> folga = 0.40 - half_width(0.30) = 0.10. Nada à direita -> esse é o min.
+    ranges, amin, ainc = _scan_with_obstacle_at_base(0.0, 0.40)
+    c = side_clearance(ranges, amin, ainc, lidar_x=0.0, x_lo=-0.25, x_hi=0.25,
+                       half_width=0.30)
+    assert c == pytest.approx(0.10, abs=0.02)
+
+
+def test_side_clearance_ignores_returns_outside_body_band():
+    # retorno à FRENTE (x≈0.5, fora da faixa [-0.25,0.25]) não é pinch lateral
+    ranges, amin, ainc = _scan_with_obstacle_at_base(0.5, 0.40)
+    c = side_clearance(ranges, amin, ainc, lidar_x=0.0, x_lo=-0.25, x_hi=0.25,
+                       half_width=0.30)
+    assert c == math.inf
+
+
+def _adv_tick(sup, t, pos, side, front_gap=math.inf, near=True):
+    # avanço acontece com FRENTE LIVRE (front_gap>front_clear); near_mapped=True
+    # pra disparar rápido (~3s) sem esperar os 15s do defer. rear bloqueado pra
+    # não preferir ré.
+    return sup.update(t, nav_wants_move=True, position=pos, rear_gap=0.05,
+                      front_gap=front_gap, near_mapped=near, side_clear=side)
+
+
+def test_adaptive_advance_extends_while_pinch_tight():
+    # frente livre + pinch lateral apertado (0.10): avança ALÉM do nudge fixo
+    # (0.20) e só para quando a folga lateral ABRE (saiu do batente).
+    sup = UnstuckSupervisor(_cfg())
+    _adv_tick(sup, 0.0, (0.0, 0.0), side=0.10)          # ancora
+    cmd = _adv_tick(sup, 3.1, (0.0, 0.0), side=0.10)    # near_mapped -> dispara avanço
+    assert cmd.active and cmd.lin == pytest.approx(0.15)
+    # passou do nudge 0.20 mas pinch ainda apertado -> CONTINUA (antes parava aqui)
+    cmd = _adv_tick(sup, 3.5, (0.30, 0.0), side=0.10)
+    assert cmd.lin == pytest.approx(0.15)
+    # folga lateral abriu (0.30 >= 0.10+0.15) -> STOP (saiu do obstáculo)
+    cmd = _adv_tick(sup, 3.9, (0.40, 0.0), side=0.30)
+    assert cmd.active and cmd.lin == pytest.approx(0.0)
+
+
+def test_adaptive_advance_only_nudge_when_no_pinch():
+    # sem aperto lateral no início (0.50 >= side_open 0.40): só o nudge (0.20),
+    # comportamento antigo — não estende à toa.
+    sup = UnstuckSupervisor(_cfg())
+    _adv_tick(sup, 0.0, (0.0, 0.0), side=0.50)
+    cmd = _adv_tick(sup, 3.1, (0.0, 0.0), side=0.50)
+    assert cmd.lin == pytest.approx(0.15)
+    cmd = _adv_tick(sup, 3.4, (0.15, 0.0), side=0.50)   # antes do nudge -> continua
+    assert cmd.lin == pytest.approx(0.15)
+    cmd = _adv_tick(sup, 3.7, (0.20, 0.0), side=0.50)   # nudge feito + sem pinch -> STOP
+    assert cmd.active and cmd.lin == pytest.approx(0.0)
+
+
+def test_adaptive_advance_capped_when_pinch_never_opens():
+    # pinch nunca abre -> para no teto forward_distance_max (0.6), nunca infinito.
+    sup = UnstuckSupervisor(_cfg())
+    _adv_tick(sup, 0.0, (0.0, 0.0), side=0.10)
+    _adv_tick(sup, 3.1, (0.0, 0.0), side=0.10)
+    cmd = _adv_tick(sup, 4.0, (0.45, 0.0), side=0.10)   # < teto -> continua
+    assert cmd.lin == pytest.approx(0.15)
+    cmd = _adv_tick(sup, 4.5, (0.60, 0.0), side=0.10)   # >= teto 0.6 -> STOP
+    assert cmd.active and cmd.lin == pytest.approx(0.0)
 
 
 def test_partial_reverse_when_gap_limited():
