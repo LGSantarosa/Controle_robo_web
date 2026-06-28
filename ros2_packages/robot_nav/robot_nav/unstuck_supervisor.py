@@ -419,17 +419,22 @@ class UnstuckSupervisor:
         # stuck_yaw; isto é só pro caso de ficar REALMENTE preso.)
         if front_gap > self.cfg.front_clear and stuck < self.cfg.front_clear_timeout:
             return _IDLE
-        # Escolha de DIREÇÃO pelo vão de cada lado. Ré é PREFERIDA quando há
-        # vão atrás (caso comum: obstáculo na frente -> recua). Sem vão útil
-        # atrás mas com frente livre -> AVANÇA (pedido 2026-06-15: obstáculo
-        # atrás não pode mais travar o robô). Encurralado dos dois lados ->
-        # segura e re-tenta (dispara quando algum lado liberar).
+        # DIREÇÃO pela CENA (2026-06-28, "analisar se precisa ré ou ir reto"):
+        # - FRENTE LIVRE e mesmo assim travou (preso de lado / no batente da porta):
+        #   AVANÇA (passa o batente). Dar ré aqui desfazia o progresso e re-aproximava
+        #   o batente = loop de ré (o BO que o dono viu). A frente livre É o caminho.
+        # - FRENTE BLOQUEADA: ré PREFERIDA se há vão atrás (clássico: parede na frente);
+        #   sem vão atrás mas frente parcial -> avança o que dá; encurralado -> segura.
+        forward_target = min(self.cfg.forward_distance,
+                             front_gap - self.cfg.front_stop_margin)
+        if front_gap > self.cfg.front_clear:
+            if forward_target >= self.cfg.forward_min:
+                return self._begin_advance(now, position, forward_target)
+            return _IDLE
         rear_target = min(self.cfg.reverse_distance,
                           rear_gap - self.cfg.rear_stop_margin)
         if rear_target >= self.cfg.reverse_min:
             return self._begin_reverse(now, position, open_side, rear_target)
-        forward_target = min(self.cfg.forward_distance,
-                             front_gap - self.cfg.front_stop_margin)
         if forward_target >= self.cfg.forward_min:
             return self._begin_advance(now, position, forward_target)
         return _IDLE

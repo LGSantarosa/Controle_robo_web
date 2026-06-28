@@ -198,8 +198,11 @@ def test_front_clear_defers_then_fires():
     assert cmd.active is False               # 12s < front_clear_timeout(15) -> defere
     cmd = sup.update(16.0, nav_wants_move=True, position=(0.0, 0.0),
                      rear_gap=math.inf, front_gap=math.inf, yaw=0.0)
-    assert cmd.active is True                # 16s > 15 -> age (ré, há vão atrás)
-    assert cmd.lin == pytest.approx(-0.25)
+    assert cmd.active is True                # 16s > 15 -> age
+    # frente LIVRE -> AVANÇA (passa o batente), NÃO ré (ré seria loop). Mesmo com
+    # vão atrás (rear=inf), a direção certa é pra frente quando a frente é o caminho.
+    assert cmd.lin == pytest.approx(0.15)
+    assert cmd.ang == pytest.approx(0.0)
 
 
 def test_door_active_suppresses_maneuver():
