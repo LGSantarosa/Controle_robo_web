@@ -85,6 +85,36 @@ def map_occupied(grid: MapGrid, x: float, y: float, neighborhood: float,
     return False
 
 
+def nearest_mapped_dist(grid: MapGrid, x: float, y: float, search_radius: float,
+                        occ_threshold: int) -> float:
+    """Distância (m) à célula OCUPADA mais próxima de (x,y) dentro de
+    `search_radius`; inf se não há parede mapeada nesse raio. SÓ DEBUG do
+    near_mapped (2026-06-28): saber a QUE distância a parede realmente está
+    quando o robô trava, pra calibrar `mapped_near_radius` (BO: o fast-path do
+    'conhecido' não cortava o delay -> suspeita de parede além do raio). Mesmo
+    padrão de varredura do map_occupied."""
+    res = grid.resolution
+    if res <= 0.0:
+        return math.inf
+    cr = int(search_radius / res) + 1
+    col0 = int((x - grid.origin_x) / res)
+    row0 = int((y - grid.origin_y) / res)
+    best = math.inf
+    for dr in range(-cr, cr + 1):
+        for dc in range(-cr, cr + 1):
+            r, c = row0 + dr, col0 + dc
+            if not (0 <= r < grid.height and 0 <= c < grid.width):
+                continue
+            if grid.data[r * grid.width + c] < occ_threshold:
+                continue
+            cx = grid.origin_x + (c + 0.5) * res
+            cy = grid.origin_y + (r + 0.5) * res
+            d = math.hypot(cx - x, cy - y)
+            if d < best:
+                best = d
+    return best
+
+
 def rear_min_gap(ranges, angle_min: float, angle_increment: float,
                  lidar_x: float, tail_x: float, half_width: float) -> float:
     """Menor vão livre (m) entre o PARA-CHOQUE traseiro e o que o /scan vê
@@ -290,7 +320,12 @@ class UnstuckConfig:
     # a parada não é surpresa -> age MUITO mais rápido (não espera os 15s). Pedido do
     # dono 2026-06-28 (defer tava demorando demais pra desencalhar do conhecido).
     front_clear_timeout_mapped: float = 3.0  # s — idem mas perto de parede MAPEADA
-    mapped_near_radius: float = 0.35  # m — parede mapeada a <isto do robô = "conhecido"
+    # 2026-06-28: 0.35 -> 0.6 (BO "demorou ~15s pra desencalhar do conhecido").
+    # Medido em log: o robô encosta na parede e o ponto MAPEADO dela lê a ~0.54 m
+    # do centro (meia-diagonal do chassi ~0.25 + offset de registro pose↔mapa
+    # ~0.2, o mesmo que obriga o map_neighborhood=0.22). Com 0.35 a parede ficava
+    # de fora -> near_mapped=False -> caía no caminho cauteloso de 15 s.
+    mapped_near_radius: float = 0.6  # m — parede mapeada a <isto do robô = "conhecido"
 
 
 class Command(NamedTuple):
@@ -625,7 +660,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("front_clear", 0.40),
                 ("front_clear_timeout", 15.0),
                 ("front_clear_timeout_mapped", 3.0),
-                ("mapped_near_radius", 0.35),
+                ("mapped_near_radius", 0.6),
                 ("scan_stale", 2.0),
                 ("nav_move_lin", 0.01),
                 ("nav_move_ang", 0.05),
@@ -843,11 +878,20 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                     my = self._position[1] + bx_r * s + by_r * c
                 else:
                     mx = my = float('nan')
+                # DEBUG do near_mapped (2026-06-28): a parede mapeada mais próxima
+                # do robô (qualquer lado) — se >mapped_near_radius o fast-path do
+                # "conhecido" NÃO dispara e o delay cai no stuck_timeout (BO #1).
+                wall = (nearest_mapped_dist(
+                    self._map, self._position[0], self._position[1], 1.0,
+                    self.map_occ_threshold) if self._map is not None
+                    else float('inf'))
                 self.get_logger().warn(
                     "DBG recov: front_gap=%.2f map=%s mapped=%s near=%.2fm@%.0f° "
-                    "blk=(%.2f,%.2f) anchor_t=%.1f" % (
+                    "near_mapped=%s wall=%.2fm(raio=%.2f) blk=(%.2f,%.2f) "
+                    "anchor_t=%.1f" % (
                         front_gap, self._map is not None, obstacle_mapped,
-                        self._near_r, self._near_deg, mx, my,
+                        self._near_r, self._near_deg, near_mapped, wall,
+                        self.mapped_near_radius, mx, my,
                         now - self.sup.anchor_t if self.sup.anchor else -1))
             if self.sup.state != self._last_state:
                 self.get_logger().warn(
