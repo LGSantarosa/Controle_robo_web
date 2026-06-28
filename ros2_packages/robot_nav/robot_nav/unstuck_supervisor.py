@@ -668,6 +668,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self.block_range = g["block_range"]
             self.map_occ_threshold = g["map_occ_threshold"]
             self.map_neighborhood = g["map_neighborhood"]
+            self.mapped_near_radius = g["mapped_near_radius"]  # usado no _tick (near_mapped)
             self.scan_stale = g["scan_stale"]
             self.nav_move_lin = g["nav_move_lin"]
             self.nav_move_ang = g["nav_move_ang"]
