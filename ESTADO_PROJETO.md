@@ -69,11 +69,11 @@ dirigindo) e **assiste em vez de atrapalhar**. Dono: "ele chegou". **78 testes**
 
 ### Pendências desta linha
 - ✅ **DBG `recov` removido** (`9d413db`) — já provou as causas. Sobrou só o log `unstuck: X -> Y`.
-- **Validar no REAL** (tudo foi no sim `sala_grande`). Em especial o `spin_clear=0.40` e o gatilho
-  por aperto-lateral: no real o `near_r`/`side_clear` vêm do `/scan` CRU (tem fantasma <0.15m do
-  LD06) → pode bloquear giro / disparar à toa. Ideal trocar o unstuck pra `/scan_safe` (BO #1 antigo,
-  separado).
-- **`reverse_distance_max=1.2` no real:** confirmar que recuar até 1.2m é seguro nos ambientes reais.
+- ✅ **Unstuck lê `/scan_safe`** (`78426de`) — remap no launch. Tira os fantasmas <0.15m do LD06 das
+  leituras do unstuck (near_r/side_clear/gaps). No sim é no-op (laser limpo); protege o real.
+- **Validar no REAL** (tudo foi no sim `sala_grande`): o `spin_clear=0.40`, o gatilho por aperto-lateral
+  e o `reverse_distance_max=1.2`. Com o `/scan_safe` já no lugar, os fantasmas não devem mais atrapalhar,
+  mas confirmar o comportamento real.
 - Push pra Pi quando o dono quiser (`git push` + na Pi `git pull`/`reset --hard` + `colcon build robot_nav`
   se não for symlink-install).
 
