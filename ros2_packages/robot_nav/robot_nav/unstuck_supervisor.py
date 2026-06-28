@@ -527,7 +527,15 @@ class UnstuckSupervisor:
         # bloqueio à frente. Senão o 1º timeout (10s) seguraria e o "conhecido" não
         # agilizaria nada (BO: defer demorava demais perto do batente).
         near_fire = near_mapped and stuck >= self.cfg.stuck_timeout_mapped
-        if stuck < self.cfg.stuck_timeout and not mapped_fire and not near_fire:
+        # APERTO LATERAL = encurralado de verdade -> age RÁPIDO, igual ao near_mapped.
+        # (2026-06-28: o near_mapped (consulta o /mapa) PERDIA paredes que o LiDAR
+        # via a 0.33m de lado por offset de registro AMCL<->mapa -> caía nos 15s
+        # cautelosos à toa, mesmo num mapa todo conhecido. side_clear vem do LiDAR
+        # (robusto). Espremido de lado num mapa conhecido = travado, não manobra.)
+        pinch_fire = (side_clear < self.cfg.side_open
+                      and stuck >= self.cfg.stuck_timeout_mapped)
+        if (stuck < self.cfg.stuck_timeout
+                and not mapped_fire and not near_fire and not pinch_fire):
             return _IDLE
         # OPÇÃO A (2026-06-28 "vai bater de verdade?"): caminho livre à frente = a
         # parada provavelmente não é obstáculo (collision freando uma manobra/giro, ou
@@ -540,7 +548,13 @@ class UnstuckSupervisor:
         # cauteloso, dá tempo pro nav). "Conheço esse obstáculo?" (pedido 06-28).
         clear_timeout = (self.cfg.front_clear_timeout_mapped if near_mapped
                          else self.cfg.front_clear_timeout)
-        if front_gap > self.cfg.front_clear and stuck < clear_timeout:
+        # só DEFERE se estiver em espaço ABERTO (frente livre E lados livres): aí a
+        # parada pode ser manobra do nav/algo dinâmico -> dá tempo. Se está espremido
+        # de LADO (side_clear < side_open) NÃO defere: está encurralado, não há o que
+        # esperar (era o que segurava 15s à toa no mapa conhecido).
+        if (front_gap > self.cfg.front_clear
+                and side_clear >= self.cfg.side_open
+                and stuck < clear_timeout):
             return _IDLE
         # DIREÇÃO pela CENA (2026-06-28, "analisar se precisa ré ou ir reto"):
         # - FRENTE LIVRE e mesmo assim travou (preso de lado / no batente da porta):

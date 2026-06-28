@@ -210,6 +210,23 @@ def test_front_clear_defers_then_fires():
     assert cmd.ang == pytest.approx(0.0)
 
 
+def test_lateral_pinch_fires_fast_when_map_misses_wall():
+    # 2026-06-28: near_mapped FALSO (offset de registro AMCL<->mapa perde a parede)
+    # + frente livre -> ANTES esperava os 15s cautelosos à toa num mapa conhecido.
+    # Espremido de LADO (side_clear=0.05, do LiDAR) = encurralado -> age RÁPIDO
+    # (~stuck_timeout_mapped 2s), sem o defer. O "ABERTO de verdade" (test acima)
+    # segue cauteloso.
+    sup = UnstuckSupervisor(_cfg())   # stuck_timeout=10, front_clear_timeout=15
+    sup.update(0.0, nav_wants_move=True, position=(0.0, 0.0), front_gap=2.0,
+               side_clear=0.05, near_mapped=False, nearest=0.0, yaw=0.0)
+    assert sup.update(1.9, nav_wants_move=True, position=(0.0, 0.0), front_gap=2.0,
+                      side_clear=0.05, near_mapped=False, nearest=0.0).active is False
+    cmd = sup.update(2.2, nav_wants_move=True, position=(0.0, 0.0), front_gap=2.0,
+                     side_clear=0.05, near_mapped=False, nearest=0.0)
+    assert cmd.active is True                 # agiu em ~2s (era ~15s)
+    assert cmd.lin == pytest.approx(0.15)     # frente livre -> avança
+
+
 def test_known_obstacle_acts_faster():
     # "CONHEÇO esse obstáculo?" (06-28): parede MAPEADA perto (near_mapped, ex. batente)
     # -> age em ~3s (front_clear_timeout_mapped), não espera os 15s do desconhecido.
