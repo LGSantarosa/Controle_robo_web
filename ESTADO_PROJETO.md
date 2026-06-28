@@ -45,17 +45,35 @@ andando, **107 m** percorridos numa rodada. Dono: "melhorou um absurdo a velocid
   **smoke-test do nó** (`ros2 run robot_nav unstuck_supervisor` por uns segundos) antes de
   confiar. Vários params do nó são `self.X` (não `self.cfg.X`) — fácil esquecer de setar.
 
-### 🎯 PRA AMANHÃ — melhorar o unstuck (afinar, não reescrever)
-1. **Validar no sim com calma** que o crash sumiu e o unstuck novo flui bem no `sala_grande`
-   (relançar `./launch.sh --sim --nav2 --world=worlds/sala_grande.sdf --map=maps/sala_grande.yaml`).
-2. **Afinar knobs** se preciso: `front_clear_timeout_mapped` (3s — baixar p/ 2s se ainda lento
-   no conhecido), `front_clear_timeout` (15s), `mapped_near_radius` (0.35m — se ele se achar
-   "perto de parede" sempre, o conhecido-rápido vira regra; pode ser bom OU agressivo demais),
-   `front_clear` (0.40m).
-3. **Pendência de método:** considerar um smoke-test automatizado do nó (subir o nó com um
-   /scan+/odom fake e ver que não crasha) p/ pegar os bugs de atributo do nó.
-4. Avaliar se o "avança quando frente livre" precisa de teto de distância/repetição (não ficar
-   empurrando pra sempre se o batente não liberar).
+### 🎯 PRA AMANHÃ — melhorar o unstuck (FEEDBACK DO DONO 06-28, fim do dia)
+> Veredito do dono: "**melhorou um absurdo**", a parada (defer) do unstuck está ajudando
+> MUITO. Mas 3 coisas concretas pra atacar:
+
+1. **🔴 AINDA DEMORA ~10s pra andar pra frente no unstuck.** O fast-path do "conhecido"
+   (`front_clear_timeout_mapped` ~3s) **não está cortando o delay** — caiu pros ~10s do
+   `stuck_timeout`. **Investigar PRIMEIRO:** o `near_mapped` está disparando? (a) o teste do
+   dono pode ter sido com o nó CRASHADO (antes do `c3632b3`) → re-testar com o fix; (b) o
+   obstáculo que trava (batente) pode não estar caindo no raio `mapped_near_radius` (0.35m) →
+   subir o raio, ou logar `near_mapped`/`DBG recov` pra ver; (c) talvez baixar o
+   `front_clear_timeout` geral. **Meta: tirar o delay → o dono disse que "se tirar esse delay
+   entre um unstuck e outro ele melhora bastante".**
+2. **🔴 TIRAR O DELAY ENTRE UM UNSTUCK E OUTRO.** Tem um `grace` (2.0s) entre manobras —
+   encadear unstucks consecutivos mais rápido (baixar/zerar o grace, ou re-armar na hora se
+   ainda travado). É o que mais incomoda na fluidez.
+3. **🟠 AVANÇO ADAPTATIVO (não reta hardcode).** Hoje o avanço é `forward_distance` fixo
+   (0.20m). O dono quer que ele **ande o SUFICIENTE pra SAIR do obstáculo que o travava**, não
+   uma reta fixa. Ideia: avançar até a cena LIBERAR (ex.: até o `front_gap`/lateral abrir, ou
+   até passar o ponto de contato `front_block_point`), com teto de segurança. Mesma ideia
+   pode valer pra ré.
+
+### Outras pendências de método/segurança
+4. **Smoke-test do nó:** os testes unitários NÃO pegam bug do `main()`/`_tick` (só a classe
+   pura `UnstuckSupervisor`) — foi o que deixou o crash do `mapped_near_radius` passar.
+   Considerar um teste que sobe o nó com /scan+/odom fake e confirma que não crasha.
+5. Teto de repetição no "avança quando frente livre" (não empurrar pra sempre se não liberar).
+6. **Conferir o crash de fato sumiu no sim** (relançar `./launch.sh --sim --nav2
+   --world=worlds/sala_grande.sdf --map=maps/sala_grande.yaml`) — o dono testou parte com o
+   nó possivelmente já morto.
 
 ---
 
