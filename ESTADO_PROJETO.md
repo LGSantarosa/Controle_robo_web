@@ -8,10 +8,30 @@
 ## 🆕 2026-06-28 (noite) — Unstuck: delay resolvido + avanço adaptativo + giro seguro/último-recurso
 
 > Sessão longa com o dono testando o `sala_grande` (canto cilindro+parede). Tudo **commitado
-> na `main`, SEM push ainda** (deploy na Pi quando o dono quiser). 3 commits: `5757791` (raio),
-> `eb87f4a` (avanço adaptativo), `7626585` (giro seguro + escape reverse + último-recurso).
-> `forward_speed 0.22` entrou junto no `7626585`. **DBG `recov` (com `side=`/`near_mapped`/`wall=`)
-> ainda LIGADO** — temporário, remover quando bater o olho final.
+> na `main`, SEM push ainda** (deploy na Pi quando o dono quiser). 6 commits: `5757791` (raio),
+> `eb87f4a` (avanço adaptativo), `7626585` (giro seguro + escape reverse + último-recurso),
+> `78a6b56` (aperto-lateral dispara rápido), `9d413db` (removeu o DBG temporário) + docs.
+> `forward_speed 0.22` entrou junto no `7626585`. **DBG `recov` REMOVIDO** (já provou as causas);
+> ficou só o log conciso `unstuck: X -> Y`.
+
+### 📊 GANHO MEDIDO (2 runs dos mesmos 5 pontos, antes×depois do aperto-lateral)
+O delay que ainda irritava (`near_mapped` perde paredes que o LiDAR vê de lado, por offset de
+registro AMCL↔mapa → caía nos 15s cautelosos num mapa conhecido) foi atacado com o **aperto
+lateral (`side_clear`, do LiDAR) como gatilho rápido** (`78a6b56`). Comparação:
+
+| métrica | baseline | com fix | Δ |
+|---|---|---|---|
+| duração da run | 1665s (27.8min) | 810s (13.5min) | **−51%** |
+| unstuck interveio | 74× | 32× | −57% |
+| tempo manobrando | 283s | 61s | −78% |
+| delay médio antes de disparar | 3.2s | 1.8s | −46% |
+| soma das esperas | 238s | 56s | −76% |
+| **fires lentos (≥10s)** | **7×** | **0** | −100% |
+
+Os fires lentos foram a ZERO (alvo direto). Bônus: muito menos travamentos no total (agir em ~2s
+em vez de ~14s tira o robô do aperto antes da cascata). Parte do −51% de duração é variância do
+nav2, mas as métricas diretas do fix (delay médio, fires lentos) são inequívocas. CSVs/baseline
+salvos no scratchpad da sessão (efêmero).
 
 ### Os 3 pedidos do dono (06-28 fim do dia) — TODOS atacados
 1. **🔴 Delay de ~10-15s pra desencalhar do "conhecido" — RESOLVIDO** (`5757791`). Causa provada
@@ -48,11 +68,11 @@ dirigindo) e **assiste em vez de atrapalhar**. Dono: "ele chegou". **78 testes**
 `self.X` não setado que os testes unitários não pegam).
 
 ### Pendências desta linha
-- **Remover o DBG `recov`** (loga `front_gap/side/near_mapped/wall/...`) quando o dono validar de
-  vez — é temporário (instrumentação que provou as causas acima).
-- **Validar no REAL** (tudo foi no sim `sala_grande`). Em especial o `spin_clear=0.40`: no real o
-  `near_r` vem do `/scan` CRU (tem fantasma <0.15m do LD06) → pode bloquear giro à toa. Ideal trocar
-  o unstuck pra `/scan_safe` (BO #1 antigo, separado).
+- ✅ **DBG `recov` removido** (`9d413db`) — já provou as causas. Sobrou só o log `unstuck: X -> Y`.
+- **Validar no REAL** (tudo foi no sim `sala_grande`). Em especial o `spin_clear=0.40` e o gatilho
+  por aperto-lateral: no real o `near_r`/`side_clear` vêm do `/scan` CRU (tem fantasma <0.15m do
+  LD06) → pode bloquear giro / disparar à toa. Ideal trocar o unstuck pra `/scan_safe` (BO #1 antigo,
+  separado).
 - **`reverse_distance_max=1.2` no real:** confirmar que recuar até 1.2m é seguro nos ambientes reais.
 - Push pra Pi quando o dono quiser (`git push` + na Pi `git pull`/`reset --hard` + `colcon build robot_nav`
   se não for symlink-install).
