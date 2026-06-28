@@ -205,6 +205,21 @@ def test_front_clear_defers_then_fires():
     assert cmd.ang == pytest.approx(0.0)
 
 
+def test_known_obstacle_acts_faster():
+    # "CONHEÇO esse obstáculo?" (06-28): parede MAPEADA perto (near_mapped, ex. batente)
+    # -> age em ~3s (front_clear_timeout_mapped), não espera os 15s do desconhecido.
+    sup = UnstuckSupervisor(_cfg())
+    sup.update(0.0, nav_wants_move=True, position=(0.0, 0.0), front_gap=math.inf,
+               near_mapped=True, yaw=0.0)
+    cmd = sup.update(2.5, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, front_gap=math.inf, near_mapped=True, yaw=0.0)
+    assert cmd.active is False               # 2.5s < 3 (mapped) -> ainda defere
+    cmd = sup.update(3.5, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, front_gap=math.inf, near_mapped=True, yaw=0.0)
+    assert cmd.active is True                # 3.5s > 3 -> JÁ age (vs 15s do desconhecido)
+    assert cmd.lin == pytest.approx(0.15)    # frente livre -> avança
+
+
 def test_door_active_suppresses_maneuver():
     # door_crossing (door_vel, prio 20) está conduzindo a travessia; o unstuck
     # (unstuck_vel, prio 30) SOBREPÕE e sabotava a manobra -> door_crossing

@@ -285,7 +285,12 @@ class UnstuckConfig:
     # robô fica preso eternamente). Frente bloqueada (<front_clear) = dispara no
     # timeout normal. Ver ESTADO 06-28.
     front_clear: float = 0.40        # m — frente com >isto de vão = "livre" (defere)
-    front_clear_timeout: float = 15.0  # s — travado além disso c/ frente livre -> age
+    front_clear_timeout: float = 15.0  # s — travado c/ frente livre + obstáculo DESCONHECIDO -> age
+    # "conheço esse obstáculo?": se há parede MAPEADA perto do robô (batente, etc.),
+    # a parada não é surpresa -> age MUITO mais rápido (não espera os 15s). Pedido do
+    # dono 2026-06-28 (defer tava demorando demais pra desencalhar do conhecido).
+    front_clear_timeout_mapped: float = 3.0  # s — idem mas perto de parede MAPEADA
+    mapped_near_radius: float = 0.35  # m — parede mapeada a <isto do robô = "conhecido"
 
 
 class Command(NamedTuple):
@@ -330,7 +335,8 @@ class UnstuckSupervisor:
                goal_active: Optional[bool] = None,
                open_side: int = 1, yaw: float = 0.0,
                door_active: bool = False,
-               obstacle_mapped: bool = False) -> Command:
+               obstacle_mapped: bool = False,
+               near_mapped: bool = False) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
         if door_active:
@@ -350,7 +356,8 @@ class UnstuckSupervisor:
             return _IDLE
         if self.state == _MONITORING:
             return self._monitoring(now, position, rear_gap, front_gap,
-                                    goal_active, open_side, obstacle_mapped, yaw)
+                                    goal_active, open_side, obstacle_mapped, yaw,
+                                    near_mapped)
         if self.state == _REVERSING:
             return self._reversing(now, position, yaw, rear_gap)
         if self.state == _ADVANCING:
@@ -364,7 +371,8 @@ class UnstuckSupervisor:
     # -- estados --
 
     def _monitoring(self, now, position, rear_gap, front_gap, goal_active,
-                    open_side, obstacle_mapped=False, yaw=0.0) -> Command:
+                    open_side, obstacle_mapped=False, yaw=0.0,
+                    near_mapped=False) -> Command:
         if goal_active is not None:
             # status do action server do nav2 disponível: é AUTORITATIVO.
             # Mata a "ré póstuma" (goal cancelado mas flag de nav_vel_raw
@@ -409,7 +417,12 @@ class UnstuckSupervisor:
         mapped_fire = (self.mapped_since is not None
                        and now - self.mapped_since >= self.cfg.stuck_timeout_mapped
                        and stuck >= self.cfg.stuck_timeout_mapped)
-        if stuck < self.cfg.stuck_timeout and not mapped_fire:
+        # near_mapped (parede MAPEADA perto do robô, QUALQUER lado — ex. batente) deixa
+        # chegar à decisão CEDO (>= stuck_timeout_mapped), igual ao mapped_fire faz pro
+        # bloqueio à frente. Senão o 1º timeout (10s) seguraria e o "conhecido" não
+        # agilizaria nada (BO: defer demorava demais perto do batente).
+        near_fire = near_mapped and stuck >= self.cfg.stuck_timeout_mapped
+        if stuck < self.cfg.stuck_timeout and not mapped_fire and not near_fire:
             return _IDLE
         # OPÇÃO A (2026-06-28 "vai bater de verdade?"): caminho livre à frente = a
         # parada provavelmente não é obstáculo (collision freando uma manobra/giro, ou
@@ -417,7 +430,12 @@ class UnstuckSupervisor:
         # de front_clear_timeout travado mesmo assim (bloqueio lateral/no giro que o
         # front reto não vê), cai na recovery abaixo. (Giro legítimo já re-ancora via
         # stuck_yaw; isto é só pro caso de ficar REALMENTE preso.)
-        if front_gap > self.cfg.front_clear and stuck < self.cfg.front_clear_timeout:
+        # timeout do defer: CURTO se conhece o obstáculo (parede mapeada perto -> não é
+        # surpresa, age rápido); LONGO se é desconhecido (pode ser pessoa/algo novo ->
+        # cauteloso, dá tempo pro nav). "Conheço esse obstáculo?" (pedido 06-28).
+        clear_timeout = (self.cfg.front_clear_timeout_mapped if near_mapped
+                         else self.cfg.front_clear_timeout)
+        if front_gap > self.cfg.front_clear and stuck < clear_timeout:
             return _IDLE
         # DIREÇÃO pela CENA (2026-06-28, "analisar se precisa ré ou ir reto"):
         # - FRENTE LIVRE e mesmo assim travou (preso de lado / no batente da porta):
@@ -606,6 +624,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("forward_min", 0.10),
                 ("front_clear", 0.40),
                 ("front_clear_timeout", 15.0),
+                ("front_clear_timeout_mapped", 3.0),
+                ("mapped_near_radius", 0.35),
                 ("scan_stale", 2.0),
                 ("nav_move_lin", 0.01),
                 ("nav_move_ang", 0.05),
@@ -638,6 +658,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 forward_min=g["forward_min"],
                 front_clear=g["front_clear"],
                 front_clear_timeout=g["front_clear_timeout"],
+                front_clear_timeout_mapped=g["front_clear_timeout_mapped"],
+                mapped_near_radius=g["mapped_near_radius"],
             )
             self.rear_lidar_x = g["rear_lidar_x"]
             self.rear_tail_x = g["rear_tail_x"]
@@ -797,12 +819,18 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             goal_active = (any(self._goal_active.values())
                            if self._goal_active else None)
             obstacle_mapped = self._obstacle_mapped() if scan_fresh else False
+            # "conheço esse obstáculo?": há parede MAPEADA perto do robô (qualquer
+            # lado — ex. batente da porta). Se sim, a recovery age mais RÁPIDO (não é
+            # surpresa). Pedido do dono 2026-06-28 (defer de 15s tava demorando).
+            near_mapped = (self._map is not None and map_occupied(
+                self._map, self._position[0], self._position[1],
+                self.mapped_near_radius, self.map_occ_threshold))
             cmd = self.sup.update(
                 now, nav_wants_move=self._nav_wants_move,
                 position=self._position, rear_gap=gap, front_gap=front_gap,
                 goal_active=goal_active, open_side=self._open_side,
                 yaw=self._yaw, door_active=self._door_active,
-                obstacle_mapped=obstacle_mapped)
+                obstacle_mapped=obstacle_mapped, near_mapped=near_mapped)
             # DEBUG temporário (2026-06-22): diagnóstico da recovery contextual.
             if (self.sup.state == "monitoring" and self._nav_wants_move
                     and now - self._dbg_t >= 1.0):
