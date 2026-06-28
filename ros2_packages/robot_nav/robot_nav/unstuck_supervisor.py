@@ -234,6 +234,11 @@ class UnstuckConfig:
     # docs/superpowers/specs/2026-06-22-unstuck-recovery-contextual-design.md
     stuck_timeout_mapped: float = 2.0
     stuck_radius: float = 0.05     # deslocou menos que isso = "parado"
+    # 2026-06-27 BO: o robô point-turnando (vx=0, girando no lugar) NÃO desloca,
+    # então o unstuck achava que travou e dava RÉ no meio do giro legítimo do
+    # path_follower, fodendo o nav2. Rotação > stuck_yaw também conta como
+    # PROGRESSO (re-ancora). Travado de verdade = comanda giro mas o yaw não muda.
+    stuck_yaw: float = 0.15        # rad (~9°) — girou mais que isso = "fez progresso"
     reverse_distance: float = 0.30
     reverse_speed: float = 0.25
     reverse_time_cap: float = 6.0
@@ -296,6 +301,7 @@ class UnstuckSupervisor:
     state: str = _MONITORING
     anchor: Optional[Tuple[float, float]] = None  # última posição "nova"
     anchor_t: float = 0.0
+    anchor_yaw: float = 0.0        # yaw quando ancorou (rotação reseta o stuck)
     mapped_since: Optional[float] = None  # desde quando o bloqueio à frente é parede mapeada
     maneuver_start_t: float = 0.0
     maneuver_start_pos: Tuple[float, float] = (0.0, 0.0)
@@ -335,7 +341,7 @@ class UnstuckSupervisor:
             return _IDLE
         if self.state == _MONITORING:
             return self._monitoring(now, position, rear_gap, front_gap,
-                                    goal_active, open_side, obstacle_mapped)
+                                    goal_active, open_side, obstacle_mapped, yaw)
         if self.state == _REVERSING:
             return self._reversing(now, position, yaw, rear_gap)
         if self.state == _ADVANCING:
@@ -349,7 +355,7 @@ class UnstuckSupervisor:
     # -- estados --
 
     def _monitoring(self, now, position, rear_gap, front_gap, goal_active,
-                    open_side, obstacle_mapped=False) -> Command:
+                    open_side, obstacle_mapped=False, yaw=0.0) -> Command:
         if goal_active is not None:
             # status do action server do nav2 disponível: é AUTORITATIVO.
             # Mata a "ré póstuma" (goal cancelado mas flag de nav_vel_raw
@@ -374,10 +380,15 @@ class UnstuckSupervisor:
                 self.mapped_since = now
         else:
             self.mapped_since = None
-        # âncora de deslocamento: só re-ancora quando o robô REALMENTE sai do
-        # raio — micro-mexidas (tentando girar, ruído de odom) não resetam.
-        if self.anchor is None or self._dist(position, self.anchor) > self.cfg.stuck_radius:
+        # âncora de PROGRESSO: re-ancora quando o robô sai do raio de deslocamento
+        # OU gira mais que stuck_yaw (point-turn legítimo = progresso, não trava).
+        # Micro-mexidas (ruído de odom) não resetam. Travado de verdade = nem
+        # desloca nem gira -> o timer acumula e a recovery dispara.
+        if (self.anchor is None
+                or self._dist(position, self.anchor) > self.cfg.stuck_radius
+                or abs(_norm_angle(yaw - self.anchor_yaw)) > self.cfg.stuck_yaw):
             self.anchor = position
+            self.anchor_yaw = yaw
             self.anchor_t = now
             return _IDLE
         # dispara a recovery: pelo timeout cheio (obstáculo novo/desconhecido)
@@ -542,6 +553,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 # da parede do /map).
                 ("map_neighborhood", 0.22),
                 ("stuck_radius", 0.05),
+                ("stuck_yaw", 0.15),
                 ("reverse_distance", 0.30),
                 ("reverse_speed", 0.25),
                 ("reverse_time_cap", 6.0),
@@ -580,6 +592,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 stuck_timeout=g["stuck_timeout"],
                 stuck_timeout_mapped=g["stuck_timeout_mapped"],
                 stuck_radius=g["stuck_radius"],
+                stuck_yaw=g["stuck_yaw"],
                 reverse_distance=g["reverse_distance"],
                 reverse_speed=g["reverse_speed"],
                 reverse_time_cap=g["reverse_time_cap"],

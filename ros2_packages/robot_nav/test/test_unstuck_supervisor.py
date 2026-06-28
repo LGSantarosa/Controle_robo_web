@@ -159,6 +159,30 @@ def test_reverses_after_timeout_when_not_displacing():
     assert cmd.ang == pytest.approx(0.0)
 
 
+def test_point_turn_does_not_trigger_reverse():
+    # BO 06-27: robô girando no lugar (yaw muda, posição NÃO) = progresso ->
+    # NÃO pode dar ré. Antes, o point-turn legítimo do path_follower disparava
+    # o unstuck (que só media deslocamento) e fodia o nav2.
+    sup = UnstuckSupervisor(_cfg())
+    yaw = 0.0
+    cmd = None
+    for i in range(40):                      # 20 s girando no lugar
+        yaw += 0.2                           # ~11°/tick > stuck_yaw (0.15)
+        cmd = sup.update(i * 0.5, nav_wants_move=True, position=(0.0, 0.0),
+                         rear_gap=math.inf, front_gap=math.inf, yaw=yaw)
+    assert cmd.active is False               # nunca disparou a manobra
+
+
+def test_frozen_yaw_still_reverses():
+    # comanda mas nem desloca nem gira (yaw congelado) = travado DE VERDADE -> ré.
+    sup = UnstuckSupervisor(_cfg())
+    sup.update(0.0, nav_wants_move=True, position=(0.0, 0.0), yaw=0.0)
+    cmd = sup.update(10.1, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, front_gap=math.inf, yaw=0.0)
+    assert cmd.active is True
+    assert cmd.lin == pytest.approx(-0.25)
+
+
 def test_door_active_suppresses_maneuver():
     # door_crossing (door_vel, prio 20) está conduzindo a travessia; o unstuck
     # (unstuck_vel, prio 30) SOBREPÕE e sabotava a manobra -> door_crossing

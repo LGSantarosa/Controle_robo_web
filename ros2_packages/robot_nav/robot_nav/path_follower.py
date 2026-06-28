@@ -63,9 +63,13 @@ def carrot_point(path: List[Pt], i0: int, lookahead: float) -> Tuple[int, Pt]:
 @dataclass
 class FollowConfig:
     forward_speed: float = 0.25     # m/s no trecho reto
-    lookahead: float = 0.6          # m — distância do carrot à frente no plano
-                                    # (1.0 cortava por dentro do arco e raspava o
-                                    # obstáculo; 0.6 cola na linha do plano)
+    lookahead: float = 0.4          # m — distância do carrot à frente no plano
+                                    # 1.0 cortava o arco/raspava; 0.6 colava melhor;
+                                    # 2026-06-27 0.6->0.4: com 0.6 o carrot caía DEPOIS
+                                    # da porta -> o robô mirava lá e virava AINDA DENTRO
+                                    # dos batentes (footprint entrava no costmap -> o
+                                    # collision parava ele na porta). 0.4 cola mais na
+                                    # linha: ele sai mais da porta antes de virar.
     turn_enter: float = 0.21        # rad (~12°) — acima disso COMEÇA a girar
     turn_exit: float = 0.05         # rad (~3°)  — abaixo disso PARA de girar (histerese)
     goal_xy_tol: float = 0.15       # m — chegou no goal (casa c/ goal_checker do nav2)
@@ -188,7 +192,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             super().__init__('path_follower')
             g = {}
             for name, default in (
-                ('forward_speed', 0.25), ('lookahead', 0.6),
+                ('forward_speed', 0.25), ('lookahead', 0.4),
                 ('turn_enter_deg', 12.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.0), ('rot_max', 4.5),
