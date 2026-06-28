@@ -5,6 +5,60 @@
 
 ---
 
+## 🆕 2026-06-28 (noite) — Unstuck: delay resolvido + avanço adaptativo + giro seguro/último-recurso
+
+> Sessão longa com o dono testando o `sala_grande` (canto cilindro+parede). Tudo **commitado
+> na `main`, SEM push ainda** (deploy na Pi quando o dono quiser). 3 commits: `5757791` (raio),
+> `eb87f4a` (avanço adaptativo), `7626585` (giro seguro + escape reverse + último-recurso).
+> `forward_speed 0.22` entrou junto no `7626585`. **DBG `recov` (com `side=`/`near_mapped`/`wall=`)
+> ainda LIGADO** — temporário, remover quando bater o olho final.
+
+### Os 3 pedidos do dono (06-28 fim do dia) — TODOS atacados
+1. **🔴 Delay de ~10-15s pra desencalhar do "conhecido" — RESOLVIDO** (`5757791`). Causa provada
+   por log: `mapped_near_radius=0.35` pequeno demais; o robô encosta na parede e o ponto MAPEADO
+   dela lê a **~0.54m do centro** (meia-diagonal do chassi ~0.25 + offset de registro pose↔mapa
+   ~0.2). Fora dos 0.35 → `near_mapped=False` → caía no caminho cauteloso de 15s. **Fix: raio
+   0.35 → 0.6.** Validado: 3/3 desencalharam em ~3s (eram 15s). Seguro (manobras seguem gap-gated;
+   cautela dos 15s preservada em espaço aberto, `wall>0.6`). Dono adorou.
+2. **🟠 Avanço adaptativo (não reta fixa) — FEITO** (`eb87f4a`). Nova fn `side_clearance` mede o
+   aperto LATERAL (o que prende no batente, já que a frente fica livre). Após o nudge mínimo
+   (0.20), se havia pinch, CONTINUA até a folga lateral ABRIR (`side_open_delta`) com teto
+   `forward_distance_max=0.6`, gap-gated. Validado: avanços ~0.30m (eram 0.20 fixo). Descoberto
+   que o avanço RASTEJAVA (0.15 = zona-morta linear do sim) → `forward_speed 0.15→0.22`.
+3. **Giro / "ele tem momentos que ia ser muito melhor mas não faz" — RESOLVIDO em 4 iterações**
+   (`7626585`), foi o grosso da sessão (whack-a-mole no mesmo canto):
+   - **BATIDA:** o giro da escalação varria a quina numa parede a 0.34m (point-turn varre círculo
+     ~0.25m + slip). **Fix: GATE** — só gira se `nearest ≥ spin_clear (0.40)`; aborta no meio se a
+     folga cair.
+   - **LIVELOCK:** o gate bloqueou o giro no canal apertado → oscilava advance↔reverse sem fim.
+     **Fix: ESCAPE REVERSE** — na escalação, recua mais fundo pelo rear aberto
+     (`reverse_distance_max=1.2`, gap-gated) até achar folga pra girar / sair do canal.
+   - **GIRO PREEMPTANDO TUDO:** tentei "giro preferido quando frente bloqueada + folga" → ele
+     **girava parado sem fim** mesmo com a traseira aberta (`vao_re=8.4`), atrapalhando o nav.
+     **Fix: GIRO = ÚLTIMO RECURSO** — só quando ENCURRALADO (sem ré nem avanço) + folga lateral.
+     Prioriza ir reto/onde o nav quer.
+   - **LADO ERRADO:** girava pelo `freer_side` (só vê setores frontais ±20-90°) e rodava o rabo na
+     parede (obstáculo a -126° traseira). **Fix: DIREÇÃO** — gira PRA LONGE do obstáculo mais
+     próximo (usa `near_deg`); fallback no freer_side se o obstáculo está ~reto à frente.
+
+**Resultado final medido (dono testou ida+volta):** spin caiu de 8→1, o robô **SAI do canto
+sozinho nos 2 sentidos**, unstuck fica quieto a maior parte do tempo (gaps de ~36s = nav2
+dirigindo) e **assiste em vez de atrapalhar**. Dono: "ele chegou". **78 testes** (vários novos) +
+**smoke-test do nó** OK (rotina nova: subir o nó 5s e conferir que não crasha — pega bug de
+`self.X` não setado que os testes unitários não pegam).
+
+### Pendências desta linha
+- **Remover o DBG `recov`** (loga `front_gap/side/near_mapped/wall/...`) quando o dono validar de
+  vez — é temporário (instrumentação que provou as causas acima).
+- **Validar no REAL** (tudo foi no sim `sala_grande`). Em especial o `spin_clear=0.40`: no real o
+  `near_r` vem do `/scan` CRU (tem fantasma <0.15m do LD06) → pode bloquear giro à toa. Ideal trocar
+  o unstuck pra `/scan_safe` (BO #1 antigo, separado).
+- **`reverse_distance_max=1.2` no real:** confirmar que recuar até 1.2m é seguro nos ambientes reais.
+- Push pra Pi quando o dono quiser (`git push` + na Pi `git pull`/`reset --hard` + `colcon build robot_nav`
+  se não for symlink-install).
+
+---
+
 ## 🆕 2026-06-28 — Tuning do path_follower + unstuck "inteligente" (MELHOROU MUITO) + crash corrigido
 
 > Sessão com o dono testando no maze `sala_grande`. Tudo commitado/pushado na `main`.
