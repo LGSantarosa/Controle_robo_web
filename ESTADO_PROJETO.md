@@ -1,7 +1,61 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-06-27**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-06-28**.
+
+---
+
+## 🆕 2026-06-28 — Tuning do path_follower + unstuck "inteligente" (MELHOROU MUITO) + crash corrigido
+
+> Sessão com o dono testando no maze `sala_grande`. Tudo commitado/pushado na `main`.
+
+### path_follower — voltou ao VALIDADO
+- Tentei `lookahead 0.4` e depois a "mira-no-canto" (RDP+segment_aim): **ambos pioraram**
+  (0.4 = hunting na boca da porta; mira-longe = não segura a linha com a assimetria do skid →
+  oscila sem avançar). **Revertido p/ carrot `lookahead 0.6` (validado, porta real 4/4).**
+- `forward_speed 0.25 → 0.30` (a pedido — robô tava lento; teto do nav `max_vel_x`=0.35).
+- **Lição:** o problema NÃO era o follower — era o **maze apertado demais**. Afrouxei o
+  `sala_grande`: portas **0.93 → 1.2 m**, pinch → 1.4 m (mundo+mapa regenerados via
+  scratchpad `make_sala_grande.py` + `world2map.py`).
+
+### unstuck — repensado, ficou MUITO melhor (4 mudanças)
+Estava atrapalhando (ré/spin no meio das manobras do path_follower). Evoluído p/ "inteligente":
+1. **Giro conta como progresso** (`stuck_yaw 0.15 rad`): point-turn legítimo não vira "travado"
+   → não dá mais ré no meio de um giro. `[e59775e]`
+2. **Opção A — "vai bater de verdade?"**: com a FRENTE LIVRE a parada não é obstáculo →
+   **DEFERE** a recovery (dá tempo pro nav) em vez de reverter. `[a176f88]` Mas não pode
+   suprimir pra sempre (senão fica preso em bloqueio lateral) → **defere até `front_clear_timeout`
+   (15s) e depois age.** `[6d1da6f]`
+3. **Direção pela cena**: ao agir, **frente livre → AVANÇA** (passa o batente); **frente
+   bloqueada → ré**. Antes dava ré com a frente livre = loop de ré. `[1dbe288]`
+4. **Filtro "conheço esse obstáculo?"**: parede MAPEADA perto do robô (`mapped_near_radius
+   0.35m`, qualquer lado) → age **rápido (~3s, `front_clear_timeout_mapped`)**; desconhecido
+   (pode ser pessoa) → cauteloso (15s). `[a460e24]`
+
+**Resultado medido no log (freeze_capture):** ré caiu de **4% → 0.4%** (10× menos), 43%
+andando, **107 m** percorridos numa rodada. Dono: "melhorou um absurdo a velocidade".
+
+### 🔴 CRASH corrigido (fim da sessão) — ATENÇÃO amanhã
+- O filtro #4 introduziu um crash: o `_tick` usava `self.mapped_near_radius` mas eu só setei
+  o param em `self.cfg`, **não como atributo do nó** → `AttributeError` FATAL no timer → o nó
+  **morria** (exit 1) = "parou o unstuck todo". **CORRIGIDO** `[c3632b3]` (setado
+  `self.mapped_near_radius = g[...]`). Nó sobe sem crash, 67 testes unstuck.
+- ⚠️ **Lição p/ amanhã:** os **testes unitários NÃO pegam bugs do `main()`/`_tick` do nó**
+  (só testam a classe `UnstuckSupervisor` pura). Qualquer mexida no nó precisa de um
+  **smoke-test do nó** (`ros2 run robot_nav unstuck_supervisor` por uns segundos) antes de
+  confiar. Vários params do nó são `self.X` (não `self.cfg.X`) — fácil esquecer de setar.
+
+### 🎯 PRA AMANHÃ — melhorar o unstuck (afinar, não reescrever)
+1. **Validar no sim com calma** que o crash sumiu e o unstuck novo flui bem no `sala_grande`
+   (relançar `./launch.sh --sim --nav2 --world=worlds/sala_grande.sdf --map=maps/sala_grande.yaml`).
+2. **Afinar knobs** se preciso: `front_clear_timeout_mapped` (3s — baixar p/ 2s se ainda lento
+   no conhecido), `front_clear_timeout` (15s), `mapped_near_radius` (0.35m — se ele se achar
+   "perto de parede" sempre, o conhecido-rápido vira regra; pode ser bom OU agressivo demais),
+   `front_clear` (0.40m).
+3. **Pendência de método:** considerar um smoke-test automatizado do nó (subir o nó com um
+   /scan+/odom fake e ver que não crasha) p/ pegar os bugs de atributo do nó.
+4. Avaliar se o "avança quando frente livre" precisa de teto de distância/repetição (não ficar
+   empurrando pra sempre se o batente não liberar).
 
 ---
 
