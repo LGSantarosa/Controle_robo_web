@@ -187,14 +187,19 @@ def test_frozen_yaw_still_reverses():
     assert cmd.lin == pytest.approx(-0.25)
 
 
-def test_front_clear_suppresses_recovery():
-    # OPÇÃO A: parado além do timeout MAS com a FRENTE LIVRE -> NÃO intervém (a parada
-    # não é obstáculo à frente; ré/spin só atrapalhavam). Deixa o nav seguir.
+def test_front_clear_defers_then_fires():
+    # OPÇÃO A (refinada 06-28): frente LIVRE -> DEFERE a recovery (dá tempo pro nav),
+    # mas não pra sempre: passou de front_clear_timeout travado mesmo assim (bloqueio
+    # lateral/no giro que o front reto não vê) -> age (senão ficaria preso eterno).
     sup = UnstuckSupervisor(_cfg())
     sup.update(0.0, nav_wants_move=True, position=(0.0, 0.0), front_gap=math.inf, yaw=0.0)
-    cmd = sup.update(20.0, nav_wants_move=True, position=(0.0, 0.0),
+    cmd = sup.update(12.0, nav_wants_move=True, position=(0.0, 0.0),
                      rear_gap=math.inf, front_gap=math.inf, yaw=0.0)
-    assert cmd.active is False               # frente livre -> sem ré
+    assert cmd.active is False               # 12s < front_clear_timeout(15) -> defere
+    cmd = sup.update(16.0, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, front_gap=math.inf, yaw=0.0)
+    assert cmd.active is True                # 16s > 15 -> age (ré, há vão atrás)
+    assert cmd.lin == pytest.approx(-0.25)
 
 
 def test_door_active_suppresses_maneuver():
