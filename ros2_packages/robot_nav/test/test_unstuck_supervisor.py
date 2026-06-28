@@ -138,7 +138,10 @@ def _cfg(**kw):
     return UnstuckConfig(**base)
 
 
-def _tick(sup, t, pos=(0.0, 0.0), nav=True, gap=math.inf, front_gap=math.inf):
+def _tick(sup, t, pos=(0.0, 0.0), nav=True, gap=math.inf, front_gap=0.0):
+    # front_gap=0.0 (frente BLOQUEADA) por padrão: sob a Opção A (2026-06-28) a
+    # recovery só dispara com obstáculo à frente; os testes de recovery assumem isso.
+    # O teste do PORTÃO (frente livre -> suprime) passa front_gap=inf explicitamente.
     return sup.update(t, nav_wants_move=nav, position=pos, rear_gap=gap,
                       front_gap=front_gap)
 
@@ -166,21 +169,32 @@ def test_point_turn_does_not_trigger_reverse():
     sup = UnstuckSupervisor(_cfg())
     yaw = 0.0
     cmd = None
-    for i in range(40):                      # 20 s girando no lugar
+    for i in range(40):                      # 20 s girando no lugar (FRENTE bloqueada)
         yaw += 0.2                           # ~11°/tick > stuck_yaw (0.15)
         cmd = sup.update(i * 0.5, nav_wants_move=True, position=(0.0, 0.0),
-                         rear_gap=math.inf, front_gap=math.inf, yaw=yaw)
+                         rear_gap=math.inf, front_gap=0.0, yaw=yaw)
     assert cmd.active is False               # nunca disparou a manobra
 
 
 def test_frozen_yaw_still_reverses():
-    # comanda mas nem desloca nem gira (yaw congelado) = travado DE VERDADE -> ré.
+    # comanda mas nem desloca nem gira (yaw congelado) E frente bloqueada = travado
+    # DE VERDADE -> ré.
     sup = UnstuckSupervisor(_cfg())
-    sup.update(0.0, nav_wants_move=True, position=(0.0, 0.0), yaw=0.0)
+    sup.update(0.0, nav_wants_move=True, position=(0.0, 0.0), front_gap=0.0, yaw=0.0)
     cmd = sup.update(10.1, nav_wants_move=True, position=(0.0, 0.0),
-                     rear_gap=math.inf, front_gap=math.inf, yaw=0.0)
+                     rear_gap=math.inf, front_gap=0.0, yaw=0.0)
     assert cmd.active is True
     assert cmd.lin == pytest.approx(-0.25)
+
+
+def test_front_clear_suppresses_recovery():
+    # OPÇÃO A: parado além do timeout MAS com a FRENTE LIVRE -> NÃO intervém (a parada
+    # não é obstáculo à frente; ré/spin só atrapalhavam). Deixa o nav seguir.
+    sup = UnstuckSupervisor(_cfg())
+    sup.update(0.0, nav_wants_move=True, position=(0.0, 0.0), front_gap=math.inf, yaw=0.0)
+    cmd = sup.update(20.0, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, front_gap=math.inf, yaw=0.0)
+    assert cmd.active is False               # frente livre -> sem ré
 
 
 def test_door_active_suppresses_maneuver():
@@ -203,7 +217,7 @@ def test_unstuck_acts_again_after_door_clears():
     sup.update(10.1, nav_wants_move=True, position=(0.0, 0.0), door_active=True)
     sup.update(10.2, nav_wants_move=True, position=(0.0, 0.0), door_active=False)
     cmd = sup.update(20.4, nav_wants_move=True, position=(0.0, 0.0),
-                     rear_gap=math.inf, front_gap=math.inf, door_active=False)
+                     rear_gap=math.inf, front_gap=0.0, door_active=False)
     assert cmd.active is True
     assert cmd.lin == pytest.approx(-0.25)
 
@@ -295,15 +309,14 @@ def test_boxed_in_both_sides_holds_then_reverses_when_rear_clears():
     assert cmd.lin == pytest.approx(-0.25)
 
 
-def test_advances_when_rear_blocked_and_front_clear():
-    # PEDIDO 2026-06-15: obstáculo ATRÁS (traseira sem vão) e frente livre ->
-    # em vez de travar, AVANÇA pra se desencaixar (antes só sabia dar ré).
+def test_front_clear_suppresses_even_with_rear_blocked():
+    # OPÇÃO A (2026-06-28): SUPERA o pedido de 2026-06-15 (avançar com frente livre).
+    # Se a frente está LIVRE, a parada não é obstáculo -> NÃO intervém (nem ré nem
+    # avanço); o path_follower/nav é que dirige pra frente. (Antes: avançava.)
     sup = UnstuckSupervisor(_cfg())
     _tick(sup, 0.0, gap=0.05, front_gap=math.inf)
     cmd = _tick(sup, 10.1, gap=0.05, front_gap=math.inf)
-    assert cmd.active is True
-    assert cmd.lin == pytest.approx(0.15)   # avanço (forward_speed), pra FRENTE
-    assert cmd.ang == pytest.approx(0.0)
+    assert cmd.active is False              # frente livre -> não mexe
 
 
 def test_reverse_preferred_when_rear_clear_even_if_front_blocked():
@@ -332,8 +345,8 @@ def test_advance_aborts_when_obstacle_enters_front():
     # algo entra/aparece na FRENTE durante o avanço -> STOP imediato (respeita
     # o collision via front_gap: nunca avança em cima de obstáculo)
     sup = UnstuckSupervisor(_cfg())
-    _tick(sup, 0.0, gap=0.05, front_gap=math.inf)
-    cmd = _tick(sup, 10.1, gap=0.05, front_gap=math.inf)  # dispara avanço
+    _tick(sup, 0.0, gap=0.05, front_gap=0.35)
+    cmd = _tick(sup, 10.1, gap=0.05, front_gap=0.35)  # frente parcial -> dispara avanço
     assert cmd.lin == pytest.approx(0.15)
     cmd = _tick(sup, 10.6, pos=(0.05, 0.0), gap=0.05, front_gap=0.08)  # entrou algo
     assert cmd.active is True and cmd.lin == pytest.approx(0.0)  # STOP
@@ -346,19 +359,19 @@ def test_advance_ends_with_explicit_stop():
     # fim do avanço manda ZERO explícito (mesmo motivo da ré: cmd_vel_to_wheels
     # segura o último comando)
     sup = UnstuckSupervisor(_cfg())
-    _tick(sup, 0.0, gap=0.05, front_gap=math.inf)
-    _tick(sup, 10.1, gap=0.05, front_gap=math.inf)  # entra em AVANÇO
-    cmd = _tick(sup, 11.0, pos=(0.20, 0.0), gap=0.05, front_gap=math.inf)  # completou
+    _tick(sup, 0.0, gap=0.05, front_gap=0.35)
+    _tick(sup, 10.1, gap=0.05, front_gap=0.35)  # entra em AVANÇO (frente parcial)
+    cmd = _tick(sup, 11.0, pos=(0.20, 0.0), gap=0.05, front_gap=0.35)  # completou
     assert cmd.active is True and cmd.lin == pytest.approx(0.0)
-    cmd = _tick(sup, 11.2, pos=(0.20, 0.0), gap=0.05, front_gap=math.inf)
+    cmd = _tick(sup, 11.2, pos=(0.20, 0.0), gap=0.05, front_gap=0.35)
     assert cmd.active is False   # grace
 
 
 def test_advance_stops_after_time_cap():
     sup = UnstuckSupervisor(_cfg(forward_time_cap=6.0))
-    _tick(sup, 0.0, gap=0.05, front_gap=math.inf)
-    _tick(sup, 10.1, gap=0.05, front_gap=math.inf)  # entra em AVANÇO
-    cmd = _tick(sup, 16.3, pos=(0.0, 0.0), gap=0.05, front_gap=math.inf)  # cap sem andar
+    _tick(sup, 0.0, gap=0.05, front_gap=0.35)
+    _tick(sup, 10.1, gap=0.05, front_gap=0.35)  # entra em AVANÇO (frente parcial)
+    cmd = _tick(sup, 16.3, pos=(0.0, 0.0), gap=0.05, front_gap=0.35)  # cap sem andar
     assert cmd.active is True and cmd.lin == pytest.approx(0.0)  # STOP explícito
 
 
@@ -446,7 +459,7 @@ def test_goal_active_fires_even_with_controller_silent():
     t = 0.0
     while t <= 12.0:
         cmd = sup.update(t, nav_wants_move=False, position=(0.0, 0.0),
-                         rear_gap=math.inf, goal_active=True)
+                         rear_gap=math.inf, front_gap=0.0, goal_active=True)
         if cmd.active:
             fired = True
             break
@@ -476,7 +489,7 @@ def _stuck_cycle(sup, t0, pos, open_side=1):
     fired = False
     while t < deadline:
         cmd = sup.update(t, nav_wants_move=True, position=pos,
-                         rear_gap=math.inf, open_side=open_side)
+                         rear_gap=math.inf, front_gap=0.0, open_side=open_side)
         if cmd.active:
             fired = True
             cmds.append(cmd)
@@ -528,7 +541,7 @@ def _escalated_sup(open_side=1, **cfg_kw):
     deadline = t + 60.0
     while t < deadline:
         cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
-                         rear_gap=math.inf, open_side=open_side)
+                         rear_gap=math.inf, front_gap=0.0, open_side=open_side)
         if cmd.active and cmd.ang != 0.0:
             return sup, t, cmd
         t += 0.1

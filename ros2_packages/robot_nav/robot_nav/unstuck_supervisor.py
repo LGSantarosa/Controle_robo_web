@@ -277,6 +277,11 @@ class UnstuckConfig:
     forward_time_cap: float = 6.0
     front_stop_margin: float = 0.10  # nunca chega a menos disso do obstáculo à frente
     forward_min: float = 0.10        # vão frontal mínimo pra valer o avanço
+    # 2026-06-28 OPÇÃO A ("vai bater de verdade?"): só intervém se a FRENTE estiver
+    # genuinamente bloqueada. front_gap > front_clear = caminho livre à frente -> a
+    # parada NÃO é obstáculo (collision freando manobra/giro, ou alinhamento) -> NÃO
+    # dá ré (atrapalhava). Deixa o path_follower seguir. Ré só quando há parede perto.
+    front_clear: float = 0.40        # m — frente com >isto de vão = não intervém
 
 
 class Command(NamedTuple):
@@ -401,6 +406,16 @@ class UnstuckSupervisor:
                        and now - self.mapped_since >= self.cfg.stuck_timeout_mapped
                        and stuck >= self.cfg.stuck_timeout_mapped)
         if stuck < self.cfg.stuck_timeout and not mapped_fire:
+            return _IDLE
+        # OPÇÃO A (2026-06-28 "vai bater de verdade?"): mesmo "travado" no tempo, só
+        # intervém se a FRENTE estiver realmente bloqueada. Caminho livre à frente =
+        # a parada não é obstáculo (collision freando uma manobra/giro, ou alinhamento)
+        # -> dar ré/spin só desfazia o que o path_follower fazia. Re-ancora e deixa o
+        # nav seguir. (Giro legítimo já não conta como travado: stuck_yaw.)
+        if front_gap > self.cfg.front_clear:
+            self.anchor = position
+            self.anchor_yaw = yaw
+            self.anchor_t = now
             return _IDLE
         # Escolha de DIREÇÃO pelo vão de cada lado. Ré é PREFERIDA quando há
         # vão atrás (caso comum: obstáculo na frente -> recua). Sem vão útil
@@ -582,6 +597,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("forward_time_cap", 6.0),
                 ("front_stop_margin", 0.10),
                 ("forward_min", 0.10),
+                ("front_clear", 0.40),
                 ("scan_stale", 2.0),
                 ("nav_move_lin", 0.01),
                 ("nav_move_ang", 0.05),
@@ -612,6 +628,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 forward_time_cap=g["forward_time_cap"],
                 front_stop_margin=g["front_stop_margin"],
                 forward_min=g["forward_min"],
+                front_clear=g["front_clear"],
             )
             self.rear_lidar_x = g["rear_lidar_x"]
             self.rear_tail_x = g["rear_tail_x"]
