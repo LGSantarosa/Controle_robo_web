@@ -139,12 +139,15 @@ def _cfg(**kw):
     return UnstuckConfig(**base)
 
 
-def _tick(sup, t, pos=(0.0, 0.0), nav=True, gap=math.inf, front_gap=0.0):
+def _tick(sup, t, pos=(0.0, 0.0), nav=True, gap=math.inf, front_gap=0.0,
+          near=0.0):
     # front_gap=0.0 (frente BLOQUEADA) por padrão: sob a Opção A (2026-06-28) a
     # recovery só dispara com obstáculo à frente; os testes de recovery assumem isso.
     # O teste do PORTÃO (frente livre -> suprime) passa front_gap=inf explicitamente.
+    # near=0.0 (PINÇADO) por padrão: sem folga pra girar -> recovery cai na RÉ (o
+    # contrato dos testes de ré). Os testes de GIRO passam near alto explicitamente.
     return sup.update(t, nav_wants_move=nav, position=pos, rear_gap=gap,
-                      front_gap=front_gap)
+                      front_gap=front_gap, nearest=near)
 
 
 def test_no_action_before_timeout():
@@ -181,11 +184,12 @@ def test_frozen_yaw_still_reverses():
     # comanda mas nem desloca nem gira (yaw congelado) E frente bloqueada = travado
     # DE VERDADE -> ré.
     sup = UnstuckSupervisor(_cfg())
-    sup.update(0.0, nav_wants_move=True, position=(0.0, 0.0), front_gap=0.0, yaw=0.0)
+    sup.update(0.0, nav_wants_move=True, position=(0.0, 0.0), front_gap=0.0,
+               yaw=0.0, nearest=0.0)
     cmd = sup.update(10.1, nav_wants_move=True, position=(0.0, 0.0),
-                     rear_gap=math.inf, front_gap=0.0, yaw=0.0)
+                     rear_gap=math.inf, front_gap=0.0, yaw=0.0, nearest=0.0)
     assert cmd.active is True
-    assert cmd.lin == pytest.approx(-0.25)
+    assert cmd.lin == pytest.approx(-0.25)   # pinçado (sem folga p/ girar) -> ré
 
 
 def test_front_clear_defers_then_fires():
@@ -241,9 +245,10 @@ def test_unstuck_acts_again_after_door_clears():
     sup.update(10.1, nav_wants_move=True, position=(0.0, 0.0), door_active=True)
     sup.update(10.2, nav_wants_move=True, position=(0.0, 0.0), door_active=False)
     cmd = sup.update(20.4, nav_wants_move=True, position=(0.0, 0.0),
-                     rear_gap=math.inf, front_gap=0.0, door_active=False)
+                     rear_gap=math.inf, front_gap=0.0, door_active=False,
+                     nearest=0.0)
     assert cmd.active is True
-    assert cmd.lin == pytest.approx(-0.25)
+    assert cmd.lin == pytest.approx(-0.25)   # pinçado -> ré
 
 
 def test_never_spins():
@@ -567,9 +572,10 @@ def test_goal_status_none_falls_back_to_latch():
 
 # ---- escalada: 3 travamentos no mesmo ponto -> ré + GIRO FORTE --------------
 
-def _stuck_cycle(sup, t0, pos, open_side=1):
+def _stuck_cycle(sup, t0, pos, open_side=1, near=0.0):
     """Um ciclo completo: arma -> manobra inteira -> sai do grace.
 
+    near=0.0 (PINÇADO) por padrão -> a manobra é RÉ (sem folga pra girar).
     Retorna (lista de comandos ativos do ciclo, t_pronto_pro_próximo).
     """
     cmds = []
@@ -579,7 +585,8 @@ def _stuck_cycle(sup, t0, pos, open_side=1):
     fired = False
     while t < deadline:
         cmd = sup.update(t, nav_wants_move=True, position=pos,
-                         rear_gap=math.inf, front_gap=0.0, open_side=open_side)
+                         rear_gap=math.inf, front_gap=0.0, open_side=open_side,
+                         nearest=near)
         if cmd.active:
             fired = True
             cmds.append(cmd)
@@ -589,49 +596,58 @@ def _stuck_cycle(sup, t0, pos, open_side=1):
     return cmds, t + 0.1
 
 
-def test_escalates_to_strong_spin_after_3_stuck_same_spot():
-    # "deu ré e travou de novo" 3x no mesmo lugar -> na 3ª, depois da ré,
-    # GIRO FORTE no lugar (spin_speed vence o atrito; arco em 30cm não vira)
-    sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5))
+def test_spin_only_as_last_resort_when_boxed():
+    # GIRO = ÚLTIMO RECURSO (2026-06-28): só ENCURRALADO (sem ré nem avanço) e com
+    # folga lateral -> gira. NÃO preempta ir reto/dar ré (o dono: "ta priorizando
+    # sempre o giro... mesmo podendo ir reto"). Giro FORTE no lugar.
+    sup, _, cmd = _spin_sup()
+    assert cmd.lin == pytest.approx(0.0)       # giro é NO LUGAR
+    assert cmd.ang == pytest.approx(3.0)       # forte
+
+
+def test_no_spin_when_reverse_possible():
+    # traseira ABERTA (dá ré) -> NÃO gira, dá ré (prioriza sair, não girar parado).
+    # Era o bug: girava parado mesmo com vao_re=8.4. front bloqueado + folga lateral.
+    sup = UnstuckSupervisor(_cfg(grace=0.5))
     t = 0.0
-    cycles = []
-    for _ in range(3):
-        cmds, t = _stuck_cycle(sup, t, pos=(0.0, 0.0))
-        cycles.append(cmds)
-    # 1ª e 2ª: só ré reta + STOP (nunca ang != 0)
-    for c in cycles[0] + cycles[1]:
-        assert c.ang == pytest.approx(0.0)
-    # 3ª: tem fase de ré E fase de giro forte
-    res = [c for c in cycles[2] if c.lin < 0]
-    spins = [c for c in cycles[2] if c.ang != 0.0]
-    assert res, "3ª manobra perdeu a ré"
-    assert spins, "3ª manobra não girou"
-    assert all(c.lin == pytest.approx(0.0) for c in spins)  # giro é NO LUGAR
-    assert spins[0].ang == pytest.approx(3.0)  # forte (vence o skid-steer)
-    assert cycles[2][-1] == (0.0, 0.0, True)   # termina com STOP explícito
+    cmd = None
+    while t < 60.0:
+        cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                         rear_gap=math.inf, front_gap=0.0, nearest=1.0,
+                         nearest_deg=-126.0, yaw=0.0)
+        if cmd.active:
+            break
+        t += 0.1
+    assert cmd.lin == pytest.approx(-0.25) and cmd.ang == pytest.approx(0.0)  # ré, não giro
 
 
 def test_spin_turns_toward_open_side():
-    sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5))
-    t = 0.0
-    for _ in range(2):
-        _, t = _stuck_cycle(sup, t, pos=(0.0, 0.0))
-    cmds, _ = _stuck_cycle(sup, t, pos=(0.0, 0.0), open_side=-1)
-    spins = [c for c in cmds if c.ang != 0.0]
-    assert spins and spins[0].ang == pytest.approx(-3.0)
+    # obstáculo ~reto à frente (near_deg=0, ambíguo) -> usa o freer_side
+    _, _, cmd = _spin_sup(open_side=-1)
+    assert cmd.ang == pytest.approx(-3.0)       # gira pro lado mais livre (direita)
 
 
-def _escalated_sup(open_side=1, **cfg_kw):
-    """Leva o supervisor até o INÍCIO do giro da 3ª manobra (já escalada)."""
-    sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5, **cfg_kw))
-    t = 0.0
-    for _ in range(2):
-        _, t = _stuck_cycle(sup, t, pos=(0.0, 0.0), open_side=open_side)
-    # 3ª: arma e atravessa a fase de ré até o 1º comando de giro
-    deadline = t + 60.0
+def test_spin_turns_away_from_nearest_obstacle():
+    # LADO ERRADO (2026-06-28): obstáculo claramente à DIREITA (near_deg=-126°,
+    # ex. traseira-direita) -> gira pra ESQUERDA (longe dele), IGNORANDO o
+    # freer_side (que só via os setores frontais e mandava pro lado errado).
+    _, _, cmd = _spin_sup(open_side=-1, near_deg=-126.0)
+    assert cmd.ang == pytest.approx(3.0)        # esquerda (oposto ao obstáculo)
+    # espelho: obstáculo à esquerda -> gira pra direita
+    _, _, cmd = _spin_sup(open_side=1, near_deg=120.0)
+    assert cmd.ang == pytest.approx(-3.0)
+
+
+def _spin_sup(open_side=1, near_deg=0.0, **cfg_kw):
+    """Leva ao 1º comando de GIRO (ENCURRALADO: frente E traseira bloqueadas, mas
+    com folga lateral pra girar -> giro é a única saída = último recurso)."""
+    sup = UnstuckSupervisor(_cfg(grace=0.5, **cfg_kw))
+    deadline, t = 60.0, 0.0
     while t < deadline:
         cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
-                         rear_gap=math.inf, front_gap=0.0, open_side=open_side)
+                         rear_gap=0.05, front_gap=0.0, open_side=open_side,
+                         yaw=0.0, nearest=1.0,  # nearest>=spin_clear -> há folga
+                         nearest_deg=near_deg)
         if cmd.active and cmd.ang != 0.0:
             return sup, t, cmd
         t += 0.1
@@ -641,7 +657,7 @@ def _escalated_sup(open_side=1, **cfg_kw):
 def test_spin_closed_loop_stops_at_target_yaw():
     # MALHA FECHADA: roda patina (comanda 30°, vira 5°) -> só para quando o
     # YAW MEDIDO (IMU) acumular spin_angle, não por tempo
-    sup, t, cmd = _escalated_sup()
+    sup, t, cmd = _spin_sup()
     yaw = 0.0
     ticks = 0
     while cmd.ang != 0.0 and ticks < 200:
@@ -656,7 +672,7 @@ def test_spin_closed_loop_stops_at_target_yaw():
 
 def test_spin_time_cap_when_yaw_frozen():
     # patinagem total (yaw não sai do lugar): teto de tempo encerra o giro
-    sup, t, cmd = _escalated_sup(spin_time_cap=1.0)
+    sup, t, cmd = _spin_sup(spin_time_cap=1.0)
     ticks = 0
     while cmd.ang != 0.0 and ticks < 200:
         t += 0.1
@@ -668,10 +684,84 @@ def test_spin_time_cap_when_yaw_frozen():
 
 def test_spin_left_speed_boost():
     # esquerda escorrega -> comanda mais força nesse lado
-    _, _, cmd_l = _escalated_sup(open_side=1, spin_left_boost=1.4)
-    _, _, cmd_r = _escalated_sup(open_side=-1, spin_left_boost=1.4)
+    _, _, cmd_l = _spin_sup(open_side=1, spin_left_boost=1.4)
+    _, _, cmd_r = _spin_sup(open_side=-1, spin_left_boost=1.4)
     assert cmd_l.ang == pytest.approx(3.0 * 1.4)   # esquerda: 4.2
     assert cmd_r.ang == pytest.approx(-3.0)        # direita: sem boost
+
+
+def _drive_escalation(sup, t, nearest, n=80):
+    """Conduz a 3ª manobra (escalada) passando `nearest`; devolve se ENTROU no
+    giro em algum momento e o t final."""
+    entered_spin = False
+    for _ in range(n):
+        sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                   rear_gap=math.inf, front_gap=0.0, nearest=nearest)
+        if sup.state == "spinning":
+            entered_spin = True
+        t += 0.1
+    return entered_spin, t
+
+
+def test_spin_skipped_when_too_tight_to_turn():
+    # 3ª vez no mesmo ponto (escalada) com obstáculo a 0.30m (< spin_clear 0.40):
+    # NÃO gira — a quina varreria a parede (BATIDA 2026-06-28). Faz só a ré.
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=1.0, reverse_time_cap=1.0,
+                                 grace=0.5))
+    t = 0.0
+    for _ in range(2):
+        _, t = _stuck_cycle(sup, t, pos=(0.0, 0.0))
+    entered_spin, _ = _drive_escalation(sup, t, nearest=0.30)
+    assert not entered_spin
+
+
+def test_spin_allowed_when_clearance_ok():
+    # mesma escalada, mas com folga (1.0m > spin_clear): gira normal.
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=1.0, reverse_time_cap=1.0,
+                                 grace=0.5))
+    t = 0.0
+    for _ in range(2):
+        _, t = _stuck_cycle(sup, t, pos=(0.0, 0.0))
+    entered_spin, _ = _drive_escalation(sup, t, nearest=1.0)
+    assert entered_spin
+
+
+def test_spin_aborts_when_obstacle_enters_sweep():
+    # já girando (folga no disparo) e algo entra no raio de varredura da quina
+    # DURANTE o giro -> STOP imediato (espelha o abort da ré/avanço).
+    sup, t, cmd = _spin_sup()
+    assert cmd.ang != 0.0 and sup.state == "spinning"
+    cmd = sup.update(t + 0.1, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, yaw=0.0, nearest=0.30)
+    assert cmd == (0.0, 0.0, True)
+    assert sup.state == "grace"
+
+
+def test_escape_reverse_extends_past_normal_until_room_then_spins():
+    # LIVELOCK no canto (2026-06-28): escalada num canal apertado (sem folga pra
+    # girar). A ré NORMAL pararia em 0.30; o ESCAPE REVERSE recua mais fundo pelo
+    # rear aberto até a folga abrir, aí gira. (rear_gap grande o tempo todo.)
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=0.5, reverse_time_cap=10.0,
+                                 grace=0.5))
+    t = 0.0
+    for _ in range(2):
+        _, t = _stuck_cycle(sup, t, pos=(0.0, 0.0))
+    # dispara a 3ª ré (escalada), frente bloqueada + canal apertado (near<spin_clear)
+    t0 = t
+    while sup.state != "reversing" and t < t0 + 5.0:
+        sup.update(t, nav_wants_move=True, position=(0.0, 0.0), rear_gap=2.0,
+                   front_gap=0.0, nearest=0.30)
+        t += 0.1
+    assert sup.state == "reversing"
+    # recuou 0.40 (> ré normal 0.30) mas AINDA apertado -> escape reverse CONTINUA
+    # (a ré normal teria ido pra grace aqui = o livelock)
+    cmd = sup.update(t, nav_wants_move=True, position=(0.0, -0.40), rear_gap=2.0,
+                     front_gap=0.0, nearest=0.30)
+    assert cmd.lin == pytest.approx(-0.25) and sup.state == "reversing"
+    # recuou mais e a folga ABRIU (saiu do canal) -> GIRA
+    cmd = sup.update(t + 0.2, nav_wants_move=True, position=(0.0, -0.55),
+                     rear_gap=2.0, front_gap=0.0, nearest=1.0)
+    assert cmd.ang != 0.0 and sup.state == "spinning"
 
 
 def test_no_escalation_when_stuck_at_different_spots():
@@ -777,9 +867,10 @@ def test_map_occupied_below_threshold_is_free():
     assert map_occupied(g, 0.25, 0.25, 0.02, 65) is False   # 50 < 65
 
 
-def _umap(sup, t, mapped, pos=(0.0, 0.0), gap=math.inf, front_gap=0.3):
+def _umap(sup, t, mapped, pos=(0.0, 0.0), gap=math.inf, front_gap=0.3, near=0.0):
+    # near=0.0 (pinçado) -> a manobra do bloqueio mapeado é RÉ (sem folga p/ girar)
     return sup.update(t, nav_wants_move=True, position=pos, rear_gap=gap,
-                      front_gap=front_gap, obstacle_mapped=mapped)
+                      front_gap=front_gap, obstacle_mapped=mapped, nearest=near)
 
 
 def test_mapped_block_reverses_at_short_timeout():

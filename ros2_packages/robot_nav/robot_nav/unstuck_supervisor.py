@@ -301,6 +301,13 @@ class UnstuckConfig:
     # PROGRESSO (re-ancora). Travado de verdade = comanda giro mas o yaw não muda.
     stuck_yaw: float = 0.15        # rad (~9°) — girou mais que isso = "fez progresso"
     reverse_distance: float = 0.30
+    # ESCAPE REVERSE adaptativo (2026-06-28 LIVELOCK no canto): quando a escalação
+    # NÃO pode girar (canal apertado, gate do giro bloqueia), recuar SÓ 0.30 não
+    # tira do canal e o avanço empurra de volta -> oscila pra sempre. Na escalada,
+    # recua MAIS FUNDO pelo rear aberto até ter folga pra girar (near>=spin_clear)
+    # ou esvaziar o teto; aí gira (agora seguro) ou solta pro nav2 em espaço aberto.
+    # Gap-gated na traseira (aborta se o rear fechar). Ré normal segue 0.30.
+    reverse_distance_max: float = 1.2  # teto do escape reverse (só na escalada)
     reverse_speed: float = 0.25
     reverse_time_cap: float = 6.0
     grace: float = 2.0
@@ -321,6 +328,17 @@ class UnstuckConfig:
     spin_time_cap: float = 4.0     # teto de tempo do giro
     # As rodas pegam pior girando pra ESQUERDA -> boost de FORÇA nesse lado.
     spin_left_boost: float = 1.4   # velocidade do giro à esquerda x1.4
+    # GATE de folga do giro (2026-06-28, BATIDA: o giro da escalação varreu a quina
+    # do robô numa parede a 0.34m). Um point-turn varre as quinas num círculo de
+    # raio ~meia-diagonal do chassi (~0.25m). Se o obstáculo mais próximo (qualquer
+    # direção) estiver a menos de spin_clear, a quina bate ao girar -> NÃO gira
+    # (faz só a ré; depois de recuar pode abrir e aí gira). Aborta o giro no meio
+    # se a folga cair. Mesma disciplina gap-gated da ré e do avanço.
+    spin_clear: float = 0.40       # m — obstáculo + próximo que isto -> não gira
+    # direção do giro: vira pro lado oposto ao obstáculo mais próximo se ele está
+    # claramente de um lado (|ângulo| > isto); senão (reto à frente/atrás) usa o
+    # freer_side. (2026-06-28: girou pro lado errado por usar só o freer_side.)
+    spin_away_deg: float = 30.0
     # Segurança da ré (batida de 2026-06-11: ré em cima de obstáculo atrás).
     # A ré só sai se houver vão útil, recua NO MÁXIMO (vão - margem) e aborta
     # na hora se o vão cair abaixo da margem durante a manobra.
@@ -334,7 +352,13 @@ class UnstuckConfig:
     # gated pelo front_min_gap (aborta se a frente fechar). A ré segue PREFERIDA
     # quando há vão atrás (caso comum: obstáculo na frente -> recua).
     forward_distance: float = 0.20  # avanço MÍNIMO (nudge) — mais curto que a ré (0.30)
-    forward_speed: float = 0.15     # mais devagar que a ré (0.25)
+    # 2026-06-28: 0.15 -> 0.22. O 0.15 ficava EM CIMA da zona-morta linear (sim
+    # linear_deadzone=0.15; real ~0.11-0.25) -> o robô RASTEJAVA (~0.05 m/s) e o
+    # avanço batia no forward_time_cap (6s) antes de chegar no alvo/folga abrir.
+    # 0.22 tira da zona-morta (anda de verdade, adaptativo passa a mandar) e segue
+    # < ré (0.25). Mesma lição do path_follower min_speed 0.10->0.22 (06-26).
+    # Continua gap-gated (front_min_gap aborta) — a frente é onde atropelou em 06-08.
+    forward_speed: float = 0.22     # acima da zona-morta; ainda < ré (0.25)
     forward_time_cap: float = 6.0
     # Avanço ADAPTATIVO (2026-06-28, pedido do dono "ande o suficiente pra SAIR do
     # obstáculo, não uma reta fixa"): o robô trava no batente com a FRENTE LIVRE ->
@@ -414,7 +438,9 @@ class UnstuckSupervisor:
                door_active: bool = False,
                obstacle_mapped: bool = False,
                near_mapped: bool = False,
-               side_clear: float = math.inf) -> Command:
+               side_clear: float = math.inf,
+               nearest: float = math.inf,
+               nearest_deg: float = 0.0) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
         if door_active:
@@ -435,13 +461,13 @@ class UnstuckSupervisor:
         if self.state == _MONITORING:
             return self._monitoring(now, position, rear_gap, front_gap,
                                     goal_active, open_side, obstacle_mapped, yaw,
-                                    near_mapped, side_clear)
+                                    near_mapped, side_clear, nearest, nearest_deg)
         if self.state == _REVERSING:
-            return self._reversing(now, position, yaw, rear_gap)
+            return self._reversing(now, position, yaw, rear_gap, nearest)
         if self.state == _ADVANCING:
             return self._advancing(now, position, front_gap, side_clear)
         if self.state == _SPINNING:
-            return self._spinning(now, yaw)
+            return self._spinning(now, yaw, nearest)
         if self.state == _GRACE:
             return self._grace(now)
         return _IDLE
@@ -450,7 +476,8 @@ class UnstuckSupervisor:
 
     def _monitoring(self, now, position, rear_gap, front_gap, goal_active,
                     open_side, obstacle_mapped=False, yaw=0.0,
-                    near_mapped=False, side_clear=math.inf) -> Command:
+                    near_mapped=False, side_clear=math.inf,
+                    nearest=math.inf, nearest_deg=0.0) -> Command:
         if goal_active is not None:
             # status do action server do nav2 disponível: é AUTORITATIVO.
             # Mata a "ré póstuma" (goal cancelado mas flag de nav_vel_raw
@@ -519,8 +546,10 @@ class UnstuckSupervisor:
         # - FRENTE LIVRE e mesmo assim travou (preso de lado / no batente da porta):
         #   AVANÇA (passa o batente). Dar ré aqui desfazia o progresso e re-aproximava
         #   o batente = loop de ré (o BO que o dono viu). A frente livre É o caminho.
-        # - FRENTE BLOQUEADA: ré PREFERIDA se há vão atrás (clássico: parede na frente);
-        #   sem vão atrás mas frente parcial -> avança o que dá; encurralado -> segura.
+        # - FRENTE BLOQUEADA: GIRA pro lado aberto se há folga pra girar (foge do
+        #   obstáculo, melhor que ré — não re-aproxima); senão (pinçado) RÉ se há
+        #   vão atrás; sem vão atrás mas frente parcial -> avança o que dá; encurralado
+        #   -> segura.
         # CAP do avanço = teto adaptativo (forward_distance_max) limitado pelo vão
         # frontal real (nunca avança em cima de obstáculo). O _advancing pode parar
         # ANTES disso (nudge mínimo feito + pinch lateral abriu); este é o teto.
@@ -533,12 +562,23 @@ class UnstuckSupervisor:
         rear_target = min(self.cfg.reverse_distance,
                           rear_gap - self.cfg.rear_stop_margin)
         if rear_target >= self.cfg.reverse_min:
-            return self._begin_reverse(now, position, open_side, rear_target)
+            # passa o rear_gap cru: o _begin_reverse escolhe o teto (0.30 normal
+            # ou reverse_distance_max na escalada = escape reverse).
+            return self._begin_reverse(now, position, open_side, rear_gap,
+                                       nearest_deg)
         if forward_target >= self.cfg.forward_min:
             return self._begin_advance(now, position, forward_target, side_clear)
+        # GIRO = ÚLTIMO RECURSO (2026-06-28): só quando ENCURRALADO (sem ré nem
+        # avanço possível) E há folga lateral pra girar. NÃO preempta ir reto/dar ré
+        # — o dono quer priorizar ir pra onde o nav quer; o giro ANTES disso fazia
+        # ele girar parado sem fim e atrapalhar (mesmo com a traseira aberta). Só
+        # gira quando é a única saída. Gate de segurança (nearest>=spin_clear) mantido.
+        if nearest >= self.cfg.spin_clear:
+            return self._begin_spin(now, open_side, yaw, nearest_deg)
         return _IDLE
 
-    def _begin_reverse(self, now, position, open_side, target) -> Command:
+    def _begin_reverse(self, now, position, open_side, rear_gap,
+                       nearest_deg=0.0) -> Command:
         # escalada: conta travamentos recentes perto DESTE ponto; na 3ª
         # tentativa no mesmo lugar a ré reta não resolveu -> ré + GIRO FORTE.
         # A escalada vive só na ré (o avanço é o plano B simples).
@@ -549,11 +589,15 @@ class UnstuckSupervisor:
             1 for (_, p) in self.history
             if self._dist(p, position) <= self.cfg.same_spot_radius)
         self.escalated = nearby >= self.cfg.escalate_after
-        self.spin_side = 1 if open_side >= 0 else -1
+        self.spin_side = self._spin_dir(open_side, nearest_deg)
         self.state = _REVERSING
         self.maneuver_start_t = now
         self.maneuver_start_pos = position
-        self.reverse_target = target
+        # escalada -> teto MAIOR (escape reverse: backa pra fora do canal); ré
+        # normal -> 0.30. Sempre limitado pelo vão traseiro real.
+        cap = (self.cfg.reverse_distance_max if self.escalated
+               else self.cfg.reverse_distance)
+        self.reverse_target = min(cap, rear_gap - self.cfg.rear_stop_margin)
         return Command(-self.cfg.reverse_speed, 0.0, True)
 
     def _begin_advance(self, now, position, target, side_clear=math.inf) -> Command:
@@ -564,13 +608,33 @@ class UnstuckSupervisor:
         self.advance_side0 = side_clear     # folga lateral inicial = tamanho do pinch
         return Command(self.cfg.forward_speed, 0.0, True)
 
+    def _spin_dir(self, open_side, nearest_deg) -> int:
+        """Lado do giro: PRA LONGE do obstáculo mais próximo. (BATIDA/lado errado
+        2026-06-28: o freer_side só olha os setores FRONTAIS ±20-90° e ignorava um
+        obstáculo na traseira -> girava o rabo pra cima da parede.) Se o obstáculo
+        está claramente de um lado (|ang|>spin_away_deg), vira pro lado OPOSTO;
+        se está ~à frente/atrás reto (ambíguo), usa o lado frontal mais livre."""
+        if abs(nearest_deg) > self.cfg.spin_away_deg:
+            return 1 if nearest_deg < 0 else -1  # obstáculo à direita -> gira esquerda
+        return 1 if open_side >= 0 else -1
+
+    def _begin_spin(self, now, open_side, yaw, nearest_deg=0.0) -> Command:
+        # GIRO DIRETO (sem ré antes): recuperação quando a frente trava mas há folga
+        # pra girar. Vira PRA LONGE do obstáculo mais próximo. Reusa o _spinning
+        # (malha fechada no yaw + abort por folga). Não mexe na escalação.
+        self.spin_side = self._spin_dir(open_side, nearest_deg)
+        self.state = _SPINNING
+        self.spin_start_t = now
+        self.spin_start_yaw = yaw
+        return self._spin_cmd()
+
     def _spin_cmd(self) -> Command:
         speed = self.cfg.spin_speed
         if self.spin_side > 0:
             speed *= self.cfg.spin_left_boost  # esquerda escorrega: + força
         return Command(0.0, self.spin_side * speed, True)
 
-    def _reversing(self, now, position, yaw, rear_gap) -> Command:
+    def _reversing(self, now, position, yaw, rear_gap, nearest=math.inf) -> Command:
         if rear_gap <= self.cfg.rear_stop_margin:
             # Algo apareceu/entrou atrás DURANTE a ré (batida de 2026-06-11:
             # a checagem era só no disparo). STOP imediato e SEM giro — com
@@ -579,11 +643,22 @@ class UnstuckSupervisor:
             self.grace_start = now
             return Command(0.0, 0.0, True)
         dist = self._dist(position, self.maneuver_start_pos)
+        # ESCAPE REVERSE (escalada): assim que recuou o mínimo (reverse_distance) E
+        # surgiu folga pra girar (near >= spin_clear), GIRA — não recua à toa. O
+        # gate do giro (BATIDA 2026-06-28) bloqueia girar apertado; aqui a ré mais
+        # funda BUSCA a folga (sai do canal pelo rear aberto) e gira quando acha.
+        if (self.escalated and dist >= self.cfg.reverse_distance
+                and nearest >= self.cfg.spin_clear):
+            self.state = _SPINNING
+            self.spin_start_t = now
+            self.spin_start_yaw = yaw
+            return self._spin_cmd()
         if (dist >= self.reverse_target
                 or now - self.maneuver_start_t >= self.cfg.reverse_time_cap):
-            if self.escalated:
-                # recuou: agora GIRO FORTE no lugar pro lado mais livre —
-                # muda o heading de verdade (arco em 30cm não virava)
+            # chegou no teto/tempo. Escalada COM folga -> gira; sem folga (canal
+            # ainda apertado mesmo após o escape reverse) -> solta pro nav2 em
+            # espaço aberto (já backou fundo); ré normal -> grace.
+            if self.escalated and nearest >= self.cfg.spin_clear:
                 self.state = _SPINNING
                 self.spin_start_t = now
                 self.spin_start_yaw = yaw
@@ -622,7 +697,14 @@ class UnstuckSupervisor:
             return Command(0.0, 0.0, True)  # STOP explícito (mesmo motivo da ré)
         return Command(self.cfg.forward_speed, 0.0, True)
 
-    def _spinning(self, now, yaw) -> Command:
+    def _spinning(self, now, yaw, nearest=math.inf) -> Command:
+        # ABORT por folga (2026-06-28 BATIDA): se algo entrou no raio de varredura
+        # da quina DURANTE o giro, para na hora (a quina bateria). Espelha o
+        # rear_gap/front_gap das outras manobras.
+        if nearest < self.cfg.spin_clear:
+            self.state = _GRACE
+            self.grace_start = now
+            return Command(0.0, 0.0, True)
         # MALHA FECHADA: para pelo yaw MEDIDO, não por tempo — roda patinando
         # comanda 30° e entrega 5°; a IMU vê a virada real.
         turned = abs(_norm_angle(yaw - self.spin_start_yaw))
@@ -687,6 +769,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("stuck_radius", 0.05),
                 ("stuck_yaw", 0.15),
                 ("reverse_distance", 0.30),
+                ("reverse_distance_max", 1.2),
                 ("reverse_speed", 0.25),
                 ("reverse_time_cap", 6.0),
                 ("grace", 2.0),
@@ -698,6 +781,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("spin_angle", 0.44),
                 ("spin_time_cap", 4.0),
                 ("spin_left_boost", 1.4),
+                ("spin_clear", 0.40),
+                ("spin_away_deg", 30.0),
                 # Geometria da ré (frame base_link): LiDAR no CENTRO do robô
                 # (todos os sensores são centrais — confirmado 2026-06-11);
                 # o vão é medido do PARA-CHOQUE traseiro (tail_x).
@@ -710,7 +795,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 # em head_x=+0.25; corredor com a MESMA largura da ré.
                 ("front_head_x", 0.25),
                 ("forward_distance", 0.20),
-                ("forward_speed", 0.15),
+                ("forward_speed", 0.22),
                 ("forward_time_cap", 6.0),
                 # Avanço adaptativo (2026-06-28): teto + limiares do pinch lateral.
                 # side_x_lo/hi = faixa longitudinal (ao redor do corpo) onde mede a
@@ -738,6 +823,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 stuck_radius=g["stuck_radius"],
                 stuck_yaw=g["stuck_yaw"],
                 reverse_distance=g["reverse_distance"],
+                reverse_distance_max=g["reverse_distance_max"],
                 reverse_speed=g["reverse_speed"],
                 reverse_time_cap=g["reverse_time_cap"],
                 grace=g["grace"],
@@ -749,6 +835,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 spin_angle=g["spin_angle"],
                 spin_time_cap=g["spin_time_cap"],
                 spin_left_boost=g["spin_left_boost"],
+                spin_clear=g["spin_clear"],
+                spin_away_deg=g["spin_away_deg"],
                 rear_stop_margin=g["rear_stop_margin"],
                 reverse_min=g["reverse_min"],
                 forward_distance=g["forward_distance"],
@@ -931,6 +1019,9 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             # scan velho -> folga lateral 0 (pinch "apertado") -> avanço não para cedo
             # pelo pinch (mas o front_gap=0 já aborta o avanço; é só consistência).
             side_clear = self._side_clear if scan_fresh else 0.0
+            # obstáculo mais próximo (qualquer direção) p/ o GATE do giro: scan velho
+            # -> 0 (não dá pra verificar folga -> não gira, seguro).
+            nearest = self._near_r if scan_fresh else 0.0
             # status visto em algum tópico? OR entre eles; nunca visto -> None
             goal_active = (any(self._goal_active.values())
                            if self._goal_active else None)
@@ -947,7 +1038,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 goal_active=goal_active, open_side=self._open_side,
                 yaw=self._yaw, door_active=self._door_active,
                 obstacle_mapped=obstacle_mapped, near_mapped=near_mapped,
-                side_clear=side_clear)
+                side_clear=side_clear, nearest=nearest,
+                nearest_deg=(self._near_deg if scan_fresh else 0.0))
             # DEBUG temporário (2026-06-22): diagnóstico da recovery contextual.
             if (self.sup.state == "monitoring" and self._nav_wants_move
                     and now - self._dbg_t >= 1.0):
