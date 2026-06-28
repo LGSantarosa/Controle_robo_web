@@ -250,6 +250,12 @@ def generate_launch_description():
                 'nav_move_ang': 0.05,
                 'rate_hz': 10.0,
             }],
+            # /scan -> /scan_safe (2026-06-28): o unstuck lia o /scan CRU; no REAL o
+            # LD06 cospe fantasmas <0.15m que envenenam near_r/side_clear/gaps (gate
+            # e direção do giro) -> bloqueariam giro / disparariam à toa. O scan_safe
+            # (scan_sanitizer) zera só os retornos <0.15m (dentro do footprint ±0.25 =
+            # fantasma), mantém tudo real >=0.15m. No SIM é no-op (laser limpo).
+            remappings=[('scan', 'scan_safe')],
         ),
         Node(
             package='nav2_lifecycle_manager', executable='lifecycle_manager',
