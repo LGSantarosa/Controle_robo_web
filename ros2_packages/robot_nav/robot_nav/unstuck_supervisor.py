@@ -85,36 +85,6 @@ def map_occupied(grid: MapGrid, x: float, y: float, neighborhood: float,
     return False
 
 
-def nearest_mapped_dist(grid: MapGrid, x: float, y: float, search_radius: float,
-                        occ_threshold: int) -> float:
-    """Distância (m) à célula OCUPADA mais próxima de (x,y) dentro de
-    `search_radius`; inf se não há parede mapeada nesse raio. SÓ DEBUG do
-    near_mapped (2026-06-28): saber a QUE distância a parede realmente está
-    quando o robô trava, pra calibrar `mapped_near_radius` (BO: o fast-path do
-    'conhecido' não cortava o delay -> suspeita de parede além do raio). Mesmo
-    padrão de varredura do map_occupied."""
-    res = grid.resolution
-    if res <= 0.0:
-        return math.inf
-    cr = int(search_radius / res) + 1
-    col0 = int((x - grid.origin_x) / res)
-    row0 = int((y - grid.origin_y) / res)
-    best = math.inf
-    for dr in range(-cr, cr + 1):
-        for dc in range(-cr, cr + 1):
-            r, c = row0 + dr, col0 + dc
-            if not (0 <= r < grid.height and 0 <= c < grid.width):
-                continue
-            if grid.data[r * grid.width + c] < occ_threshold:
-                continue
-            cx = grid.origin_x + (c + 0.5) * res
-            cy = grid.origin_y + (r + 0.5) * res
-            d = math.hypot(cx - x, cy - y)
-            if d < best:
-                best = d
-    return best
-
-
 def rear_min_gap(ranges, angle_min: float, angle_increment: float,
                  lidar_x: float, tail_x: float, half_width: float) -> float:
     """Menor vão livre (m) entre o PARA-CHOQUE traseiro e o que o /scan vê
@@ -895,9 +865,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._door_active = False  # door_crossing conduzindo? -> standdown
             self._map = None           # MapGrid do /map estático (None até a 1ª msg)
             self._front_bp = None      # ponto de contato à frente (x,y base_link)
-            self._near_r = math.inf    # DEBUG: retorno LiDAR mais próximo (m)
-            self._near_deg = 0.0       # DEBUG: ângulo desse retorno (graus)
-            self._dbg_t = 0.0          # DEBUG: throttle do log
+            self._near_r = math.inf    # obstáculo + próximo (m) — gate do giro
+            self._near_deg = 0.0       # ângulo desse retorno (graus) — direção do giro
             self._last_state = self.sup.state
 
             be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -983,7 +952,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._front_bp = front_block_point(
                 ranges, msg.angle_min, msg.angle_increment,
                 self.rear_lidar_x, self.front_head_x, self.rear_half_width)
-            # DEBUG temporário (2026-06-22): retorno mais próximo (dist+ângulo).
+            # obstáculo mais próximo (dist+ângulo): gate do giro (nearest >= spin_clear
+            # pra não varrer a quina) e DIREÇÃO do giro (gira pra longe dele, via ângulo).
             finite = np.isfinite(ranges) & (ranges > 0.0)
             if finite.any():
                 i = int(np.argmin(np.where(finite, ranges, np.inf)))
@@ -1054,32 +1024,6 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 obstacle_mapped=obstacle_mapped, near_mapped=near_mapped,
                 side_clear=side_clear, nearest=nearest,
                 nearest_deg=(self._near_deg if scan_fresh else 0.0))
-            # DEBUG temporário (2026-06-22): diagnóstico da recovery contextual.
-            if (self.sup.state == "monitoring" and self._nav_wants_move
-                    and now - self._dbg_t >= 1.0):
-                self._dbg_t = now
-                if self._front_bp is not None:
-                    bx_r, by_r = self._front_bp
-                    c, s = math.cos(self._yaw), math.sin(self._yaw)
-                    mx = self._position[0] + bx_r * c - by_r * s
-                    my = self._position[1] + bx_r * s + by_r * c
-                else:
-                    mx = my = float('nan')
-                # DEBUG do near_mapped (2026-06-28): a parede mapeada mais próxima
-                # do robô (qualquer lado) — se >mapped_near_radius o fast-path do
-                # "conhecido" NÃO dispara e o delay cai no stuck_timeout (BO #1).
-                wall = (nearest_mapped_dist(
-                    self._map, self._position[0], self._position[1], 1.0,
-                    self.map_occ_threshold) if self._map is not None
-                    else float('inf'))
-                self.get_logger().warn(
-                    "DBG recov: front_gap=%.2f side=%.2f map=%s mapped=%s "
-                    "near=%.2fm@%.0f° near_mapped=%s wall=%.2fm(raio=%.2f) "
-                    "blk=(%.2f,%.2f) anchor_t=%.1f" % (
-                        front_gap, side_clear, self._map is not None,
-                        obstacle_mapped, self._near_r, self._near_deg,
-                        near_mapped, wall, self.mapped_near_radius, mx, my,
-                        now - self.sup.anchor_t if self.sup.anchor else -1))
             if self.sup.state != self._last_state:
                 self.get_logger().warn(
                     "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s vao_re=%.2f)" % (
