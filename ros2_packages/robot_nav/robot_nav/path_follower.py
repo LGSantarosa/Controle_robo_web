@@ -62,7 +62,8 @@ def carrot_point(path: List[Pt], i0: int, lookahead: float) -> Tuple[int, Pt]:
 
 @dataclass
 class FollowConfig:
-    forward_speed: float = 0.25     # m/s no trecho reto
+    forward_speed: float = 0.30     # m/s no trecho reto (2026-06-27: 0.25->0.30 a
+                                    # pedido — robô tava lento; teto do nav é 0.35)
     lookahead: float = 0.4          # m — distância do carrot à frente no plano
                                     # 1.0 cortava o arco/raspava; 0.6 colava melhor;
                                     # 2026-06-27 0.6->0.4: com 0.6 o carrot caía DEPOIS
@@ -192,7 +193,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             super().__init__('path_follower')
             g = {}
             for name, default in (
-                ('forward_speed', 0.25), ('lookahead', 0.4),
+                ('forward_speed', 0.30), ('lookahead', 0.4),
                 ('turn_enter_deg', 12.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.0), ('rot_max', 4.5),
