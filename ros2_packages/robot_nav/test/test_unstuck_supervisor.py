@@ -1055,3 +1055,63 @@ def test_clearest_heading_offset_breaks_ties_toward_the_plan():
     o2 = clearest_heading_offset(ranges, amin, ainc,
                                  prefer_bearing=math.radians(-50), **_clear_args())
     assert o2 is not None and o2 < 0
+
+
+# ---- giro CALCULADO na decisão (clear_offset -> gira em vez de dar ré) ------
+# Dono 2026-06-29: "às vezes falta 5° pra ir reto e ele dá ré, gira fixo, erra,
+# dá ré de novo". Se há um giro PEQUENO (computado no nó, <= cap) que abre a
+# frente rumo ao plano, gira só isso em vez de dar ré. clear_offset vem do nó.
+
+def _stuck_then(sup, clear_offset=None, yaw=0.0, front_gap=0.0, rear_gap=math.inf):
+    # ancora no t=0 e dispara a recovery no t=10.1 (passou o stuck_timeout=10)
+    sup.update(0.0, nav_wants_move=True, position=(0.0, 0.0), rear_gap=rear_gap,
+               front_gap=front_gap, yaw=yaw, nearest=0.0, clear_offset=clear_offset)
+    return sup.update(10.1, nav_wants_move=True, position=(0.0, 0.0),
+                      rear_gap=rear_gap, front_gap=front_gap, yaw=yaw,
+                      nearest=0.0, clear_offset=clear_offset)
+
+
+def test_clear_offset_turns_instead_of_reversing():
+    # frente bloqueada, ré DISPONÍVEL (rear inf), mas cabe um giro de 0.20 rad ->
+    # prefere o giro pequeno à ré
+    sup = UnstuckSupervisor(_cfg())
+    cmd = _stuck_then(sup, clear_offset=0.20)
+    assert cmd.active is True
+    assert cmd.lin == pytest.approx(0.0)   # giro no lugar, NÃO ré
+    assert cmd.ang > 0                       # +offset -> gira pra esquerda
+    assert sup.state == "turning"
+
+
+def test_clear_turn_direction_follows_offset_sign():
+    sup = UnstuckSupervisor(_cfg())
+    cmd = _stuck_then(sup, clear_offset=-0.20)
+    assert cmd.lin == pytest.approx(0.0)
+    assert cmd.ang < 0                       # -offset -> gira pra direita
+    assert sup.state == "turning"
+
+
+def test_clear_turn_reaches_target_then_grace():
+    sup = UnstuckSupervisor(_cfg())
+    _stuck_then(sup, clear_offset=0.20, yaw=0.0)   # alvo de yaw = 0.20
+    assert sup.state == "turning"
+    # yaw chegou no alvo -> encerra a manobra (grace)
+    cmd = sup.update(10.2, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, front_gap=0.0, yaw=0.20, nearest=0.0)
+    assert sup.state == "grace"
+    assert cmd.lin == pytest.approx(0.0) and cmd.ang == pytest.approx(0.0)
+
+
+def test_tiny_clear_offset_still_reverses():
+    # giro calculado abaixo do mínimo (no-op) -> NÃO vira o caminho da ré
+    sup = UnstuckSupervisor(_cfg())
+    cmd = _stuck_then(sup, clear_offset=0.01)
+    assert cmd.lin == pytest.approx(-0.25)   # ré normal
+    assert sup.state == "reversing"
+
+
+def test_no_clear_offset_reverses_as_before():
+    # regressão: sem clear_offset, o comportamento é o de antes (ré)
+    sup = UnstuckSupervisor(_cfg())
+    cmd = _stuck_then(sup, clear_offset=None)
+    assert cmd.lin == pytest.approx(-0.25)
+    assert sup.state == "reversing"

@@ -343,6 +343,14 @@ class UnstuckConfig:
     # claramente de um lado (|ângulo| > isto); senão (reto à frente/atrás) usa o
     # freer_side. (2026-06-28: girou pro lado errado por usar só o freer_side.)
     spin_away_deg: float = 30.0
+    # GIRO CALCULADO (2026-06-29, dono "falta 5° pra ir reto"): quando a frente
+    # trava mas cabe um giro PEQUENO que alinha a frente com o plano (offset vem
+    # do nó via clearest_heading_offset, já limitado pelo cap), gira só o que
+    # falta EM VEZ de dar ré. clear_turn_min = piso (abaixo disso = no-op, dá ré);
+    # tol/time_cap = fim da manobra (malha fechada no yaw, igual ao spin).
+    clear_turn_min: float = 0.05       # rad (~3°) — giro menor que isto não vale
+    clear_turn_tol: float = 0.05       # rad — chegou no alvo de heading
+    clear_turn_time_cap: float = 3.0   # s — teto de tempo do giro calculado
     # Segurança da ré (batida de 2026-06-11: ré em cima de obstáculo atrás).
     # A ré só sai se houver vão útil, recua NO MÁXIMO (vão - margem) e aborta
     # na hora se o vão cair abaixo da margem durante a manobra.
@@ -410,6 +418,7 @@ _MONITORING = "monitoring"
 _REVERSING = "reversing"
 _ADVANCING = "advancing"
 _SPINNING = "spinning"
+_TURNING = "turning"
 _GRACE = "grace"
 
 
@@ -432,6 +441,9 @@ class UnstuckSupervisor:
     spin_side: int = 1         # +1 esq / -1 dir
     spin_start_t: float = 0.0
     spin_start_yaw: float = 0.0
+    turn_offset: float = 0.0          # giro calculado: offset pedido (rad, CCW+)
+    turn_target_yaw: float = 0.0      # alvo de heading (malha fechada)
+    turn_start_t: float = 0.0
     history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
 
     def update(self, now: float, *, nav_wants_move: bool,
@@ -444,7 +456,8 @@ class UnstuckSupervisor:
                near_mapped: bool = False,
                side_clear: float = math.inf,
                nearest: float = math.inf,
-               nearest_deg: float = 0.0) -> Command:
+               nearest_deg: float = 0.0,
+               clear_offset: Optional[float] = None) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
         if door_active:
@@ -465,13 +478,16 @@ class UnstuckSupervisor:
         if self.state == _MONITORING:
             return self._monitoring(now, position, rear_gap, front_gap,
                                     goal_active, open_side, obstacle_mapped, yaw,
-                                    near_mapped, side_clear, nearest, nearest_deg)
+                                    near_mapped, side_clear, nearest, nearest_deg,
+                                    clear_offset)
         if self.state == _REVERSING:
             return self._reversing(now, position, yaw, rear_gap, nearest)
         if self.state == _ADVANCING:
             return self._advancing(now, position, front_gap, side_clear)
         if self.state == _SPINNING:
             return self._spinning(now, yaw, nearest)
+        if self.state == _TURNING:
+            return self._turning(now, yaw)
         if self.state == _GRACE:
             return self._grace(now)
         return _IDLE
@@ -481,7 +497,8 @@ class UnstuckSupervisor:
     def _monitoring(self, now, position, rear_gap, front_gap, goal_active,
                     open_side, obstacle_mapped=False, yaw=0.0,
                     near_mapped=False, side_clear=math.inf,
-                    nearest=math.inf, nearest_deg=0.0) -> Command:
+                    nearest=math.inf, nearest_deg=0.0,
+                    clear_offset=None) -> Command:
         if goal_active is not None:
             # status do action server do nav2 disponível: é AUTORITATIVO.
             # Mata a "ré póstuma" (goal cancelado mas flag de nav_vel_raw
@@ -577,6 +594,15 @@ class UnstuckSupervisor:
             if forward_target >= self.cfg.forward_min:
                 return self._begin_advance(now, position, forward_target, side_clear)
             return _IDLE
+        # GIRO CALCULADO (2026-06-29, dono "falta 5° pra ir reto"): a frente está
+        # bloqueada, mas cabe um giro PEQUENO (<= cap, computado no nó via
+        # clearest_heading_offset) que alinha a frente com o plano? Gira só o que
+        # falta EM VEZ de dar ré — matava o vai-e-volta (ré -> giro fixo de 25° ->
+        # erra -> ré). Conservador: o cap é pequeno (~15°); se precisa de mais, NÃO
+        # vem offset (None) e cai na ré abaixo. Vem ANTES da ré de propósito (a
+        # ideia é justamente preferir o giro pequeno à ré quando ele resolve).
+        if clear_offset is not None and abs(clear_offset) >= self.cfg.clear_turn_min:
+            return self._begin_clear_turn(now, yaw, clear_offset)
         rear_target = min(self.cfg.reverse_distance,
                           rear_gap - self.cfg.rear_stop_margin)
         if rear_target >= self.cfg.reverse_min:
@@ -594,6 +620,31 @@ class UnstuckSupervisor:
         if nearest >= self.cfg.spin_clear:
             return self._begin_spin(now, open_side, yaw, nearest_deg)
         return _IDLE
+
+    def _begin_clear_turn(self, now, yaw, offset) -> Command:
+        # Giro CALCULADO: alvo = heading atual + offset (o quanto falta pra abrir a
+        # frente rumo ao plano). Malha fechada no yaw MEDIDO (igual ao spin: a roda
+        # patina, o yaw não mente). Encerra ao chegar no alvo OU no teto de tempo.
+        self.state = _TURNING
+        self.turn_offset = offset
+        self.turn_target_yaw = _norm_angle(yaw + offset)
+        self.turn_start_t = now
+        return self._turning(now, yaw)
+
+    def _turning(self, now, yaw) -> Command:
+        err = _norm_angle(self.turn_target_yaw - yaw)
+        if (abs(err) <= self.cfg.clear_turn_tol
+                or now - self.turn_start_t >= self.cfg.clear_turn_time_cap):
+            # chegou (ou estourou o tempo): solta pro nav retomar reto na frente
+            # agora alinhada. grace evita re-disparo imediato.
+            self.state = _GRACE
+            self.grace_start = now
+            return Command(0.0, 0.0, True)
+        side = 1 if err > 0 else -1            # fecha a malha pelo erro restante
+        speed = self.cfg.spin_speed
+        if side > 0:
+            speed *= self.cfg.spin_left_boost  # esquerda escorrega: + força
+        return Command(0.0, side * speed, True)
 
     def _begin_reverse(self, now, position, open_side, rear_gap,
                        nearest_deg=0.0) -> Command:
@@ -755,7 +806,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                            QoSDurabilityPolicy)
     from action_msgs.msg import GoalStatusArray
     from geometry_msgs.msg import Twist
-    from nav_msgs.msg import Odometry, OccupancyGrid
+    from nav_msgs.msg import Odometry, OccupancyGrid, Path
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import String
     try:
@@ -801,6 +852,15 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("spin_left_boost", 1.4),
                 ("spin_clear", 0.40),
                 ("spin_away_deg", 30.0),
+                # Giro CALCULADO (2026-06-29): cap pequeno (~15°) — só ajusta o
+                # talinho que falta pra abrir a frente rumo ao plano; senão dá ré.
+                ("clear_turn_cap_deg", 15.0),     # cap da correção (nó)
+                ("clear_turn_depth", 0.6),        # frente "livre" = vão >= isto (m)
+                ("clear_turn_step_deg", 2.0),     # granularidade da busca (nó)
+                ("clear_lookahead", 0.5),         # ponto do /plan p/ o rumo (m)
+                ("clear_turn_min", 0.05),         # piso do giro (rad) — < = no-op
+                ("clear_turn_tol", 0.05),         # chegou no alvo (rad)
+                ("clear_turn_time_cap", 3.0),     # teto de tempo do giro (s)
                 # Geometria da ré (frame base_link): LiDAR no CENTRO do robô
                 # (todos os sensores são centrais — confirmado 2026-06-11);
                 # o vão é medido do PARA-CHOQUE traseiro (tail_x).
@@ -869,7 +929,15 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 front_clear_timeout=g["front_clear_timeout"],
                 front_clear_timeout_mapped=g["front_clear_timeout_mapped"],
                 mapped_near_radius=g["mapped_near_radius"],
+                clear_turn_min=g["clear_turn_min"],
+                clear_turn_tol=g["clear_turn_tol"],
+                clear_turn_time_cap=g["clear_turn_time_cap"],
             )
+            # params do giro calculado que vivem no NÓ (precisam do /scan + /plan)
+            self.clear_turn_cap = math.radians(g["clear_turn_cap_deg"])
+            self.clear_turn_depth = g["clear_turn_depth"]
+            self.clear_turn_step = math.radians(g["clear_turn_step_deg"])
+            self.clear_lookahead = g["clear_lookahead"]
             self.rear_lidar_x = g["rear_lidar_x"]
             self.rear_tail_x = g["rear_tail_x"]
             self.rear_half_width = g["rear_half_width"]
@@ -901,6 +969,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._front_bp = None      # ponto de contato à frente (x,y base_link)
             self._near_r = math.inf    # obstáculo + próximo (m) — gate do giro
             self._near_deg = 0.0       # ângulo desse retorno (graus) — direção do giro
+            self._scan_raw = None      # (ranges, angle_min, angle_increment) p/ o giro calculado
+            self._plan = []            # pontos (x,y) do /plan (frame map) — rumo do giro
             self._last_state = self.sup.state
 
             be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -920,6 +990,9 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             # autonomia. Continua sendo a intenção do nav p/ o gate _nav_wants_move.
             self.create_subscription(Twist, "nav_vel", self._on_nav_raw, 10)
             self.create_subscription(LaserScan, "scan", self._on_scan, be)
+            # /plan (Theta*) p/ o RUMO do giro calculado: ao girar pra abrir a
+            # frente, prefere a heading mais próxima de onde o plano quer ir.
+            self.create_subscription(Path, "plan", self._on_plan, 10)
             # Standdown durante a travessia de porta: enquanto o door_crossing
             # está staging/rotating/crossing, o unstuck fica quieto (senão a ré
             # prio 30 sabota a manobra prio 20 e a porta nunca fecha).
@@ -961,12 +1034,38 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._nav_wants_move = (abs(msg.linear.x) > self.nav_move_lin
                                     or abs(msg.angular.z) > self.nav_move_ang)
 
+        def _on_plan(self, msg):
+            # só os (x,y) em frame map; o rumo é calculado no _tick com a pose
+            self._plan = [(p.pose.position.x, p.pose.position.y)
+                          for p in msg.poses]
+
+        def _plan_bearing(self):
+            """Rumo do /plan relativo ao heading da robô (rad, +esq). Usa o 1º
+            ponto do plano a >= clear_lookahead de distância (frente da robô).
+            Aproxima odom≈map (mesma hipótese do block_point_mapped do nó). 0.0
+            se não há plano -> o giro calculado cai no menor ajuste sem viés."""
+            if not self._plan:
+                return 0.0
+            px, py = self._position
+            target = None
+            for (x, y) in self._plan:
+                if math.hypot(x - px, y - py) >= self.clear_lookahead:
+                    target = (x, y)
+                    break
+            if target is None:
+                target = self._plan[-1]
+            return _norm_angle(math.atan2(target[1] - py, target[0] - px)
+                               - self._yaw)
+
         def _on_scan(self, msg):
             # time.monotonic(): freshness local, sem criar rclpy.time.Time a
             # 10 Hz nem depender de NTP (P3 da AUDITORIA_2026-06-11). O update()
             # da lógica pura só usa diferenças, então a base monotônica serve.
             self._scan_t = time.monotonic()
             ranges = np.asarray(msg.ranges, dtype=np.float64)
+            # guarda o scan cru pro giro calculado (clearest_heading_offset varre
+            # rotações reusando o front_min_gap com o ângulo deslocado)
+            self._scan_raw = (ranges, msg.angle_min, msg.angle_increment)
             self._rear_gap = rear_min_gap(
                 ranges, msg.angle_min, msg.angle_increment,
                 self.rear_lidar_x, self.rear_tail_x, self.rear_half_width)
@@ -1050,6 +1149,16 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             near_mapped = (self._map is not None and map_occupied(
                 self._map, self._position[0], self._position[1],
                 self.mapped_near_radius, self.map_occ_threshold))
+            # GIRO CALCULADO: menor rotação (<= cap) que abre a frente rumo ao
+            # plano. None se nada pequeno resolve -> a máquina cai na ré.
+            clear_offset = None
+            if scan_fresh and self._scan_raw is not None:
+                ranges, amin, ainc = self._scan_raw
+                clear_offset = clearest_heading_offset(
+                    ranges, amin, ainc, self.rear_lidar_x, self.front_head_x,
+                    self.rear_half_width, self.clear_turn_depth,
+                    self.clear_turn_cap, self.clear_turn_step,
+                    prefer_bearing=self._plan_bearing())
             cmd = self.sup.update(
                 now, nav_wants_move=self._nav_wants_move,
                 position=self._position, rear_gap=gap, front_gap=front_gap,
@@ -1057,13 +1166,20 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 yaw=self._yaw, door_active=self._door_active,
                 obstacle_mapped=obstacle_mapped, near_mapped=near_mapped,
                 side_clear=side_clear, nearest=nearest,
-                nearest_deg=(self._near_deg if scan_fresh else 0.0))
+                nearest_deg=(self._near_deg if scan_fresh else 0.0),
+                clear_offset=clear_offset)
             if self.sup.state != self._last_state:
+                extra = ""
+                if self.sup.state == "turning":
+                    # "propôs giro X° em vez de ré" — pra medir na próxima run
+                    # quantas rés o giro calculado substituiu (dono 2026-06-29).
+                    extra = " GIRO_CALC=%+.0f° (em vez de ré)" % math.degrees(
+                        self.sup.turn_offset)
                 self.get_logger().warn(
-                    "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s vao_re=%.2f)" % (
+                    "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s vao_re=%.2f)%s" % (
                         self._last_state, self.sup.state,
                         self._position[0], self._position[1],
-                        self._stop_active, gap))
+                        self._stop_active, gap, extra))
                 self._last_state = self.sup.state
             if cmd.active:
                 t = Twist()
