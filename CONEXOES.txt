@@ -5,7 +5,7 @@ ARDUINO MEGA
   Serial1 (TX18, RX19)   -> hoverboard FRENTE (FL+FR) 115200 baud
   Serial2 (TX16, RX17)   -> hoverboard TRÁS  (RL+RR)  115200 baud
   Serial3 (TX14, RX15)   -> reserva/debug
-  I²C (SDA20, SCL21)     -> MPU6050 (IMU)
+  I²C (SDA20, SCL21)     -> MPU9250 (IMU; MESMOS 4 fios do 6050; mag AK8963 interno, sem fio novo)
   SPI (MISO50, MOSI51, SCK52) + CS10 -> PMW3901 (flow, via shifter 5V/3.3V)
   pino 5                 -> fita LED status
   pino 7                 -> relé da luz

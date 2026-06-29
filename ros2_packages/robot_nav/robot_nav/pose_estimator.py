@@ -3,7 +3,7 @@
 Estimador de pose pro modo TREKKING.
 
 Funde 3 fontes em (x, y, yaw) no frame `odom`:
-  - MPU6050 (/imu/data)       → taxa de yaw (giro); yaw INTEGRADO, sem absoluto
+  - MPU9250 (/imu/data)       → taxa de yaw (giro); yaw INTEGRADO (mag/absoluto: TODO)
   - PMW3901 (/optical_flow)   → velocidade no chão em (vx, vy) corpo
   - Encoders (4 RPMs)         → velocidade no corpo, fallback quando o flow é ruim
 
@@ -142,11 +142,12 @@ class PoseEstimator(Node):
         # girando, o diferencial de roda congelado integra um giro fantasma
         # infinito no mapa. Ver project_mega_i2c_hang + fused_odom (wheel_fresh).
         self.declare_parameter('wheel_timeout', 0.3)
-        # Sinal da taxa de yaw da IMU (gyro Z). A MPU6050 está montada DE
-        # PONTA-CABEÇA (Z aponta pra baixo) → giro vem invertido, default -1.0.
-        # Se na bancada o robô girar pro lado errado no odom, troque pra +1.0
-        # (não precisa reflashear a MEGA). Ver project_imu_mpu6050_mounting.
-        self.declare_parameter('imu_yaw_sign', -1.0)
+        # Sinal da taxa de yaw da IMU (gyro Z). A MPU9250 está montada PLANA com
+        # os componentes pra CIMA (Z aponta pra cima) → giro no sentido ROS,
+        # default +1.0. (Era -1.0 com o MPU6050 de ponta-cabeça.) Se na bancada o
+        # robô girar pro lado errado no odom, troque pra -1.0 (não precisa
+        # reflashear a MEGA). Ver project_imu_mpu9250.
+        self.declare_parameter('imu_yaw_sign', 1.0)
 
         self.wheel_radius   = float(self.get_parameter('wheel_radius').value)
         self.wheel_base     = float(self.get_parameter('wheel_base').value)
@@ -259,10 +260,10 @@ class PoseEstimator(Node):
     # ------------------------------------------------------------------
     def _on_imu(self, msg: Imu):
         with self._lock:
-            # MPU6050 (6 eixos): sem orientação absoluta (não tem magnetômetro).
-            # Usamos só a taxa de yaw do giro (z); imu_yaw_sign corrige a
-            # montagem de ponta-cabeça (Z pra baixo → sinal invertido). O yaw é
-            # integrado no FusedOdom. Ver project_imu_mpu6050_mounting.
+            # MPU9250: tem magnetômetro (AK8963), mas por enquanto NÃO usamos —
+            # só a taxa de yaw do giro (z), yaw integrado (igual ao 6050). O
+            # imu_yaw_sign casa a montagem (agora PLANA, Z pra cima → +1.0). Yaw
+            # absoluto (mag) é TODO. Ver project_imu_mpu9250.
             self._imu_yaw_rate = msg.angular_velocity.z * self.imu_yaw_sign
             self._last_imu_wall = time.monotonic()
 

@@ -1,20 +1,27 @@
 #pragma once
+#include <Arduino.h>   // delay/millis (antes vinham transitivos pela lib Adafruit)
 #include <Wire.h>
-#include <Adafruit_MPU6050.h>
-#include <Adafruit_Sensor.h>
 
 namespace sensors {
 
-// IMU = MPU6050 (6 eixos: giroscópio + acelerômetro). Substituiu o BNO055.
-// Diferença que importa: o MPU6050 NÃO tem magnetômetro nem fusão interna →
-// NÃO existe orientação absoluta. Entregamos só giro (rad/s) + accel (m/s²);
-// o yaw é integrado da taxa do giro no pose_estimator.
+// IMU = MPU9250 (9 eixos: giroscópio + acelerômetro + magnetômetro AK8963).
+// Substituiu o MPU6050.
 //
-// Montagem: o chip está DE PONTA-CABEÇA (eixo Z aponta pra BAIXO). O driver
-// devolve gyro/accel no frame BRUTO do sensor (sem correção de montagem); a
-// inversão de sinal do yaw (Z down → yaw = -gz) é aplicada no pose_estimator
-// via param imu_yaw_sign, pra permitir ajuste de bancada sem reflashear a MEGA.
-// Ver memória project_imu_mpu6050_mounting.
+// POR ENQUANTO usamos só GYRO + ACCEL (yaw INTEGRADO da taxa do giro Z, igual
+// ao 6050). O magnetômetro (AK8963, yaw ABSOLUTO → mata a deriva do yaw) fica
+// pra um passo seguinte: a IMU agora está no CENTRO do robô, plana, longe da EMI
+// dos motores, então o mag deve ser confiável. Os ganchos pra ele estão no .cpp
+// (endereço/bypass) marcados como TODO. Ver memória project_imu_mpu9250.
+//
+// Montagem: chip PLANO, componentes pra CIMA (eixo Z pra cima). O driver devolve
+// gyro/accel no FRAME BRUTO do sensor (sem correção de montagem); o sinal do yaw
+// é aplicado no pose_estimator via param imu_yaw_sign — agora +1.0 (era -1.0
+// quando a placa ficava de ponta-cabeça com o 6050).
+//
+// Por que NÃO a Adafruit_MPU6050: ela confere o chip-ID (0x68) e REJEITA o 9250
+// (que responde 0x71). O mapa de registradores de gyro/accel do 9250 é idêntico
+// ao 6050, então lemos direto por registrador (Wire) — sem dependência externa,
+// reusando o Wire.setWireTimeout/recovery que o firmware já configura no setup().
 class Imu {
  public:
     bool begin();
@@ -30,11 +37,14 @@ class Imu {
 
  private:
     bool tryInit_(uint8_t addr);
-    void calibrateGyro_();   // estima o bias do giro com o robô parado (1x no boot)
+    void calibrateGyro_();                       // bias do giro com o robô parado (1x no boot)
+    bool readRaw_(float& gx, float& gy, float& gz,
+                  float& ax, float& ay, float& az);   // burst + escala, SEM bias
+    bool writeReg_(uint8_t reg, uint8_t val);
+    bool readRegs_(uint8_t reg, uint8_t* buf, uint8_t n);
 
-    Adafruit_MPU6050 mpu_;
     // Endereço I²C: 0x68 (AD0=GND, default) ou 0x69 (AD0=VCC). begin() tenta os
-    // dois, igual o BNO055 fazia, pra não depender do jumper.
+    // dois, igual o 6050 fazia, pra não depender do jumper.
     uint8_t  addr_ = 0x68;
     bool     ok_ = false;
     bool     calibrated_ = false;          // bias só é estimado uma vez (no boot)

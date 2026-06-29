@@ -56,10 +56,10 @@ def generate_launch_description():
         description='Polaridade do lado direito (-1.0 inverte). Aplicado em cmd_vel_to_wheels E pose_estimator.'
     )
     imu_yaw_sign_arg = DeclareLaunchArgument(
-        'imu_yaw_sign', default_value='-1.0',
-        description='Sinal da taxa de yaw da MPU6050. -1.0 = montada de ponta-cabeca '
-                    '(Z pra baixo, default). Trocar p/ 1.0 se o giro vier invertido '
-                    'na bancada — sem reflashear a MEGA.'
+        'imu_yaw_sign', default_value='1.0',
+        description='Sinal da taxa de yaw da MPU9250. 1.0 = montada PLANA com '
+                    'componentes pra cima (Z pra cima, default). Trocar p/ -1.0 se o '
+                    'giro vier invertido na bancada — sem reflashear a MEGA.'
     )
     use_flow_arg = DeclareLaunchArgument(
         'use_flow', default_value='true',
@@ -126,8 +126,8 @@ def generate_launch_description():
             # Janela de freshness da IMU: sem /imu/data nesse tempo → cai pro
             # yaw de roda (degradação graciosa).
             'imu_timeout': 0.3,
-            # Sinal do yaw da MPU6050 (montagem de ponta-cabeça → -1.0). Override
-            # de bancada via `imu_yaw_sign:=1.0` se o giro vier invertido.
+            # Sinal do yaw da MPU9250 (montagem PLANA, Z pra cima → +1.0). Override
+            # de bancada via `imu_yaw_sign:=-1.0` se o giro vier invertido.
             'imu_yaw_sign': LaunchConfiguration('imu_yaw_sign'),
             # Flow OFF por padrão (EMI do PMW3901 infla a pose ao dirigir).
             'use_flow': LaunchConfiguration('use_flow'),

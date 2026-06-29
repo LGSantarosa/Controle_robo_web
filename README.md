@@ -1,6 +1,6 @@
 # Controle Web do Robô 4 Rodas
 
-Interface web para controlar um robô **skid-steer de 4 rodas** com duas placas de hoverboard agregadas por um **Arduino MEGA 2560**, LiDAR **LDROBOT LD06**, IMU **MPU6050**, optical flow **PMW3901**, **mapeamento SLAM**, **navegação autônoma Nav2 com click-to-go** e uma **camada própria de segurança e manobra**: collision monitor com scan sanitizado, supervisor de desencalhe (ré em malha fechada na IMU), **travessia de porta assistida** (`door_crossing`, portas marcadas pela UI) e monitor de tensão das placas.
+Interface web para controlar um robô **skid-steer de 4 rodas** com duas placas de hoverboard agregadas por um **Arduino MEGA 2560**, LiDAR **LDROBOT LD06**, IMU **MPU9250**, optical flow **PMW3901**, **mapeamento SLAM**, **navegação autônoma Nav2 com click-to-go** e uma **camada própria de segurança e manobra**: collision monitor com scan sanitizado, supervisor de desencalhe (ré em malha fechada na IMU), **travessia de porta assistida** (`door_crossing`, portas marcadas pela UI) e monitor de tensão das placas.
 
 ## Sumário
 
@@ -21,7 +21,7 @@ Interface web para controlar um robô **skid-steer de 4 rodas** com duas placas 
   - [Modo NAV2 — navegação autônoma](#modo-nav2--navegação-autônoma)
 - [Operação headless](#operação-headless)
 - [Controles](#controles)
-- [Sensores embarcados (MPU6050 + PMW3901)](#sensores-embarcados-mpu6050--pmw3901)
+- [Sensores embarcados (MPU9250 + PMW3901)](#sensores-embarcados-mpu9250--pmw3901)
 - [Sinalização do robô (LEDs, relé, botão)](#sinalização-do-robô-leds-relé-botão)
 - [Navegação por waypoints](#navegação-por-waypoints)
 - [Camada de segurança e manobra (NAV2)](#camada-de-segurança-e-manobra-nav2)
@@ -170,7 +170,7 @@ Navegador (WASD / Gamepad / Clique / Waypoints / Marcar porta)
   Arduino MEGA 2560 (firmware C++, Wire timeout + watchdog WDTO_2S)
         │  Serial1 ───► placa hoverboard FRENTE  (FL + FR)
         │  Serial2 ───► placa hoverboard TRÁS    (RL + RR)
-        │  I²C    ───► MPU6050  (IMU 6 eixos — gyro + accel)
+        │  I²C    ───► MPU9250  (IMU — gyro + accel; mag interno)
         │  SPI    ───► PMW3901  (optical flow)
         │  pinos  ───► relé / LED de marco / botão / fita de 3 LEDs na 12 V
 
@@ -250,7 +250,7 @@ A flag `--sim` troca tudo que é hardware por simulação:
 | Odometria | `pose_estimator` (fusão rodas + IMU + flow) | plugin `DiffDrive` do Gazebo |
 | `/cmd_vel → rodas` | `cmd_vel_to_wheels` + MEGA | plugin `DiffDrive` do Gazebo |
 | LiDAR | `ldlidar_stl_ros2` em `/dev/lidar` (LD06) | sensor `gpu_lidar` na SDF do robô |
-| IMU | MPU6050 (via MEGA) | (não simulado) |
+| IMU | MPU9250 (via MEGA) | (não simulado) |
 | Optical flow | PMW3901 (via MEGA) | (não simulado) |
 | Corpo do robô | URDF (`robot.urdf.xacro` — 4 rodas) | SDF (`sim_robot.sdf` — 4 rodas skid-steer, geometria REAL 0.37×0.35) |
 | `/scan`, `/odom`, `/tf` | tópicos reais | via `ros_gz_bridge` (GZ → ROS) |
@@ -332,7 +332,7 @@ O `worlds/empty.sdf` serve como template pronto.
   ```
 - **Firmware da MEGA (só hardware real)**:
   - [PlatformIO Core](https://platformio.org/install/cli): instalado automaticamente pelo `setup.sh` / `setup_pi.sh` via `pip install --user platformio`
-  - Bibliotecas (instaladas pelo `pio` automaticamente na primeira build): `Adafruit MPU6050`, `Adafruit Unified Sensor`; o PMW3901 usa um **fork local** em `lib/Bitcraze_PMW3901/` (SQUAL real); `FastLED` está comentado (anel abandonado)
+  - Bibliotecas: o IMU **MPU9250** usa driver direto por registrador (`sensors_imu.*`, sem dependência externa — a `Adafruit MPU6050` foi removida porque rejeita o 9250); o PMW3901 usa um **fork local** em `lib/Bitcraze_PMW3901/` (SQUAL real); `FastLED` está comentado (anel abandonado)
 - Python 3.10+
 
 ---
@@ -393,7 +393,7 @@ ls -la /dev/mega /dev/lidar
 O firmware C++ fica em `firmware/mega_bridge/` (projeto PlatformIO). Ele:
 - recebe comandos do PC pela USB (frames `0xAA 0x55 [tipo] [len] [payload] [xor]`, 230400 baud);
 - envia `SerialCommand` (0xABCD) para as duas placas pelos `Serial1` (frente) e `Serial2` (trás) a 50 Hz, com **watchdog de 500 ms** (zera os motores se o PC parar de falar);
-- agrega os `SerialFeedback` das duas placas e os dados de MPU6050 + PMW3901 num único stream para o PC;
+- agrega os `SerialFeedback` das duas placas e os dados de MPU9250 + PMW3901 num único stream para o PC;
 - protege o barramento I²C com `Wire.setWireTimeout` + watchdog de hardware `WDTO_2S` (EMI dos motores travava a TWI e congelava o firmware — fix 2026-06-09, validado em campo).
 
 **Pinagem fixa:**
@@ -404,7 +404,7 @@ O firmware C++ fica em `firmware/mega_bridge/` (projeto PlatformIO). Ele:
 | Serial1 | 18 (TX), 19 (RX) | Placa hoverboard **FRENTE** |
 | Serial2 | 16 (TX), 17 (RX) | Placa hoverboard **TRÁS** |
 | Serial3 | 14 (TX), 15 (RX) | Reserva / debug |
-| I²C | 20 (SDA), 21 (SCL) | MPU6050 (IMU 6 eixos) |
+| I²C | 20 (SDA), 21 (SCL) | MPU9250 (IMU; mesmos fios do 6050; mag AK8963 interno) |
 | SPI | 50 (MISO), 51 (MOSI), 52 (SCK) | PMW3901 (via conversor 5↔3.3 V) |
 | CS do PMW3901 | 10 | PMW3901 |
 | Fita de LEDs | relé/12 V | Fita de 3 LEDs na 12 V (o anel WS2812 foi **abandonado** — curto no DIN; driver fora do build) |
@@ -863,11 +863,11 @@ Ao soltar o botão, o multiplicador volta ao valor anterior do slider. A UI tamb
 
 ---
 
-## Sensores embarcados (MPU6050 + PMW3901)
+## Sensores embarcados (MPU9250 + PMW3901)
 
 A Arduino MEGA agrega dois sensores que entram no ROS via `mega_bridge` e são **fundidos pelo `pose_estimator`** (que publica `/odom` e o TF `odom→base_link` em todos os modos):
 
-**MPU6050 — IMU 6 eixos** (I²C, endereço `0x68`):
+**MPU9250 — IMU 9 eixos** (I²C `0x68`; gyro+accel usados, mag AK8963 = TODO):
 - Tópico: `/imu/data` (`sensor_msgs/Imu`, QoS `BEST_EFFORT` — o subscriber precisa casar, senão a IMU "some").
 - 6 eixos **sem yaw absoluto**: o yaw é **integrado do gyro Z** pelo `pose_estimator`. Validado na bancada: escala ~+2% em 360°, suficiente sem correção.
 - Montada de ponta-cabeça (Z pra baixo) → `imu_yaw_sign=-1.0` no launch.
@@ -1110,7 +1110,7 @@ Controle_robo_web/
 │       ├── include/
 │       │   ├── protocol.h             # Frames 0xAA 0x55 [tipo] [len] [payload] [xor]
 │       │   ├── hoverboard.h           # SerialCommand 0xABCD + parser de SerialFeedback
-│       │   ├── sensors_imu.h          # Wrapper do MPU6050
+│       │   ├── sensors_imu.h          # Driver MPU9250 (registrador direto)
 │       │   ├── sensors_flow.h         # Wrapper do PMW3901 (fork c/ SQUAL real)
 │       │   ├── leds.h                 # Anel WS2812 — ABANDONADO, fora do build
 │       │   └── io_signals.h           # Relé, LED, botão

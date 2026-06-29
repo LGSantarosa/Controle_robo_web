@@ -4,7 +4,7 @@
 //   USB (PC) ↔ Serial       (protocolo agregado, frames 0xAA 0x55, 230400 baud)
 //   Serial1 ↔ placa hoverboard FRENTE  (controla FL+FR, SerialCommand 0xABCD)
 //   Serial2 ↔ placa hoverboard TRÁS    (controla RL+RR, SerialCommand 0xABCD)
-//   I2C ↔ MPU6050 IMU (6 eixos: giro + accel; SEM yaw absoluto)
+//   I2C ↔ MPU9250 IMU (giro + accel; mag AK8963 p/ yaw absoluto é TODO)
 //   SPI ↔ PMW3901 optical flow (CS = pino 10)
 //   (anel WS2812 COMENTADO — ver AUDITORIA_2026-05-29 A1. O driver vive em
 //    leds.cpp/leds.h mas está FORA do build via build_src_filter no
@@ -183,7 +183,7 @@ static void txImu() {
     if (!imu_dev.ok())   return;
     if (!imu_dev.read()) return;
 
-    // MPU6050 (6 eixos): só giro (rad/s) + accel (m/s²), frame BRUTO do sensor.
+    // MPU9250: por enquanto só giro (rad/s) + accel (m/s²), frame BRUTO do sensor.
     // Sem quaternion — não há orientação absoluta. O yaw é integrado da taxa do
     // giro no pose_estimator (que também corrige a montagem de ponta-cabeça).
     int16_t gx = f_to_milli(imu_dev.gx());
