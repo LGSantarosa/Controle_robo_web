@@ -12,8 +12,13 @@ constexpr uint8_t REG_ACCEL_XOUT_H  = 0x3B;  // início do burst (accel..temp..g
 constexpr uint8_t REG_PWR_MGMT_1    = 0x6B;
 constexpr uint8_t REG_WHO_AM_I       = 0x75;
 
-constexpr uint8_t WHO_MPU9250 = 0x71;        // MPU9250
-constexpr uint8_t WHO_MPU9255 = 0x73;        // variante MPU9255 (aceita também)
+// WHO_AM_I aceitos. Gyro/accel são IDÊNTICOS nas três (o 9250 é um 6500 + mag),
+// então o driver gyro-only serve pra todas. SÓ o 9250/9255 têm o AK8963 (mag) →
+// o yaw absoluto futuro só existe se o boot reportar 0x71/0x73. Se for 0x70
+// (placa GY-6500 = MPU6500), funciona como IMU mas SEM magnetômetro.
+constexpr uint8_t WHO_MPU6500 = 0x70;        // MPU6500 (GY-6500) — sem mag
+constexpr uint8_t WHO_MPU9250 = 0x71;        // MPU9250 (GY-9250) — com mag
+constexpr uint8_t WHO_MPU9255 = 0x73;        // MPU9255 — com mag
 
 // Escalas escolhidas (casam com o 6050 anterior):
 //  ±500 °/s → 65.5 LSB/(°/s);  ±4 g → 8192 LSB/g.
@@ -50,7 +55,8 @@ bool Imu::tryInit_(uint8_t addr) {
     addr_ = addr;
     uint8_t who = 0;
     if (!readRegs_(REG_WHO_AM_I, &who, 1)) return false;
-    if (who != WHO_MPU9250 && who != WHO_MPU9255) return false;
+    if (who != WHO_MPU6500 && who != WHO_MPU9250 && who != WHO_MPU9255)
+        return false;
     // Reset e wake-up. PLL com referência de giro (clock estável p/ a taxa).
     if (!writeReg_(REG_PWR_MGMT_1, 0x80)) return false;  // reset
     delay(100);
