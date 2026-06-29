@@ -854,7 +854,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("spin_away_deg", 30.0),
                 # Giro CALCULADO (2026-06-29): cap pequeno (~15°) — só ajusta o
                 # talinho que falta pra abrir a frente rumo ao plano; senão dá ré.
-                ("clear_turn_cap_deg", 15.0),     # cap da correção (nó)
+                ("clear_turn_cap_deg", 30.0),     # cap da correção (nó); 2026-06-29:
+                # 15->30 (GAPPROF: os vãos das rés abriam a 16-38°, 15 pegava ~0)
                 ("clear_turn_depth", 0.6),        # frente "livre" = vão >= isto (m)
                 ("clear_turn_step_deg", 2.0),     # granularidade da busca (nó)
                 ("clear_lookahead", 0.5),         # ponto do /plan p/ o rumo (m)
@@ -1057,6 +1058,32 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             return _norm_angle(math.atan2(target[1] - py, target[0] - px)
                                - self._yaw)
 
+        def _gap_profile_str(self):
+            # DBG GIRO_CALC (2026-06-29, temporário): por que a ré em vez do giro?
+            # Mostra quanto a FRENTE abre (front_min_gap) em cada heading -40..+40°,
+            # o rumo do plano, e o que um cap LARGO (45°) acharia com a depth atual.
+            # Lê: "abre só 0.45 (< depth)" -> baixar depth; "abre em +22° (> cap 15)"
+            # -> subir cap. REMOVER após tunar.
+            if self._scan_raw is None:
+                return "GAPPROF no-scan"
+            ranges, amin, ainc = self._scan_raw
+            parts = []
+            for deg in range(-40, 41, 5):
+                o = math.radians(deg)
+                g = front_min_gap(ranges, amin - o, ainc, self.rear_lidar_x,
+                                  self.front_head_x, self.rear_half_width)
+                parts.append("%+d:%s" % (
+                    deg, "inf" if math.isinf(g) else "%.2f" % g))
+            wide = clearest_heading_offset(
+                ranges, amin, ainc, self.rear_lidar_x, self.front_head_x,
+                self.rear_half_width, self.clear_turn_depth, math.radians(45),
+                self.clear_turn_step, prefer_bearing=self._plan_bearing())
+            return ("GAPPROF depth=%.2f cap=%.0f plan_rel=%+.0f wide45=%s | %s"
+                    % (self.clear_turn_depth, math.degrees(self.clear_turn_cap),
+                       math.degrees(self._plan_bearing()),
+                       ("%+.0f" % math.degrees(wide)) if wide is not None
+                       else "None", " ".join(parts)))
+
         def _on_scan(self, msg):
             # time.monotonic(): freshness local, sem criar rclpy.time.Time a
             # 10 Hz nem depender de NTP (P3 da AUDITORIA_2026-06-11). O update()
@@ -1180,6 +1207,12 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                         self._last_state, self.sup.state,
                         self._position[0], self._position[1],
                         self._stop_active, gap, extra))
+                # DBG GIRO_CALC: ao decidir RÉ, loga o perfil de vão (por que não
+                # girou?). REMOVER após tunar cap/depth. front_gap atual junto.
+                if self.sup.state == "reversing":
+                    self.get_logger().warn(
+                        "DBG front_gap=%.2f %s" % (front_gap,
+                                                   self._gap_profile_str()))
                 self._last_state = self.sup.state
             if cmd.active:
                 t = Twist()
