@@ -34,6 +34,13 @@ class Imu {
     float ay() const { return ay_; }
     float az() const { return az_; }
     bool ok() const { return ok_; }
+    // Magnetômetro AK8963 (yaw absoluto, fase 1). mx/my/mz em µT, JÁ no frame do
+    // gyro/accel (eixos alinhados) e com a correção de fábrica ASA aplicada.
+    // magOk() = false até o AK8963 inicializar / se a leitura estourar (HOFL).
+    float mx() const { return mx_; }
+    float my() const { return my_; }
+    float mz() const { return mz_; }
+    bool magOk() const { return mag_ok_; }
 
  private:
     bool tryInit_(uint8_t addr);
@@ -42,6 +49,11 @@ class Imu {
                   float& ax, float& ay, float& az);   // burst + escala, SEM bias
     bool writeReg_(uint8_t reg, uint8_t val);
     bool readRegs_(uint8_t reg, uint8_t* buf, uint8_t n);
+    // AK8963 (magnetômetro embutido no MPU9250, acessível via bypass em 0x0C)
+    bool initMag_();                             // bypass + ASA + modo contínuo (1x no boot)
+    void readMag_();                             // 1 amostra: ST1/data/ST2, ASA, alinha eixos
+    bool magWrite_(uint8_t reg, uint8_t val);
+    bool magRead_(uint8_t reg, uint8_t* buf, uint8_t n);
 
     // Endereço I²C: 0x68 (AD0=GND, default) ou 0x69 (AD0=VCC). begin() tenta os
     // dois, igual o 6050 fazia, pra não depender do jumper.
@@ -52,6 +64,10 @@ class Imu {
     float gx_ = 0, gy_ = 0, gz_ = 0;       // rad/s (sem bias)
     float ax_ = 0, ay_ = 0, az_ = 0;       // m/s²
     float bx_ = 0, by_ = 0, bz_ = 0;       // bias do giro (rad/s), subtraído no read()
+    // AK8963
+    bool  mag_ok_ = false;
+    float mx_ = 0, my_ = 0, mz_ = 0;       // µT, frame do gyro, ASA aplicado
+    float asax_ = 1, asay_ = 1, asaz_ = 1; // correção de fábrica por eixo (fuse ROM)
 };
 
 }  // namespace sensors

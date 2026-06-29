@@ -14,6 +14,7 @@ constexpr uint8_t FT_RELAY     = 0x03;
 constexpr uint8_t FT_STATE     = 0x81;
 constexpr uint8_t FT_IMU       = 0x82;
 constexpr uint8_t FT_FLOW      = 0x83;
+constexpr uint8_t FT_MAG       = 0x84;   // magnetômetro AK8963 (mx,my,mz int16) — yaw absoluto fase 1
 
 uint8_t computeChecksum(uint8_t type, uint8_t len, const uint8_t* payload);
 void    writeFrame(Stream& port, uint8_t type, const uint8_t* payload, uint8_t len);

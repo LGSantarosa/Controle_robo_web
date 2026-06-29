@@ -9,8 +9,20 @@ constexpr uint8_t REG_GYRO_CONFIG   = 0x1B;  // fundo de escala do giro
 constexpr uint8_t REG_ACCEL_CONFIG  = 0x1C;  // fundo de escala do accel
 constexpr uint8_t REG_ACCEL_CONFIG2 = 0x1D;  // DLPF do accel (novo no 9250)
 constexpr uint8_t REG_ACCEL_XOUT_H  = 0x3B;  // início do burst (accel..temp..gyro)
+constexpr uint8_t REG_INT_PIN_CFG   = 0x37;  // BYPASS_EN p/ falar direto com o AK8963
+constexpr uint8_t REG_USER_CTRL     = 0x6A;  // I2C master OFF p/ o bypass valer
 constexpr uint8_t REG_PWR_MGMT_1    = 0x6B;
 constexpr uint8_t REG_WHO_AM_I       = 0x75;
+
+// --- AK8963 (magnetômetro embutido), I²C 0x0C via bypass ---
+constexpr uint8_t AK_ADDR    = 0x0C;
+constexpr uint8_t AK_WIA     = 0x00;   // = 0x48
+constexpr uint8_t AK_ST1     = 0x02;   // bit0 DRDY
+constexpr uint8_t AK_HXL     = 0x03;   // HXL..HZH (6 bytes) + ST2 (0x09)
+constexpr uint8_t AK_CNTL1   = 0x0A;
+constexpr uint8_t AK_ASAX    = 0x10;   // correção de fábrica (fuse ROM)
+constexpr uint8_t AK_WHO     = 0x48;
+constexpr float   AK_UT_PER_LSB = 0.15f;   // 16-bit: 4912 µT / 32760 ≈ 0.15
 
 // WHO_AM_I aceitos. Gyro/accel são IDÊNTICOS nas três (o 9250 é um 6500 + mag),
 // então o driver gyro-only serve pra todas. SÓ o 9250/9255 têm o AK8963 (mag) →
@@ -70,6 +82,9 @@ bool Imu::tryInit_(uint8_t addr) {
     writeReg_(REG_ACCEL_CONFIG,  0x08);                  // ±4 g
     writeReg_(REG_ACCEL_CONFIG2, 0x02);                  // accel DLPF (~99 Hz)
     delay(10);
+    // Magnetômetro AK8963 (fase 1 yaw absoluto): inicia em separado — se falhar,
+    // o gyro/accel seguem OK (mag_ok_ fica false, só o mag não é reportado).
+    initMag_();
     return true;
 }
 
@@ -157,7 +172,69 @@ bool Imu::read() {
     ax_ = ax;
     ay_ = ay;
     az_ = az;
+    readMag_();             // atualiza mx_/my_/mz_ (fase 1 yaw absoluto)
     return true;
+}
+
+// ---------------- AK8963 (magnetômetro) ----------------
+
+bool Imu::magWrite_(uint8_t reg, uint8_t val) {
+    Wire.beginTransmission(AK_ADDR);
+    Wire.write(reg);
+    Wire.write(val);
+    return Wire.endTransmission() == 0;
+}
+
+bool Imu::magRead_(uint8_t reg, uint8_t* buf, uint8_t n) {
+    Wire.beginTransmission(AK_ADDR);
+    Wire.write(reg);
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom(AK_ADDR, n) != n) return false;
+    for (uint8_t i = 0; i < n; ++i) buf[i] = Wire.read();
+    return true;
+}
+
+bool Imu::initMag_() {
+    // Bypass: liga o AK8963 direto no barramento (I²C master do MPU desligado).
+    writeReg_(REG_USER_CTRL, 0x00);        // I2C_MST_EN = 0
+    writeReg_(REG_INT_PIN_CFG, 0x02);      // BYPASS_EN
+    delay(10);
+    uint8_t who = 0;
+    if (!magRead_(AK_WIA, &who, 1) || who != AK_WHO) {
+        mag_ok_ = false;
+        return false;
+    }
+    // Correção de fábrica (ASA) lida no modo fuse ROM.
+    magWrite_(AK_CNTL1, 0x00); delay(10);  // power down
+    magWrite_(AK_CNTL1, 0x0F); delay(10);  // fuse ROM access
+    uint8_t asa[3] = {128, 128, 128};
+    magRead_(AK_ASAX, asa, 3);
+    asax_ = (asa[0] - 128) / 256.0f + 1.0f;
+    asay_ = (asa[1] - 128) / 256.0f + 1.0f;
+    asaz_ = (asa[2] - 128) / 256.0f + 1.0f;
+    magWrite_(AK_CNTL1, 0x00); delay(10);  // power down
+    magWrite_(AK_CNTL1, 0x16); delay(10);  // contínuo modo 2 (100 Hz) + 16-bit
+    mag_ok_ = true;
+    return true;
+}
+
+void Imu::readMag_() {
+    if (!mag_ok_) return;
+    uint8_t st1 = 0;
+    if (!magRead_(AK_ST1, &st1, 1) || !(st1 & 0x01)) return;  // sem amostra nova (DRDY=0)
+    uint8_t b[7];                            // HXL..HZH (6, LITTLE-endian) + ST2
+    if (!magRead_(AK_HXL, b, 7)) return;
+    if (b[6] & 0x08) return;                 // ST2 HOFL = overflow -> descarta amostra
+    const int16_t hx = (int16_t)((b[1] << 8) | b[0]);
+    const int16_t hy = (int16_t)((b[3] << 8) | b[2]);
+    const int16_t hz = (int16_t)((b[5] << 8) | b[4]);
+    const float cx = hx * asax_ * AK_UT_PER_LSB;   // ASA por eixo do AK + µT
+    const float cy = hy * asay_ * AK_UT_PER_LSB;
+    const float cz = hz * asaz_ * AK_UT_PER_LSB;
+    // Alinha pro frame do gyro/accel: AK X=sensor Y, AK Y=sensor X, AK Z=-sensor Z.
+    mx_ = cy;
+    my_ = cx;
+    mz_ = -cz;
 }
 
 }  // namespace sensors

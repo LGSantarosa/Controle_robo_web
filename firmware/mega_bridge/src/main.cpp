@@ -202,6 +202,20 @@ static void txImu() {
     memcpy(buf + 10, &az, 2);
 
     protocol::writeFrame(Serial, protocol::FT_IMU, buf, sizeof(buf));
+
+    // Magnetômetro AK8963 (fase 1 yaw absoluto): frame separado FT_MAG, atualizado
+    // junto (read() acima já leu o mag). Em DECI-µT (×10) p/ caber no int16 com
+    // resolução 0.1 µT (Earth ~50 µT). Só envia se o AK8963 inicializou/leu OK.
+    if (imu_dev.magOk()) {
+        int16_t mx = (int16_t)(imu_dev.mx() * 10.0f);
+        int16_t my = (int16_t)(imu_dev.my() * 10.0f);
+        int16_t mz = (int16_t)(imu_dev.mz() * 10.0f);
+        uint8_t mbuf[6];
+        memcpy(mbuf + 0, &mx, 2);
+        memcpy(mbuf + 2, &my, 2);
+        memcpy(mbuf + 4, &mz, 2);
+        protocol::writeFrame(Serial, protocol::FT_MAG, mbuf, sizeof(mbuf));
+    }
 }
 
 static void txFlow() {

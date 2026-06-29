@@ -31,11 +31,11 @@ análise. **NÃO muda:** `mega_bridge.py`, `pose_estimator.py`, launch, nav (int
 - **Alinhar eixos:** o frame do AK8963 é rotacionado vs o do gyro/accel (mag X = sensor Y,
   mag Y = sensor X, mag Z = −sensor Z). Alinhar no firmware pro mesmo frame do gyro.
 - Novos getters `mx()/my()/mz()` (µT ou raw escalado) + `magOk()`. Bias do gyro intacto.
-- `protocol.h`: novo tipo de frame **`FT_MAG = 0x83`**. `main.cpp`: enviar mx,my,mz (int16,
-  milli-unidade, igual ao gyro) num frame 0x83, a ~20-50 Hz. **Frame 0x82 (gyro) inalterado.**
+- `protocol.h`: novo tipo de frame **`FT_MAG = 0x84`** (0x83 já é o flow). `main.cpp`: enviar mx,my,mz (int16,
+  milli-unidade, igual ao gyro) num frame 0x84 (deci-µT, ×10), junto do 0x82 a 50 Hz. **Frame 0x82 (gyro) inalterado.**
 
 ### 2. Ferramenta offline (`firmware/mega_bridge/tools/mag_check.py` ou `controle_web/tools/`)
-- Lê `/dev/mega` cru (230400), decodifica os frames `0x83` (igual ao decoder de gyro já usado
+- Lê `/dev/mega` cru (230400), decodifica os frames `0x84` (igual ao decoder de gyro já usado
   nos testes ad-hoc desta sessão).
 - **Modo coleta/calibração:** grava mx,my,mz enquanto o robô gira 360°. Calcula **hard-iron**
   (offset = (max+min)/2 por eixo) e **soft-iron** (escala simples: raio médio / raio do eixo).
@@ -55,7 +55,7 @@ análise. **NÃO muda:** `mega_bridge.py`, `pose_estimator.py`, launch, nav (int
 - Fusão no pose_estimator (Fase 2).
 - Compensação de inclinação (tilt) — robô anda em piso plano/nivelado → assume nivelado (YAGNI;
   revisar só se o chão for irregular).
-- Mudanças no `mega_bridge.py` (a validação é por leitura crua; o parse do 0x83 no bridge entra
+- Mudanças no `mega_bridge.py` (a validação é por leitura crua; o parse do 0x84 no bridge entra
   na Fase 2, junto com a fusão).
 
 ## Riscos
