@@ -5,6 +5,7 @@ import pytest
 from robot_nav.unstuck_supervisor import (
     UnstuckConfig,
     UnstuckSupervisor,
+    clearest_heading_offset,
     freer_side,
     front_min_gap,
     rear_min_gap,
@@ -991,3 +992,66 @@ def test_block_point_mapped_none_inputs_false():
     g = _grid_with([(2, 4)])
     assert block_point_mapped(g, (0.05, 0.45), 0.0, None, 0.25, 0.5, 0.10, 65) is False
     assert block_point_mapped(None, (0.05, 0.45), 0.0, (0.40, -0.20), 0.25, 0.5, 0.10, 65) is False
+
+
+# ---- clearest_heading_offset (giro CALCULADO de menor correção) ------------
+# Em vez de girar um valor fixo "pra longe do obstáculo", MEDE qual o menor
+# ajuste de heading que abre um corredor reto pra frente (caso do dono:
+# "faltavam 5° pra esquerda pra ir reto"). prefer_bearing = rumo do /plan
+# (desempate). None = nenhuma rotação pequena abre -> cai na ré.
+
+def _clear_args(depth=0.6, max_off=math.radians(60), step=math.radians(2)):
+    return dict(depth=depth, max_offset=max_off, step=step, **GEO_FRONT)
+
+
+def test_clearest_heading_offset_zero_when_front_already_clear():
+    # obstáculo só ATRÁS -> a frente já está livre, nenhuma correção precisa
+    ranges, amin, ainc = _scan_with_obstacle_at(math.pi, 0.50)
+    assert clearest_heading_offset(ranges, amin, ainc, **_clear_args()) == 0.0
+
+
+def test_clearest_heading_offset_finds_a_turn_that_clears_the_front():
+    # obstáculo reto à frente, dentro do depth -> deve achar uma rotação que abre
+    ranges, amin, ainc = _scan_with_obstacle_at_base(0.40, 0.0)
+    o = clearest_heading_offset(ranges, amin, ainc, **_clear_args())
+    assert o is not None
+    # POSTCONDIÇÃO: girando por o, o corredor frontal abre >= depth
+    assert front_min_gap(ranges, amin - o, ainc, **GEO_FRONT) >= 0.6
+
+
+def test_clearest_heading_offset_is_the_smallest_correction():
+    # nenhum ajuste de MAGNITUDE MENOR que o resultado abre a frente
+    ranges, amin, ainc = _scan_with_obstacle_at_base(0.40, 0.0)
+    step = math.radians(2)
+    o = clearest_heading_offset(ranges, amin, ainc, **_clear_args(step=step))
+    assert o is not None
+    for k in range(0, int(round(abs(o) / step))):
+        m = k * step
+        assert front_min_gap(ranges, amin - m, ainc, **GEO_FRONT) < 0.6
+        assert front_min_gap(ranges, amin + m, ainc, **GEO_FRONT) < 0.6
+
+
+def test_clearest_heading_offset_none_when_front_is_boxed():
+    # parede densa cobrindo todo o arco frontal perto -> nenhuma rotação abre
+    n = 360
+    amin = -math.pi
+    ainc = 2 * math.pi / n
+    ranges = [float("inf")] * n
+    for i in range(n):
+        a = amin + i * ainc
+        if abs(a) <= math.radians(80):
+            ranges[i] = 0.35  # perto, dentro do depth, em todo o arco frontal
+    assert clearest_heading_offset(ranges, amin, ainc, **_clear_args()) is None
+
+
+def test_clearest_heading_offset_breaks_ties_toward_the_plan():
+    # frente reta bloqueada -> abre simétrico p/ os 2 lados; o plano à ESQUERDA
+    # (prefer_bearing>0) desempata pro lado esquerdo (offset positivo)
+    ranges, amin, ainc = _scan_with_obstacle_at_base(0.40, 0.0)
+    o = clearest_heading_offset(ranges, amin, ainc,
+                                prefer_bearing=math.radians(50), **_clear_args())
+    assert o is not None and o > 0
+    # espelho: plano à DIREITA -> offset negativo
+    o2 = clearest_heading_offset(ranges, amin, ainc,
+                                 prefer_bearing=math.radians(-50), **_clear_args())
+    assert o2 is not None and o2 < 0

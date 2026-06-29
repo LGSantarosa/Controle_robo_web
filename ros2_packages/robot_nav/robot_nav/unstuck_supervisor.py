@@ -172,6 +172,40 @@ def front_block_point(ranges, angle_min, angle_increment, lidar_x, head_x,
     return (float(x[i]), float(y[i]))
 
 
+def clearest_heading_offset(ranges, angle_min: float, angle_increment: float,
+                            lidar_x: float, head_x: float, half_width: float,
+                            depth: float, max_offset: float, step: float,
+                            prefer_bearing: float = 0.0):
+    """Menor rotação NO LUGAR (rad, CCW+) dentro de [-max_offset, +max_offset]
+    que deixa o CORREDOR FRONTAL livre por >= `depth` metros.
+
+    Em vez de girar um valor FIXO "pra longe do obstáculo" (o `_spin_dir` de
+    hoje), MEDE qual ajuste de heading basta pra a frente passar reto — o caso
+    do dono: "faltavam 5° pra esquerda pra ir reto, mas ele dava ré e girava 25°
+    e errava". Girar a robô por θ = ver o /scan com os ângulos deslocados de −θ
+    (reusa o `front_min_gap`): se o vão à frente nessa heading >= depth, abriu.
+
+    Varre os candidatos do MENOR ajuste pro maior; `prefer_bearing` (rumo do
+    /plan no frame da robô, +esq) desempata rotações de mesma magnitude pro lado
+    do objetivo. Retorna None se NADA na faixa abre a frente (precisa de ré).
+    """
+    if angle_increment == 0.0 or step <= 0.0:
+        return None
+    n = int(max_offset / step)
+    cands = [0.0]
+    for k in range(1, n + 1):
+        cands.append(k * step)
+        cands.append(-k * step)
+    # menor correção primeiro; plano como desempate entre mesma magnitude
+    cands.sort(key=lambda o: (abs(o), abs(o - prefer_bearing)))
+    for o in cands:
+        gap = front_min_gap(ranges, angle_min - o, angle_increment,
+                            lidar_x, head_x, half_width)
+        if gap >= depth:
+            return o
+    return None
+
+
 def side_clearance(ranges, angle_min: float, angle_increment: float,
                    lidar_x: float, x_lo: float, x_hi: float,
                    half_width: float) -> float:
