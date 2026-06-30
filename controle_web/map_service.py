@@ -364,6 +364,10 @@ class MapBridge:
         # /scan ao vivo -> overlay azul no mapa (debug de localização: ver se o
         # scan encaixa nas paredes do mapa com o robô parado).
         self._last_scan_emit = 0.0
+        # Overlay do lidar é OPCIONAL (toggle no front, igual o costmap). Default
+        # OFF: vídeo limpo; liga quando quer debugar. Desligado, _on_scan retorna
+        # cedo e nem projeta o /scan (poupa CPU/transporte da Pi).
+        self._scan_on = False
         # DIAG lag (2026-06-24): grava age/tf_fallback/ryaw por scan num CSV
         # pra EU ler depois e achar o hop do atraso. Remover ao fechar.
         try:
@@ -615,6 +619,12 @@ class MapBridge:
             return {'ok': True, 'layer': 'global', 'on': on}
         return {'ok': False, 'error': f'camada desconhecida: {layer}'}
 
+    def set_scan_layer(self, on: bool) -> dict:
+        """Liga/desliga o overlay do /scan (pontos azuis do lidar). Desligado,
+        o _on_scan retorna cedo e não projeta nada — poupa CPU/transporte."""
+        self._scan_on = bool(on)
+        return {'ok': True, 'on': self._scan_on}
+
     def _on_plan(self, msg: Path):
         try:
             pts = [
@@ -628,6 +638,8 @@ class MapBridge:
     def _on_scan(self, msg: LaserScan):
         # Converte o /scan pro frame 'map' e emite pontos pro overlay azul.
         # Throttle (SCAN_PUBLISH_HZ) + downsample pra não afogar o websocket.
+        if not self._scan_on:
+            return   # overlay do lidar desligado no front (default) -> nem projeta
         now = time.time()
         if now - self._last_scan_emit < 1.0 / self.SCAN_PUBLISH_HZ:
             return

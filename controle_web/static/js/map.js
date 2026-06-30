@@ -25,6 +25,7 @@
   let scan = null;         // { xs:[], ys:[] } — /scan ao vivo em coords do mapa
   let costmapGlobal = null;     // { img, info } — overlay do /global_costmap
   let showGlobalCostmap = false; // camada ligada/desligada (toggle na toolbar)
+  let showScan = false;         // overlay do lidar — OFF por padrão (vídeo limpo)
 
   // Waypoints
   let waypoints  = [];     // [{x, y, yaw}]
@@ -60,6 +61,7 @@
   const btnDoor = document.getElementById('map-btn-door');
   const doorChip = document.getElementById('map-door-chip');
   const btnCostmap = document.getElementById('map-btn-costmap');
+  const btnScan = document.getElementById('map-btn-scan');
 
   // Espera o socket de client.js existir. client.js cria `window.robotSocket`.
   function waitForSocket(cb) {
@@ -240,6 +242,13 @@
       btnCostmap.classList.toggle('active', showGlobalCostmap);
       socket.emit('set_costmap_layer', { layer: 'global', on: showGlobalCostmap });
       if (!showGlobalCostmap) { costmapGlobal = null; }
+      render();
+    });
+    if (btnScan) btnScan.addEventListener('click', () => {
+      showScan = !showScan;
+      btnScan.classList.toggle('active', showScan);
+      socket.emit('set_scan_layer', { on: showScan });
+      if (!showScan) { scan = null; }   // limpa os pontos ao desligar
       render();
     });
     if (btnWpMode) btnWpMode.addEventListener('click', () => setWpMode(!wpMode));
@@ -632,8 +641,8 @@
     ctx.lineWidth = 1;
     ctx.strokeRect(r.dx, r.dy, r.dw, r.dh);
 
-    // Scan do LiDAR ao vivo (pontos azuis) — debug de localização
-    if (scan && scan.xs && scan.xs.length) {
+    // Scan do LiDAR ao vivo (pontos azuis) — debug de localização (toggle)
+    if (showScan && scan && scan.xs && scan.xs.length) {
       ctx.fillStyle = '#1e90ff';
       for (let i = 0; i < scan.xs.length; i++) {
         const c = worldToCanvas(scan.xs[i], scan.ys[i]);

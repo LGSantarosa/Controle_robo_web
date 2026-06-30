@@ -357,6 +357,19 @@ def handle_set_costmap_layer(data):
     emit('costmap_layer_ack', map_bridge.set_costmap_layer(layer, on))
 
 
+@socketio.on('set_scan_layer')
+def handle_set_scan_layer(data):
+    """Liga/desliga o overlay do /scan (pontos azuis do lidar) no mapa.
+
+    Default OFF (igual o costmap) — vídeo limpo; liga quando quer debugar a
+    localização. Desligado, o servidor nem projeta o /scan (poupa CPU/transporte)."""
+    if map_bridge is None:
+        emit('scan_layer_ack', {'ok': False, 'error': 'sem mapa neste modo'})
+        return
+    on = (data or {}).get('on', False)
+    emit('scan_layer_ack', map_bridge.set_scan_layer(on))
+
+
 @socketio.on('start_waypoints')
 def handle_start_waypoints(data):
     if map_bridge is None:
