@@ -23,6 +23,7 @@
   let plan = [];           // [{ x, y }]
   let lastGoal = null;     // { x, y }
   let scan = null;         // { xs:[], ys:[] } — /scan ao vivo em coords do mapa
+  let lastScanPoseTs = 0;  // Date.now() do último scan_update c/ pose do boneco
   let costmapGlobal = null;     // { img, info } — overlay do /global_costmap
   let showGlobalCostmap = false; // camada ligada/desligada (toggle na toolbar)
 
@@ -161,6 +162,12 @@
     });
 
     socket.on('robot_pose', (data) => {
+      // FONTE ÚNICA da pose do boneco enquanto o scan está vivo: o robot_pose
+      // avulso (pose_loop, TF "agora") chega num outro instante que o scan e
+      // descola o robô dos pontos (robô parecia 1-2s atrás do lidar). Aqui ele
+      // só vale quando o scan PAROU (>0.6s sem scan) — aí é o fallback honesto.
+      // Com scan vivo, quem manda na pose é o scan_update (mesma msg dos pontos).
+      if (Date.now() - lastScanPoseTs < 600) return;
       robotPose = data;
       poseEl.textContent = `robô: x=${data.x.toFixed(2)} y=${data.y.toFixed(2)} yaw=${(data.yaw * 180 / Math.PI).toFixed(0)}°`;
       render();
@@ -179,6 +186,7 @@
       scan = { xs: data.xs, ys: data.ys };
       if (data.rx !== undefined) {
         robotPose = { x: data.rx, y: data.ry, yaw: data.ryaw };
+        lastScanPoseTs = Date.now();   // marca: pose do boneco veio COM os pontos
         poseEl.textContent = `robô: x=${data.rx.toFixed(2)} y=${data.ry.toFixed(2)} yaw=${(data.ryaw * 180 / Math.PI).toFixed(0)}°`;
       }
       // DIAG lag (2026-06-24): _age = sensor->emit (TF/CPU na Pi);
