@@ -855,6 +855,50 @@ def test_spin_escape_count_is_per_spot():
     assert c.ang == pytest.approx(3.0)
 
 
+def test_fire_reason_timeout_for_unknown_front_block():
+    # pessoa parando o robô em espaço ABERTO (sem pinch, sem parede mapeada perto):
+    # só dispara no stuck_timeout cauteloso -> reason "timeout".
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=10.0, grace=0.5))
+    t = 0.0
+    while t < 12.0:
+        cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                         rear_gap=math.inf, front_gap=0.0, nearest=0.0,
+                         side_clear=math.inf, near_mapped=False)
+        if cmd.active:
+            break
+        t += 0.1
+    assert sup.last_fire_reason == "timeout"
+    assert t >= 9.9  # esperou os ~10s, não furou
+
+
+def test_fire_reason_pinch_when_lateral_tight():
+    # aperto lateral (side_clear < side_open) fura pros ~2s -> reason "pinch"
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=10.0, grace=0.5))
+    t = 0.0
+    while t < 6.0:
+        cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                         rear_gap=math.inf, front_gap=2.0, nearest=0.0,
+                         side_clear=0.05, near_mapped=False)
+        if cmd.active:
+            break
+        t += 0.1
+    assert sup.last_fire_reason == "pinch"
+
+
+def test_fire_reason_near_when_close_to_mapped_wall():
+    # parede MAPEADA perto (near_mapped) fura pros ~2s -> reason "near"
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=10.0, grace=0.5))
+    t = 0.0
+    while t < 6.0:
+        cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                         rear_gap=math.inf, front_gap=0.0, nearest=0.0,
+                         side_clear=math.inf, near_mapped=True)
+        if cmd.active:
+            break
+        t += 0.1
+    assert sup.last_fire_reason == "near"
+
+
 def test_no_escalation_when_stuck_at_different_spots():
     # travou em lugares DIFERENTES (>same_spot_radius): sempre ré reta
     sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5))

@@ -454,6 +454,9 @@ class UnstuckSupervisor:
     history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
     # giros (point-turn) recentes por ponto — anti-livelock (spin_escape_after)
     spin_history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
+    # motivo do último disparo p/ LOG de campo (06-30: pessoa parando o robô dispara
+    # rápido?). "timeout"=cauteloso 10s; "mapped"/"near"/"pinch" furam pros ~2s.
+    last_fire_reason: str = ""
 
     def update(self, now: float, *, nav_wants_move: bool,
                position: Tuple[float, float], rear_gap: float = math.inf,
@@ -586,6 +589,17 @@ class UnstuckSupervisor:
                 and side_clear >= self.cfg.side_open
                 and stuck < clear_timeout):
             return _IDLE
+        # MOTIVO do disparo (LOG de campo 2026-06-30): passou os 2 guards -> vai
+        # manobrar. "timeout"=cauteloso (10/15s, obstáculo desconhecido/pessoa); os
+        # demais FURAM pros ~2s (stuck_timeout_mapped). REMOVER após tunar.
+        if stuck >= self.cfg.stuck_timeout:
+            self.last_fire_reason = "timeout"
+        elif mapped_fire:
+            self.last_fire_reason = "mapped"
+        elif near_fire:
+            self.last_fire_reason = "near"
+        else:
+            self.last_fire_reason = "pinch"
         # DIREÇÃO pela CENA (2026-06-28, "analisar se precisa ré ou ir reto"):
         # - FRENTE LIVRE e mesmo assim travou (preso de lado / no batente da porta):
         #   AVANÇA (passa o batente). Dar ré aqui desfazia o progresso e re-aproximava
@@ -1250,10 +1264,14 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 clear_offset=clear_offset)
             if self.sup.state != self._last_state:
                 extra = ""
+                if self._last_state == "monitoring":
+                    # motivo do disparo: "timeout"=cauteloso 10/15s (desconhecido/
+                    # pessoa); "near"/"pinch"/"mapped"=furou pros ~2s. (campo 06-30)
+                    extra = " reason=%s" % self.sup.last_fire_reason
                 if self.sup.state == "turning":
                     # "propôs giro X° em vez de ré" — pra medir na próxima run
                     # quantas rés o giro calculado substituiu (dono 2026-06-29).
-                    extra = " GIRO_CALC=%+.0f° (em vez de ré)" % math.degrees(
+                    extra += " GIRO_CALC=%+.0f° (em vez de ré)" % math.degrees(
                         self.sup.turn_offset)
                 self.get_logger().warn(
                     "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s vao_re=%.2f)%s" % (
