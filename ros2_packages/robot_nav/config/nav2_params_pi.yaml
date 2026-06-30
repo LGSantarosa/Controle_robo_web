@@ -376,7 +376,13 @@ global_costmap:
         # CHEGAR perto da porta, não passar por dentro. Logo a folga de 0.45 (que
         # tira o robô de cima do box3: 0.45 da borda = ~0.20 m de folga real)
         # deve ser OK. SE a porta parar de engatar no sim -> reverter pra 0.35.
-        inflation_radius: 0.45
+        # 2026-06-30: 0.45 -> 0.50. O dono pediu MAIS berço no contorno de pessoa
+        # (o robô desviou mas TRISCOU no sapato dele, devagar — inaceitável). +5cm
+        # de folga no plano que contorna a perna (marcada na obstacle_layer ao vivo).
+        # ⚠️ RISCO: o door_crossing agora está OFF (o path_follower threada a porta
+        # PELO /plan global) — então 0.50 pode reativar o "engorda a porta" do 0.40.
+        # VALIDAR a travessia de porta em campo; se parar de threadar -> voltar 0.45.
+        inflation_radius: 0.50
       # PI: false — diffs em vez do mapa inteiro.
       always_send_full_costmap: false
 
