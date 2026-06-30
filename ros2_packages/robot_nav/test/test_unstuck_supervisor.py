@@ -782,6 +782,79 @@ def test_escape_reverse_extends_past_normal_until_room_then_spins():
     assert cmd.ang != 0.0 and sup.state == "spinning"
 
 
+def _spin_cycle(sup, t0, pos, rear_gap, front_gap, nearest, open_side=1):
+    """Um ciclo de recovery no cenário de GIRO (frente bloqueada, folga lateral pra
+    girar). yaw congelado -> o giro acaba pelo spin_time_cap. Retorna (1º comando
+    ativo do ciclo, t pronto pro próximo)."""
+    t = t0
+    deadline = t0 + 60.0
+    first = None
+    fired = False
+    while t < deadline:
+        cmd = sup.update(t, nav_wants_move=True, position=pos,
+                         rear_gap=rear_gap, front_gap=front_gap,
+                         open_side=open_side, nearest=nearest, yaw=0.0)
+        if cmd.active:
+            fired = True
+            if first is None:
+                first = cmd
+        elif fired and sup.state == "monitoring":
+            break  # manobra acabou e o grace venceu
+        t += 0.1
+    return first, t + 0.1
+
+
+def test_forces_reverse_after_two_spins_same_spot():
+    # ANTI-LIVELOCK (pedido do dono 2026-06-30): point-turn não muda a POSIÇÃO ->
+    # gira no mesmo ponto, re-dispara, gira de novo ("preso fazendo só um movimento").
+    # 2 giros no mesmo ponto sem sair -> a 3ª recovery TROCA pra translação (ré, que
+    # é a direção mais aberta aqui: rear_gap 0.15 > front_gap 0.0).
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=1.0, grace=0.5, spin_time_cap=1.0,
+                                 spin_escape_after=2))
+    t = 0.0
+    c1, t = _spin_cycle(sup, t, (0.0, 0.0), rear_gap=0.15, front_gap=0.0, nearest=1.0)
+    c2, t = _spin_cycle(sup, t, (0.0, 0.0), rear_gap=0.15, front_gap=0.0, nearest=1.0)
+    c3, t = _spin_cycle(sup, t, (0.0, 0.0), rear_gap=0.15, front_gap=0.0, nearest=1.0)
+    assert c1.ang == pytest.approx(3.0) and c2.ang == pytest.approx(3.0)  # giros 1 e 2
+    assert c3.ang == pytest.approx(0.0) and c3.lin == pytest.approx(-0.25)  # 3ª = RÉ
+
+
+def test_forces_forward_when_front_more_open_after_two_spins():
+    # mesma ideia, mas a FRENTE é a direção mais aberta -> avança em vez de girar.
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=1.0, grace=0.5, spin_time_cap=1.0,
+                                 spin_escape_after=2, forward_speed=0.15))
+    t = 0.0
+    for _ in range(2):
+        _, t = _spin_cycle(sup, t, (0.0, 0.0), rear_gap=0.0, front_gap=0.15, nearest=1.0)
+    c3, _ = _spin_cycle(sup, t, (0.0, 0.0), rear_gap=0.0, front_gap=0.15, nearest=1.0)
+    assert c3.ang == pytest.approx(0.0) and c3.lin == pytest.approx(0.15)  # FRENTE
+
+
+def test_keeps_spinning_when_boxed_both_sides():
+    # emparedado dos 2 lados (sem vão útil pra ré nem frente): mantém o giro — é a
+    # única saída, não há como transladar contra parede.
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=1.0, grace=0.5, spin_time_cap=1.0,
+                                 spin_escape_after=2))
+    t = 0.0
+    for _ in range(2):
+        _, t = _spin_cycle(sup, t, (0.0, 0.0), rear_gap=0.05, front_gap=0.0, nearest=1.0)
+    c3, _ = _spin_cycle(sup, t, (0.0, 0.0), rear_gap=0.05, front_gap=0.0, nearest=1.0)
+    assert c3.ang == pytest.approx(3.0)  # ainda gira
+
+
+def test_spin_escape_count_is_per_spot():
+    # o contador é por PONTO (same_spot_radius): 2 giros em (0,0) não forçam
+    # translação num lugar diferente.
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=1.0, grace=0.5, spin_time_cap=1.0,
+                                 spin_escape_after=2))
+    t = 0.0
+    for _ in range(2):
+        _, t = _spin_cycle(sup, t, (0.0, 0.0), rear_gap=0.15, front_gap=0.0, nearest=1.0)
+    # longe (2m): sem histórico de giro nesse ponto -> a recovery lá é GIRO normal
+    c, _ = _spin_cycle(sup, t, (2.0, 0.0), rear_gap=0.15, front_gap=0.0, nearest=1.0)
+    assert c.ang == pytest.approx(3.0)
+
+
 def test_no_escalation_when_stuck_at_different_spots():
     # travou em lugares DIFERENTES (>same_spot_radius): sempre ré reta
     sup = UnstuckSupervisor(_cfg(reverse_time_cap=2.0, grace=0.5))

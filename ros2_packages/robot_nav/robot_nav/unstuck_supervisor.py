@@ -343,6 +343,13 @@ class UnstuckConfig:
     # claramente de um lado (|ângulo| > isto); senão (reto à frente/atrás) usa o
     # freer_side. (2026-06-28: girou pro lado errado por usar só o freer_side.)
     spin_away_deg: float = 30.0
+    # ANTI-LIVELOCK do giro (2026-06-30, dono "pra não ficar preso num lugar fazendo
+    # só um movimento"): o point-turn NÃO muda a posição -> gira no mesmo ponto,
+    # re-dispara, gira de novo. Depois de spin_escape_after giros no MESMO ponto
+    # (same_spot_radius) sem sair, a recovery TROCA pra translação curta na direção
+    # mais aberta (ré OU frente) — quebra o loop mudando a posição. Só volta ao giro
+    # se estiver emparedado dos 2 lados (sem vão útil pra transladar).
+    spin_escape_after: int = 2     # giros no mesmo ponto antes de forçar translação
     # GIRO CALCULADO (2026-06-29, dono "falta 5° pra ir reto"): quando a frente
     # trava mas cabe um giro PEQUENO que alinha a frente com o plano (offset vem
     # do nó via clearest_heading_offset, já limitado pelo cap), gira só o que
@@ -445,6 +452,8 @@ class UnstuckSupervisor:
     turn_target_yaw: float = 0.0      # alvo de heading (malha fechada)
     turn_start_t: float = 0.0
     history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
+    # giros (point-turn) recentes por ponto — anti-livelock (spin_escape_after)
+    spin_history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
 
     def update(self, now: float, *, nav_wants_move: bool,
                position: Tuple[float, float], rear_gap: float = math.inf,
@@ -618,7 +627,20 @@ class UnstuckSupervisor:
         # ele girar parado sem fim e atrapalhar (mesmo com a traseira aberta). Só
         # gira quando é a única saída. Gate de segurança (nearest>=spin_clear) mantido.
         if nearest >= self.cfg.spin_clear:
-            return self._begin_spin(now, open_side, yaw, nearest_deg)
+            # ANTI-LIVELOCK (2026-06-30): se já girou spin_escape_after vezes neste
+            # mesmo ponto sem sair, o point-turn não está resolvendo (não muda a
+            # posição). TROCA pra translação curta na direção mais aberta — quebra
+            # o loop. Só volta ao giro se emparedado dos 2 lados (escape = None).
+            spins_here = sum(
+                1 for (st, sp) in self.spin_history
+                if now - st <= self.cfg.escalate_window
+                and self._dist(sp, position) <= self.cfg.same_spot_radius)
+            if spins_here >= self.cfg.spin_escape_after:
+                escape = self._begin_spin_escape(
+                    now, position, rear_gap, front_gap, side_clear)
+                if escape is not None:
+                    return escape
+            return self._begin_spin(now, open_side, yaw, nearest_deg, position)
         return _IDLE
 
     def _begin_clear_turn(self, now, yaw, offset) -> Command:
@@ -687,15 +709,43 @@ class UnstuckSupervisor:
             return 1 if nearest_deg < 0 else -1  # obstáculo à direita -> gira esquerda
         return 1 if open_side >= 0 else -1
 
-    def _begin_spin(self, now, open_side, yaw, nearest_deg=0.0) -> Command:
+    def _begin_spin(self, now, open_side, yaw, nearest_deg=0.0,
+                    position=(0.0, 0.0)) -> Command:
         # GIRO DIRETO (sem ré antes): recuperação quando a frente trava mas há folga
         # pra girar. Vira PRA LONGE do obstáculo mais próximo. Reusa o _spinning
         # (malha fechada no yaw + abort por folga). Não mexe na escalação.
+        # Registra o giro (anti-livelock: 2 giros no mesmo ponto -> força translação).
+        self.spin_history = [(st, sp) for (st, sp) in self.spin_history
+                             if now - st <= self.cfg.escalate_window]
+        self.spin_history.append((now, position))
         self.spin_side = self._spin_dir(open_side, nearest_deg)
         self.state = _SPINNING
         self.spin_start_t = now
         self.spin_start_yaw = yaw
         return self._spin_cmd()
+
+    def _begin_spin_escape(self, now, position, rear_gap, front_gap,
+                           side_clear=math.inf) -> Optional[Command]:
+        # Pós spin_escape_after giros no mesmo ponto: TRANSLADA na direção mais
+        # aberta (ré OU frente) p/ quebrar o livelock do point-turn. Nudge curto,
+        # gap-gated (os estados _reversing/_advancing abortam se algo encostar).
+        # SEM escalação->giro (justamente fugindo do giro). Retorna None se NENHUMA
+        # direção tem vão útil (emparedado dos 2 lados) -> o chamador mantém o giro.
+        rear_room = rear_gap - self.cfg.rear_stop_margin
+        front_room = front_gap - self.cfg.front_stop_margin
+        if rear_room <= 0.0 and front_room <= 0.0:
+            return None
+        self.maneuver_start_t = now
+        self.maneuver_start_pos = position
+        if rear_room >= front_room:
+            self.escalated = False     # nudge limpo (não vira escape-reverse->giro)
+            self.reverse_target = min(self.cfg.reverse_distance, rear_room)
+            self.state = _REVERSING
+            return self._reversing(now, position, 0.0, rear_gap)
+        self.forward_target = min(self.cfg.forward_distance, front_room)
+        self.advance_side0 = side_clear
+        self.state = _ADVANCING
+        return self._advancing(now, position, front_gap, side_clear)
 
     def _spin_cmd(self) -> Command:
         speed = self.cfg.spin_speed
@@ -852,6 +902,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("spin_left_boost", 1.4),
                 ("spin_clear", 0.40),
                 ("spin_away_deg", 30.0),
+                # anti-livelock: 2 giros no mesmo ponto -> força translação (06-30)
+                ("spin_escape_after", 2),
                 # Giro CALCULADO (2026-06-29): cap pequeno (~15°) — só ajusta o
                 # talinho que falta pra abrir a frente rumo ao plano; senão dá ré.
                 ("clear_turn_cap_deg", 30.0),     # cap da correção (nó); 2026-06-29:
@@ -916,6 +968,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 spin_left_boost=g["spin_left_boost"],
                 spin_clear=g["spin_clear"],
                 spin_away_deg=g["spin_away_deg"],
+                spin_escape_after=int(g["spin_escape_after"]),
                 rear_stop_margin=g["rear_stop_margin"],
                 reverse_min=g["reverse_min"],
                 forward_distance=g["forward_distance"],
