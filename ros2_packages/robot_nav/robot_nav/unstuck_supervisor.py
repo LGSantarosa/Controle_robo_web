@@ -324,8 +324,9 @@ class UnstuckConfig:
     escalate_after: int = 3        # tentativas no mesmo ponto antes do giro
     same_spot_radius: float = 0.5  # raio que define "mesmo ponto"
     escalate_window: float = 120.0  # esquece travamentos mais velhos que isso
-    spin_speed: float = 2.5        # rad/s do giro (3.0->2.5 06-30: dono "rapidão
-    # demais"). Piso ~1.7 (skid-steer não gira abaixo, calib); 2.5 fica acima.
+    spin_speed: float = 2.0        # rad/s do giro (3.0->2.5->2.0 06-30: dono "ainda
+    # dá um tranco do nada" no meio das curvinhas suaves). Piso ~1.7 (skid-steer não
+    # gira abaixo, calib); 2.0 fica logo acima (à esq vira 2.0*1.4=2.8 c/ o boost).
     # Giro em MALHA FECHADA no yaw (campo: comanda 30° e a roda patinando
     # entrega 5°): gira até o yaw MEDIDO (IMU, confiável mesmo patinando)
     # acumular spin_angle; spin_time_cap é o teto se nem patinar resolver.
@@ -351,6 +352,17 @@ class UnstuckConfig:
     # mais aberta (ré OU frente) — quebra o loop mudando a posição. Só volta ao giro
     # se estiver emparedado dos 2 lados (sem vão útil pra transladar).
     spin_escape_after: int = 2     # giros no mesmo ponto antes de forçar translação
+    # ANTI-LIVELOCK ré<->avanço (2026-06-30, dono — campo: pessoa atrás deixava uma
+    # FRESTA, o robô dava ré curtinha -> avançava -> ré... no MESMO ponto sem sair,
+    # batendo sempre no mesmo eixo bloqueado; só saiu quando a fresta fechou). MIRROR
+    # do spin_escape: depois de move_escape_after TRANSLAÇÕES (ré/avanço) no mesmo
+    # ponto sem deslocar, o eixo não está resolvendo -> GIRA pra fugir dele ("99% das
+    # vezes é melhor girar, podia ter girado antes"). Lado: o do PLANO primeiro; se já
+    # girou pra esse lado aqui sem sair, vira pro OUTRO. Só com folga pra girar
+    # (nearest>=spin_clear); emparedado -> cai na lógica normal (ré/escape-reverse).
+    move_escape_after: int = 3     # translações no mesmo ponto antes de forçar o giro
+    plan_side_min: float = 0.17    # rad (~10°) — abaixo disso o plano é ~reto à frente
+    # (ambíguo) -> o lado do giro de escape cai no _spin_dir (longe do obstáculo).
     # GIRO CALCULADO (2026-06-29, dono "falta 5° pra ir reto"): quando a frente
     # trava mas cabe um giro PEQUENO que alinha a frente com o plano (offset vem
     # do nó via clearest_heading_offset, já limitado pelo cap), gira só o que
@@ -455,6 +467,13 @@ class UnstuckSupervisor:
     history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
     # giros (point-turn) recentes por ponto — anti-livelock (spin_escape_after)
     spin_history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
+    # translações (ré/avanço) recentes por ponto — anti-livelock ré<->avanço
+    # (move_escape_after); só as manobras NORMAIS (não os nudges de escape).
+    move_history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
+    # giros de escape ré<->avanço já feitos por ponto, com LADO (+1 esq/-1 dir) —
+    # pra virar pro outro lado quando o lado do plano não resolveu.
+    escape_spin_history: List[Tuple[float, Tuple[float, float], int]] = field(
+        default_factory=list)
     # motivo do último disparo p/ LOG de campo (06-30: pessoa parando o robô dispara
     # rápido?). "timeout"=cauteloso 10s; "mapped"/"near"/"pinch" furam pros ~2s.
     last_fire_reason: str = ""
@@ -470,7 +489,8 @@ class UnstuckSupervisor:
                side_clear: float = math.inf,
                nearest: float = math.inf,
                nearest_deg: float = 0.0,
-               clear_offset: Optional[float] = None) -> Command:
+               clear_offset: Optional[float] = None,
+               plan_bearing: float = 0.0) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
         if door_active:
@@ -492,7 +512,7 @@ class UnstuckSupervisor:
             return self._monitoring(now, position, rear_gap, front_gap,
                                     goal_active, open_side, obstacle_mapped, yaw,
                                     near_mapped, side_clear, nearest, nearest_deg,
-                                    clear_offset)
+                                    clear_offset, plan_bearing)
         if self.state == _REVERSING:
             return self._reversing(now, position, yaw, rear_gap, nearest)
         if self.state == _ADVANCING:
@@ -511,7 +531,7 @@ class UnstuckSupervisor:
                     open_side, obstacle_mapped=False, yaw=0.0,
                     near_mapped=False, side_clear=math.inf,
                     nearest=math.inf, nearest_deg=0.0,
-                    clear_offset=None) -> Command:
+                    clear_offset=None, plan_bearing=0.0) -> Command:
         if goal_active is not None:
             # status do action server do nav2 disponível: é AUTORITATIVO.
             # Mata a "ré póstuma" (goal cancelado mas flag de nav_vel_raw
@@ -627,6 +647,27 @@ class UnstuckSupervisor:
         # ideia é justamente preferir o giro pequeno à ré quando ele resolve).
         if clear_offset is not None and abs(clear_offset) >= self.cfg.clear_turn_min:
             return self._begin_clear_turn(now, yaw, clear_offset)
+        # ANTI-LIVELOCK ré<->avanço (2026-06-30): já transladou move_escape_after
+        # vezes neste mesmo ponto sem sair? Bater no mesmo eixo (ré curta <-> avanço,
+        # ex. pessoa atrás deixando uma fresta) não resolve -> GIRA pra fugir dele,
+        # contanto que haja folga (nearest>=spin_clear). Lado: o do PLANO 1º, senão o
+        # outro (ver _escape_spin_side). Emparedado (sem folga pra girar) -> NÃO força
+        # o giro: cai na ré/escape-reverse normal abaixo (o canal apertado precisa de
+        # ré, não de giro). Vem ANTES da ré: a ideia é trocar a ré teimosa pelo giro.
+        if nearest >= self.cfg.spin_clear:
+            moves_here = sum(
+                1 for (mt, mp) in self.move_history
+                if now - mt <= self.cfg.escalate_window
+                and self._dist(mp, position) <= self.cfg.same_spot_radius)
+            if moves_here >= self.cfg.move_escape_after:
+                side = self._escape_spin_side(now, position, plan_bearing,
+                                              open_side, nearest_deg)
+                self.escape_spin_history = [
+                    (st, sp, s) for (st, sp, s) in self.escape_spin_history
+                    if now - st <= self.cfg.escalate_window]
+                self.escape_spin_history.append((now, position, side))
+                return self._begin_spin(now, open_side, yaw, nearest_deg,
+                                        position, force_side=side)
         rear_target = min(self.cfg.reverse_distance,
                           rear_gap - self.cfg.rear_stop_margin)
         if rear_target >= self.cfg.reverse_min:
@@ -696,6 +737,7 @@ class UnstuckSupervisor:
             if self._dist(p, position) <= self.cfg.same_spot_radius)
         self.escalated = nearby >= self.cfg.escalate_after
         self.spin_side = self._spin_dir(open_side, nearest_deg)
+        self._record_move(now, position)
         self.state = _REVERSING
         self.maneuver_start_t = now
         self.maneuver_start_pos = position
@@ -707,12 +749,37 @@ class UnstuckSupervisor:
         return Command(-self.cfg.reverse_speed, 0.0, True)
 
     def _begin_advance(self, now, position, target, side_clear=math.inf) -> Command:
+        self._record_move(now, position)
         self.state = _ADVANCING
         self.maneuver_start_t = now
         self.maneuver_start_pos = position
         self.forward_target = target        # teto (cap) gap-limitado deste avanço
         self.advance_side0 = side_clear     # folga lateral inicial = tamanho do pinch
         return Command(self.cfg.forward_speed, 0.0, True)
+
+    def _record_move(self, now, position) -> None:
+        # histórico de TRANSLAÇÕES normais por ponto (anti-livelock ré<->avanço).
+        # Só as manobras normais entram aqui — os nudges de _begin_spin_escape NÃO
+        # (eles já são escape e não devem realimentar o contador).
+        self.move_history = [(mt, mp) for (mt, mp) in self.move_history
+                             if now - mt <= self.cfg.escalate_window]
+        self.move_history.append((now, position))
+
+    def _escape_spin_side(self, now, position, plan_bearing, open_side,
+                          nearest_deg) -> int:
+        # Lado do giro de escape ré<->avanço: o do PLANO primeiro (+esq). Sem plano
+        # claro (|bearing|<plan_side_min, ~reto à frente) cai no _spin_dir (longe do
+        # obstáculo). Se já girou pra esse lado NESTE ponto sem sair -> vira pro OUTRO.
+        if abs(plan_bearing) >= self.cfg.plan_side_min:
+            prefer = 1 if plan_bearing > 0 else -1
+        else:
+            prefer = self._spin_dir(open_side, nearest_deg)
+        tried = [s for (st, sp, s) in self.escape_spin_history
+                 if now - st <= self.cfg.escalate_window
+                 and self._dist(sp, position) <= self.cfg.same_spot_radius]
+        if prefer in tried:
+            return -prefer
+        return prefer
 
     def _spin_dir(self, open_side, nearest_deg) -> int:
         """Lado do giro: PRA LONGE do obstáculo mais próximo. (BATIDA/lado errado
@@ -725,15 +792,18 @@ class UnstuckSupervisor:
         return 1 if open_side >= 0 else -1
 
     def _begin_spin(self, now, open_side, yaw, nearest_deg=0.0,
-                    position=(0.0, 0.0)) -> Command:
+                    position=(0.0, 0.0), force_side=None) -> Command:
         # GIRO DIRETO (sem ré antes): recuperação quando a frente trava mas há folga
         # pra girar. Vira PRA LONGE do obstáculo mais próximo. Reusa o _spinning
         # (malha fechada no yaw + abort por folga). Não mexe na escalação.
         # Registra o giro (anti-livelock: 2 giros no mesmo ponto -> força translação).
+        # force_side: o escape ré<->avanço impõe o lado (do plano/flip), em vez do
+        # _spin_dir (longe do obstáculo).
         self.spin_history = [(st, sp) for (st, sp) in self.spin_history
                              if now - st <= self.cfg.escalate_window]
         self.spin_history.append((now, position))
-        self.spin_side = self._spin_dir(open_side, nearest_deg)
+        self.spin_side = (force_side if force_side is not None
+                          else self._spin_dir(open_side, nearest_deg))
         self.state = _SPINNING
         self.spin_start_t = now
         self.spin_start_yaw = yaw
@@ -1262,7 +1332,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 obstacle_mapped=obstacle_mapped, near_mapped=near_mapped,
                 side_clear=side_clear, nearest=nearest,
                 nearest_deg=(self._near_deg if scan_fresh else 0.0),
-                clear_offset=clear_offset)
+                clear_offset=clear_offset,
+                plan_bearing=self._plan_bearing())
             if self.sup.state != self._last_state:
                 extra = ""
                 if self._last_state == "monitoring":

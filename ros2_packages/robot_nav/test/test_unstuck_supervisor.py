@@ -855,6 +855,94 @@ def test_spin_escape_count_is_per_spot():
     assert c.ang == pytest.approx(3.0)
 
 
+# ---- anti-livelock ré<->avanço: troca pra GIRO (dono 2026-06-30) --------------
+# Pessoa atrás deixa uma fresta -> ré curtinha -> avança -> ré... no MESMO ponto
+# sem sair (o robô bateu nisso em campo). Após move_escape_after translações no
+# mesmo ponto sem deslocar, GIRA pra fugir do eixo travado (lado do PLANO 1º).
+
+def _move_cycle(sup, t0, pos, rear_gap, front_gap, nearest, plan_bearing=0.0,
+                open_side=1):
+    """Ciclo de recovery passando plan_bearing; retorna (1º cmd ativo, t)."""
+    t = t0
+    deadline = t0 + 60.0
+    first = None
+    fired = False
+    while t < deadline:
+        cmd = sup.update(t, nav_wants_move=True, position=pos, rear_gap=rear_gap,
+                         front_gap=front_gap, open_side=open_side, nearest=nearest,
+                         yaw=0.0, plan_bearing=plan_bearing)
+        if cmd.active:
+            fired = True
+            if first is None:
+                first = cmd
+        elif fired and sup.state == "monitoring":
+            break
+        t += 0.1
+    return first, t + 0.1
+
+
+def test_forces_spin_after_n_translations_same_spot():
+    # 3 rés no mesmo ponto (fresta atrás, frente bloqueada, folga pra girar) -> a
+    # 4ª recovery TROCA pra GIRO em vez de uma 4ª ré (quebra o vai-e-volta).
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=1.0, grace=0.5, reverse_time_cap=1.0,
+                                 move_escape_after=3, spin_time_cap=1.0))
+    t = 0.0
+    for _ in range(3):
+        c, t = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
+                           nearest=1.0, plan_bearing=0.5)
+        assert c.lin == pytest.approx(-0.25) and c.ang == pytest.approx(0.0)  # ré
+    c4, _ = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
+                        nearest=1.0, plan_bearing=0.5)
+    assert c4.lin == pytest.approx(0.0) and c4.ang != 0.0  # GIRO
+
+
+def test_escape_spin_follows_plan_side():
+    # o lado do giro de escape é o do PLANO: plano à ESQUERDA (+) -> gira esquerda;
+    # plano à DIREITA (-) -> gira direita.
+    def run(plan):
+        sup = UnstuckSupervisor(_cfg(stuck_timeout=1.0, grace=0.5,
+                                     reverse_time_cap=1.0, move_escape_after=3,
+                                     spin_time_cap=1.0))
+        t = 0.0
+        for _ in range(3):
+            _, t = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
+                               nearest=1.0, plan_bearing=plan)
+        c, _ = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
+                          nearest=1.0, plan_bearing=plan)
+        return c
+    assert run(0.5).ang > 0.0    # plano à esquerda -> giro à esquerda
+    assert run(-0.5).ang < 0.0   # plano à direita  -> giro à direita
+
+
+def test_escape_spin_flips_to_other_side_when_plan_side_already_tried():
+    # girou pro lado do plano e NÃO saiu (mesmo ponto de novo) -> tenta o OUTRO lado.
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=1.0, grace=0.5, reverse_time_cap=1.0,
+                                 move_escape_after=3, spin_time_cap=1.0))
+    t = 0.0
+    for _ in range(3):
+        _, t = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
+                           nearest=1.0, plan_bearing=0.5)
+    c_first, t = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
+                             nearest=1.0, plan_bearing=0.5)
+    c_flip, _ = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
+                            nearest=1.0, plan_bearing=0.5)
+    assert c_first.ang > 0.0 and c_flip.ang < 0.0   # esquerda (plano) -> depois direita
+
+
+def test_no_forced_spin_when_too_tight_to_turn():
+    # sem folga pra girar (nearest < spin_clear): NÃO força giro — continua dando ré
+    # (o "só esperar/normal" dos 1%; em canal apertado a ré/escape-reverse é a saída).
+    sup = UnstuckSupervisor(_cfg(stuck_timeout=1.0, grace=0.5, reverse_time_cap=1.0,
+                                 move_escape_after=3, spin_time_cap=1.0))
+    t = 0.0
+    for _ in range(3):
+        _, t = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
+                           nearest=0.30, plan_bearing=0.5)
+    c4, _ = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
+                        nearest=0.30, plan_bearing=0.5)
+    assert c4.lin == pytest.approx(-0.25) and c4.ang == pytest.approx(0.0)  # ré, não giro
+
+
 def test_fire_reason_timeout_for_unknown_front_block():
     # pessoa parando o robô em espaço ABERTO (sem pinch, sem parede mapeada perto):
     # só dispara no stuck_timeout cauteloso -> reason "timeout".
