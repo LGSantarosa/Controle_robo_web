@@ -364,10 +364,6 @@ class MapBridge:
         # /scan ao vivo -> overlay azul no mapa (debug de localização: ver se o
         # scan encaixa nas paredes do mapa com o robô parado).
         self._last_scan_emit = 0.0
-        # Scan segurado p/ emissão atrasada de 1 frame (ver _on_scan): o TF do
-        # stamp do scan só chega ~1 ciclo depois, então seguramos o anterior e
-        # o emitimos quando o TF dele já existe -> nuvem grudada nas paredes.
-        self._held_scan = None
         # DIAG lag (2026-06-24): grava age/tf_fallback/ryaw por scan num CSV
         # pra EU ler depois e achar o hop do atraso. Remover ao fechar.
         try:
@@ -630,32 +626,14 @@ class MapBridge:
             log.debug(f"[MapBridge] erro no /plan: {e}")
 
     def _on_scan(self, msg: LaserScan):
-        # Despacho com ATRASO DE 1 FRAME. O pipeline de TF (AMCL+pose_estimator)
-        # atrasa mais que o próprio scan -> no instante do callback o TF do stamp
-        # do scan AINDA não chegou. Antes o código caía num fallback que projetava
-        # a nuvem na pose "de agora": nos giros isso girava a nuvem torta e jogava
-        # os pontos pra FORA do mapa (o "arraste/pulo"). Agora: tentamos o scan no
-        # próprio stamp (0 atraso se o TF já veio); se não veio, SEGURAMOS e
-        # emitimos o ANTERIOR, cujo stamp já tem TF -> nuvem e boneco saem
-        # grudados e casados com as paredes, ~1 frame (~160ms) atrás do real.
-        # O usuário aceita o atraso; o que não pode é descolar/varrer.
+        # Converte o /scan pro frame 'map' e emite pontos pro overlay azul.
+        # Throttle (SCAN_PUBLISH_HZ) + downsample pra não afogar o websocket.
         now = time.time()
         if now - self._last_scan_emit < 1.0 / self.SCAN_PUBLISH_HZ:
             return
-        if self._emit_scan_at_stamp(msg, now):
-            self._held_scan = None       # TF já estava pronto -> sem atraso
-            return
-        held = self._held_scan
-        self._held_scan = msg            # segura o atual p/ o próximo ciclo
-        if held is not None:
-            self._emit_scan_at_stamp(held, now, deferred=True)
-
-    def _emit_scan_at_stamp(self, msg: LaserScan, now: float,
-                            deferred: bool = False) -> bool:
-        # Projeta o /scan pro frame 'map' USANDO O TF DO STAMP DO PRÓPRIO SCAN
-        # (nunca o "latest"). Retorna True se emitiu, False se o TF daquele stamp
-        # ainda não está no buffer (aí quem chamou segura o scan p/ o próximo
-        # ciclo). Sem fallback pra pose de agora -> sem arraste nos giros.
+        # DIAG lag (2026-06-24): idade do scan no emit + se caiu no fallback de
+        # TF (yaw velho -> arrasto da nuvem no giro). Vai no payload p/ a UI
+        # mostrar; some quando fechar o diagnóstico. NÃO logar no rosout.
         stamp_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         # age = idade do scan no domínio de relógio DO STAMP. No sim o stamp é
         # sim-time (/clock) e `now=time.time()` é wall-clock → a subtração dava
@@ -663,22 +641,35 @@ class MapBridge:
         # respeita use_sim_time) casa os dois domínios — válido em sim E real.
         ros_now = self._node.get_clock().now().nanoseconds * 1e-9
         scan_age = ros_now - stamp_sec
+        tf_fallback = False
         try:
-            # TF no INSTANTE do scan: scan (frame_id) e boneco (base_link) NO
-            # MESMO stamp -> pontos e robô no mesmo frame, casados com as paredes.
+            # TF no INSTANTE do scan (não o atual): em giro rápido o scan é de
+            # alguns ms atrás; usar o stamp dele alinha os pontos com a pose da
+            # hora -> sem o "borrado/girando". Fallback pro mais recente se o
+            # buffer não tiver esse stamp exato.
             tf = self._tf_buffer.lookup_transform(
                 'map', msg.header.frame_id, msg.header.stamp
             )
+            # Pose do boneco (base_link) NO MESMO stamp do scan: vai junto no
+            # payload pra render no MESMO frame -> boneco colado nos pontos,
+            # lidar não fica "na frente" do desenho do robô.
             tf_base = self._tf_buffer.lookup_transform(
                 'map', 'base_link', msg.header.stamp
             )
         except Exception:
-            return False   # TF do stamp ainda não chegou -> segura p/ depois
-        # DIAG lag: tf_fallback agora vira "emitido com atraso de 1 frame" (held).
-        tf_fallback = deferred
+            tf_fallback = True
+            try:
+                tf = self._tf_buffer.lookup_transform(
+                    'map', msg.header.frame_id, rclpy.time.Time()
+                )
+                tf_base = self._tf_buffer.lookup_transform(
+                    'map', 'base_link', rclpy.time.Time()
+                )
+            except Exception:
+                return  # sem TF ainda -> sem overlay
         diag = {
             '_age': round(scan_age, 3),     # s: sensor->emit (TF/CPU)
-            '_fb': tf_fallback,             # True = emitido com atraso de 1 frame
+            '_fb': tf_fallback,             # True = usou yaw velho (fallback)
             '_sts': now,                    # server_ts p/ medir transporte
         }
         lx = tf.transform.translation.x
@@ -699,7 +690,7 @@ class MapBridge:
         ranges = np.asarray(msg.ranges, dtype=np.float32)
         n = ranges.size
         if n == 0:
-            return True
+            return
         idx = np.arange(n)
         ang = msg.angle_min + idx * msg.angle_increment + lyaw
         step = max(1, n // 320)   # LD06 ~450 pts -> ~320 (mais denso = legível)
@@ -711,14 +702,13 @@ class MapBridge:
             self._sock.emit('scan_update', {'xs': [], 'ys': [], **pose, **diag},
                             namespace='/')
             self._log_scan_lag(now, stamp_sec, scan_age, tf_fallback, ryaw, 0)
-            return True
+            return
         rr = ranges[sel]
         xs = (lx + rr * np.cos(ang[sel])).round(3).tolist()
         ys = (ly + rr * np.sin(ang[sel])).round(3).tolist()
         self._sock.emit('scan_update', {'xs': xs, 'ys': ys, **pose, **diag},
                         namespace='/')
         self._log_scan_lag(now, stamp_sec, scan_age, tf_fallback, ryaw, len(xs))
-        return True
 
     def _log_scan_lag(self, ts, scan_stamp, age, tf_fallback, ryaw, npts):
         # DIAG lag (2026-06-24): nunca deixa o CSV derrubar a viz.
