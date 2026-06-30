@@ -1,7 +1,45 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-06-28**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-06-30**.
+
+---
+
+## 🆕 2026-06-30 (tarde) — Viz do mapa: lidar virou OPCIONAL + conserto do unstuck (escape-spin)
+
+> Tudo na `main` e **deployado na Pi** (HEAD `9c4833a`; web é só Flask, robot_nav buildado com
+> colcon). dev = origin = Pi. A run da manhã (`acff7f1`) tinha rodado a rota inteira ("magnífica").
+
+### 1. Viz lidar/robô no mapa — usuário: "horrível pra gravar vídeo, descolados"
+- **Sintoma:** nuvem do lidar e boneco do robô descolados; nos giros os pontos varrem pra fora do
+  mapa; robô parecia 1-2s atrás do lidar.
+- **Diagnóstico por CSV** (`controle_web/logs/scan_lag/`, run 13:55, 5543 amostras):
+  `tf_fallback = 100%` — o `lookup_transform` no stamp do scan NUNCA acha o TF (o pipeline
+  AMCL+pose_estimator atrasa mais que o scan) → caía no fallback "pose de agora" → girava a nuvem
+  torta (ω·age, p99 222ms / max 439ms) e jogava os pontos pra fora.
+- **❌ deferred-emit (segurar 1 frame) FALHOU em campo: TRAVOU o scan** (quando o TF nem no frame
+  seguinte chega, congela e o robô segue sozinho → descola pior). **Revertido** (`345eba4`→`81eaf32`).
+- **✅ Solução aceita:** lidar virou **camada OPCIONAL** (botão `📡 Lidar`, igual o costmap),
+  **default OFF** → vídeo limpo (`9742cea`). Desligado, `_on_scan` retorna cedo (poupa CPU/rede).
+- **🔴 ABERTO (separado da viz): pose/yaw do robô ERRADA (AMCL).** Robô físico torto mas o mapa
+  mostra reto, com o LIDAR casando nas paredes (nuvem certa) = localização, não desenho. Atacar
+  depois (provável odometria/AMCL no giro).
+
+### 2. Unstuck — escape-spin (`acff7f1`) estava BURRO em campo: girava em loop, lado errado
+- Campo: girou ~5× no lugar, **nunca mais deu ré**, e **pro lado errado**.
+- **2 bugs do `acff7f1`:** (a) `_escape_spin_side` flipava pro OUTRO lado no 2º giro no mesmo ponto
+  → ia contra o plano; (b) não zerava `move_history` → as 3 translações velhas ficavam no contador
+  (120s) e o giro RE-DISPARAVA a cada ciclo pra sempre.
+- **✅ Fix `9c4833a`:** (a) **SEMPRE o lado do plano** (tirei o flip + o `escape_spin_history`
+  morto); (b) **zera `move_history` ao girar** → o ciclo seguinte cai na ré/avanço antes de girar
+  de novo → alterna giro↔translação. 100 testes passam. **⏳ FALTA VALIDAR CAMPO** (deployado, mas
+  a stack que estava rodando era a antiga; próximo launch pega o fix).
+- ⚠️ NÃO reverter `acff7f1` (usuário recusou) — o ponto era deixar a recuperação esperta, não tirar.
+
+### Nota cosmética (não é BO)
+Erro `RTPS_TRANSPORT_SHM ... fastrtps_port7010 open_and_lock_file failed` no boot = locks zumbis em
+`/dev/shm` da queda de energia + vários restarts (todos dono `robo`, /dev/shm 1% cheio). Inofensivo
+(DDS cai pro UDP). Limpa com reboot (tmpfs) ou `rm -f /dev/shm/fastrtps_*` com a stack DESLIGADA.
 
 ---
 
