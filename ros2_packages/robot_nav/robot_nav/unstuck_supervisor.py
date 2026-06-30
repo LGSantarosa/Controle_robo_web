@@ -324,7 +324,8 @@ class UnstuckConfig:
     escalate_after: int = 3        # tentativas no mesmo ponto antes do giro
     same_spot_radius: float = 0.5  # raio que define "mesmo ponto"
     escalate_window: float = 120.0  # esquece travamentos mais velhos que isso
-    spin_speed: float = 3.0        # rad/s do giro pós-ré (precisa vencer atrito)
+    spin_speed: float = 2.5        # rad/s do giro (3.0->2.5 06-30: dono "rapidão
+    # demais"). Piso ~1.7 (skid-steer não gira abaixo, calib); 2.5 fica acima.
     # Giro em MALHA FECHADA no yaw (campo: comanda 30° e a roda patinando
     # entrega 5°): gira até o yaw MEDIDO (IMU, confiável mesmo patinando)
     # acumular spin_angle; spin_time_cap é o teto se nem patinar resolver.
@@ -910,7 +911,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("escalate_after", 3),
                 ("same_spot_radius", 0.5),
                 ("escalate_window", 120.0),
-                ("spin_speed", 3.0),
+                ("spin_speed", 2.5),  # 3.0->2.5 (06-30: giro do unstuck rápido demais)
                 ("spin_angle", 0.44),
                 ("spin_time_cap", 4.0),
                 ("spin_left_boost", 1.4),
