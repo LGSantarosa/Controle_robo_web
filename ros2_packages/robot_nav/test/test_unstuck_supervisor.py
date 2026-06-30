@@ -914,8 +914,10 @@ def test_escape_spin_follows_plan_side():
     assert run(-0.5).ang < 0.0   # plano à direita  -> giro à direita
 
 
-def test_escape_spin_flips_to_other_side_when_plan_side_already_tried():
-    # girou pro lado do plano e NÃO saiu (mesmo ponto de novo) -> tenta o OUTRO lado.
+def test_escape_spin_always_plan_side_never_flips():
+    # SEMPRE gira pro lado do plano, inclusive no 2º giro no mesmo ponto (dono 06-30:
+    # flipar pro outro lado mandava pra direção ERRADA). E entre um giro e outro ele
+    # VOLTA a transladar (o contador zera no giro -> não gira em loop sem dar ré).
     sup = UnstuckSupervisor(_cfg(stuck_timeout=1.0, grace=0.5, reverse_time_cap=1.0,
                                  move_escape_after=3, spin_time_cap=1.0))
     t = 0.0
@@ -924,9 +926,18 @@ def test_escape_spin_flips_to_other_side_when_plan_side_already_tried():
                            nearest=1.0, plan_bearing=0.5)
     c_first, t = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
                              nearest=1.0, plan_bearing=0.5)
-    c_flip, _ = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
-                            nearest=1.0, plan_bearing=0.5)
-    assert c_first.ang > 0.0 and c_flip.ang < 0.0   # esquerda (plano) -> depois direita
+    assert c_first.lin == pytest.approx(0.0) and c_first.ang > 0.0  # 1º giro: esquerda (plano)
+    # loop quebrado: o ciclo seguinte volta a dar RÉ (não gira de novo na cara)
+    c_after, t = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
+                             nearest=1.0, plan_bearing=0.5)
+    assert c_after.lin == pytest.approx(-0.25) and c_after.ang == pytest.approx(0.0)  # ré
+    # 3 translações de novo -> 2º giro: AINDA lado do plano (não flipou pra direita)
+    for _ in range(2):
+        _, t = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
+                           nearest=1.0, plan_bearing=0.5)
+    c_second, _ = _move_cycle(sup, t, (0.0, 0.0), rear_gap=0.25, front_gap=0.0,
+                              nearest=1.0, plan_bearing=0.5)
+    assert c_second.lin == pytest.approx(0.0) and c_second.ang > 0.0  # 2º giro: AINDA esquerda
 
 
 def test_no_forced_spin_when_too_tight_to_turn():

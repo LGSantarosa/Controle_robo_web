@@ -470,10 +470,6 @@ class UnstuckSupervisor:
     # translações (ré/avanço) recentes por ponto — anti-livelock ré<->avanço
     # (move_escape_after); só as manobras NORMAIS (não os nudges de escape).
     move_history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
-    # giros de escape ré<->avanço já feitos por ponto, com LADO (+1 esq/-1 dir) —
-    # pra virar pro outro lado quando o lado do plano não resolveu.
-    escape_spin_history: List[Tuple[float, Tuple[float, float], int]] = field(
-        default_factory=list)
     # motivo do último disparo p/ LOG de campo (06-30: pessoa parando o robô dispara
     # rápido?). "timeout"=cauteloso 10s; "mapped"/"near"/"pinch" furam pros ~2s.
     last_fire_reason: str = ""
@@ -660,12 +656,13 @@ class UnstuckSupervisor:
                 if now - mt <= self.cfg.escalate_window
                 and self._dist(mp, position) <= self.cfg.same_spot_radius)
             if moves_here >= self.cfg.move_escape_after:
-                side = self._escape_spin_side(now, position, plan_bearing,
-                                              open_side, nearest_deg)
-                self.escape_spin_history = [
-                    (st, sp, s) for (st, sp, s) in self.escape_spin_history
-                    if now - st <= self.cfg.escalate_window]
-                self.escape_spin_history.append((now, position, side))
+                side = self._escape_spin_side(plan_bearing, open_side, nearest_deg)
+                # QUEBRA O LOOP (campo 06-30: girou ~5x e nunca mais deu ré): zera o
+                # contador de translações deste eixo. Senão as 3 translações velhas
+                # ficam no contador por escalate_window (120s) e o escape-spin
+                # RE-DISPARA a cada ciclo pra sempre. Zerado, o próximo ciclo cai na
+                # ré/avanço antes de poder girar de novo -> alterna giro<->translação.
+                self.move_history = []
                 return self._begin_spin(now, open_side, yaw, nearest_deg,
                                         position, force_side=side)
         rear_target = min(self.cfg.reverse_distance,
@@ -765,21 +762,14 @@ class UnstuckSupervisor:
                              if now - mt <= self.cfg.escalate_window]
         self.move_history.append((now, position))
 
-    def _escape_spin_side(self, now, position, plan_bearing, open_side,
-                          nearest_deg) -> int:
-        # Lado do giro de escape ré<->avanço: o do PLANO primeiro (+esq). Sem plano
-        # claro (|bearing|<plan_side_min, ~reto à frente) cai no _spin_dir (longe do
-        # obstáculo). Se já girou pra esse lado NESTE ponto sem sair -> vira pro OUTRO.
+    def _escape_spin_side(self, plan_bearing, open_side, nearest_deg) -> int:
+        # SEMPRE o lado pra onde o PLANO aponta (dono 06-30: "tem que preferir SEMPRE
+        # girar pro lado que o planner aponta; flipar pro outro lado ia pra direção
+        # ERRADA e atrapalhava mais que ajudava"). Sem plano claro (|bearing| <
+        # plan_side_min, ~reto à frente) -> _spin_dir (longe do obstáculo mais próximo).
         if abs(plan_bearing) >= self.cfg.plan_side_min:
-            prefer = 1 if plan_bearing > 0 else -1
-        else:
-            prefer = self._spin_dir(open_side, nearest_deg)
-        tried = [s for (st, sp, s) in self.escape_spin_history
-                 if now - st <= self.cfg.escalate_window
-                 and self._dist(sp, position) <= self.cfg.same_spot_radius]
-        if prefer in tried:
-            return -prefer
-        return prefer
+            return 1 if plan_bearing > 0 else -1
+        return self._spin_dir(open_side, nearest_deg)
 
     def _spin_dir(self, open_side, nearest_deg) -> int:
         """Lado do giro: PRA LONGE do obstáculo mais próximo. (BATIDA/lado errado
