@@ -1,6 +1,8 @@
 #!/bin/bash
-# Configura nomes USB estáveis via localização física da porta USB.
-# Funciona mesmo quando dois dispositivos têm o mesmo VID:PID (ex: CH340).
+# Configura nomes USB estáveis via IDENTIDADE do dispositivo (serial / VID:PID).
+# 2026-07-01: era por PORTA FÍSICA (KERNELS) e INVERTEU mega<->lidar quando os
+# cabos trocaram de porta USB. Agora casa a MEGA pelo SERIAL (imune a troca de
+# porta) e o LiDAR pelo VID:PID (fallback pra porta física só se faltar serial).
 # Uso: sudo ./setup_udev.sh
 #
 # Identifica:
@@ -52,6 +54,30 @@ get_vidpid() {
     echo "${vid}:${pid}"
 }
 
+get_serial() {
+    # Serial USB estável (ID_SERIAL_SHORT). Arduino genuíno tem; adaptadores
+    # baratos (PL2303/CH340 genéricos) frequentemente NÃO — nesse caso volta vazio
+    # e o chamador cai no fallback por porta física.
+    local dev="$1"
+    udevadm info "$dev" 2>/dev/null | awk -F= '/ID_SERIAL_SHORT/{print $2}'
+}
+
+# Emite uma regra udev pra um dispositivo, preferindo a IDENTIDADE estável:
+#   serial presente        -> ATTRS{idVendor}+{idProduct}+{serial}  (imune a porta)
+#   sem serial, com VID:PID -> ATTRS{idVendor}+{idProduct}          (imune a porta)
+#   sem nada                -> KERNELS (porta física, frágil — último recurso)
+emit_rule() {
+    local name="$1" vidpid="$2" serial="$3" path="$4"
+    local vid="${vidpid%%:*}" pid="${vidpid##*:}"
+    if [ -n "$serial" ] && [ -n "$vid" ] && [ -n "$pid" ]; then
+        echo "SUBSYSTEM==\"tty\", ATTRS{idVendor}==\"$vid\", ATTRS{idProduct}==\"$pid\", ATTRS{serial}==\"$serial\", SYMLINK+=\"$name\", MODE=\"0660\", GROUP=\"dialout\""
+    elif [ -n "$vid" ] && [ -n "$pid" ]; then
+        echo "SUBSYSTEM==\"tty\", ATTRS{idVendor}==\"$vid\", ATTRS{idProduct}==\"$pid\", SYMLINK+=\"$name\", MODE=\"0660\", GROUP=\"dialout\""
+    else
+        echo "SUBSYSTEM==\"tty\", KERNELS==\"$path\", SYMLINK+=\"$name\", MODE=\"0660\", GROUP=\"dialout\""
+    fi
+}
+
 list_tty_ports() {
     ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || true
 }
@@ -101,7 +127,8 @@ else
     fi
     LIDAR_PATH=$(get_devpath "$LIDAR_PORT")
     LIDAR_VIDPID=$(get_vidpid "$LIDAR_PORT")
-    echo "  LiDAR identificado: $LIDAR_PORT → path=$LIDAR_PATH  VID:PID=$LIDAR_VIDPID"
+    LIDAR_SERIAL=$(get_serial "$LIDAR_PORT")
+    echo "  LiDAR identificado: $LIDAR_PORT → VID:PID=$LIDAR_VIDPID serial=${LIDAR_SERIAL:-<nenhum>} path=$LIDAR_PATH"
 fi
 echo ""
 
@@ -149,8 +176,9 @@ fi
 
 MEGA_PATH=$(get_devpath "$MEGA_PORT")
 MEGA_VIDPID=$(get_vidpid "$MEGA_PORT")
+MEGA_SERIAL=$(get_serial "$MEGA_PORT")
 
-echo "  MEGA identificada: $MEGA_PORT → path=$MEGA_PATH  VID:PID=$MEGA_VIDPID"
+echo "  MEGA identificada: $MEGA_PORT → VID:PID=$MEGA_VIDPID serial=${MEGA_SERIAL:-<nenhum>} path=$MEGA_PATH"
 echo ""
 
 # Sem o USB path a regra udev vira `KERNELS==""` (casa com nada, ou pior,
@@ -180,22 +208,22 @@ echo "Criando $RULES_FILE ..."
 {
     cat << EOF
 # Regras udev para nomes estáveis — Arduino MEGA + LiDAR.
-# Usa localização física da porta USB (KERNELS) para diferenciar
-# dispositivos com o mesmo VID:PID.
+# Casa por IDENTIDADE do dispositivo (serial / VID:PID) — imune a troca de
+# porta USB. Só cai pra porta física (KERNELS) se faltar serial E VID:PID.
 # Gerado por setup_udev.sh em $(date).
 #
 # Para regenerar: sudo ~/Workspace/Controle_robo_web/setup_udev.sh
 
 # Arduino MEGA 2560 — ponte 2 placas hoverboard + sensores
-# porta USB física: $MEGA_PATH
-SUBSYSTEM=="tty", KERNELS=="$MEGA_PATH", SYMLINK+="mega", MODE="0660", GROUP="dialout"
+# VID:PID=$MEGA_VIDPID serial=${MEGA_SERIAL:-<nenhum>} (porta física era $MEGA_PATH)
+$(emit_rule mega "$MEGA_VIDPID" "$MEGA_SERIAL" "$MEGA_PATH")
 EOF
 
     if [ -n "$LIDAR_PATH" ]; then
         cat << EOF
 
-# LiDAR FHL-LD20 — porta USB física: $LIDAR_PATH
-SUBSYSTEM=="tty", KERNELS=="$LIDAR_PATH", SYMLINK+="lidar", MODE="0660", GROUP="dialout"
+# LiDAR FHL-LD20 — VID:PID=$LIDAR_VIDPID serial=${LIDAR_SERIAL:-<nenhum>} (porta física era $LIDAR_PATH)
+$(emit_rule lidar "$LIDAR_VIDPID" "$LIDAR_SERIAL" "$LIDAR_PATH")
 EOF
     fi
 } > "$RULES_FILE"
@@ -221,8 +249,8 @@ fi
 echo ""
 echo "=== Pronto! ==="
 echo ""
-echo "IMPORTANTE: Esses symlinks dependem da porta USB FÍSICA."
-echo "Se trocar o cabo de entrada USB, rode este script novamente."
+echo "IMPORTANTE: symlinks agora casam por SERIAL/VID:PID — imunes a troca de"
+echo "porta USB. Só rode de novo se TROCAR a placa (MEGA/adaptador do LiDAR)."
 echo ""
 echo "Próximo passo: ./launch.sh (rebuild incremental automático)."
 echo "Pra recompilar tudo do zero (raro), apague o install/ e rode ./setup_pi.sh ou ./setup.sh."
