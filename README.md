@@ -1,6 +1,8 @@
 # Controle Web do Robô 4 Rodas
 
-Interface web para controlar um robô **skid-steer de 4 rodas** com duas placas de hoverboard agregadas por um **Arduino MEGA 2560**, LiDAR **LDROBOT LD06**, IMU **MPU9250**, optical flow **PMW3901**, **mapeamento SLAM**, **navegação autônoma Nav2 com click-to-go** e uma **camada própria de segurança e manobra**: collision monitor com scan sanitizado, supervisor de desencalhe (ré em malha fechada na IMU), **travessia de porta assistida** (`door_crossing`, portas marcadas pela UI) e monitor de tensão das placas.
+Interface web para controlar um robô **skid-steer de 4 rodas** com duas placas de hoverboard agregadas por um **Arduino MEGA 2560**, LiDAR **LDROBOT LD06**, IMU **MPU6050**, **mapeamento SLAM**, **navegação autônoma Nav2 com click-to-go** e uma **camada própria de segurança e manobra**: seguidor de trajetória próprio (`path_follower` — segue o `/plan` em retas + giro no lugar, ignora o controller do Nav2), collision monitor com scan sanitizado, supervisor de desencalhe (ré/giro em malha fechada na IMU) e monitor de tensão das placas.
+
+> **Estado do hardware (2026-07-01):** o optical flow **PMW3901 foi removido** do robô (level shifter marginal, deu problema demais) — hoje o robô navega **só com LiDAR + rodas + IMU**. A IMU voltou a ser um **MPU6050** (o "MPU9250"/MPU6500 foi devolvido). As seções abaixo que citam o PMW3901 estão marcadas como **inativas hoje** (o código/fusão do flow continua no repo, caso o sensor volte). Ver `ESTADO_PROJETO.md` para o histórico.
 
 ## Sumário
 
@@ -21,7 +23,7 @@ Interface web para controlar um robô **skid-steer de 4 rodas** com duas placas 
   - [Modo NAV2 — navegação autônoma](#modo-nav2--navegação-autônoma)
 - [Operação headless](#operação-headless)
 - [Controles](#controles)
-- [Sensores embarcados (MPU9250 + PMW3901)](#sensores-embarcados-mpu9250--pmw3901)
+- [Sensores embarcados (IMU MPU6050 + optical flow)](#sensores-embarcados-imu-mpu6050--optical-flow)
 - [Sinalização do robô (LEDs, relé, botão)](#sinalização-do-robô-leds-relé-botão)
 - [Navegação por waypoints](#navegação-por-waypoints)
 - [Camada de segurança e manobra (NAV2)](#camada-de-segurança-e-manobra-nav2)
@@ -158,7 +160,7 @@ Navegador (WASD / Gamepad / Clique / Waypoints / Marcar porta)
         │  Action navigate_to_pose  (waypoints e click-to-go em NAV2)
         │  /doors (portas marcadas) + /initialpose (definir pose)
         ▼
-  twist_mux   (joy 100 > key 90 > web 50 > unstuck 30 > door 20 > nav 10)
+  twist_mux FINAL (joy 100 > key 90 > web 50 > unstuck 30 > autonomia 10)
         │  /cmd_vel  (geometry_msgs/Twist)
         ▼
   cmd_vel_to_wheels
@@ -170,43 +172,47 @@ Navegador (WASD / Gamepad / Clique / Waypoints / Marcar porta)
   Arduino MEGA 2560 (firmware C++, Wire timeout + watchdog WDTO_2S)
         │  Serial1 ───► placa hoverboard FRENTE  (FL + FR)
         │  Serial2 ───► placa hoverboard TRÁS    (RL + RR)
-        │  I²C    ───► MPU9250  (IMU — gyro + accel; mag interno)
-        │  SPI    ───► PMW3901  (optical flow)
+        │  I²C    ───► MPU6050  (IMU — gyro + accel; yaw integrado do gyro Z)
+        │  SPI    ───► [PMW3901 optical flow — REMOVIDO 2026-07-01]
         │  pinos  ───► relé / LED de marco / botão / fita de 3 LEDs na 12 V
 
   Sensores publicados pela MEGA via mega_bridge:
     /hoverboard/wheel_velocities  (Float64MultiArray, RPM por roda [FL,FR,RL,RR])
     /imu/data           (sensor_msgs/Imu — gyro/accel, QoS BEST_EFFORT)
-    /optical_flow       (Vector3Stamped — dx, dy, SQUAL real)
+    /optical_flow       (Vector3Stamped — 0 Hz hoje: sensor removido)
     /battery/{front,rear}  (→ power_monitor: CSV 10 Hz + chip de tensão na UI)
 
   LiDAR LDROBOT LD06 ───► /scan  (USB próprio, com retry no boot + watchdog)
 
-  pose_estimator (SEMPRE) — fusão rodas + IMU + flow → /odom + TF odom→base_link
-                  (congela a pose se o stream de rodas morrer — wheel_fresh)
+  pose_estimator (SEMPRE) — fusão rodas + IMU (+ flow, quando presente) → /odom + TF
+                  odom→base_link (congela a pose se o stream de rodas morrer — wheel_fresh)
 
   ┌─────────────────────────┬─────────────────────────────────────────┐
   │  TELEOP                 │  SLAM                   │  NAV2          │
   │  (web + LiDAR +         │  slam_toolbox           │  map_server +  │
   │   pose_estimator)       │  → /map (ao vivo)       │  amcl + planner│
-  │                         │  → TF map→odom          │  + DWB c/      │
-  │                         │  correção de yaw pela   │  RotationShim +│
-  │                         │  UI (trekking/yaw_fix)  │  bt_navigator  │
-  │                         │                         │  (BT custom:   │
-  │                         │                         │  ré ANTES do   │
-  │                         │                         │  spin) +       │
+  │                         │  → TF map→odom          │  + planner     │
+  │                         │  correção de yaw pela   │  Theta* +      │
+  │                         │  UI (trekking/yaw_fix)  │  path_follower │
+  │                         │                         │  (reto + giro  │
+  │                         │                         │  no lugar) +   │
+  │                         │                         │  bt_navigator +│
   │                         │                         │  CAMADA DE     │
   │                         │                         │  SEGURANÇA ▼   │
   └─────────────────────────┴─────────────────────────────────────────┘
 
   Camada de segurança/manobra (só NAV2 — ver seção própria):
-    scan_sanitizer      /scan → /scan_safe (mata fantasmas <15 cm do LD06;
-                        máscara de batente durante travessia de porta)
-    collision_monitor   freia nav_vel_raw → nav_vel lendo /scan_safe
-    unstuck_supervisor  robô parado c/ goal ativo → ré furando o collision
-                        (prio 30; checagem de vão traseiro rear_min_gap)
-    door_crossing       porta marcada na UI → alinha no eixo e atravessa
-                        reto vigiando o vão (prio 20; publica /door_zone)
+    path_follower       segue o /plan do Theta* em RETAS + giro no lugar
+                        (publica follow_vel; ignora o controller do Nav2)
+    scan_sanitizer      /scan → /scan_safe (mata fantasmas <15 cm do LD06)
+    twist_mux_auto      arbitra a autonomia: door_vel(20) > follow_vel(15)
+                        > nav_vel(10) → auto_vel_raw
+    collision_monitor   freia auto_vel_raw → auto_vel lendo /scan_safe
+                        (protege TODA a autonomia num ponto só)
+    unstuck_supervisor  robô parado c/ goal ativo → ré/giro furando o
+                        collision (entra no mux FINAL, prio 30)
+    [door_crossing]     OBSOLETO/DESATIVADO — o path_follower atravessa
+                        porta nativamente (nó comentado no launch)
         │
         ▼  Pontes ROS2 → Socket.IO (no app Flask)
   map_service.py:    /map → PNG, TF map→base_link, /plan, /initialpose,
@@ -231,7 +237,7 @@ Navegador (WASD / Gamepad / Clique / Waypoints / Marcar porta)
 |------|------|---------------|-------------------|
 | **TELEOP** | *(padrão)* | Dirigir manualmente | Só web + LiDAR + nós do robô — sem camada de segurança ativa |
 | **SLAM** | `--slam` | Construir o mapa da sala | `slam_toolbox` em modo *mapping online* (gera `/map` ao vivo) |
-| **NAV2** | `--nav2` | Navegação autônoma + click-to-go + waypoints + métricas | `map_server` + `amcl` (com beam_skip) + `planner_server` + `controller_server` (DWB + RotationShim) + `bt_navigator` (BT custom: ré antes do spin) + `behavior_server` + `velocity_smoother` + `waypoint_follower` + **camada de segurança**: `scan_sanitizer` + `collision_monitor` + `unstuck_supervisor` + `door_crossing` + `NavMetricsCollector` (CSV) |
+| **NAV2** | `--nav2` | Navegação autônoma + click-to-go + waypoints + métricas | `map_server` + `amcl` (com beam_skip) + `planner_server` (Theta\*) + `controller_server` (DWB, ignorado pelo seguidor) + `bt_navigator` + `behavior_server` + `velocity_smoother` + `waypoint_follower` + **camada de segurança**: `path_follower` + `scan_sanitizer` + `twist_mux_auto` + `collision_monitor` + `unstuck_supervisor` + `NavMetricsCollector` (CSV) (`door_crossing` desativado) |
 | **TREKKING** | `--trekking` | Ponto-a-ponto rápido com PID, fusão de 3 sensores e snap-to-cone via LiDAR (sem Nav2) | `cone_detector` + `trekking_runner` (máquina de estado + PID) + correção de pose por cone-âncora |
 
 Em todos os modos o servidor web, a ponte MEGA (`mega_bridge`), o `pose_estimator` (dono da odometria e do TF `odom→base_link`), o `twist_mux` e o LiDAR rodam normalmente — você sempre pode dirigir manualmente, mesmo durante SLAM ou NAV2. O `power_monitor` (tensão das placas) sobe em qualquer modo com ROS.
@@ -247,11 +253,11 @@ A flag `--sim` troca tudo que é hardware por simulação:
 | Stage | Modo real | Modo `--sim` |
 |-------|-----------|--------------|
 | Ponte para os motores | `mega_bridge` ↔ Arduino MEGA ↔ 2 placas hoverboard | plugin `DiffDrive` do Gazebo |
-| Odometria | `pose_estimator` (fusão rodas + IMU + flow) | plugin `DiffDrive` do Gazebo |
+| Odometria | `pose_estimator` (fusão rodas + IMU; flow removido) | plugin `DiffDrive` do Gazebo |
 | `/cmd_vel → rodas` | `cmd_vel_to_wheels` + MEGA | plugin `DiffDrive` do Gazebo |
 | LiDAR | `ldlidar_stl_ros2` em `/dev/lidar` (LD06) | sensor `gpu_lidar` na SDF do robô |
-| IMU | MPU9250 (via MEGA) | (não simulado) |
-| Optical flow | PMW3901 (via MEGA) | (não simulado) |
+| IMU | MPU6050 (via MEGA) | (não simulado) |
+| Optical flow | PMW3901 — **removido do robô** (2026-07-01) | (não simulado) |
 | Corpo do robô | URDF (`robot.urdf.xacro` — 4 rodas) | SDF (`sim_robot.sdf` — 4 rodas skid-steer, geometria REAL 0.37×0.35) |
 | `/scan`, `/odom`, `/tf` | tópicos reais | via `ros_gz_bridge` (GZ → ROS) |
 
@@ -332,7 +338,7 @@ O `worlds/empty.sdf` serve como template pronto.
   ```
 - **Firmware da MEGA (só hardware real)**:
   - [PlatformIO Core](https://platformio.org/install/cli): instalado automaticamente pelo `setup.sh` / `setup_pi.sh` via `pip install --user platformio`
-  - Bibliotecas: o IMU **MPU9250** usa driver direto por registrador (`sensors_imu.*`, sem dependência externa — a `Adafruit MPU6050` foi removida porque rejeita o 9250); o PMW3901 usa um **fork local** em `lib/Bitcraze_PMW3901/` (SQUAL real); `FastLED` está comentado (anel abandonado)
+  - Bibliotecas: a IMU usa driver direto por registrador (`sensors_imu.*`, sem dependência externa; a whitelist de WHO_AM_I aceita MPU6050 `0x68`, MPU6500/9250 `0x70/0x71/0x73`); o PMW3901 (hoje removido) usava um **fork local** em `lib/Bitcraze_PMW3901/` (SQUAL real); `FastLED` está comentado (anel abandonado)
 - Python 3.10+
 
 ---
@@ -393,7 +399,7 @@ ls -la /dev/mega /dev/lidar
 O firmware C++ fica em `firmware/mega_bridge/` (projeto PlatformIO). Ele:
 - recebe comandos do PC pela USB (frames `0xAA 0x55 [tipo] [len] [payload] [xor]`, 230400 baud);
 - envia `SerialCommand` (0xABCD) para as duas placas pelos `Serial1` (frente) e `Serial2` (trás) a 50 Hz, com **watchdog de 500 ms** (zera os motores se o PC parar de falar);
-- agrega os `SerialFeedback` das duas placas e os dados de MPU9250 + PMW3901 num único stream para o PC;
+- agrega os `SerialFeedback` das duas placas e os dados da IMU MPU6050 (e do PMW3901, quando presente) num único stream para o PC;
 - protege o barramento I²C com `Wire.setWireTimeout` + watchdog de hardware `WDTO_2S` (EMI dos motores travava a TWI e congelava o firmware — fix 2026-06-09, validado em campo).
 
 **Pinagem fixa:**
@@ -404,9 +410,9 @@ O firmware C++ fica em `firmware/mega_bridge/` (projeto PlatformIO). Ele:
 | Serial1 | 18 (TX), 19 (RX) | Placa hoverboard **FRENTE** |
 | Serial2 | 16 (TX), 17 (RX) | Placa hoverboard **TRÁS** |
 | Serial3 | 14 (TX), 15 (RX) | Reserva / debug |
-| I²C | 20 (SDA), 21 (SCL) | MPU9250 (IMU; mesmos fios do 6050; mag AK8963 interno) |
-| SPI | 50 (MISO), 51 (MOSI), 52 (SCK) | PMW3901 (via conversor 5↔3.3 V) |
-| CS do PMW3901 | 10 | PMW3901 |
+| I²C | 20 (SDA), 21 (SCL) | MPU6050 (IMU 6 eixos, endereço `0x68`) |
+| SPI | 50 (MISO), 51 (MOSI), 52 (SCK) | PMW3901 (via conversor 5↔3.3 V) — **removido 2026-07-01** |
+| CS do PMW3901 | 10 | PMW3901 — removido |
 | Fita de LEDs | relé/12 V | Fita de 3 LEDs na 12 V (o anel WS2812 foi **abandonado** — curto no DIN; driver fora do build) |
 | Relé da luz | 7 | Módulo relé |
 | LED de sinalização do marco | 8 | LED externo |
@@ -557,7 +563,7 @@ O que sobe a mais (3 nós Python leves, ~10% CPU total):
 
 | Nó | Tópico produzido | Função |
 |----|------------------|--------|
-| `pose_estimator` | `/trekking/pose`, `/trekking/odom`, `/trekking/slip` (+ `/odom` e o TF, em todos os modos) | Funde **MPU6050 (yaw do gyro, validado ~99%)** + **PMW3901 (flow)** + **4 RPMs**. Quando `quality` do flow é alta, ele assume — corrige slip das rodas. |
+| `pose_estimator` | `/trekking/pose`, `/trekking/odom`, `/trekking/slip` (+ `/odom` e o TF, em todos os modos) | Funde **MPU6050 (yaw do gyro, validado ~99%)** + **4 RPMs** (+ **PMW3901 flow**, quando presente — hoje removido). Corrige slip das rodas. |
 | `cone_detector`  | `/trekking/cones` | Clusteriza `/scan` por gap, filtra por largura (5–40 cm) e publica candidatos a cone em frame `odom`. |
 | `trekking_runner`| `/cmd_vel`, `/leds/color`, `/trekking/state`, `/trekking/target` | Máquina IDLE/RECORD/PLAY com PID heading + `v = v_max·cos²(err)·brake`, snap-to-cone re-âncora o alvo a cada waypoint. |
 
@@ -614,8 +620,15 @@ ros2 launch robot_nav trekking.launch.py v_max:=0.8 flow_height:=0.13
 
 ### Calibração e diagnóstico do flow (PMW3901) — sessão 2026-05-29
 
-O flow agora está **na fusão** (antes estava efetivamente desligado). O que foi
-feito, em ordem:
+> ⚠️ **INATIVO HOJE (2026-07-01):** o PMW3901 foi **removido do robô** (level shifter
+> MOSFET marginal, EMI dos motores corrompia amostras — dor crônica). O robô navega
+> sem flow: yaw = IMU, translação reta = roda calibrada, posição = LiDAR/AMCL.
+> `/optical_flow` fica a 0 Hz e `flow_stale=true` no `/trekking/health` é NORMAL.
+> A seção abaixo é histórico/referência — o código da fusão segue no repo caso o
+> sensor volte (plano: breakout da Pimoroni, que já traz regulador + level-shift onboard).
+
+O flow, **quando montado**, entra **na fusão** (antes estava efetivamente desligado).
+O que foi feito, em ordem:
 
 **1. SQUAL real (C5).** Antes o `quality` saía hardcoded em 0. Como o
 `pose_estimator` pesa o flow por `alpha = sigmoid((quality - q_mid)/q_slope)`
@@ -719,8 +732,8 @@ mais pelo navegador, que tinha latência ruim via WiFi. O web vira só
 **visualização** (default `WEB_TELEOP=off`). Quem arbitra o `/cmd_vel` é o
 `twist_mux`: **PS4 (`joy_vel`, prio 100) > WASD (`key_vel`, prio 90) >
 web (`web_vel`, prio 50, só se `--web-teleop`) > desencalhe (`unstuck_vel`,
-prio 30) > travessia de porta (`door_vel`, prio 20) > Nav2/trekking
-(`nav_vel`, prio 10)**. Encostar no analógico do PS4 (segurando o dead-man
+prio 30) > autonomia (`auto_vel`, prio 10 — nav + path_follower já filtrados
+pelo collision)**. Encostar no analógico do PS4 (segurando o dead-man
 **L1**) durante um Nav2 assume o controle; soltar devolve a navegação após o
 timeout de 0.5 s.
 
@@ -863,20 +876,22 @@ Ao soltar o botão, o multiplicador volta ao valor anterior do slider. A UI tamb
 
 ---
 
-## Sensores embarcados (MPU9250 + PMW3901)
+## Sensores embarcados (IMU MPU6050 + optical flow)
 
-A Arduino MEGA agrega dois sensores que entram no ROS via `mega_bridge` e são **fundidos pelo `pose_estimator`** (que publica `/odom` e o TF `odom→base_link` em todos os modos):
+A Arduino MEGA lê a IMU e entrega os dados no ROS via `mega_bridge`, **fundidos pelo `pose_estimator`** (que publica `/odom` e o TF `odom→base_link` em todos os modos):
 
-**MPU9250 — IMU 9 eixos** (I²C `0x68`; gyro+accel usados, mag AK8963 = TODO):
+**MPU6050 — IMU 6 eixos** (I²C `0x68`; gyro+accel; sem magnetômetro):
 - Tópico: `/imu/data` (`sensor_msgs/Imu`, QoS `BEST_EFFORT` — o subscriber precisa casar, senão a IMU "some").
 - 6 eixos **sem yaw absoluto**: o yaw é **integrado do gyro Z** pelo `pose_estimator`. Validado na bancada: escala ~+2% em 360°, suficiente sem correção.
 - Montada de ponta-cabeça (Z pra baixo) → `imu_yaw_sign=-1.0` no launch.
 - **Uso atual: FUNDIDA.** O yaw do gyro corrige a odometria de roda no giro (skid-steer patina, a roda superestima yaw) — resolveu o "pose erra no giro" do SLAM/Nav2 (validação ~99% em campo, 2026-06-08).
+- **Histórico (2026-07-01):** o dono chegou a trocar por um MPU6500/"9250" e depois voltou pro MPU6050. O firmware (driver direto por registrador) tinha uma whitelist de WHO_AM_I que **não incluía o `0x68` do 6050** → a IMU ficava a 0 Hz sem ninguém perceber (o LiDAR/AMCL mascarava). Corrigido: a whitelist aceita `0x68` (6050) e `0x70/0x71/0x73` (6500/9250/9255).
 
-**PMW3901 — sensor de fluxo óptico** (SPI, CS pino 10):
-- Tópico: `/optical_flow` (`geometry_msgs/Vector3Stamped`: `x=dx`, `y=dy`, `z=SQUAL` real lido do registrador `0x07`).
-- **Uso atual: FUNDIDO** (`use_flow=on`): velocidade real no chão em linha reta, corrige slip das rodas. Escala calibrada em campo (era 12,8× off), integração por `flow_tick_velocity` (bug da pose dobrada corrigido), gates `flow_yaw_gate` e `flow_plausible` descartam lixo de EMI na manobra.
-- ⚠️ Pendência de hardware: o level shifter MOSFET do SPI é marginal — EMI dos motores na manobra corrompe amostras (descartadas pelos gates). Fix real = trocar por shifter push-pull (74AHCT125/74LVC245).
+**PMW3901 — sensor de fluxo óptico** (SPI, CS pino 10) — ⚠️ **REMOVIDO DO ROBÔ (2026-07-01):**
+- **Não está montado hoje.** `/optical_flow` fica a 0 Hz e a fusão roda só com rodas + IMU. `flow_stale=true` no `/trekking/health` é NORMAL agora — não é bug.
+- Motivo da remoção: o level shifter MOSFET do SPI era marginal e a EMI dos motores corrompia as amostras (chip-id lia `0xFF` = MISO morto). Dor crônica; o dono arrancou o sensor.
+- Plano futuro (não urgente): breakout da **Pimoroni** (regulador + level-shift onboard, 5 V direto) que mata o shifter marginal. O código da fusão do flow segue no repo pronto pra religar.
+- Quando montado: tópico `/optical_flow` (`geometry_msgs/Vector3Stamped`: `x=dx`, `y=dy`, `z=SQUAL` real do registrador `0x07`); entra na fusão com `use_flow=on`, escala calibrada em campo, gates `flow_yaw_gate`/`flow_plausible` contra lixo de EMI.
 
 Quem orquestra ambos no firmware: `firmware/mega_bridge/src/main.cpp` (loop principal), `firmware/mega_bridge/include/sensors_imu.h` e `sensors_flow.h`.
 
@@ -929,39 +944,42 @@ Entre cada waypoint, limpa o `local_costmap` (`/local_costmap/clear_entirely_loc
 
 ## Camada de segurança e manobra (NAV2)
 
-Quatro nós próprios (todos em `robot_nav`, lógica pura testável por pytest + cola de I/O fina) cercam o Nav2 stock. Pipeline de velocidade no modo NAV2:
+Nós próprios (todos em `robot_nav`, lógica pura testável por pytest + cola de I/O fina) cercam o Nav2 stock. Desde 2026-06-26 o pipeline é de **dois muxes** — o `collision_monitor` fica no meio e passa a proteger **TODA** a autonomia num ponto só (antes só filtrava o `nav_vel` e o seguidor furava):
 
 ```
-controller (DWB+RotationShim) → velocity_smoother → nav_vel_raw
-    → collision_monitor (lê /scan_safe) → nav_vel → twist_mux → /cmd_vel
+path_follower (follow_vel) ┐
+velocity_smoother (nav_vel) ├─→ twist_mux_auto → auto_vel_raw
+door_crossing (door_vel)   ┘        (door 20 > follower 15 > nav 10)
+                                         │
+                                         ▼
+                              collision_monitor (lê /scan_safe) → auto_vel
+                                         │
+    unstuck_vel (30) ─────────────┐     │
+    joy/key/web (100/90/50) ──────┼─────┴──→ twist_mux FINAL → /cmd_vel
+                                         (autonomia = auto_vel, prio 10)
 ```
+
+O **unstuck e o humano (PS4/web)** entram no mux FINAL, **a jusante** do collision — então continuam furando o reflexo (resgate/override sempre funcionam). Se o collision cair, `auto_vel` some e a autonomia não anda (collision é OBRIGATÓRIO), mas o humano segue dirigindo.
+
+### path_follower — seguidor de trajetória (reto + giro no lugar)
+
+O controlador do Nav2 (DWB) tenta arcos suaves, mas o skid-steer com zona-morta **não esterça andando** (medido: sempre sub-vira, ≤19% do comando) → o robô chegava de cara/paralelo na parede. O `path_follower` **ignora o `controller_server`** e segue diretamente o `/plan` do planner Theta\* com dois primitivos: **anda reto** enquanto apontado pro carrot (lookahead 0.6 m) e **gira no lugar** (autoridade alta, malha fechada no yaw) quando precisa realinhar. Publica em `follow_vel` (prio 15 no `twist_mux_auto`). Dono: **"visivelmente melhor", "igual ao sim".** Foi ele que tornou o `door_crossing` obsoleto (atravessa porta estreita nativamente — 4/4 no real, porta deletada do mapa).
 
 ### scan_sanitizer — `/scan` → `/scan_safe`
 
-O LD06 cospe **retornos fantasmas** a <15 cm do sensor (dentro do chassi — fisicamente impossíveis) em ~2% dos scans, em setores fixos. Com `min_points: 2` na PolygonStop, 2 pontinhos congelavam o robô — inclusive parado no meio de uma porta (17 dos 22 freezes de um bag analisado em 2026-06-12). O nó troca `0 < r < 0.15` por `+inf` e republica. **Só o collision monitor consome `/scan_safe`** — SLAM, costmaps e cone_detector seguem no `/scan` cru.
-
-Também aplica a **máscara de batente** da travessia de porta (abaixo): durante o estado `crossing`, discos de 0,30 m ao redor dos 2 batentes marcados viram `inf` — o collision monitor fica "do tamanho da porta": cego só para os batentes clicados, enxergando todo o resto (pessoa no vão continua freando). Fail-safe: sem TF → sem máscara.
+O LD06 cospe **retornos fantasmas** a <15 cm do sensor (dentro do chassi — fisicamente impossíveis) em ~2% dos scans, em setores fixos. Com `min_points: 2` na PolygonStop, 2 pontinhos congelavam o robô — inclusive parado no meio de uma porta (17 dos 22 freezes de um bag analisado em 2026-06-12). O nó troca `0 < r < 0.15` por `+inf` e republica. **Só o collision monitor consome `/scan_safe`** — SLAM, costmaps e cone_detector seguem no `/scan` cru. (A máscara de batente da porta só era usada pelo `door_crossing`, hoje desativado.)
 
 ### collision_monitor (Nav2 stock, tunado)
 
-Freia `nav_vel_raw → nav_vel` lendo o scan **sanitizado**. `PolygonStop` ±0,30 m de largura (era ±0,38 — batente de porta entrava na caixa) e `PolygonSlow` reduz pra 30% na aproximação. Atua **antes** do twist_mux, então PS4/web passam por cima dele.
+Freia `auto_vel_raw → auto_vel` lendo o scan **sanitizado** — no meio dos dois muxes, protege toda a autonomia (nav + seguidor + porta). `PolygonStop` ±0,30 m de largura (era ±0,38 — batente de porta entrava na caixa) e `PolygonSlow` reduz pra 30% na aproximação. O unstuck e o humano entram **depois** dele (mux FINAL), então passam por cima.
 
-### unstuck_supervisor — desencalhe com ré
+### unstuck_supervisor — desencalhe com ré/giro
 
-O collision monitor congela TUDO (até a rotação), e um robô empacado de frente nunca faz o `FollowPath` falhar — o recovery do BT não dispara. O supervisor vigia: **parado >5 cm por 5 s com goal ativo** → publica ré 0,30 m em `unstuck_vel` (prio 30, **fura o collision**); 3 encalhes no mesmo ponto → ré + giro de 15° em malha fechada na IMU pro lado mais livre. A ré é protegida pela checagem `rear_min_gap` (vão real do para-choque num corredor retangular atrás, re-checado durante a manobra, com abort no meio). Validado em campo ("melhorou pra cacete").
+O collision monitor congela TUDO (até a rotação), e um robô empacado de frente nunca faz o `FollowPath` falhar — o recovery do BT não dispara. O supervisor vigia: **parado com goal ativo** → publica ré em `unstuck_vel` (prio 30, **fura o collision**). Evoluído (2026-06/07): dispara rápido perto de parede mapeada/aperto lateral, escolhe a direção pela cena (frente livre → avança; atrás livre → ré), e o **escape-spin** gira SEMPRE pro lado do plano quando encurralado, alternando giro↔translação pra não entrar em loop. A ré é protegida pela checagem `rear_min_gap` (vão real do para-choque). Validado em campo ("melhorou pra cacete").
 
-### door_crossing — travessia de porta assistida (novo, 2026-06-12)
+### door_crossing — travessia de porta assistida ⚠️ OBSOLETO/DESATIVADO (2026-06-26)
 
-O Nav2 não atravessa porta estreita: entra torto, o batente entra na PolygonStop e congela. Fluxo:
-
-1. **Marcar** a porta na UI (botão 🚪, um clique em cada batente) → `maps/<mapa>.doors.json` → `/doors` (latched).
-2. Com **goal ativo + robô na zona (1,2 m) + nav empurrando pra frente**, o nó assume via `door_vel` (prio 20):
-   - `staging` — vai devagar pro ponto de preparação no eixo da porta;
-   - `rotating` — gira no lugar até encarar o eixo de verdade (**|lateral| < 8 cm E |yaw| < 5°**, estável por 5 ticks);
-   - `crossing` — atravessa reto a 0,15 m/s com micro-correção, **vigiando o vão** (`gap_ahead`: obstáculo a <0,45 m no corredor à frente → aborta; os 2 batentes marcados não contam).
-3. Passou do centro + 0,5 m → solta pro Nav2 seguir o goal.
-
-Aborta e devolve pro Nav2 se: TF sumir, goal morrer, scan envelhecer, vão fechar ou timeout (15 s pra alinhar, 40 s total). Publica `/door_zone` (estado) — é o gate da máscara de batente no sanitizer e do chip na UI. **Validado em campo 2026-06-12: o robô atravessou a porta.**
+**Não roda mais** — o nó está **comentado no `nav2.launch.py`**. Existia porque o DWB velho não threadava porta estreita (entrava torto, batente na PolygonStop, congela). O `path_follower` passou a atravessar porta nativamente (vai reto pelo vão + giro decisivo), então o `door_crossing` virou redundante e foi desligado. O código continua no repo (`robot_nav/door_crossing.py`); pra religar = descomentar no launch + `colcon build robot_nav`. Quando ativo, ele assumia via `door_vel` (prio 20) uma porta marcada na UI (2 cliques) e alinhava/atravessava vigiando o vão.
 
 ### Recovery com ré primeiro (BT custom)
 
@@ -1010,24 +1028,26 @@ Tópicos consumidos:
 | `/joy_vel` | `geometry_msgs/Twist` | `teleop_twist_joy` (PS4) | `twist_mux` (prio 100) | só real |
 | `/key_vel` | `geometry_msgs/Twist` | `bin/robot-key` (WASD via SSH) | `twist_mux` (prio 90) | só real, opcional |
 | `/web_vel` | `geometry_msgs/Twist` | `controle_web` (se `WEB_TELEOP=on`) | `twist_mux` (prio 50) | opcional |
-| `/nav_vel_raw` | `geometry_msgs/Twist` | `velocity_smoother` (nav2) | `collision_monitor` / `unstuck_supervisor` / `door_crossing` | só `--nav2` |
-| `/nav_vel` | `geometry_msgs/Twist` | `collision_monitor` (nav2) / `trekking_runner` | `twist_mux` (prio 10) | só `--nav2`/`--trekking` |
-| `/unstuck_vel` | `geometry_msgs/Twist` | `unstuck_supervisor` | `twist_mux` (prio 30 — fura o collision) | só `--nav2` |
-| `/door_vel` | `geometry_msgs/Twist` | `door_crossing` | `twist_mux` (prio 20) | só `--nav2` |
+| `/nav_vel` | `geometry_msgs/Twist` | `velocity_smoother` (nav2) / `trekking_runner` | `twist_mux_auto` (prio 10) | só `--nav2`/`--trekking` |
+| `/follow_vel` | `geometry_msgs/Twist` | `path_follower` | `twist_mux_auto` (prio 15) | só `--nav2` |
+| `/door_vel` | `geometry_msgs/Twist` | `door_crossing` (DESATIVADO) | `twist_mux_auto` (prio 20) | — (nó comentado) |
+| `/auto_vel_raw` | `geometry_msgs/Twist` | `twist_mux_auto` | `collision_monitor` | só `--nav2` |
+| `/auto_vel` | `geometry_msgs/Twist` | `collision_monitor` | `twist_mux` FINAL (prio 10) | só `--nav2` |
+| `/unstuck_vel` | `geometry_msgs/Twist` | `unstuck_supervisor` | `twist_mux` FINAL (prio 30 — fura o collision) | só `--nav2` |
 | `/wheel_vel_setpoints` | `wheel_msgs/WheelSpeeds` | `cmd_vel_to_wheels` | `mega_bridge` (envia pras 2 placas) | sempre |
 | `/hoverboard/wheel_velocities` | `std_msgs/Float64MultiArray` (RPM, ordem [FL,FR,RL,RR]) | `mega_bridge` | `pose_estimator` | sempre |
 | `/imu/data` | `sensor_msgs/Imu` (QoS `BEST_EFFORT`) | `mega_bridge` | `pose_estimator` (yaw fundido) / `unstuck_supervisor` (giro fechado) | sempre |
-| `/optical_flow` | `geometry_msgs/Vector3Stamped` | `mega_bridge` | `pose_estimator` (vx fundido) | sempre |
+| `/optical_flow` | `geometry_msgs/Vector3Stamped` | `mega_bridge` | `pose_estimator` (vx fundido) | sensor **removido** — 0 Hz hoje |
 | `/battery/front` `/battery/rear` | `sensor_msgs/BatteryState` | `mega_bridge` | `power_monitor` (CSV + chip UI) | sempre |
 | `/leds/color` | `std_msgs/ColorRGBA` | `trekking_runner` (no-op) | `mega_bridge` → MEGA | sempre (anel abandonado) |
 | `/light/cmd` | `std_msgs/Bool` | (cliente, futuro) | `mega_bridge` → MEGA | sempre |
-| `/scan` | `sensor_msgs/LaserScan` | LiDAR driver (LD06) | `slam_toolbox` / `amcl` / costmaps / `cone_detector` / `scan_sanitizer` / `door_crossing` | sempre |
+| `/scan` | `sensor_msgs/LaserScan` | LiDAR driver (LD06) | `slam_toolbox` / `amcl` / costmaps / `cone_detector` / `scan_sanitizer` | sempre |
 | `/scan_safe` | `sensor_msgs/LaserScan` | `scan_sanitizer` | `collision_monitor` (SÓ ele) | só `--nav2` |
 | `/doors` | `std_msgs/String` (JSON, latched) | `MapBridge` (web) | `door_crossing` / `scan_sanitizer` | só `--nav2` |
 | `/door_zone` | `std_msgs/String` (JSON, latched) | `door_crossing` | `scan_sanitizer` (gate da máscara) / `MapBridge` (chip UI) | só `--nav2` |
 | `/initialpose` | `PoseWithCovarianceStamped` | `MapBridge` (botão Definir pose) | `amcl` | só `--nav2` |
 | `/trekking/yaw_fix` | `std_msgs/Float64` | `MapBridge` (modo slam) | `pose_estimator` (gira o yaw da roda, SLAM re-converge) | só `--slam` |
-| `/odom` | `nav_msgs/Odometry` | `pose_estimator` (fusão rodas+IMU+flow) | `slam_toolbox` / `amcl` / `nav_metrics` | sempre |
+| `/odom` | `nav_msgs/Odometry` | `pose_estimator` (fusão rodas+IMU; flow removido) | `slam_toolbox` / `amcl` / `nav_metrics` | sempre |
 | `/map` | `nav_msgs/OccupancyGrid` | `slam_toolbox` / `map_server` | `map_service.py` (ponte web) | slam, nav2 |
 | `/goal_pose` | `geometry_msgs/PoseStamped` | `map_service.py` (legacy) | `bt_navigator` | nav2 |
 | `/plan` | `nav_msgs/Path` | `planner_server` | `map_service.py` / `nav_metrics` | nav2 |
@@ -1038,7 +1058,7 @@ Tópicos consumidos:
 
 **TFs publicadas:**
 - `base_link → base_laser, imu_link, flow_link, 4 rodas` — static (URDF via `robot_state_publisher`). **Todos os sensores estão no CENTRO do chassi** (o offset de 0,10 m do LiDAR era falso e foi removido em 2026-06-11).
-- `odom → base_link` — dinâmica (`pose_estimator`, fusão rodas + IMU + flow; o antigo `odom_publisher` foi deletado)
+- `odom → base_link` — dinâmica (`pose_estimator`, fusão rodas + IMU; flow removido; o antigo `odom_publisher` foi deletado)
 - `map → odom` — dinâmica, em SLAM pelo `slam_toolbox`, em NAV2 pelo `amcl`
 
 ### Cinemática
@@ -1110,8 +1130,8 @@ Controle_robo_web/
 │       ├── include/
 │       │   ├── protocol.h             # Frames 0xAA 0x55 [tipo] [len] [payload] [xor]
 │       │   ├── hoverboard.h           # SerialCommand 0xABCD + parser de SerialFeedback
-│       │   ├── sensors_imu.h          # Driver MPU9250 (registrador direto)
-│       │   ├── sensors_flow.h         # Wrapper do PMW3901 (fork c/ SQUAL real)
+│       │   ├── sensors_imu.h          # Driver da IMU (registrador direto; MPU6050 0x68 / 6500 / 9250)
+│       │   ├── sensors_flow.h         # Wrapper do PMW3901 (fork c/ SQUAL real) — sensor removido do robô
 │       │   ├── leds.h                 # Anel WS2812 — ABANDONADO, fora do build
 │       │   └── io_signals.h           # Relé, LED, botão
 │       └── src/                       # Implementações + main.cpp (Wire timeout + watchdog)
@@ -1152,9 +1172,10 @@ Controle_robo_web/
 │           ├── cmd_vel_to_wheels.py   # /cmd_vel → /wheel_vel_setpoints
 │           ├── pose_estimator.py      # Fusão rodas+IMU+flow → /odom + TF (todos os modos)
 │           ├── fused_odom.py          # Lógica pura da fusão (testável sem ROS)
-│           ├── scan_sanitizer.py      # /scan → /scan_safe (fantasmas + máscara de batente)
-│           ├── unstuck_supervisor.py  # Desencalhe: ré furando o collision (prio 30)
-│           ├── door_crossing.py       # Travessia de porta assistida (prio 20)
+│           ├── path_follower.py        # Segue o /plan em retas + giro no lugar (prio 15)
+│           ├── scan_sanitizer.py      # /scan → /scan_safe (fantasmas <15 cm do LD06)
+│           ├── unstuck_supervisor.py  # Desencalhe: ré/giro furando o collision (prio 30)
+│           ├── door_crossing.py       # Travessia de porta assistida (prio 20) — DESATIVADO
 │           ├── cone_detector.py       # Clusteriza /scan em cones candidatos (trekking)
 │           ├── cone_pose_fix.py       # Correção de pose por cone-âncora (trekking)
 │           ├── trekking_runner.py     # FSM IDLE/RECORD/PLAY + PID + snap-to-cone
@@ -1191,7 +1212,7 @@ Controle_robo_web/
 | Parâmetro | Valor | Por quê |
 |-----------|-------|---------|
 | `plugin` | `RotationShimController` + `primary_controller: DWB` | DWB sozinho não comita giro acentuado em skid-steer (critics premiam ir reto). O shim gira NO LUGAR até quase alinhar e só então entrega pro DWB. RPP foi testado e **rejeitado** (limita pela velocidade medida → trava no giro). |
-| `angular_dist_threshold` | `0.30` (~17°) | Foi apertado pra 0.15 (~9°) pra caber em porta — oscilou em campo ("tenta várias vezes até ficar de frente") e foi **revertido**: a precisão fina de porta agora é do `door_crossing`. |
+| `angular_dist_threshold` | `0.30` (~17°) | Foi apertado pra 0.15 (~9°) pra caber em porta — oscilou em campo ("tenta várias vezes até ficar de frente") e foi **revertido**. (Vale só pro DWB, hoje ignorado; quem cruza porta é o `path_follower` com giro no lugar.) |
 | `rotate_to_heading_angular_vel` | `4.2` | Giro contínuo do shim (mais fino). O piso de ~6.0 vale pro arranque parado (teleop/unstuck). |
 | `closed_loop` | `false` | **CRÍTICO.** Em malha fechada na odom medida, o comando nunca cresce além do atrito estático e o robô não gira. |
 | `max_vel_x` | `0.35` | A segurança é do collision monitor, não de andar devagar. |
@@ -1233,7 +1254,7 @@ Em `controle_web/logs/`:
 |---------|----------|
 | `robot_nodes.log` | `robot_state_publisher`, `mega_bridge`, `pose_estimator`, `cmd_vel_to_wheels`, `twist_mux`, teleop PS4 |
 | `lidar.log` | Driver LiDAR (LD06, com retry de boot + watchdog de runtime) |
-| `nav2.log` | Stack Nav2 + `scan_sanitizer` + `unstuck_supervisor` + `door_crossing` (modo nav2) |
+| `nav2.log` | Stack Nav2 + `path_follower` + `scan_sanitizer` + `unstuck_supervisor` (modo nav2) |
 | `slam.log` | slam_toolbox (modo slam) |
 | `sim.log` | Gazebo + bridges (modo sim) |
 | `movements.log` | Histórico de comandos em JSON Lines |
@@ -1259,7 +1280,7 @@ tail -f controle_web/logs/lidar.log
 - **BMS dos hoverboards desarma sob stall** (39 V → 6 V; o botão de emergência reseta). Hipótese viva: rotor bloqueado quando a navegação empurra obstáculo invisível ao collision (<21 cm, abaixo do plano do LiDAR). O `power_monitor` grava o CSV justamente pra pegar o próximo desarme com dados.
 - **Fantasmas do LD06 têm causa física.** Os retornos <15 cm concentram em setores fixos (~200–260° e ~80–120° no frame do laser) — algo no chassi raspa o feixe. O sanitizer filtra, mas vale inspecionar o que está no caminho.
 - **Sem e-stop dedicado** no protocolo (sem lock no twist_mux). O dead-man do PS4 (L1) é a parada manual mais rápida.
-- **Level shifter do PMW3901 marginal** — EMI na manobra corrompe amostras de flow (gates descartam). Fix real: shifter push-pull (74AHCT125/74LVC245).
+- **PMW3901 (optical flow) removido do robô (2026-07-01)** — o level shifter MOSFET do SPI era marginal e a EMI na manobra corrompia as amostras (chip-id `0xFF`). Hoje navega sem flow (yaw = IMU, translação = roda, posição = LiDAR). Voltar = breakout da Pimoroni (level-shift onboard); o código da fusão segue no repo.
 
 **Limitações de projeto:**
 
