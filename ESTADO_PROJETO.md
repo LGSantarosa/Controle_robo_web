@@ -5,6 +5,38 @@
 
 ---
 
+## 🆕 2026-07-01 — IMU estava MORTA a sessão toda (fix) + PMW3901 arrancado (sem flow temp.)
+
+> Commit `553e7b3` na `main`, **deployado na Pi + MEGA reflashada**. Sessão de diagnóstico.
+
+### 🔴→✅ IMU: o robô rodou a sala INTEIRA (30-06) SEM IMU e ninguém percebeu
+- O dono devolveu o "9250" (era MPU6500, sem mag — ver `PROVA_MPU6500_NAO_9250.md`) e
+  **recolocou o MPU6050 antigo** (de ponta-cabeça). Mas o firmware direto-por-registrador só
+  aceitava WHO_AM_I `0x70/0x71/0x73` (6500/9250/9255); o **6050 responde `0x68`** → `tryInit_`
+  rejeitava → `begin()` falhava → `/imu/data` a **0 Hz**. Provado por probe (mesmo nó, mesma
+  janela: rodas 48 Hz ✅, IMU 0 Hz, flow 0 Hz).
+- **Implicação:** a run "magnífica" de 30-06 e o "erra um pouco na pose às vezes" foram **com a
+  IMU MORTA**. Andou bem porque **wheels + LiDAR/AMCL** carregam: o AMCL casa o scan ~10 Hz e
+  corrige o yaw no mapa (a odom de roda gira 90° onde girou 15°, o AMCL puxa de volta). O errinho
+  de pose ocasional = os instantes em que o scan-match enfraquecia. **NÃO era "AMCL no giro"** (o
+  BO aberto do 30-06) — era a IMU fora.
+- **FIX `553e7b3`:** (a) firmware aceita `WHO_MPU6050=0x68` (gyro/accel compatível, mesmas escalas;
+  `initMag_` falha gracioso) → **MEGA reflashada, IMU volta a 50 Hz** (confirmado no serial cru:
+  frame 0x82 a ~50 Hz); (b) `imu_yaw_sign` `+1.0 → -1.0` (6050 Z p/ baixo). **⏳ FALTA validar na
+  bancada:** subir a stack → `yaw_source=imu` + girar p/ ESQ o yaw do /odom SOBE (senão flipa sinal).
+
+### 🗑️ PMW3901 (optical flow) ARRANCADO do robô — TEMPORARIAMENTE SEM FLOW
+- O flow estava a 0 Hz (chip-id lia `0xFF` = MISO morto; level-shifter MOSFET marginal, dor
+  crônica). Diagnóstico isolou o HW, mas o dono **arrancou o sensor** ("fodase") — o robô fica
+  **sem PMW3901 por enquanto**. Decisão: o flow é **baixa prioridade** (yaw = IMU; translação reta =
+  roda calibrada; posição = LiDAR/AMCL) → não vale brigar com o shifter.
+- **Plano futuro:** se quiser flow de volta, comprar um **breakout da Pimoroni** (regulador +
+  level-shift onboard, 5V direto, LED próprio) que mata o shifter marginal — plugar limpo. Não urgente.
+- ⚠️ Com o sensor fora, `/optical_flow` fica a 0 Hz (esperado); `use_flow` já era ~no-op na prática.
+  `flow_stale=true` no `/trekking/health` é NORMAL agora. NÃO tratar como bug.
+
+---
+
 ## 🆕 2026-06-30 (tarde) — Viz do mapa: lidar virou OPCIONAL + conserto do unstuck (escape-spin)
 
 > Tudo na `main` e **deployado na Pi** (HEAD `9c4833a`; web é só Flask, robot_nav buildado com
