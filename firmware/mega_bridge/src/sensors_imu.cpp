@@ -24,10 +24,12 @@ constexpr uint8_t AK_ASAX    = 0x10;   // correção de fábrica (fuse ROM)
 constexpr uint8_t AK_WHO     = 0x48;
 constexpr float   AK_UT_PER_LSB = 0.15f;   // 16-bit: 4912 µT / 32760 ≈ 0.15
 
-// WHO_AM_I aceitos. Gyro/accel são IDÊNTICOS nas três (o 9250 é um 6500 + mag),
-// então o driver gyro-only serve pra todas. SÓ o 9250/9255 têm o AK8963 (mag) →
-// o yaw absoluto futuro só existe se o boot reportar 0x71/0x73. Se for 0x70
-// (placa GY-6500 = MPU6500), funciona como IMU mas SEM magnetômetro.
+// WHO_AM_I aceitos. Gyro/accel são IDÊNTICOS nos quatro (mesmo mapa de
+// registrador e escalas InvenSense), então o driver gyro-only serve pra todos.
+// SÓ o 9250/9255 têm o AK8963 (mag) → o yaw absoluto futuro só existe se o boot
+// reportar 0x71/0x73. 0x70 (GY-6500 = MPU6500) e 0x68 (MPU6050, a IMU antiga
+// remontada 2026-07-01) funcionam como IMU mas SEM magnetômetro.
+constexpr uint8_t WHO_MPU6050 = 0x68;        // MPU6050 (IMU antiga) — sem mag
 constexpr uint8_t WHO_MPU6500 = 0x70;        // MPU6500 (GY-6500) — sem mag
 constexpr uint8_t WHO_MPU9250 = 0x71;        // MPU9250 (GY-9250) — com mag
 constexpr uint8_t WHO_MPU9255 = 0x73;        // MPU9255 — com mag
@@ -67,7 +69,8 @@ bool Imu::tryInit_(uint8_t addr) {
     addr_ = addr;
     uint8_t who = 0;
     if (!readRegs_(REG_WHO_AM_I, &who, 1)) return false;
-    if (who != WHO_MPU6500 && who != WHO_MPU9250 && who != WHO_MPU9255)
+    if (who != WHO_MPU6050 && who != WHO_MPU6500 &&
+        who != WHO_MPU9250 && who != WHO_MPU9255)
         return false;
     // Reset e wake-up. PLL com referência de giro (clock estável p/ a taxa).
     if (!writeReg_(REG_PWR_MGMT_1, 0x80)) return false;  // reset

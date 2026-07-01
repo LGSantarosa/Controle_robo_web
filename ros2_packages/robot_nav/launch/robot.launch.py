@@ -56,10 +56,11 @@ def generate_launch_description():
         description='Polaridade do lado direito (-1.0 inverte). Aplicado em cmd_vel_to_wheels E pose_estimator.'
     )
     imu_yaw_sign_arg = DeclareLaunchArgument(
-        'imu_yaw_sign', default_value='1.0',
-        description='Sinal da taxa de yaw da MPU9250. 1.0 = montada PLANA com '
-                    'componentes pra cima (Z pra cima, default). Trocar p/ -1.0 se o '
-                    'giro vier invertido na bancada — sem reflashear a MEGA.'
+        'imu_yaw_sign', default_value='-1.0',
+        description='Sinal da taxa de yaw da IMU. 2026-07-01: voltou o MPU6050 '
+                    'antigo, montado de PONTA-CABEÇA (Z pra baixo) -> -1.0. (Era '
+                    '+1.0 com o 6500 montado plano.) Confirmar na bancada: girando '
+                    'p/ esquerda o yaw do /odom tem que SUBIR; se descer, +1.0.'
     )
     use_flow_arg = DeclareLaunchArgument(
         'use_flow', default_value='true',

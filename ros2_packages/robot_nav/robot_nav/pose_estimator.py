@@ -142,12 +142,12 @@ class PoseEstimator(Node):
         # girando, o diferencial de roda congelado integra um giro fantasma
         # infinito no mapa. Ver project_mega_i2c_hang + fused_odom (wheel_fresh).
         self.declare_parameter('wheel_timeout', 0.3)
-        # Sinal da taxa de yaw da IMU (gyro Z). A MPU9250 está montada PLANA com
-        # os componentes pra CIMA (Z aponta pra cima) → giro no sentido ROS,
-        # default +1.0. (Era -1.0 com o MPU6050 de ponta-cabeça.) Se na bancada o
-        # robô girar pro lado errado no odom, troque pra -1.0 (não precisa
-        # reflashear a MEGA). Ver project_imu_mpu9250.
-        self.declare_parameter('imu_yaw_sign', 1.0)
+        # Sinal da taxa de yaw da IMU (gyro Z). 2026-07-01: voltou o MPU6050
+        # antigo, montado de PONTA-CABEÇA (Z pra baixo) → -1.0. (Era +1.0 com o
+        # MPU6500 montado plano, devolvido por vir sem magnetômetro.) O launch
+        # passa este valor; se na bancada girar pro lado errado no odom, troque o
+        # sinal (não precisa reflashear a MEGA). Ver project_imu_mpu9250.
+        self.declare_parameter('imu_yaw_sign', -1.0)
 
         self.wheel_radius   = float(self.get_parameter('wheel_radius').value)
         self.wheel_base     = float(self.get_parameter('wheel_base').value)
@@ -260,10 +260,10 @@ class PoseEstimator(Node):
     # ------------------------------------------------------------------
     def _on_imu(self, msg: Imu):
         with self._lock:
-            # MPU9250: tem magnetômetro (AK8963), mas por enquanto NÃO usamos —
-            # só a taxa de yaw do giro (z), yaw integrado (igual ao 6050). O
-            # imu_yaw_sign casa a montagem (agora PLANA, Z pra cima → +1.0). Yaw
-            # absoluto (mag) é TODO. Ver project_imu_mpu9250.
+            # MPU6050 (6 eixos): SEM magnetômetro → só a taxa de yaw do giro (z),
+            # yaw integrado. O imu_yaw_sign casa a montagem (de ponta-cabeça,
+            # Z pra baixo → -1.0). Yaw absoluto (mag) não existe neste chip.
+            # Ver project_imu_mpu9250.
             self._imu_yaw_rate = msg.angular_velocity.z * self.imu_yaw_sign
             self._last_imu_wall = time.monotonic()
 
