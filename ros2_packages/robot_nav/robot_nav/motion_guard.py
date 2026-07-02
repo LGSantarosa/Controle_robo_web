@@ -10,10 +10,13 @@ estático (parede, móvel parado) fica na mesma célula; célula que estava LIVR
 Atuação (filtro de velocidade, só autonomia):
     twist_mux_auto -> auto_vel_pre -> [motion_guard] -> auto_vel_raw
         -> collision_monitor -> auto_vel -> mux final
-  - móvel no raio guard_radius  -> linear.x *= slow_scale   (slowing)
-  - móvel no corredor à frente  -> linear.x = 0 até limpar clear_time (blocked)
-  - angular.z passa INTOCADO SEMPRE (escalar wz cai na zona-morta 1.7 e
-    congela o point-turn — lição do rot_min 07-02).
+  - móvel no raio guard_radius  -> linear.x escala pela distância (slowing);
+    angular.z passa INTOCADO (continua navegando/girando perto de gente)
+  - móvel no corredor à frente  -> PARADA TOTAL vx=0 E wz=0 até limpar
+    clear_time (blocked). wz zerado a pedido do dono 07-02: com wz liberado o
+    replan balançava o caminho e o robô GIRAVA no lugar enquanto a pessoa
+    passava. NUNCA escalar wz parcialmente (zona-morta 1.7 = comando fraco
+    que não gira); zerar é seguro.
   - TF/scan indisponível ou enabled=false -> PASS-THROUGH (nunca mata a nav).
 
 SEM predição de cruzamento por enquanto (proposta B da spec): os pontos
@@ -140,14 +143,20 @@ class MotionGuard:
 
     def filter(self, t: float, vx: float, wz: float
                ) -> Tuple[float, float, str]:
-        """aplica a decisão no comando. wz NUNCA muda (zona-morta do giro).
-        Os latches expiram sozinhos pelo relógio (clear_time) — cobre também
-        o decaimento durante o gate de giro (gated não re-avista o móvel)."""
+        """aplica a decisão no comando. wz nunca é ESCALADO (zona-morta do
+        giro); no blocked ele é ZERADO junto (parada total). Os latches
+        expiram sozinhos pelo relógio (clear_time) — cobre também o
+        decaimento durante o gate de giro (gated não re-avista o móvel)."""
         c = self.cfg
         if not c.enabled or t - self._last_scan_t > c.scan_stale:
             return vx, wz, 'passthrough'
         if t - self._last_corridor_t < c.clear_time:
-            return (0.0 if vx > 0.0 else vx), wz, 'blocked'
+            # parada TOTAL: wz TAMBÉM zera (dono 07-02: com wz liberado o
+            # replan do nav2 balançava o caminho e o robô girava no lugar
+            # enquanto a pessoa ainda passava). Zerar é seguro — o perigo da
+            # zona-morta é ESCALAR wz (comando fraco que não gira), não zerar.
+            # Ré (vx<0, afasta do móvel à frente) continua passando.
+            return (0.0 if vx > 0.0 else vx), 0.0, 'blocked'
         if t - self._last_moving_t < c.clear_time:
             # escala PROPORCIONAL à distância do móvel: colado (<=slow_dist)
             # freia no piso slow_scale; na borda do raio quase não freia.

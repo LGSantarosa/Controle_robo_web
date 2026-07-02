@@ -113,13 +113,17 @@ def test_filter_slow_proportional_to_distance():
     assert far > 0.30 * 0.7               # na borda do raio quase não freia
 
 
-def test_filter_blocked_zeroes_forward_keeps_wz():
+def test_filter_blocked_full_stop_including_wz():
+    # blocked = parada TOTAL (dono 07-02: com wz liberado o replan do nav2
+    # balançava o caminho e o robô ficava GIRANDO no lugar enquanto a pessoa
+    # ainda passava — "para de pensar" até o corredor limpar). Zerar wz é
+    # seguro (o perigo da zona-morta é ESCALAR, não zerar).
     g = _guard()
     t = _feed_static(g)
     obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]      # no corredor
     g.observe(t, WALL + obj, POSE, 0.0)
     vx, wz, st = g.filter(t, 0.30, 2.4)
-    assert (vx, wz, st) == (0.0, 2.4, 'blocked')
+    assert (vx, wz, st) == (0.0, 0.0, 'blocked')
 
 
 def test_filter_blocked_does_not_zero_reverse():
@@ -127,8 +131,9 @@ def test_filter_blocked_does_not_zero_reverse():
     t = _feed_static(g)
     obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
     g.observe(t, WALL + obj, POSE, 0.0)
-    vx, _, st = g.filter(t, -0.25, 0.0)   # ré (unstuck-like) não é bloqueada
+    vx, wz, st = g.filter(t, -0.25, 1.0)  # ré (afasta do móvel) não é bloqueada
     assert st == 'blocked' and vx == -0.25
+    assert wz == 0.0                      # mas o giro para mesmo assim
 
 
 def test_filter_resumes_after_clear_time():

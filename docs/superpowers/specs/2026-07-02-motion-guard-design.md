@@ -56,11 +56,14 @@ A cada `/scan_safe` (~10 Hz):
   validação 07-02: 50% uniforme era imperceptível de lado/atrás — "vindo na
   minha direção" agora vira freio progressivo.)
 - Cluster móvel dentro do **corredor à frente** (retângulo `±corridor_half_w`
-  0,35 m × `corridor_len` 1,5 m em base_link, avaliado só quando o comando tem
-  vx > 0) → `linear.x = 0` → estado `blocked`. Retoma quando o corredor fica
-  sem móvel por `clear_time` (1,5 s).
-- `angular.z` passa INTOCADO sempre: escalar wz jogaria o giro pra baixo da
-  zona-morta 1,7 rad/s e congelaria os point-turns (lição do rot_min 07-02).
+  0,35 m × `corridor_len` 1,5 m em base_link) → **PARADA TOTAL: `linear.x = 0`
+  E `angular.z = 0`** → estado `blocked`. Retoma quando o corredor fica sem
+  móvel por `clear_time` (1,5 s). (Validação real 07-02: com wz liberado o
+  replan do nav2 balançava o caminho e o robô girava no lugar enquanto a
+  pessoa passava — "para de pensar" até limpar. Ré vx<0 continua passando.)
+- `angular.z` NUNCA é escalado parcialmente (comando fraco cai na zona-morta
+  1,7 rad/s e congela point-turn — lição do rot_min 07-02); no `slowing` passa
+  intocado, no `blocked` é zerado (zerar é seguro).
 - Sem comando entrando, nada sai (filtro puro; não "segura o mux").
 
 ## Failsafe e observabilidade
