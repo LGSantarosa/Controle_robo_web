@@ -20,6 +20,25 @@
   22,7s). Giro puro a ~24°/s faz 180° em 7,5s → 37s girando = outra coisa segurando
   (suspeitos: collision segurando wz, re-alinhamentos em cadeia). CSV guardado no scratchpad.
 
+### 2b. motion_guard NO REAL 07-02 (tarde/noite) — 🟡 PARCIAL: "deu boa, melhorou", dono quer MAIS testes (seg 07-06?)
+
+4 iterações de campo no mesmo dia (dono andando perto do robô real), tudo deployado na Pi (`16d50fb`):
+
+1. **unstuck standdown** (`e9f41e2` + teto `84b2423`): unstuck disparava `pinch` em ~2s EM CIMA
+   do dono (pessoa ≠ parede). Agora: guard em `blocked` → unstuck não conta/dispara; teto
+   `guard_hold_max=20s` (bloqueado sem nada mudar → unstuck reativa); soltou → relógio zera.
+2. **blocked = parada TOTAL** (`1e68ec3`): wz liberado fazia o robô GIRAR no lugar caçando o
+   replan enquanto a pessoa passava. wz agora ZERA no blocked (zerar é seguro; nunca ESCALAR).
+3. **bolha `freeze_dist=1.2m`** (`6b00e92`): pessoa do LADO caía em slowing (giro livre, 71% do
+   teste) → rodava atrás do plano-contorno. Móvel a <1,2m em QUALQUER direção = parada total.
+4. **corredor 2,5m + gap de retomada 3s** (`16d50fb`): dono cruzava o caminho ALÉM do corredor
+   de 1,5m → follower saía atrás do desvio-fantasma do planner. Corredor agora cobre o raio
+   todo e a retomada espera 3s (~3 replans endireitam o plano antes de andar).
+
+**Veredito do dono: "deu boa, melhorou" — deixar como PARCIAL, testar mais.** Knobs live se
+precisar: `guard_radius` (3.5 se cruzar mais longe que 2,5m ainda desviar), `clear_time`,
+`freeze_dist`. 237 testes. ⚠️ NUNCA escalar wz parcialmente (zona-morta 1.7).
+
 ### 2. motion_guard — cautela com objeto EM MOVIMENTO (pedido do dono pós-run 07-02) ✅ SIM
 - **Nó novo** `robot_nav/motion_guard.py` (spec `docs/superpowers/specs/2026-07-02-motion-guard-
   design.md`): diff temporal do `/scan_safe` no frame odom (célula livre 0,5s atrás + retorno
