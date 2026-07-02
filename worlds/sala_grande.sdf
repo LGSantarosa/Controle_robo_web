@@ -164,5 +164,42 @@
         <visual name="v"><geometry><box><size>0.6 1.5 0.8</size></box></geometry>
           <material><ambient>0.5 0.5 0.5 1</ambient><diffuse>0.5 0.5 0.5 1</diffuse></material></visual>
       </link></model>
+    <!-- "pessoa" = 2 pernas cilindricas TELEOPAVEIS p/ estressar o motion_guard
+         (2026-07-02). Nasce na sala decoy (fora da rota); dirigir com
+         bin/teleop-pernas (bridge + teclado). Flutua 1cm com gravidade OFF =
+         sem atrito brigando com o VelocityControl; cilindros de 0.6m cobrem o
+         lidar (z=0.15). Parada ela e' so um obstaculo estatico qualquer. -->
+    <model name="pessoa">
+      <pose>6.5 3.5 0 0 0 0</pose>
+      <link name="pernas">
+        <gravity>false</gravity>
+        <inertial>
+          <mass>10</mass>
+          <inertia><ixx>0.5</ixx><iyy>0.5</iyy><izz>0.5</izz></inertia>
+        </inertial>
+        <collision name="perna_esq">
+          <pose>0 0.15 0.31 0 0 0</pose>
+          <geometry><cylinder><radius>0.06</radius><length>0.6</length></cylinder></geometry>
+        </collision>
+        <visual name="perna_esq_v">
+          <pose>0 0.15 0.31 0 0 0</pose>
+          <geometry><cylinder><radius>0.06</radius><length>0.6</length></cylinder></geometry>
+          <material><ambient>0.8 0.2 0.2 1</ambient><diffuse>0.8 0.2 0.2 1</diffuse></material>
+        </visual>
+        <collision name="perna_dir">
+          <pose>0 -0.15 0.31 0 0 0</pose>
+          <geometry><cylinder><radius>0.06</radius><length>0.6</length></cylinder></geometry>
+        </collision>
+        <visual name="perna_dir_v">
+          <pose>0 -0.15 0.31 0 0 0</pose>
+          <geometry><cylinder><radius>0.06</radius><length>0.6</length></cylinder></geometry>
+          <material><ambient>0.8 0.2 0.2 1</ambient><diffuse>0.8 0.2 0.2 1</diffuse></material>
+        </visual>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system"
+              name="gz::sim::systems::VelocityControl">
+        <topic>/model/pessoa/cmd_vel</topic>
+      </plugin>
+    </model>
   </world>
 </sdf>
