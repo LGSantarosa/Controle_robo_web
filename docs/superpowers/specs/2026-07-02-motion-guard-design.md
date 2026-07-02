@@ -45,8 +45,8 @@ A cada `/scan_safe` (~10 Hz):
 4. Clusteriza móveis por vizinhança (gap 0,3 m); cluster < `min_cluster_points`
    (3) = ruído, descarta. Só considera raio ≤ `guard_radius` (2,5 m).
 5. **Gate de giro**: |wz| medido do robô > `wz_gate` (0,3 rad/s) → não avalia
-   (o scan inteiro "anda" quando o robô gira); segura a última decisão e decai
-   pra livre após `hold_timeout` (1,0 s) sem avaliação.
+   (o scan inteiro "anda" quando o robô gira); a última decisão fica segurada
+   e decai pra livre sozinha (`clear_time` sem re-avistar o móvel).
 
 ## Atuação (só no vx — NUNCA no wz)
 
@@ -72,7 +72,7 @@ A cada `/scan_safe` (~10 Hz):
 
 `enabled=true, guard_radius=2.5, slow_scale=0.5, corridor_half_w=0.35,
 corridor_len=1.5, clear_time=1.5, grid_res=0.15, lookback=0.5,
-min_cluster_points=3, wz_gate=0.3, hold_timeout=1.0, scan_stale=1.0`
+min_cluster_points=3, cluster_gap=0.3, wz_gate=0.3, scan_stale=1.0`
 
 ## Testes e validação
 
