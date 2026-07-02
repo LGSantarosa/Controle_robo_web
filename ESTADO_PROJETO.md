@@ -5,6 +5,45 @@
 
 ---
 
+## 🆕 2026-07-02 (tarde) — Fluidez P1+P2 no path_follower + motion_guard NOVO (validado no sim)
+
+> Tudo na `main`. ⏳ deploy na Pi = decisão do dono (nada disso foi pro real ainda).
+
+### 1. Fluidez dos giros (spec/plano 07-02): P1+P2 aplicados, medidos na rota do dono
+- **P1 `0b35ef2`**: `rot_min` 2.0→2.4 rad/s (2.0 comandado ≈ 10°/s reais na zona-morta 1.7 =
+  rastejo que parecia parada; 2.4 ≈ 25°/s). **P2 `7d1fe49`**: alvo do giro CONGELADO ao entrar
+  em turning (não caça mais o replan ~1Hz no meio do point-turn). 214→230 testes.
+- **Medição (sim sala_grande, rota de 5 pontos do dono, baseline = runs anteriores da mesma
+  rota)**: hoje **922s** vs 810s (06-28 com fix do unstuck) e 1665s (06-28 baseline).
+  turning 38,7% (real 07-02 dava 56%), driving mediano 0,89s, wz_flips 61.
+- **🔴 PRÓXIMO ALVO: giros monstruosos** — 7 giros >5s somando ~135s (piores: 36,8s, 33,2s,
+  22,7s). Giro puro a ~24°/s faz 180° em 7,5s → 37s girando = outra coisa segurando
+  (suspeitos: collision segurando wz, re-alinhamentos em cadeia). CSV guardado no scratchpad.
+
+### 2. motion_guard — cautela com objeto EM MOVIMENTO (pedido do dono pós-run 07-02) ✅ SIM
+- **Nó novo** `robot_nav/motion_guard.py` (spec `docs/superpowers/specs/2026-07-02-motion-guard-
+  design.md`): diff temporal do `/scan_safe` no frame odom (célula livre 0,5s atrás + retorno
+  agora = borda de coisa se movendo; parede/móvel parado não dispara) + clusters. Filtra SÓ a
+  autonomia: `twist_mux_auto → auto_vel_pre → motion_guard → auto_vel_raw → collision`.
+  unstuck/manual FORA. **wz passa intocado SEMPRE** (escalar giro cai na zona-morta 1.7 =
+  congela point-turn). Failsafe: sem TF/scan ou `enabled=false` → pass-through (nunca mata a
+  nav). Params live (`ros2 param set /motion_guard ...`). CSV `controle_web/logs/motion_guard.csv`.
+- **Comportamento**: móvel no raio 2,5m → vx escala PROPORCIONAL à distância (piso 25% a
+  <0,6m — feedback do dono na 1ª validação: 50% uniforme era imperceptível de lado/atrás);
+  móvel no corredor à frente (±0,35×1,5m) → PARA e retoma sozinho 1,5s após limpar.
+- **Validação no sim (stress de 170s, dono dirigindo "pessoa" de 2 pernas por teleop)**:
+  escala mediana 0,25 a <0,8m / 0,44 a 0,8-1,5m / 0,73 a 1,5-2,5m (rampa certinha);
+  **11 paradas** de 1,7-4,3s (travessias) e 2 longas (7s/17s = pernas insistindo no corredor,
+  correto); nearest mínimo 0,26m SEM bater; retomou sozinho todas as vezes.
+- **Ferramentas versionadas**: "pessoa" (2 pernas cilíndricas teleopáveis, VelocityControl)
+  no `worlds/sala_grande.sdf` (nasce na sala decoy) + `bin/teleop-pernas` (teclado numérico
+  modo carrinho: 8 frente, 4/6 gira, 5 para).
+- **Fora de escopo (só se precisar)**: predição de cruzamento por velocidade de cluster
+  (proposta B da spec); reação durante point-turn (vx já é 0 e wz é intocável — limitação
+  conhecida); atuação no manual.
+
+---
+
 ## 🆕 2026-07-02 — As 2 placas "MPU9250" novas TAMBÉM são MPU6500 sem mag (3/3)
 
 > Teste feito num **Arduino avulso (328P) no PC dev** — a MEGA do robô não foi tocada.

@@ -28,7 +28,7 @@
 **Interfaces:**
 - Produces: `GuardConfig` (dataclass mutável, campos = defaults da spec); `MotionGuard(cfg)` com `observe(t: float, pts: list[tuple[float,float]], pose: tuple[float,float,float], wz: float) -> None` (pts e pose no frame odom) e atributos pós-observe: `moving_clusters: list[list[tuple]]`, `nearest_moving: float` (inf se nada), `in_corridor: bool`.
 
-- [ ] **Step 1: Testes de detecção (falhando)**
+- [x] **Step 1: Testes de detecção (falhando)**
 
 ```python
 """Testes da lógica pura do motion_guard (sem ROS)."""
@@ -110,12 +110,12 @@ def test_corridor_respects_robot_yaw():
     assert g.in_corridor is False
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `cd ros2_packages/robot_nav && python3 -m pytest test/test_motion_guard.py -v`
 Expected: FAIL/ERROR em todos (`ModuleNotFoundError: robot_nav.motion_guard`).
 
-- [ ] **Step 3: Implementar `GuardConfig` + `MotionGuard.observe`**
+- [x] **Step 3: Implementar `GuardConfig` + `MotionGuard.observe`**
 
 Criar `ros2_packages/robot_nav/robot_nav/motion_guard.py`:
 
@@ -272,12 +272,12 @@ class MotionGuard:
         return clusters
 ```
 
-- [ ] **Step 4: Rodar os testes da Task 1**
+- [x] **Step 4: Rodar os testes da Task 1**
 
 Run: `cd ros2_packages/robot_nav && python3 -m pytest test/test_motion_guard.py -v`
 Expected: 7 PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ros2_packages/robot_nav/robot_nav/motion_guard.py ros2_packages/robot_nav/test/test_motion_guard.py
@@ -294,7 +294,7 @@ git commit -m "motion_guard: deteccao de movimento por diff temporal no frame od
 - Consumes: estado interno pós-`observe` (`_last_moving_t`, `_last_corridor_t`, `_last_scan_t`, `_last_eval_t`).
 - Produces: `MotionGuard.filter(t: float, vx: float, wz: float) -> tuple[float, float, str]` — retorna `(vx_out, wz_out, state)` com `state in ('idle','slowing','blocked','passthrough')`; `wz_out == wz` SEMPRE.
 
-- [ ] **Step 1: Testes do filtro (falhando)**
+- [x] **Step 1: Testes do filtro (falhando)**
 
 Acrescentar em `test/test_motion_guard.py`:
 
@@ -379,12 +379,12 @@ def test_filter_passthrough_when_disabled():
     assert (vx, wz, st) == (0.30, 1.0, 'passthrough')
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `cd ros2_packages/robot_nav && python3 -m pytest test/test_motion_guard.py -k filter -v`
 Expected: 8 FAIL (`AttributeError: filter`).
 
-- [ ] **Step 3: Implementar `filter`**
+- [x] **Step 3: Implementar `filter`**
 
 Acrescentar na classe `MotionGuard` (o decaimento durante o gate de giro sai
 de graça: gated não re-avista o móvel → o latch expira sozinho em `clear_time`):
@@ -403,12 +403,12 @@ de graça: gated não re-avista o móvel → o latch expira sozinho em `clear_ti
         return vx, wz, 'idle'
 ```
 
-- [ ] **Step 4: Suíte inteira**
+- [x] **Step 4: Suíte inteira**
 
 Run: `cd ros2_packages/robot_nav && python3 -m pytest test/ -q`
 Expected: tudo PASS (214 antigos + 15 novos).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ros2_packages/robot_nav/robot_nav/motion_guard.py ros2_packages/robot_nav/test/test_motion_guard.py
@@ -426,7 +426,7 @@ git commit -m "motion_guard: filtro de velocidade (slowing/blocked/passthrough) 
 - Consumes: `MotionGuard.observe/filter` (Tasks 1-2); `utils.spin_node`.
 - Produces: executável `motion_guard`; tópicos `auto_vel_pre` (in) → `auto_vel_raw` (out), `/motion_guard/state` (String latched), CSV `controle_web/logs/motion_guard.csv`.
 
-- [ ] **Step 1: Escrever o `main()`**
+- [x] **Step 1: Escrever o `main()`**
 
 Acrescentar no fim de `motion_guard.py` (padrão do path_follower; params live via callback, lição do `04bcf86`):
 
@@ -587,7 +587,7 @@ if __name__ == '__main__':
     main()
 ```
 
-- [ ] **Step 2: Entry point no setup.py**
+- [x] **Step 2: Entry point no setup.py**
 
 Em `ros2_packages/robot_nav/setup.py`, na lista `console_scripts`, depois de `sim_actuator_model`:
 
@@ -595,7 +595,7 @@ Em `ros2_packages/robot_nav/setup.py`, na lista `console_scripts`, depois de `si
             'motion_guard = robot_nav.motion_guard:main',
 ```
 
-- [ ] **Step 3: Wiring no launch**
+- [x] **Step 3: Wiring no launch**
 
 Em `ros2_packages/robot_nav/launch/nav2.launch.py`:
 
@@ -623,7 +623,7 @@ Em `ros2_packages/robot_nav/launch/nav2.launch.py`:
 
 (c) Atualizar o comentário do velocity_smoother (linha ~136) e do twist_mux_auto (linha ~182) que citam `auto_vel_raw` como saída direta do mux: agora `mux -> auto_vel_pre -> motion_guard -> auto_vel_raw -> collision`.
 
-- [ ] **Step 4: Suíte + build + smoke**
+- [x] **Step 4: Suíte + build + smoke**
 
 Run: `cd ros2_packages/robot_nav && python3 -m pytest test/ -q`
 Expected: tudo PASS.
@@ -634,7 +634,7 @@ Expected: `Finished <<< robot_nav`.
 Run: `source install/setup.bash && timeout 5 ros2 run robot_nav motion_guard; echo "exit=$?"`
 Expected: log `motion_guard ativo: ...` e `exit=124` (vivo 5s sem crash — lição 06-28: teste unitário não pega bug de `self.X`).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ros2_packages/robot_nav/robot_nav/motion_guard.py ros2_packages/robot_nav/setup.py ros2_packages/robot_nav/launch/nav2.launch.py
@@ -650,12 +650,12 @@ git commit -m "motion_guard: no ROS + wiring auto_vel_pre->auto_vel_raw (filtra 
 **Interfaces:**
 - Consumes: stack do sim (`./launch.sh --sim --nav2 --world=worlds/sala_grande.sdf --map=maps/sala_grande.yaml`), executável `motion_guard` (Task 3).
 
-- [ ] **Step 1: Relançar o sim (COORDENAR com o dono — não derrubar run em andamento)**
+- [x] **Step 1: Relançar o sim (COORDENAR com o dono — não derrubar run em andamento)**
 
 O dono relança: `./launch.sh --sim --nav2 --world=worlds/sala_grande.sdf --map=maps/sala_grande.yaml --spawn-x=3.0 --spawn-y=0.0`.
 Verificar: `ros2 topic echo /motion_guard/state --once` → `idle` (ou `passthrough` só até o 1º scan+TF).
 
-- [ ] **Step 2: Spawnar a caixa móvel (ator animado do gz NÃO aparece no gpu_lidar)**
+- [x] **Step 2: Spawnar a caixa móvel (ator animado do gz NÃO aparece no gpu_lidar)**
 
 ```bash
 gz service -s /world/sala_grande/create --reqtype gz.msgs.EntityFactory \
@@ -664,7 +664,7 @@ gz service -s /world/sala_grande/create --reqtype gz.msgs.EntityFactory \
 
 Expected: `data: true`. Ajustar `<pose>` p/ ~2m à frente da rota do robô no momento do teste.
 
-- [ ] **Step 3: Mandar um goal e cruzar a caixa na frente do robô**
+- [x] **Step 3: Mandar um goal e cruzar a caixa na frente do robô**
 
 Goal simples (robô andando reto):
 
@@ -682,13 +682,13 @@ sleep 6
 gz topic -t /model/moving_box/cmd_vel -m gz.msgs.Twist -p 'linear: {y: 0.0}'
 ```
 
-- [ ] **Step 4: EU leio o CSV e o estado (dono não interpreta nada)**
+- [x] **Step 4: EU leio o CSV e o estado (dono não interpreta nada)**
 
 Run: `python3 - <<'EOF'` (resumo por estado do `controle_web/logs/motion_guard.csv`: contagem de ticks por estado, vx_in vs vx_out nos trechos slowing/blocked, timestamps das transições)`EOF`
 Expected: sequência `idle → slowing` (caixa se movendo no raio) `→ blocked` (caixa no corredor, vx_out=0 com vx_in>0) `→ idle` (~1.5s após a caixa sair); robô RETOMA e chega no goal (SUCCEEDED). Parede/mobília estática NUNCA gera slowing com o robô parado ou andando reto.
 Regressão (falso positivo constante, nunca retoma, nav morta) → investigar antes de seguir; se insanável, `ros2 param set /motion_guard enabled false` desativa ao vivo.
 
-- [ ] **Step 5: ESTADO_PROJETO.md + checkboxes + commit + push**
+- [x] **Step 5: ESTADO_PROJETO.md + checkboxes + commit + push**
 
 Atualizar `ESTADO_PROJETO.md` (seção 07-02): motion_guard implementado + resultado da validação sim + "⏳ real: decisão do dono". Marcar checkboxes deste plano.
 

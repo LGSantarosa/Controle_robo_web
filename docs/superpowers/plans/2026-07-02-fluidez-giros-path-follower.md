@@ -27,7 +27,7 @@
 **Interfaces:**
 - Produces: `analyze_follow.py <csv>` imprime `turning_pct`, `driving_median_s`, `turns_over_5s`, `wz_flips`; `send_route.sh` manda a rota (4 goals em sequência, espera cada um).
 
-- [ ] **Step 1: Escrever o analisador**
+- [x] **Step 1: Escrever o analisador**
 
 ```python
 #!/usr/bin/env python3
@@ -57,7 +57,7 @@ print(f"turning_episodes={len(turns)}")
 print(f"wz_flips={flips}")
 ```
 
-- [ ] **Step 2: Escrever a rota fixa**
+- [x] **Step 2: Escrever a rota fixa**
 
 ```bash
 #!/usr/bin/env bash
@@ -79,12 +79,12 @@ goal 0.0  0.0  0.0    1.0     # origem
 echo ROTA_COMPLETA
 ```
 
-- [ ] **Step 3: Rodar o sim com o HEAD atual e a rota**
+- [x] **Step 3: Rodar o sim com o HEAD atual e a rota**
 
 Run: `./launch.sh --sim --nav2 --world=worlds/sala.sdf --map=maps/sim_sala.yaml` (background), esperar nav ativo (`ros2 topic echo /follow_state --once`), então `bash <scratchpad>/fluidez/send_route.sh`.
 Expected: `ROTA_COMPLETA` sem abort; `controle_web/logs/follow_debug.csv` gravado.
 
-- [ ] **Step 4: Medir e guardar a baseline**
+- [x] **Step 4: Medir e guardar a baseline**
 
 Run: `python3 <scratchpad>/fluidez/analyze_follow.py controle_web/logs/follow_debug.csv | tee <scratchpad>/fluidez/baseline.txt` e copiar o csv pra `<scratchpad>/fluidez/baseline_follow_debug.csv`.
 Expected: 4 números impressos (turning_pct alto ~50%+ reproduz o sintoma; se turning_pct < 20% na baseline o sim NÃO reproduz o problema → PARAR e discutir com o dono antes de seguir).
@@ -98,7 +98,7 @@ Expected: 4 números impressos (turning_pct alto ~50%+ reproduz o sintoma; se tu
 **Interfaces:**
 - Produces: `FollowConfig.rot_min == 2.4` (default novo; testes existentes usam `cfg.rot_min` relativo, não quebram).
 
-- [ ] **Step 1: Teste do default novo (falhando)**
+- [x] **Step 1: Teste do default novo (falhando)**
 
 ```python
 def test_rot_min_default_beats_deadzone_crawl():
@@ -107,29 +107,29 @@ def test_rot_min_default_beats_deadzone_crawl():
     assert FollowConfig().rot_min == pytest.approx(2.4)
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `cd ros2_packages/robot_nav && python3 -m pytest test/test_path_follower.py::test_rot_min_default_beats_deadzone_crawl -v`
 Expected: FAIL (`2.0 != 2.4`)
 
-- [ ] **Step 3: Mudar os 2 defaults**
+- [x] **Step 3: Mudar os 2 defaults**
 
 Em `path_follower.py` linha 82: `rot_min: float = 2.4` (e atualizar o comentário: `# rad/s — piso do giro (2.0 dava ~10°/s real = rastejo; 2.4 ≈ 25°/s, ver spec 07-02)`).
 Na linha 202 do `main()`: `('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),`
 
-- [ ] **Step 4: Suíte inteira**
+- [x] **Step 4: Suíte inteira**
 
 Run: `cd ros2_packages/robot_nav && python3 -m pytest test/ -q`
 Expected: tudo PASS (nenhum teste fixa 2.0 absoluto).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ros2_packages/robot_nav/robot_nav/path_follower.py ros2_packages/robot_nav/test/test_path_follower.py
 git commit -m "path_follower: rot_min 2.0->2.4 — correcao pequena deixa de rastejar na zona-morta (spec fluidez 07-02)"
 ```
 
-- [ ] **Step 6: Medir P1 no sim**
+- [x] **Step 6: Medir P1 no sim**
 
 Mesmo protocolo da Task 1 Steps 3-4 (relançar sim, mesma rota), salvar em `<scratchpad>/fluidez/p1.txt`.
 Expected: `turning_pct` e `turns_over_5s` CAEM vs baseline; `wz_flips` não sobe. Regressão → reverter commit e discutir.
@@ -143,7 +143,7 @@ Expected: `turning_pct` e `turns_over_5s` CAEM vs baseline; `wz_flips` não sobe
 **Interfaces:**
 - Produces: atributo interno `DecisiveFollower._turn_target: Optional[float]` (bearing map-frame congelado ao entrar em turning; `None` fora do giro).
 
-- [ ] **Step 1: Testes do congelamento (falhando)**
+- [x] **Step 1: Testes do congelamento (falhando)**
 
 ```python
 def test_turn_target_frozen_while_plan_shifts():
@@ -180,12 +180,12 @@ def test_turn_target_reset_when_goal_lost():
     assert f._turn_target is None
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `cd ros2_packages/robot_nav && python3 -m pytest test/test_path_follower.py -k turn_target -v`
 Expected: 3 FAIL (`AttributeError: _turn_target` / wz flipado).
 
-- [ ] **Step 3: Implementar o freeze**
+- [x] **Step 3: Implementar o freeze**
 
 Em `DecisiveFollower.__init__`: `self._turn_target: Optional[float] = None`.
 No `update()`, branch idle (linha ~121) e branch arrived (~139): `self._turn_target = None` antes do return.
@@ -211,19 +211,19 @@ Substituir o bloco de histerese (passo 3 do update):
 
 (`goal_turn` NÃO muda — o yaw do goal já é alvo fixo.)
 
-- [ ] **Step 4: Suíte inteira**
+- [x] **Step 4: Suíte inteira**
 
 Run: `cd ros2_packages/robot_nav && python3 -m pytest test/ -q`
 Expected: tudo PASS (os 2 testes de histerese existentes seguem valendo: com estado forçado `turning` sem `_turn_target`, o herr do plano é usado — comportamento antigo preservado).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ros2_packages/robot_nav/robot_nav/path_follower.py ros2_packages/robot_nav/test/test_path_follower.py
 git commit -m "path_follower: congela o bearing-alvo durante o giro — nao caça replan no meio do point-turn (spec fluidez 07-02)"
 ```
 
-- [ ] **Step 6: Medir P1+P2 no sim**
+- [x] **Step 6: Medir P1+P2 no sim**
 
 Mesmo protocolo (relançar sim, mesma rota), salvar em `<scratchpad>/fluidez/p1p2.txt`.
 Expected: `turns_over_5s` → ~0; `driving_median_s` SOBE vs baseline; `wz_flips` estável. Regressão → reverter SÓ o commit do P2.
@@ -234,16 +234,16 @@ Expected: `turns_over_5s` → ~0; `driving_median_s` SOBE vs baseline; `wz_flips
 - Modify: `ESTADO_PROJETO.md` (seção 07-02)
 - Modify: `docs/superpowers/plans/2026-07-02-fluidez-giros-path-follower.md` (checkboxes)
 
-- [ ] **Step 1: Smoke-test do nó** (lição de 06-28: teste unitário não pega bug de `self.X`)
+- [x] **Step 1: Smoke-test do nó** (lição de 06-28: teste unitário não pega bug de `self.X`)
 
 Run: `source install/setup.bash && timeout 5 ros2 run robot_nav path_follower; echo "exit=$?"`
 Expected: `exit=124` (timeout matou = nó vivo 5s sem crash).
 
-- [ ] **Step 2: Tabela comparativa + ESTADO**
+- [x] **Step 2: Tabela comparativa + ESTADO**
 
 Escrever em `ESTADO_PROJETO.md` a tabela baseline×P1×P1+P2 (4 métricas) + status "⏳ validar no real quando o dono quiser". Commit: `git commit -m "docs(estado): 07-02 fluidez path_follower — resultados sim P1/P2"`.
 
-- [ ] **Step 3: Push**
+- [x] **Step 3: Push**
 
 Run: `git push`
 Expected: main atualizada; deploy na Pi fica a cargo do dono (fora do escopo).
