@@ -112,6 +112,16 @@ def test_filter_slow_proportional_to_distance():
     assert far > 0.30 * 0.7               # na borda do raio quase não freia
 
 
+def test_defaults_catch_path_crossers_and_settle():
+    # dono 07-02 (3ª rodada real): cruzava o CAMINHO além do corredor de 1.5m
+    # -> o follower saía atrás do desvio-fantasma do planner. Corredor agora
+    # cobre o raio todo (2.5) e a retomada espera 3s (≈3 replans do nav2
+    # endireitarem o plano antes de voltar a andar).
+    cfg = GuardConfig()
+    assert cfg.corridor_len == 2.5
+    assert cfg.clear_time == 3.0
+
+
 def test_filter_freeze_bubble_full_stop_any_direction():
     # BOLHA (dono 07-02, 2ª rodada real): móvel se mexendo a <freeze_dist
     # (1.2m) em QUALQUER direção -> parada total, mesmo fora do corredor.
@@ -149,7 +159,7 @@ def test_filter_blocked_does_not_zero_reverse():
 
 
 def test_filter_resumes_after_clear_time():
-    g = _guard()
+    g = _guard(clear_time=1.5)   # timing do teste independe do default
     t = _feed_static(g)
     obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
     g.observe(t, WALL + obj, POSE, 0.0)
@@ -161,7 +171,7 @@ def test_filter_resumes_after_clear_time():
 
 
 def test_filter_wz_gate_holds_then_decays():
-    g = _guard()
+    g = _guard(clear_time=1.5)   # timing do teste independe do default
     t = _feed_static(g)
     obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
     g.observe(t, WALL + obj, POSE, 0.0)                    # blocked

@@ -45,12 +45,16 @@ class GuardConfig:
                                     # quase cheio — feedback do dono 07-02:
                                     # 50% uniforme era imperceptível de lado)
     corridor_half_w: float = 0.35   # m — meia-largura do corredor à frente
-    corridor_len: float = 1.5       # m — alcance do corredor
+    corridor_len: float = 2.5       # m — alcance do corredor (1.5→2.5 dono
+                                    # 07-02: cruzava o caminho ALÉM do corredor
+                                    # e o follower saía atrás do desvio)
     freeze_dist: float = 1.2        # m — BOLHA: móvel mais perto que isso em
                                     # QUALQUER direção = parada total (dono
                                     # 07-02: do lado, o giro liberado rodava
                                     # atrás do plano-contorno; "para de pensar")
-    clear_time: float = 1.5         # s — corredor limpo por isso -> retoma
+    clear_time: float = 3.0         # s — limpo por isso -> retoma (1.5→3.0
+                                    # dono 07-02: gap p/ ~3 replans do nav2
+                                    # endireitarem o plano antes de andar)
     grid_res: float = 0.15          # m — célula da grade de comparação
     lookback: float = 0.5           # s — compara com snapshot desta idade
     min_cluster_points: int = 3     # cluster menor = ruído
