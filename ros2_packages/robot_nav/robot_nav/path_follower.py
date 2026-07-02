@@ -106,6 +106,7 @@ class DecisiveFollower:
     def __init__(self, cfg: FollowConfig):
         self.cfg = cfg
         self.state = 'idle'
+        self._turn_target = None  # bearing (map) congelado durante o turning
         self.dbg = {}        # diagnóstico do último update (logado pelo nó)
 
     def _turn_cmd(self, herr: float) -> float:
@@ -121,6 +122,7 @@ class DecisiveFollower:
         c = self.cfg
         if pose is None or not goal_active or not path or len(path) < 2:
             self.state = 'idle'
+            self._turn_target = None
             return Cmd(0.0, 0.0, 'idle')
 
         x, y, yaw = pose
@@ -139,6 +141,7 @@ class DecisiveFollower:
                                 'dist_goal': dist_goal}
                     return Cmd(0.0, self._turn_cmd(yerr), 'goal_turn')
             self.state = 'arrived'
+            self._turn_target = None
             return Cmd(0.0, 0.0, 'arrived')
 
         # 2) CARROT no plano a ~lookahead à frente (segue a FORMA do caminho)
@@ -151,14 +154,19 @@ class DecisiveFollower:
                     'herr_deg': math.degrees(herr), 'dist_aim': dist_aim,
                     'dist_goal': dist_goal}
 
-        # 3) HISTERESE: girando -> só sai quando alinha BEM; senão -> entra em giro
-        #    quando o erro passa do turn_enter. Quebra o limite-ciclo (pulinho).
+        # 3) HISTERESE + ALVO CONGELADO: ao ENTRAR no giro trava o bearing-alvo
+        #    (replans ~1Hz moviam o carrot NO MEIO do giro -> caçava alvo móvel,
+        #    giros de 8-19s na run real de 07-02). Sai do giro -> re-olha o plano.
         if self.state == 'turning':
+            if self._turn_target is not None:
+                herr = wrap(self._turn_target - yaw)
             if abs(herr) <= c.turn_exit:
                 self.state = 'driving'
+                self._turn_target = None
         else:
             if abs(herr) >= c.turn_enter:
                 self.state = 'turning'
+                self._turn_target = bearing
             else:
                 self.state = 'driving'
 

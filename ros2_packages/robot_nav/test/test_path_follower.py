@@ -111,6 +111,40 @@ def test_rot_min_default_beats_deadzone_crawl():
     assert FollowConfig().rot_min == pytest.approx(2.4)
 
 
+def test_turn_target_frozen_while_plan_shifts():
+    # entra girando pra +90° (path +y); no meio do giro o plano vira pra -y.
+    # SEM freeze ele inverteria o giro (caça alvo móvel); COM freeze segue +.
+    f = _fol()
+    path_up = [(0.0, y * 0.1) for y in range(40)]
+    cmd = f.update((0.0, 0.0, 0.0), path_up, goal_active=True, goal_yaw=math.pi / 2)
+    assert cmd.state == 'turning' and cmd.wz > 0.0
+    path_down = [(0.0, -y * 0.1) for y in range(40)]
+    cmd2 = f.update((0.0, 0.0, math.radians(45)), path_down, goal_active=True,
+                    goal_yaw=-math.pi / 2)
+    assert cmd2.state == 'turning'
+    assert cmd2.wz > 0.0          # continua no alvo congelado (+90°), não flipa
+
+
+def test_turn_target_cleared_after_alignment():
+    # alinhou com o alvo congelado -> driving e o próximo giro re-mira o plano novo.
+    f = _fol()
+    path_up = [(0.0, y * 0.1) for y in range(40)]
+    f.update((0.0, 0.0, 0.0), path_up, goal_active=True, goal_yaw=math.pi / 2)
+    cmd = f.update((0.0, 0.0, math.pi / 2), path_up, goal_active=True,
+                   goal_yaw=math.pi / 2)
+    assert cmd.state == 'driving'
+    assert f._turn_target is None
+
+
+def test_turn_target_reset_when_goal_lost():
+    f = _fol()
+    path_up = [(0.0, y * 0.1) for y in range(40)]
+    f.update((0.0, 0.0, 0.0), path_up, goal_active=True, goal_yaw=math.pi / 2)
+    cmd = f.update((0.0, 0.0, 0.0), path_up, goal_active=False, goal_yaw=None)
+    assert cmd.state == 'idle'
+    assert f._turn_target is None
+
+
 def test_goal_turn_then_arrived():
     f = _fol()
     path = [(0.0, 0.0), (0.05, 0.0)]   # goal coladinho
