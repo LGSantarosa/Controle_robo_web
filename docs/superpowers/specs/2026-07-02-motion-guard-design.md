@@ -55,6 +55,9 @@ A cada `/scan_safe` (~10 Hz):
   subindo linear até ~1,0 na borda do `guard_radius`. (Feedback do dono na
   validação 07-02: 50% uniforme era imperceptível de lado/atrás — "vindo na
   minha direção" agora vira freio progressivo.)
+- **BOLHA `freeze_dist` (1,2m)**: móvel se mexendo mais perto que isso em
+  QUALQUER direção → parada total (= blocked). (2ª rodada real 07-02: pessoa
+  do LADO deixava o giro liberado e o robô rodava atrás do plano-contorno.)
 - Cluster móvel dentro do **corredor à frente** (retângulo `±corridor_half_w`
   0,35 m × `corridor_len` 1,5 m em base_link) → **PARADA TOTAL: `linear.x = 0`
   E `angular.z = 0`** → estado `blocked`. Retoma quando o corredor fica sem
@@ -77,7 +80,7 @@ A cada `/scan_safe` (~10 Hz):
 
 ## Parâmetros (defaults)
 
-`enabled=true, guard_radius=2.5, slow_scale=0.25 (piso), slow_dist=0.6, corridor_half_w=0.35,
+`enabled=true, guard_radius=2.5, slow_scale=0.25 (piso), slow_dist=0.6, freeze_dist=1.2, corridor_half_w=0.35,
 corridor_len=1.5, clear_time=1.5, grid_res=0.15, lookback=0.5,
 min_cluster_points=3, cluster_gap=0.3, wz_gate=0.3, scan_stale=1.0`
 

@@ -46,6 +46,10 @@ class GuardConfig:
                                     # 50% uniforme era imperceptível de lado)
     corridor_half_w: float = 0.35   # m — meia-largura do corredor à frente
     corridor_len: float = 1.5       # m — alcance do corredor
+    freeze_dist: float = 1.2        # m — BOLHA: móvel mais perto que isso em
+                                    # QUALQUER direção = parada total (dono
+                                    # 07-02: do lado, o giro liberado rodava
+                                    # atrás do plano-contorno; "para de pensar")
     clear_time: float = 1.5         # s — corredor limpo por isso -> retoma
     grid_res: float = 0.15          # m — célula da grade de comparação
     lookback: float = 0.5           # s — compara com snapshot desta idade
@@ -150,7 +154,9 @@ class MotionGuard:
         c = self.cfg
         if not c.enabled or t - self._last_scan_t > c.scan_stale:
             return vx, wz, 'passthrough'
-        if t - self._last_corridor_t < c.clear_time:
+        freeze = (t - self._last_moving_t < c.clear_time
+                  and self._last_nearest < c.freeze_dist)
+        if freeze or t - self._last_corridor_t < c.clear_time:
             # parada TOTAL: wz TAMBÉM zera (dono 07-02: com wz liberado o
             # replan do nav2 balançava o caminho e o robô girava no lugar
             # enquanto a pessoa ainda passava). Zerar é seguro — o perigo da
@@ -208,7 +214,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
         # afináveis ao vivo (lição 04bcf86): mutam a MESMA ref de cfg que
         # observe/filter leem -> `ros2 param set` pega no tick seguinte
         _CFG_PARAMS = ('enabled', 'guard_radius', 'slow_scale', 'slow_dist',
-                       'corridor_half_w', 'corridor_len', 'clear_time',
+                       'freeze_dist', 'corridor_half_w', 'corridor_len',
+                       'clear_time',
                        'grid_res', 'lookback', 'min_cluster_points',
                        'cluster_gap', 'wz_gate', 'scan_stale')
 

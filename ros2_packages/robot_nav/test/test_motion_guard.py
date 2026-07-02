@@ -97,7 +97,7 @@ def test_filter_slowing_scales_vx_only():
 
 def test_filter_slow_proportional_to_distance():
     # mais PERTO = mais devagar (o "vindo na minha direção" vira freio
-    # progressivo); no piso (slow_dist) trava em slow_scale.
+    # progressivo), na faixa entre a bolha (freeze_dist) e o raio.
     def vx_with_obj_at(d):
         g = _guard()
         t = _feed_static(g)
@@ -107,10 +107,22 @@ def test_filter_slow_proportional_to_distance():
         assert st == 'slowing'
         return vx
 
-    far, mid, near = vx_with_obj_at(2.2), vx_with_obj_at(1.2), vx_with_obj_at(0.5)
+    far, mid, near = vx_with_obj_at(2.2), vx_with_obj_at(1.7), vx_with_obj_at(1.3)
     assert far > mid > near               # monotônico com a distância
-    assert near == 0.30 * 0.25            # <slow_dist 0.6 -> piso slow_scale 0.25
     assert far > 0.30 * 0.7               # na borda do raio quase não freia
+
+
+def test_filter_freeze_bubble_full_stop_any_direction():
+    # BOLHA (dono 07-02, 2ª rodada real): móvel se mexendo a <freeze_dist
+    # (1.2m) em QUALQUER direção -> parada total, mesmo fora do corredor.
+    # Antes: pessoa do LADO deixava o giro liberado (slowing) e o robô
+    # rodava atrás do plano-contorno enquanto ela passava ("ficar maluco").
+    g = _guard()
+    t = _feed_static(g)
+    obj = [(0.0, -0.9), (0.0, -1.0), (0.1, -0.9)]   # do LADO, colado
+    g.observe(t, WALL + obj, POSE, 0.0)
+    vx, wz, st = g.filter(t, 0.30, 2.4)
+    assert (vx, wz, st) == (0.0, 0.0, 'blocked')
 
 
 def test_filter_blocked_full_stop_including_wz():
