@@ -105,6 +105,12 @@ def test_turn_magnitude_respects_min_and_max():
     assert abs(f._turn_cmd(math.radians(5))) == pytest.approx(cfg.rot_min)
 
 
+def test_rot_min_default_beats_deadzone_crawl():
+    # 2026-07-02: rot_min 2.0 comandado ≈ 10°/s real (zona-morta 1.7 +
+    # resposta 0.6·(cmd−1.7)) = rastejo que parece parada. 2.4 ≈ 25°/s.
+    assert FollowConfig().rot_min == pytest.approx(2.4)
+
+
 def test_goal_turn_then_arrived():
     f = _fol()
     path = [(0.0, 0.0), (0.05, 0.0)]   # goal coladinho

@@ -79,7 +79,9 @@ class FollowConfig:
     goal_xy_tol: float = 0.15       # m — chegou no goal (casa c/ goal_checker do nav2)
     goal_yaw_tol: float = 0.10      # rad (~6°) — encarou o yaw do goal
     rot_k: float = 3.0              # ganho P do giro (rad/s por rad)
-    rot_min: float = 2.0            # rad/s — piso do giro (vence a zona-morta 1.7)
+    rot_min: float = 2.4            # rad/s — piso do giro (2.0 dava ~10°/s real =
+                                    # rastejo na zona-morta 1.7; 2.4 ≈ 25°/s,
+                                    # ver spec fluidez 07-02)
     rot_max: float = 4.5            # rad/s — teto do giro
     slow_radius: float = 0.4        # m — começa a frear o avanço perto do goal
     # 2026-06-26: 0.10 -> 0.22. CAMPO: perto do goal o ramp baixava p/ ~0.10-0.11
@@ -199,7 +201,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 ('forward_speed', 0.30), ('lookahead', 0.6),
                 ('turn_enter_deg', 12.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
-                ('rot_k', 3.0), ('rot_min', 2.0), ('rot_max', 4.5),
+                ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
                 ('slow_radius', 0.4), ('min_speed', 0.22), ('rate_hz', 20.0),
             ):
                 self.declare_parameter(name, default)
