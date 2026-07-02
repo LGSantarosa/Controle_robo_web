@@ -269,6 +269,47 @@ def test_unstuck_acts_again_after_door_clears():
     assert cmd.lin == pytest.approx(-0.25)   # pinçado -> ré
 
 
+def test_guard_blocked_holds_triggers():
+    # CAUTELA ≠ TRAVADO (2026-07-02): o motion_guard parou a autonomia de
+    # propósito (pessoa se mexendo no corredor). O unstuck NÃO pode contar
+    # isso como encalhe — em campo ele disparava pinch/ré em cima do dono.
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0)
+    cmd = sup.update(10.1, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, front_gap=0.0, nearest=0.0,
+                     guard_blocked=True)
+    assert cmd.active is False
+
+
+def test_unstuck_rearms_after_guard_clears():
+    # guard soltou -> re-ancora e o relógio de travado recomeça DO ZERO
+    # (não herda o tempo parado da cautela).
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0)
+    sup.update(10.1, nav_wants_move=True, position=(0.0, 0.0),
+               guard_blocked=True)
+    cmd = _tick(sup, 10.2)                    # acabou de soltar: nada
+    assert cmd.active is False
+    cmd = _tick(sup, 15.0)                    # 4.8s < timeout re-ancorado
+    assert cmd.active is False
+    cmd = _tick(sup, 20.4)                    # 10.2s parado pós-guard -> age
+    assert cmd.active is True
+    assert cmd.lin == pytest.approx(-0.25)
+
+
+def test_guard_blocked_does_not_abort_running_maneuver():
+    # a manobra em andamento (ré) NÃO é abortada pelo guard — o unstuck_vel
+    # (prio 30) nem passa pelo motion_guard; só novos disparos são segurados.
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0)
+    cmd = _tick(sup, 10.1)                    # dispara a ré
+    assert cmd.active is True
+    cmd = sup.update(10.3, nav_wants_move=True, position=(0.01, 0.0),
+                     rear_gap=math.inf, front_gap=0.0, nearest=0.0,
+                     guard_blocked=True)
+    assert cmd.active is True                 # segue dando ré
+
+
 def test_never_spins():
     # GIRO REMOVIDO (decisão 2026-06-10): a manobra é SEMPRE ré, nunca angular.
     sup = UnstuckSupervisor(_cfg())

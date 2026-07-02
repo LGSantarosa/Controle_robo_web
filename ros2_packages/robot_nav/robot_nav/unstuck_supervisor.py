@@ -486,9 +486,22 @@ class UnstuckSupervisor:
                nearest: float = math.inf,
                nearest_deg: float = 0.0,
                clear_offset: Optional[float] = None,
-               plan_bearing: float = 0.0) -> Command:
+               plan_bearing: float = 0.0,
+               guard_blocked: bool = False) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
+        if guard_blocked and self.state == _MONITORING:
+            # CAUTELA ≠ TRAVADO (2026-07-02): o motion_guard segurou a
+            # autonomia de propósito (coisa se MEXENDO no corredor à frente).
+            # Parado assim não é encalhe — em campo o unstuck disparava
+            # pinch/ré em cima da PESSOA que causou a parada. Enquanto o
+            # guard bloqueia: não acumula stuck, não dispara mapped/pinch;
+            # re-ancora (o relógio recomeça do zero quando o guard soltar).
+            # Manobra JÁ em andamento não é abortada (só novos disparos) —
+            # o unstuck_vel (prio 30) nem passa pelo motion_guard.
+            self.anchor = None
+            self.mapped_since = None
+            return _IDLE
         if door_active:
             # STANDDOWN: o door_crossing está conduzindo a travessia (door_vel,
             # prio 20 no twist_mux). O unstuck (prio 30) SOBREPÕE e sabotava a
@@ -1127,6 +1140,15 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             # prio 30 sabota a manobra prio 20 e a porta nunca fecha).
             self.create_subscription(
                 String, "door_zone", self._on_door_zone, latched)
+            # Standdown durante a CAUTELA do motion_guard (2026-07-02): guard
+            # em 'blocked' = parada DE PROPÓSITO (coisa se mexendo no corredor)
+            # -> não é encalhe; segura novos disparos (pinch/mapped/timeout)
+            # enquanto bloqueia + cauda de 2s. Sem motion_guard publicando,
+            # nada muda (default False).
+            self._guard_blocked = False
+            self._guard_tail_until = 0.0
+            self.create_subscription(
+                String, "motion_guard/state", self._on_guard_state, latched)
             # /map estático do SLAM (latched/transient_local): recovery
             # contextual — bloqueio à frente que bate aqui = parede mapeada.
             self.create_subscription(
@@ -1162,6 +1184,15 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
         def _on_nav_raw(self, msg):
             self._nav_wants_move = (abs(msg.linear.x) > self.nav_move_lin
                                     or abs(msg.angular.z) > self.nav_move_ang)
+
+        def _on_guard_state(self, msg):
+            was = self._guard_blocked
+            self._guard_blocked = (msg.data == "blocked")
+            if was and not self._guard_blocked:
+                # soltou: cauda curta pro robô re-engatar antes de o unstuck
+                # voltar a contar (evita disparo no vácuo pós-bloqueio)
+                self._guard_tail_until = self.get_clock().now().nanoseconds \
+                    * 1e-9 + 2.0
 
         def _on_plan(self, msg):
             # só os (x,y) em frame map; o rumo é calculado no _tick com a pose
@@ -1323,7 +1354,9 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 side_clear=side_clear, nearest=nearest,
                 nearest_deg=(self._near_deg if scan_fresh else 0.0),
                 clear_offset=clear_offset,
-                plan_bearing=self._plan_bearing())
+                plan_bearing=self._plan_bearing(),
+                guard_blocked=(self._guard_blocked
+                               or now < self._guard_tail_until))
             if self.sup.state != self._last_state:
                 extra = ""
                 if self._last_state == "monitoring":
