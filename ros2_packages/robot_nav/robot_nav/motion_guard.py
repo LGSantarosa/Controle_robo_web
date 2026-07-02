@@ -35,7 +35,12 @@ Pt = Tuple[float, float]
 class GuardConfig:
     enabled: bool = True
     guard_radius: float = 2.5       # m — só olha móvel até aqui
-    slow_scale: float = 0.5         # fator no vx com móvel no raio
+    slow_scale: float = 0.25        # PISO do fator no vx (móvel colado)
+    slow_dist: float = 0.6          # m — abaixo disso o fator satura no piso
+                                    # (entre slow_dist e guard_radius a escala
+                                    # sobe linear até 1.0: perto=lento, longe=
+                                    # quase cheio — feedback do dono 07-02:
+                                    # 50% uniforme era imperceptível de lado)
     corridor_half_w: float = 0.35   # m — meia-largura do corredor à frente
     corridor_len: float = 1.5       # m — alcance do corredor
     clear_time: float = 1.5         # s — corredor limpo por isso -> retoma
@@ -60,6 +65,7 @@ class MotionGuard:
         self.nearest_moving: float = math.inf
         self.in_corridor: bool = False
         self._last_moving_t: float = -math.inf
+        self._last_nearest: float = math.inf   # dist do móvel na última vista
         self._last_corridor_t: float = -math.inf
         self._last_scan_t: float = -math.inf
 
@@ -128,6 +134,7 @@ class MotionGuard:
                 break
         if clusters:
             self._last_moving_t = t
+            self._last_nearest = self.nearest_moving
         if self.in_corridor:
             self._last_corridor_t = t
 
@@ -142,7 +149,11 @@ class MotionGuard:
         if t - self._last_corridor_t < c.clear_time:
             return (0.0 if vx > 0.0 else vx), wz, 'blocked'
         if t - self._last_moving_t < c.clear_time:
-            return vx * c.slow_scale, wz, 'slowing'
+            # escala PROPORCIONAL à distância do móvel: colado (<=slow_dist)
+            # freia no piso slow_scale; na borda do raio quase não freia.
+            span = max(c.guard_radius - c.slow_dist, 1e-6)
+            k = min(1.0, max(0.0, (self._last_nearest - c.slow_dist) / span))
+            return vx * (c.slow_scale + (1.0 - c.slow_scale) * k), wz, 'slowing'
         return vx, wz, 'idle'
 
     def _cluster(self, pts: List[Pt]) -> List[List[Pt]]:
@@ -187,7 +198,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
     class MotionGuardNode(Node):
         # afináveis ao vivo (lição 04bcf86): mutam a MESMA ref de cfg que
         # observe/filter leem -> `ros2 param set` pega no tick seguinte
-        _CFG_PARAMS = ('enabled', 'guard_radius', 'slow_scale',
+        _CFG_PARAMS = ('enabled', 'guard_radius', 'slow_scale', 'slow_dist',
                        'corridor_half_w', 'corridor_len', 'clear_time',
                        'grid_res', 'lookback', 'min_cluster_points',
                        'cluster_gap', 'wz_gate', 'scan_stale')
@@ -224,9 +235,10 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                                 'in_corridor', 'vx_in', 'vx_out'])
             self.get_logger().info(
                 'motion_guard ativo: raio %.1fm, corredor %.2fx%.1fm, '
-                'slow %.0f%%, clear %.1fs' % (
+                'slow %.0f%%@%.1fm..100%%@%.1fm, clear %.1fs' % (
                     cfg.guard_radius, cfg.corridor_half_w * 2,
-                    cfg.corridor_len, cfg.slow_scale * 100, cfg.clear_time))
+                    cfg.corridor_len, cfg.slow_scale * 100, cfg.slow_dist,
+                    cfg.guard_radius, cfg.clear_time))
 
         def _on_set_params(self, params):
             for p in params:

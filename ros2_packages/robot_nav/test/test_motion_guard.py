@@ -91,8 +91,26 @@ def test_filter_slowing_scales_vx_only():
     g.observe(t, WALL + obj, POSE, 0.0)
     vx, wz, st = g.filter(t, 0.30, 2.4)
     assert st == 'slowing'
-    assert vx == 0.15                     # slow_scale 0.5
+    assert 0.30 * 0.25 < vx < 0.30        # escala fica entre o piso e o cheio
     assert wz == 2.4                      # wz NUNCA muda
+
+
+def test_filter_slow_proportional_to_distance():
+    # mais PERTO = mais devagar (o "vindo na minha direção" vira freio
+    # progressivo); no piso (slow_dist) trava em slow_scale.
+    def vx_with_obj_at(d):
+        g = _guard()
+        t = _feed_static(g)
+        obj = [(0.0, -d), (0.0, -d - 0.1), (0.1, -d)]   # ao LADO, fora do corredor
+        g.observe(t, WALL + obj, POSE, 0.0)
+        vx, _, st = g.filter(t, 0.30, 0.0)
+        assert st == 'slowing'
+        return vx
+
+    far, mid, near = vx_with_obj_at(2.2), vx_with_obj_at(1.2), vx_with_obj_at(0.5)
+    assert far > mid > near               # monotônico com a distância
+    assert near == 0.30 * 0.25            # <slow_dist 0.6 -> piso slow_scale 0.25
+    assert far > 0.30 * 0.7               # na borda do raio quase não freia
 
 
 def test_filter_blocked_zeroes_forward_keeps_wz():

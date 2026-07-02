@@ -50,7 +50,11 @@ A cada `/scan_safe` (~10 Hz):
 
 ## Atuação (só no vx — NUNCA no wz)
 
-- Cluster móvel no raio → `linear.x *= slow_scale` (0,5) → estado `slowing`.
+- Cluster móvel no raio → `linear.x` escala PROPORCIONAL à distância do móvel
+  (estado `slowing`): piso `slow_scale` (0,25) com móvel a ≤`slow_dist` (0,6m),
+  subindo linear até ~1,0 na borda do `guard_radius`. (Feedback do dono na
+  validação 07-02: 50% uniforme era imperceptível de lado/atrás — "vindo na
+  minha direção" agora vira freio progressivo.)
 - Cluster móvel dentro do **corredor à frente** (retângulo `±corridor_half_w`
   0,35 m × `corridor_len` 1,5 m em base_link, avaliado só quando o comando tem
   vx > 0) → `linear.x = 0` → estado `blocked`. Retoma quando o corredor fica
@@ -70,7 +74,7 @@ A cada `/scan_safe` (~10 Hz):
 
 ## Parâmetros (defaults)
 
-`enabled=true, guard_radius=2.5, slow_scale=0.5, corridor_half_w=0.35,
+`enabled=true, guard_radius=2.5, slow_scale=0.25 (piso), slow_dist=0.6, corridor_half_w=0.35,
 corridor_len=1.5, clear_time=1.5, grid_res=0.15, lookback=0.5,
 min_cluster_points=3, cluster_gap=0.3, wz_gate=0.3, scan_stale=1.0`
 
