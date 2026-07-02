@@ -36,6 +36,7 @@ setup(
             'path_follower = robot_nav.path_follower:main',
             'freeze_capture = robot_nav.freeze_capture:main',
             'sim_actuator_model = robot_nav.sim_actuator_model:main',
+            'motion_guard = robot_nav.motion_guard:main',
         ],
     },
 )

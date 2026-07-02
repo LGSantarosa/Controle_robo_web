@@ -161,3 +161,160 @@ class MotionGuard:
                     hits[0].extend(other)
                     clusters.remove(other)
         return clusters
+
+
+def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
+    import csv as _csv
+    import os as _os
+
+    import numpy as np
+    import rclpy
+    from rclpy.node import Node
+    from rclpy.qos import (QoSDurabilityPolicy, QoSProfile, ReliabilityPolicy,
+                           qos_profile_sensor_data)
+    from rcl_interfaces.msg import SetParametersResult
+    from geometry_msgs.msg import Twist
+    from nav_msgs.msg import Odometry
+    from sensor_msgs.msg import LaserScan
+    from std_msgs.msg import String
+    from tf2_ros import Buffer, TransformListener, TransformException
+
+    from .utils import quat_to_yaw, spin_node
+
+    latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                         durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+
+    class MotionGuardNode(Node):
+        # afináveis ao vivo (lição 04bcf86): mutam a MESMA ref de cfg que
+        # observe/filter leem -> `ros2 param set` pega no tick seguinte
+        _CFG_PARAMS = ('enabled', 'guard_radius', 'slow_scale',
+                       'corridor_half_w', 'corridor_len', 'clear_time',
+                       'grid_res', 'lookback', 'min_cluster_points',
+                       'cluster_gap', 'wz_gate', 'scan_stale')
+
+        def __init__(self):
+            super().__init__('motion_guard')
+            cfg = GuardConfig()
+            for name in self._CFG_PARAMS:
+                self.declare_parameter(name, getattr(cfg, name))
+                setattr(cfg, name, self.get_parameter(name).value)
+            self.guard = MotionGuard(cfg)
+            self.add_on_set_parameters_callback(self._on_set_params)
+
+            self.tf_buffer = Buffer()
+            self.tf_listener = TransformListener(self.tf_buffer, self)
+            self._wz = 0.0
+            self._last_state = None
+
+            self.pub = self.create_publisher(Twist, 'auto_vel_raw', 10)
+            self.pub_state = self.create_publisher(
+                String, 'motion_guard/state', latched)
+            self.create_subscription(LaserScan, 'scan_safe', self._on_scan,
+                                     qos_profile_sensor_data)
+            self.create_subscription(Odometry, 'odom', self._on_odom,
+                                     qos_profile_sensor_data)
+            self.create_subscription(Twist, 'auto_vel_pre', self._on_cmd, 10)
+
+            d = 'controle_web/logs'
+            _os.makedirs(d, exist_ok=True)
+            self._csv_f = open(_os.path.join(d, 'motion_guard.csv'),
+                               'w', newline='')
+            self._csv = _csv.writer(self._csv_f)
+            self._csv.writerow(['t', 'state', 'n_moving', 'nearest',
+                                'in_corridor', 'vx_in', 'vx_out'])
+            self.get_logger().info(
+                'motion_guard ativo: raio %.1fm, corredor %.2fx%.1fm, '
+                'slow %.0f%%, clear %.1fs' % (
+                    cfg.guard_radius, cfg.corridor_half_w * 2,
+                    cfg.corridor_len, cfg.slow_scale * 100, cfg.clear_time))
+
+        def _on_set_params(self, params):
+            for p in params:
+                if p.name in self._CFG_PARAMS:
+                    setattr(self.guard.cfg, p.name, p.value)
+                    self.get_logger().info(
+                        'param %s = %s (live)' % (p.name, p.value))
+            return SetParametersResult(successful=True)
+
+        def _now(self) -> float:
+            return self.get_clock().now().nanoseconds * 1e-9
+
+        def _on_odom(self, msg: Odometry):
+            self._wz = msg.twist.twist.angular.z
+
+        def _pose_odom(self):
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    'odom', 'base_link', rclpy.time.Time())
+            except TransformException:
+                return None
+            t = tf.transform.translation
+            q = tf.transform.rotation
+            return (t.x, t.y, quat_to_yaw(q.x, q.y, q.z, q.w))
+
+        def _on_scan(self, msg: LaserScan):
+            # pontos do scan -> frame odom (TF mais recente; a 10Hz e objeto
+            # lento a defasagem é < grid_res). TF faltando -> NÃO alimenta o
+            # guard -> scan_stale -> pass-through (failsafe da spec).
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    'odom', msg.header.frame_id, rclpy.time.Time())
+            except TransformException:
+                self.get_logger().warn('sem TF odom<-%s; pass-through'
+                                       % msg.header.frame_id,
+                                       throttle_duration_sec=5.0)
+                return
+            pose = self._pose_odom()
+            if pose is None:
+                return
+            r = np.asarray(msg.ranges, dtype=np.float32)
+            # corta em guard_radius + 1m: barato e o guard re-filtra pelo robô
+            ok = np.isfinite(r) & (r > 0.0) & \
+                (r <= self.guard.cfg.guard_radius + 1.0)
+            if not np.any(ok):
+                self.guard.observe(self._now(), [], pose, self._wz)
+                return
+            a = msg.angle_min + np.arange(r.size) * msg.angle_increment
+            xl, yl = r[ok] * np.cos(a[ok]), r[ok] * np.sin(a[ok])
+            tt, q = tf.transform.translation, tf.transform.rotation
+            yaw = quat_to_yaw(q.x, q.y, q.z, q.w)
+            c, s = math.cos(yaw), math.sin(yaw)
+            pts = list(zip((tt.x + xl * c - yl * s).tolist(),
+                           (tt.y + xl * s + yl * c).tolist()))
+            self.guard.observe(self._now(), pts, pose, self._wz)
+
+        def _on_cmd(self, msg: Twist):
+            t = self._now()
+            vx, wz, state = self.guard.filter(t, msg.linear.x, msg.angular.z)
+            out = Twist()
+            out.linear.x = vx
+            out.angular.z = wz
+            self.pub.publish(out)
+            if state != self._last_state:
+                self._last_state = state
+                self.pub_state.publish(String(data=state))
+                if state == 'passthrough':
+                    self.get_logger().warn(
+                        'pass-through (scan/TF indisponível ou disabled)',
+                        throttle_duration_sec=5.0)
+            self._csv.writerow([
+                round(t, 3), state, len(self.guard.moving_clusters),
+                round(self.guard.nearest_moving, 2)
+                if math.isfinite(self.guard.nearest_moving) else '',
+                int(self.guard.in_corridor),
+                round(msg.linear.x, 3), round(vx, 3)])
+            self._csv_f.flush()
+
+    rclpy.init(args=args)
+    node = MotionGuardNode()
+    try:
+        spin_node(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == '__main__':
+    main()

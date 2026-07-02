@@ -132,8 +132,9 @@ def generate_launch_description():
             name='velocity_smoother', output=nav_output,
             parameters=[params_file, sim_time_param],
             # 2-mux (2026-06-26): a saída do smoother (nav_vel) entra no mux de
-            # AUTONOMIA (twist_mux_auto) junto com follow_vel/door_vel; o
-            # collision_monitor filtra a SAÍDA desse mux (auto_vel_raw->auto_vel).
+            # AUTONOMIA (twist_mux_auto) junto com follow_vel/door_vel; a saída
+            # do mux passa pelo motion_guard (auto_vel_pre->auto_vel_raw,
+            # 2026-07-02) e o collision_monitor filtra depois (->auto_vel).
             # Antes o collision filtrava só a saída do smoother (nav_vel_raw).
             remappings=[('cmd_vel', 'cmd_vel_nav'), ('cmd_vel_smoothed', 'nav_vel')],
         ),
@@ -179,14 +180,26 @@ def generate_launch_description():
         #     parameters=[sim_time_param],
         # ),
         # Mux de AUTONOMIA (1º estágio do 2-mux, 2026-06-26): arbitra as fontes
-        # autônomas (nav_vel, follow_vel, door_vel) numa fonte só, auto_vel_raw,
-        # que entra no collision_monitor. unstuck/humano NÃO entram aqui — eles
-        # ficam no mux FINAL (robot/sim.launch.py), a jusante do collision.
+        # autônomas (nav_vel, follow_vel, door_vel) numa fonte só, auto_vel_pre,
+        # que passa pelo motion_guard e entra no collision_monitor. unstuck/
+        # humano NÃO entram aqui — ficam no mux FINAL (robot/sim.launch.py),
+        # a jusante do collision.
         Node(
             package='twist_mux', executable='twist_mux',
             name='twist_mux_auto', output=nav_output,
             parameters=[twist_mux_auto_cfg, sim_time_param],
-            remappings=[('cmd_vel_out', 'auto_vel_raw')],
+            remappings=[('cmd_vel_out', 'auto_vel_pre')],
+        ),
+        # Cautela com objeto EM MOVIMENTO (2026-07-02): diff temporal do
+        # /scan_safe no frame odom -> móvel perto = desacelera; móvel no
+        # corredor à frente = para e retoma sozinho. Filtra SÓ a autonomia
+        # (auto_vel_pre -> auto_vel_raw); unstuck/manual ficam fora. Failsafe:
+        # sem TF/scan -> pass-through (nunca mata a nav). wz passa intocado.
+        # Spec: docs/superpowers/specs/2026-07-02-motion-guard-design.md
+        Node(
+            package='robot_nav', executable='motion_guard',
+            name='motion_guard', output=nav_output,
+            parameters=[sim_time_param],
         ),
         # Collision Monitor: lê /scan_safe (sanitizado acima) e freia
         # auto_vel_raw -> auto_vel ANTES do mux FINAL. Agora protege TODA a
