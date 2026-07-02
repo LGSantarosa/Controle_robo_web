@@ -297,6 +297,41 @@ def test_unstuck_rearms_after_guard_clears():
     assert cmd.lin == pytest.approx(-0.25)
 
 
+def test_guard_hold_expires_after_20s():
+    # teto do standdown (dono 07-02): guard preso em blocked por >20s sem
+    # nada mudar -> o unstuck REATIVA (volta a contar e age nos timers dele).
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0)
+    for t in (5.0, 10.0, 20.0, 24.9):
+        cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                         rear_gap=math.inf, front_gap=0.0, nearest=0.0,
+                         guard_blocked=True)
+        assert cmd.active is False            # segurado (< 20s de bloqueio)
+    sup.update(25.1, nav_wants_move=True, position=(0.0, 0.0),
+               rear_gap=math.inf, front_gap=0.0, nearest=0.0,
+               guard_blocked=True)            # 20.1s: hold caiu, re-ancora
+    cmd = sup.update(35.3, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, front_gap=0.0, nearest=0.0,
+                     guard_blocked=True)      # 10.2s parado pós-teto -> age
+    assert cmd.active is True
+    assert cmd.lin == pytest.approx(-0.25)
+
+
+def test_guard_hold_timer_resets_when_block_clears():
+    # bloqueio intermitente (pessoa indo e vindo) NÃO acumula pro teto:
+    # cada soltada zera o relógio dos 20s.
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0)
+    sup.update(10.1, nav_wants_move=True, position=(0.0, 0.0),
+               guard_blocked=True)
+    sup.update(25.0, nav_wants_move=True, position=(0.0, 0.0),
+               guard_blocked=False)           # soltou: zera o teto
+    cmd = sup.update(30.0, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, front_gap=0.0, nearest=0.0,
+                     guard_blocked=True)      # bloqueio NOVO (5s < 20s)
+    assert cmd.active is False
+
+
 def test_guard_blocked_does_not_abort_running_maneuver():
     # a manobra em andamento (ré) NÃO é abortada pelo guard — o unstuck_vel
     # (prio 30) nem passa pelo motion_guard; só novos disparos são segurados.

@@ -298,6 +298,10 @@ class UnstuckConfig:
     # LiDAR, livre no /map) segue o stuck_timeout cheio. Ver
     # docs/superpowers/specs/2026-06-22-unstuck-recovery-contextual-design.md
     stuck_timeout_mapped: float = 2.0
+    # Teto do standdown do motion_guard (dono 2026-07-02): guard preso em
+    # 'blocked' por mais que isso SEM nada mudar -> o unstuck reativa (o guard
+    # pode estar vendo um falso-móvel; não morrer de fome esperando).
+    guard_hold_max: float = 20.0
     stuck_radius: float = 0.05     # deslocou menos que isso = "parado"
     # 2026-06-27 BO: o robô point-turnando (vx=0, girando no lugar) NÃO desloca,
     # então o unstuck achava que travou e dava RÉ no meio do giro legítimo do
@@ -450,6 +454,7 @@ class UnstuckSupervisor:
     anchor_t: float = 0.0
     anchor_yaw: float = 0.0        # yaw quando ancorou (rotação reseta o stuck)
     mapped_since: Optional[float] = None  # desde quando o bloqueio à frente é parede mapeada
+    guard_since: Optional[float] = None   # desde quando o motion_guard bloqueia (teto do standdown)
     maneuver_start_t: float = 0.0
     maneuver_start_pos: Tuple[float, float] = (0.0, 0.0)
     reverse_target: float = 0.0    # quanto recuar NESTA manobra (<= reverse_distance)
@@ -490,7 +495,13 @@ class UnstuckSupervisor:
                guard_blocked: bool = False) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
-        if guard_blocked and self.state == _MONITORING:
+        if guard_blocked:
+            if self.guard_since is None:
+                self.guard_since = now
+        else:
+            self.guard_since = None
+        if (guard_blocked and self.state == _MONITORING
+                and now - self.guard_since <= self.cfg.guard_hold_max):
             # CAUTELA ≠ TRAVADO (2026-07-02): o motion_guard segurou a
             # autonomia de propósito (coisa se MEXENDO no corredor à frente).
             # Parado assim não é encalhe — em campo o unstuck disparava
@@ -499,6 +510,8 @@ class UnstuckSupervisor:
             # re-ancora (o relógio recomeça do zero quando o guard soltar).
             # Manobra JÁ em andamento não é abortada (só novos disparos) —
             # o unstuck_vel (prio 30) nem passa pelo motion_guard.
+            # TETO guard_hold_max (dono 07-02): bloqueado além disso sem nada
+            # mudar -> deixa de segurar e o unstuck volta a contar/agir.
             self.anchor = None
             self.mapped_since = None
             return _IDLE
@@ -967,6 +980,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 # os 10 s). block_range = front_gap acima disso não conta como
                 # bloqueio à frente. Lookup no /map cru (sem inflação).
                 ("stuck_timeout_mapped", 2.0),
+                ("guard_hold_max", 20.0),
                 ("block_range", 0.5),
                 ("map_occ_threshold", 65),
                 # 0.22 (não 0.15): absorve o offset de registro pose↔mapa (~0.2 m
@@ -1039,6 +1053,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self.cfg = UnstuckConfig(
                 stuck_timeout=g["stuck_timeout"],
                 stuck_timeout_mapped=g["stuck_timeout_mapped"],
+                guard_hold_max=g["guard_hold_max"],
                 stuck_radius=g["stuck_radius"],
                 stuck_yaw=g["stuck_yaw"],
                 reverse_distance=g["reverse_distance"],
