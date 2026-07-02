@@ -1,7 +1,30 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-06-30**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-02**.
+
+---
+
+## 🆕 2026-07-02 — As 2 placas "MPU9250" novas TAMBÉM são MPU6500 sem mag (3/3)
+
+> Teste feito num **Arduino avulso (328P) no PC dev** — a MEGA do robô não foi tocada.
+
+- **Veredito (mesmo método do laudo `PROVA_MPU6500_NAO_9250.md`):** as duas placas leram
+  `WHO_AM_I(0x75)=0x70` (assinatura do **MPU6500**) e o AK8963 em `0x0C` **não dá ACK** nem
+  com bypass → **SEM magnetômetro**. Placar: **3 de 3** módulos "GY-9250" eram 6500 (a
+  devolvida + estas duas). O laudo vale igual pra devolução destas.
+- **Decisão prática: parar de caçar GY-9250 de marketplace** (mesmo PCB/silk do 6500, chip
+  populado quase sempre é o 6500). Pra yaw absoluto, os caminhos confiáveis:
+  **magnetômetro dedicado** (QMC5883L/HMC5883L/LIS3MDL, entra no mesmo I²C) ou breakout de
+  fornecedor sério (**ICM-20948** Adafruit/Pimoroni, sucessor do 9250). Adaptar o firmware
+  do mag (hoje AK8963, dormente) pra QMC5883L é simples.
+- **Ferramenta nova VERSIONADA: `firmware/imu_diag/`** (`7db28d8` + env `nano`) — o sketch
+  DIAG MAG do laudo, agora no repo: scanner I²C + WHO_AM_I + bypass + WIA do AK8963 +
+  amostra em µT, veredito impresso, roda em loop de 3 s (troca de placa sem reflashear;
+  cortar o 5V antes). Flash: `pio run -e nano -t upload --upload-port /dev/ttyUSB0`
+  (Arduino 328P avulso; SDA=A4, SCL=A5) ou env default pra MEGA (⚠️ apaga o mega_bridge —
+  reflashear depois).
+- IMU do robô segue o **MPU6050** (fix `553e7b3`, ⏳ validar sinal do yaw na bancada).
 
 ---
 
