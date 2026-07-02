@@ -342,7 +342,9 @@ def test_filter_resumes_after_clear_time():
     g.observe(t, WALL + obj, POSE, 0.0)
     assert g.filter(t + 1.0, 0.30, 0.0)[2] == 'blocked'   # ainda dentro do clear_time
     g.observe(t + 1.0, WALL, POSE, 0.0)                    # corredor limpo
-    vx, _, st = g.filter(t + 1.0 + 1.6, 0.30, 0.0)         # 1.6s > clear_time 1.5
+    g.observe(t + 2.6, WALL, POSE, 0.0)                    # scans seguem chegando
+    # (sem scans o failsafe scan_stale vira passthrough — comportamento certo)
+    vx, _, st = g.filter(t + 2.6, 0.30, 0.0)               # >clear_time s/ móvel
     assert st == 'idle' and vx == 0.30
 
 

@@ -131,6 +131,20 @@ class MotionGuard:
         if self.in_corridor:
             self._last_corridor_t = t
 
+    def filter(self, t: float, vx: float, wz: float
+               ) -> Tuple[float, float, str]:
+        """aplica a decisão no comando. wz NUNCA muda (zona-morta do giro).
+        Os latches expiram sozinhos pelo relógio (clear_time) — cobre também
+        o decaimento durante o gate de giro (gated não re-avista o móvel)."""
+        c = self.cfg
+        if not c.enabled or t - self._last_scan_t > c.scan_stale:
+            return vx, wz, 'passthrough'
+        if t - self._last_corridor_t < c.clear_time:
+            return (0.0 if vx > 0.0 else vx), wz, 'blocked'
+        if t - self._last_moving_t < c.clear_time:
+            return vx * c.slow_scale, wz, 'slowing'
+        return vx, wz, 'idle'
+
     def _cluster(self, pts: List[Pt]) -> List[List[Pt]]:
         """agrupamento single-link por distância <= cluster_gap (N pequeno)."""
         gap2 = self.cfg.cluster_gap ** 2
