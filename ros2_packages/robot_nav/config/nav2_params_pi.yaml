@@ -295,9 +295,14 @@ local_costmap:
           # Antes era -0.05 (filtro de chão da câmera RGB-D removida).
           min_obstacle_height: 0.0
           # 2026-06-08: revertido 1.0 → 0.0 (estava medroso — segurava obstáculo
-          # fantasma por 1 s e bloqueava a rota). Trade-off: perna fina de cadeira
-          # pode piscar no costmap; aceitável pra não travar a navegação.
-          observation_persistence: 0.0
+          # fantasma por 1 s e bloqueava a rota).
+          # 2026-07-03: 0.0 → 1.0 DE VOLTA. O dropout de feixe rasante do LD06
+          # (mesmo do motion_guard) fazia a marca PISCAR -> Theta* trocava de
+          # LADO a cada replan de 1Hz ("plano enlouquece") -> robô em zigue-
+          # zague sem nada na frente. Os fantasmas <0.15m que motivaram o 0.0
+          # hoje morrem no scan_safe, e pessoa = motion_guard cuida. Rastro de
+          # 1s de quem passa é aceitável.
+          observation_persistence: 1.0
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
           obstacle_max_range: 2.5
@@ -340,7 +345,9 @@ global_costmap:
           marking: true
           data_type: "LaserScan"
           # 2026-06-08: revertido 1.0 → 0.0 (idem ao local — estava medroso).
-          observation_persistence: 0.0
+          # 2026-07-03: 0.0 → 1.0 de volta (ver local: dropout piscava a marca
+          # -> plano trocava de lado a cada replan -> zigue-zague).
+          observation_persistence: 1.0
           raytrace_max_range: 3.0
           obstacle_max_range: 2.5
       static_layer:
