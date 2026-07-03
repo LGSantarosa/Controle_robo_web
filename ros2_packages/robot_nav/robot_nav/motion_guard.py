@@ -276,6 +276,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self.tf_buffer = Buffer()
             self.tf_listener = TransformListener(self.tf_buffer, self)
             self._wz = 0.0
+            self._vx = 0.0
+            self._last_pose = None
             self._last_state = None
 
             self.pub = self.create_publisher(Twist, 'auto_vel_raw', 10)
@@ -292,8 +294,13 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self._csv_f = open(_os.path.join(d, 'motion_guard.csv'),
                                'w', newline='')
             self._csv = _csv.writer(self._csv_f)
+            # px..cy: diagnóstico de campo 07-03 (ONDE nasce o falso positivo:
+            # pose do robô + vel medida + centróide do cluster móvel + bearing
+            # relativo ao heading). Remover as colunas quando o guard assentar.
             self._csv.writerow(['t', 'state', 'n_moving', 'nearest',
-                                'in_corridor', 'vx_in', 'vx_out'])
+                                'in_corridor', 'vx_in', 'vx_out',
+                                'px', 'py', 'pyaw', 'vx_odom', 'wz_odom',
+                                'cx', 'cy', 'cbear_deg'])
             self.get_logger().info(
                 'motion_guard ativo: raio %.1fm, corredor %.2fx%.1fm, '
                 'slow %.0f%%@%.1fm..100%%@%.1fm, clear %.1fs' % (
@@ -314,6 +321,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
 
         def _on_odom(self, msg: Odometry):
             self._wz = msg.twist.twist.angular.z
+            self._vx = msg.twist.twist.linear.x
 
         def _pose_odom(self):
             try:
@@ -355,6 +363,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             pts = list(zip((tt.x + xl * c - yl * s).tolist(),
                            (tt.y + xl * s + yl * c).tolist()))
             self.guard.observe(self._now(), pts, pose, self._wz)
+            self._last_pose = pose
 
         def _on_cmd(self, msg: Twist):
             t = self._now()
@@ -370,12 +379,27 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                     self.get_logger().warn(
                         'pass-through (scan/TF indisponível ou disabled)',
                         throttle_duration_sec=5.0)
+            cx = cy = cbear = ''
+            if self.guard.moving_clusters and self._last_pose is not None:
+                px, py, pyaw = self._last_pose
+                # centróide do cluster mais PRÓXIMO (o que manda na decisão)
+                cl = min(self.guard.moving_clusters,
+                         key=lambda cl: min(math.hypot(p[0] - px, p[1] - py)
+                                            for p in cl))
+                cx = round(sum(p[0] for p in cl) / len(cl), 2)
+                cy = round(sum(p[1] for p in cl) / len(cl), 2)
+                cbear = round(math.degrees(
+                    (math.atan2(cy - py, cx - px) - pyaw + math.pi)
+                    % (2 * math.pi) - math.pi))
+            pose = self._last_pose or ('', '', '')
             self._csv.writerow([
                 round(t, 3), state, len(self.guard.moving_clusters),
                 round(self.guard.nearest_moving, 2)
                 if math.isfinite(self.guard.nearest_moving) else '',
                 int(self.guard.in_corridor),
-                round(msg.linear.x, 3), round(vx, 3)])
+                round(msg.linear.x, 3), round(vx, 3),
+                *(round(v, 3) if v != '' else '' for v in pose),
+                round(self._vx, 3), round(self._wz, 3), cx, cy, cbear])
             self._csv_f.flush()
 
     rclpy.init(args=args)
