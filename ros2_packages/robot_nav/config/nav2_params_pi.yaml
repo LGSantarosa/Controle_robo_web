@@ -516,8 +516,16 @@ collision_monitor:
       # FRONTAL; quem vem na frente ainda desacelera). Parede do lado para de
       # forçar crawl.
       points: "[[0.65, 0.32], [0.65, -0.32], [-0.45, -0.32], [-0.45, 0.32]]"
-      action_type: "slowdown"
-      slowdown_ratio: 0.3
+      # 2026-07-03 slowdown -> LIMIT (o VILÃO das pausas, medido no pause_budget):
+      # o slowdown 0.3 escalava TAMBÉM o giro-no-lugar (2.4 -> 0.72 < zona-morta
+      # 1.7) -> robô comandava giro morto perto de parede/porta (34% do tempo de
+      # comando da missão!). O limit corta POR EIXO: linear_limit 0.10 = mesma
+      # proteção de aproximação de antes (0.35*0.3); angular_limit 4.0 = giro
+      # NUNCA capado (atuador satura em 2.5; PolygonStop segue zerando rota de
+      # colisão real). Point-turn no lugar não avança sobre o obstáculo.
+      action_type: "limit"
+      linear_limit: 0.10
+      angular_limit: 4.0
       # min_points BAIXO (2) de propósito: perna fina de cadeira a ~1 m devolve
       # só 1–2 feixes. 2 pontos já dispara. Falso-positivo aqui só desacelera
       # (seguro). Um humano devolve muitos pontos, sempre pega.
