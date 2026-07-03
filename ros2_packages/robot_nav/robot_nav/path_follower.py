@@ -93,20 +93,6 @@ class FollowConfig:
     # foi medida — só a do giro=1.7; o sim_actuator_model tb só modela o giro, por
     # isso o sim não pegava esse trava.)
     min_speed: float = 0.22         # m/s — avanço mínimo (acima da zona-morta)
-    # COMPROMISSO DE RUMO (2026-07-03, campo: 54 inversões de giro presas num
-    # ponto — o replan de 1Hz mexia o carrot uns graus e o follower re-girava
-    # a cada balançada, ora pra um lado ora pro outro, sem nunca andar):
-    # completou um giro -> enquanto não DIRIGIR commit_dist, só re-entra em
-    # turning acima de turn_enter_committed (curva de verdade age na hora;
-    # ruído de replan não vira giro). Por DISTÂNCIA de propósito (sem relógio):
-    # parado, o compromisso não expira sozinho — quem muda a cena (anda/
-    # unstuck) é que reabre a decisão.
-    commit_dist: float = 0.35       # m dirigidos p/ voltar ao turn_enter normal
-    turn_enter_committed: float = 0.61   # rad (~35°) — re-entrada sob compromisso
-    # alvo ~ATRÁS (>150°): os dois lados custam igual e o SINAL do erro é ruído
-    # (+178/-178 alternando por replan) -> girava 180° pros DOIS lados. Mantém
-    # o lado do último giro.
-    sticky_behind: float = 2.62     # rad (~150°)
 
 
 @dataclass
@@ -121,21 +107,14 @@ class DecisiveFollower:
         self.cfg = cfg
         self.state = 'idle'
         self._turn_target = None  # bearing (map) congelado durante o turning
-        self._commit_pose = None  # onde o último giro completou (compromisso)
-        self._last_turn_side = None   # +1/-1 — lado do último giro (sticky 180)
         self.dbg = {}        # diagnóstico do último update (logado pelo nó)
 
     def _turn_cmd(self, herr: float) -> float:
         """giro no lugar pelo MENOR ângulo: sinal = sinal do erro; magnitude P
-        saturada entre rot_min e rot_max. Alvo ~atrás (> sticky_behind): o
-        sinal do erro é ruído — mantém o lado do último giro."""
+        saturada entre rot_min e rot_max."""
         c = self.cfg
         mag = min(c.rot_max, max(c.rot_min, abs(herr) * c.rot_k))
-        side = math.copysign(1.0, herr)
-        if abs(herr) > c.sticky_behind and self._last_turn_side is not None:
-            side = self._last_turn_side
-        self._last_turn_side = side
-        return side * mag
+        return math.copysign(mag, herr)
 
     def update(self, pose: Optional[Tuple[float, float, float]],
                path: Optional[List[Pt]], goal_active: bool,
@@ -144,7 +123,6 @@ class DecisiveFollower:
         if pose is None or not goal_active or not path or len(path) < 2:
             self.state = 'idle'
             self._turn_target = None
-            self._commit_pose = None
             return Cmd(0.0, 0.0, 'idle')
 
         x, y, yaw = pose
@@ -185,18 +163,8 @@ class DecisiveFollower:
             if abs(herr) <= c.turn_exit:
                 self.state = 'driving'
                 self._turn_target = None
-                self._commit_pose = (x, y)   # compromisso: decidi este rumo
         else:
-            # COMPROMISSO: recém-girou e ainda não dirigiu commit_dist ->
-            # ruído de replan (< turn_enter_committed) não vira giro novo.
-            enter = c.turn_enter
-            if self._commit_pose is not None:
-                if math.hypot(x - self._commit_pose[0],
-                              y - self._commit_pose[1]) >= c.commit_dist:
-                    self._commit_pose = None
-                else:
-                    enter = c.turn_enter_committed
-            if abs(herr) >= enter:
+            if abs(herr) >= c.turn_enter:
                 self.state = 'turning'
                 self._turn_target = bearing
             else:
@@ -243,8 +211,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
                 ('slow_radius', 0.4), ('min_speed', 0.22), ('rate_hz', 20.0),
-                ('commit_dist', 0.35), ('turn_enter_committed_deg', 35.0),
-                ('sticky_behind_deg', 150.0),
             ):
                 self.declare_parameter(name, default)
                 g[name] = self.get_parameter(name).value
@@ -256,10 +222,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 goal_xy_tol=g['goal_xy_tol'],
                 goal_yaw_tol=math.radians(g['goal_yaw_tol_deg']),
                 rot_k=g['rot_k'], rot_min=g['rot_min'], rot_max=g['rot_max'],
-                slow_radius=g['slow_radius'], min_speed=g['min_speed'],
-                commit_dist=g['commit_dist'],
-                turn_enter_committed=math.radians(g['turn_enter_committed_deg']),
-                sticky_behind=math.radians(g['sticky_behind_deg']))
+                slow_radius=g['slow_radius'], min_speed=g['min_speed'])
             self.fol = DecisiveFollower(self.cfg)
 
             self._path: Optional[List[Pt]] = None
