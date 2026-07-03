@@ -114,6 +114,53 @@ def test_occlusion_reveal_is_not_moving():
     assert g.filter(t + 0.2, 0.30, 0.0)[2] == 'idle'
 
 
+def _polar_of(pts, bin_deg=1.0, drop_bins=()):
+    """mapa polar como o nó monta do scan COMPLETO: bin->maior alcance;
+    feixe dropado/inválido = 0.0 (desconhecido, nunca 'livre')."""
+    pol = {}
+    for p in pts:
+        b = int(math.floor(math.degrees(math.atan2(p[1], p[0])) / bin_deg))
+        pol[b] = max(pol.get(b, 0.0), math.hypot(p[0], p[1]))
+    for b in drop_bins:
+        pol[b] = 0.0
+    return pol
+
+
+def test_beam_dropout_reappearing_wall_not_moving():
+    # FALSO residual de campo 07-03 (CSV diagnóstico): 25% das detecções com o
+    # robô PARADO, clusters atrás/do lado (rasante), nos MESMOS lugares =
+    # feixe do LD06 dropa em superfície rasante e VOLTA segundos depois. Ao
+    # voltar, a célula estava ausente e o bin do raycast vazio ("livre") ->
+    # virava móvel sustentado. Com o polar do scan COMPLETO o dropout entra
+    # como alcance 0.0 = DESCONHECIDO -> não valida movimento.
+    g = _guard()
+    wall_gap = [p for p in WALL if not (-0.2 < p[1] < 0.2)]   # setor dropado
+    drop = range(-8, 8)          # bins ~bearing 0° (onde a parede sumiu)
+    for i in range(8):
+        g.observe(i * 0.1, wall_gap, POSE, 0.0,
+                  polar=_polar_of(wall_gap, drop_bins=drop))
+    t = 0.8
+    for i in range(g.cfg.persist_frames):     # o feixe volta: parede reaparece
+        g.observe(t + i * 0.1, WALL, POSE, 0.0, polar=_polar_of(WALL))
+    assert g.moving_clusters == []
+    assert g.filter(t + 0.2, 0.30, 0.0)[2] == 'idle'
+
+
+def test_mover_detected_with_full_polar():
+    # contraprova com polar explícito: pessoa aparece onde o feixe velho
+    # ATRAVESSAVA (batia na parede atrás) -> detecta normal
+    g = _guard()
+    for i in range(8):
+        g.observe(i * 0.1, WALL, POSE, 0.0, polar=_polar_of(WALL))
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
+    t = 0.8
+    for i in range(g.cfg.persist_frames):
+        g.observe(t + i * 0.1, WALL + obj, POSE, 0.0,
+                  polar=_polar_of(WALL + obj))
+    assert len(g.moving_clusters) == 1
+    assert g.filter(t + 0.2, 0.30, 0.0)[2] == 'blocked'
+
+
 def test_mover_in_observed_free_space_still_detected():
     # contraprova do raycast: pessoa aparece onde o feixe velho PASSAVA
     # (batia na parede bem atrás / não batia em nada) -> segue detectada

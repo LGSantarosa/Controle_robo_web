@@ -112,21 +112,26 @@ class MotionGuard:
         return old
 
     def observe(self, t: float, pts: List[Pt],
-                pose: Tuple[float, float, float], wz: float) -> None:
+                pose: Tuple[float, float, float], wz: float,
+                polar=None) -> None:
         c = self.cfg
         self._last_scan_t = t
         cells = frozenset(self._cell(p) for p in pts)
         px, py, pyaw = pose
-        # mapa polar visto DESTA pose (bin de bearing -> maior alcance): é o
-        # "o que o feixe atravessou" que o raycast do futuro consulta. max por
-        # bin = se algum feixe do bin passou longe, o espaço até lá era livre.
         binw = math.radians(c.ray_bin_deg)
-        polar = {}
-        for p in pts:
-            b = int(math.floor(math.atan2(p[1] - py, p[0] - px) / binw))
-            d = math.hypot(p[0] - px, p[1] - py)
-            if d > polar.get(b, 0.0):
-                polar[b] = d
+        # mapa polar visto DESTA pose (bin de bearing -> maior alcance): é o
+        # "o que o feixe atravessou" que o raycast do futuro consulta.
+        # PREFERIR o polar do nó (scan COMPLETO, dropout=0.0=desconhecido —
+        # campo 07-03: feixe rasante do LD06 some e volta; sem isso a volta
+        # parecia móvel). Fallback (testes/sem nó): monta dos próprios pts
+        # (bin sem feixe = livre).
+        if polar is None:
+            polar = {}
+            for p in pts:
+                b = int(math.floor(math.atan2(p[1] - py, p[0] - px) / binw))
+                d = math.hypot(p[0] - px, p[1] - py)
+                if d > polar.get(b, 0.0):
+                    polar[b] = d
         self._snaps.append((t, cells, (px, py), polar))
 
         # GATE DE GIRO: girando, o scan inteiro "anda" (pose/TF atrasam) ->
@@ -349,20 +354,36 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             if pose is None:
                 return
             r = np.asarray(msg.ranges, dtype=np.float32)
+            a = msg.angle_min + np.arange(r.size) * msg.angle_increment
+            tt, q = tf.transform.translation, tf.transform.rotation
+            yaw = quat_to_yaw(q.x, q.y, q.z, q.w)
+            # polar do scan COMPLETO pro raycast (07-03): feixe válido ->
+            # alcance real (sem corte: "atravessou até lá"); feixe
+            # dropado/inválido -> 0.0 = DESCONHECIDO (o dropout rasante do
+            # LD06 que some-e-volta não valida mais movimento). max por bin =
+            # um feixe válido no bin vence o dropout vizinho (viés pra manter
+            # a detecção). LiDAR ~centro do robô (= referência do raycast).
+            binw = math.radians(self.guard.cfg.ray_bin_deg)
+            bear = (a + yaw + math.pi) % (2.0 * math.pi) - math.pi
+            bins = np.floor(bear / binw).astype(int)
+            rr = np.where(np.isfinite(r) & (r > 0.0), r, 0.0)
+            polar = {}
+            for b, d in zip(bins.tolist(), rr.tolist()):
+                if d > polar.get(b, -1.0):
+                    polar[b] = d
             # corta em guard_radius + 1m: barato e o guard re-filtra pelo robô
             ok = np.isfinite(r) & (r > 0.0) & \
                 (r <= self.guard.cfg.guard_radius + 1.0)
             if not np.any(ok):
-                self.guard.observe(self._now(), [], pose, self._wz)
+                self.guard.observe(self._now(), [], pose, self._wz,
+                                   polar=polar)
+                self._last_pose = pose
                 return
-            a = msg.angle_min + np.arange(r.size) * msg.angle_increment
-            xl, yl = r[ok] * np.cos(a[ok]), r[ok] * np.sin(a[ok])
-            tt, q = tf.transform.translation, tf.transform.rotation
-            yaw = quat_to_yaw(q.x, q.y, q.z, q.w)
             c, s = math.cos(yaw), math.sin(yaw)
+            xl, yl = r[ok] * np.cos(a[ok]), r[ok] * np.sin(a[ok])
             pts = list(zip((tt.x + xl * c - yl * s).tolist(),
                            (tt.y + xl * s + yl * c).tolist()))
-            self.guard.observe(self._now(), pts, pose, self._wz)
+            self.guard.observe(self._now(), pts, pose, self._wz, polar=polar)
             self._last_pose = pose
 
         def _on_cmd(self, msg: Twist):
