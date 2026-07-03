@@ -18,6 +18,15 @@ def _feed_static(g, t0=0.0, n=8, dt=0.1, pts=WALL):
     return t0 + n * dt
 
 
+def _feed_mover(g, t, obj, frames=None, dt=0.1, wz=0.0, pose=POSE):
+    """alimenta o móvel por `frames` scans consecutivos (default = o mínimo
+    p/ latchar, persist_frames). Retorna o t do último scan."""
+    n = frames if frames is not None else g.cfg.persist_frames
+    for i in range(n):
+        g.observe(t + i * dt, WALL + obj, pose, wz)
+    return t + (n - 1) * dt
+
+
 def test_static_wall_not_moving():
     g = _guard()
     _feed_static(g)
@@ -84,11 +93,37 @@ def test_filter_idle_passes_command():
     assert (vx, wz, st) == (0.30, 1.0, 'idle')
 
 
+def test_flicker_single_frame_does_not_latch():
+    # FALSO POSITIVO de campo 07-03: TF atrasado + borda de oclusão fazem
+    # parede MAPEADA "piscar" como móvel por 1 frame enquanto o robô anda ->
+    # o guard ficava 100% do tempo em slowing/blocked sem ninguém perto.
+    # 1 frame isolado (ou não-consecutivo) = ruído, NÃO latcha.
+    g = _guard()
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
+    g.observe(t, WALL + obj, POSE, 0.0)            # 1 frame só
+    assert g.filter(t, 0.30, 0.0)[2] == 'idle'
+    g.observe(t + 0.1, WALL, POSE, 0.0)            # sumiu
+    g.observe(t + 0.2, WALL + obj, POSE, 0.0)      # voltou (não-consecutivo)
+    assert g.filter(t + 0.2, 0.30, 0.0)[2] == 'idle'
+
+
+def test_persistent_mover_latches_after_persist_frames():
+    g = _guard(persist_frames=3)
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]     # no corredor
+    g.observe(t, WALL + obj, POSE, 0.0)
+    g.observe(t + 0.1, WALL + obj, POSE, 0.0)
+    assert g.filter(t + 0.1, 0.30, 0.0)[2] == 'idle'    # 2 < persist_frames
+    g.observe(t + 0.2, WALL + obj, POSE, 0.0)
+    assert g.filter(t + 0.2, 0.30, 0.0)[2] == 'blocked'  # 3º consecutivo latcha
+
+
 def test_filter_slowing_scales_vx_only():
     g = _guard()
     t = _feed_static(g)
     obj = [(0.5, -1.5), (0.5, -1.4), (0.6, -1.5)]   # móvel perto, FORA do corredor
-    g.observe(t, WALL + obj, POSE, 0.0)
+    t = _feed_mover(g, t, obj)
     vx, wz, st = g.filter(t, 0.30, 2.4)
     assert st == 'slowing'
     assert 0.30 * 0.25 < vx < 0.30        # escala fica entre o piso e o cheio
@@ -102,7 +137,7 @@ def test_filter_slow_proportional_to_distance():
         g = _guard()
         t = _feed_static(g)
         obj = [(0.0, -d), (0.0, -d - 0.1), (0.1, -d)]   # ao LADO, fora do corredor
-        g.observe(t, WALL + obj, POSE, 0.0)
+        t = _feed_mover(g, t, obj)
         vx, _, st = g.filter(t, 0.30, 0.0)
         assert st == 'slowing'
         return vx
@@ -130,7 +165,7 @@ def test_filter_freeze_bubble_full_stop_any_direction():
     g = _guard()
     t = _feed_static(g)
     obj = [(0.0, -0.9), (0.0, -1.0), (0.1, -0.9)]   # do LADO, colado
-    g.observe(t, WALL + obj, POSE, 0.0)
+    t = _feed_mover(g, t, obj)
     vx, wz, st = g.filter(t, 0.30, 2.4)
     assert (vx, wz, st) == (0.0, 0.0, 'blocked')
 
@@ -143,7 +178,7 @@ def test_filter_blocked_full_stop_including_wz():
     g = _guard()
     t = _feed_static(g)
     obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]      # no corredor
-    g.observe(t, WALL + obj, POSE, 0.0)
+    t = _feed_mover(g, t, obj)
     vx, wz, st = g.filter(t, 0.30, 2.4)
     assert (vx, wz, st) == (0.0, 0.0, 'blocked')
 
@@ -152,7 +187,7 @@ def test_filter_blocked_does_not_zero_reverse():
     g = _guard()
     t = _feed_static(g)
     obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
-    g.observe(t, WALL + obj, POSE, 0.0)
+    t = _feed_mover(g, t, obj)
     vx, wz, st = g.filter(t, -0.25, 1.0)  # ré (afasta do móvel) não é bloqueada
     assert st == 'blocked' and vx == -0.25
     assert wz == 0.0                      # mas o giro para mesmo assim
@@ -162,11 +197,11 @@ def test_filter_resumes_after_clear_time():
     g = _guard(clear_time=1.5)   # timing do teste independe do default
     t = _feed_static(g)
     obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
-    g.observe(t, WALL + obj, POSE, 0.0)
-    assert g.filter(t + 1.0, 0.30, 0.0)[2] == 'blocked'   # dentro do clear_time
-    g.observe(t + 1.0, WALL, POSE, 0.0)                    # corredor limpo
-    g.observe(t + 2.6, WALL, POSE, 0.0)                    # scans seguem chegando
-    vx, _, st = g.filter(t + 2.6, 0.30, 0.0)               # >clear_time s/ móvel
+    tl = _feed_mover(g, t, obj)
+    assert g.filter(tl + 0.8, 0.30, 0.0)[2] == 'blocked'   # dentro do clear_time
+    g.observe(tl + 0.8, WALL, POSE, 0.0)                    # corredor limpo
+    g.observe(tl + 2.4, WALL, POSE, 0.0)                    # scans seguem chegando
+    vx, _, st = g.filter(tl + 2.4, 0.30, 0.0)               # >clear_time s/ móvel
     assert st == 'idle' and vx == 0.30
 
 
@@ -174,14 +209,14 @@ def test_filter_wz_gate_holds_then_decays():
     g = _guard(clear_time=1.5)   # timing do teste independe do default
     t = _feed_static(g)
     obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
-    g.observe(t, WALL + obj, POSE, 0.0)                    # blocked
-    g.observe(t + 0.1, WALL + obj, POSE, 2.0)              # girando: NÃO avalia
-    assert g.filter(t + 0.2, 0.30, 2.0)[2] == 'blocked'    # decisão segurada
+    tl = _feed_mover(g, t, obj)                             # blocked
+    g.observe(tl + 0.1, WALL + obj, POSE, 2.0)              # girando: NÃO avalia
+    assert g.filter(tl + 0.2, 0.30, 2.0)[2] == 'blocked'    # decisão segurada
     # muito tempo girando sem avaliação -> decai pra livre (clear_time 1.5
     # depois da última vista do móvel; gated não re-avista)
     for i in range(30):
-        g.observe(t + 0.2 + i * 0.1, WALL + obj, POSE, 2.0)
-    vx, _, st = g.filter(t + 3.5, 0.30, 2.0)
+        g.observe(tl + 0.2 + i * 0.1, WALL + obj, POSE, 2.0)
+    vx, _, st = g.filter(tl + 3.5, 0.30, 2.0)
     assert st == 'idle' and vx == 0.30
 
 

@@ -58,6 +58,14 @@ class GuardConfig:
     grid_res: float = 0.15          # m — célula da grade de comparação
     lookback: float = 0.5           # s — compara com snapshot desta idade
     min_cluster_points: int = 3     # cluster menor = ruído
+    persist_frames: int = 3         # scans CONSECUTIVOS c/ móvel p/ latchar.
+                                    # Campo 07-03: TF atrasado + borda de
+                                    # oclusão "piscam" parede mapeada como
+                                    # móvel (62% dos falsos = 1 frame, 81%
+                                    # <=3) -> guard vivia preso em slowing/
+                                    # blocked sem ninguém perto. Custo: ~0.3s
+                                    # de latência a 10Hz (pessoa real dispara
+                                    # todo frame; detecção começa a 2.5m).
     cluster_gap: float = 0.3        # m — distância máx p/ mesmo cluster
     wz_gate: float = 0.3            # rad/s — girando acima disso não avalia
     scan_stale: float = 1.0         # s sem scan -> pass-through
@@ -79,6 +87,7 @@ class MotionGuard:
         self._last_nearest: float = math.inf   # dist do móvel na última vista
         self._last_corridor_t: float = -math.inf
         self._last_scan_t: float = -math.inf
+        self._consec: int = 0       # scans consecutivos vendo móvel
 
     def _cell(self, p: Pt) -> Tuple[int, int]:
         r = self.cfg.grid_res
@@ -143,11 +152,15 @@ class MotionGuard:
                     break
             if self.in_corridor:
                 break
-        if clusters:
+        # PERSISTÊNCIA: só latcha com persist_frames scans consecutivos vendo
+        # móvel — 1 frame isolado é flicker de TF atrasado/borda de oclusão
+        # (falso positivo de campo 07-03), não pessoa. Frame limpo zera.
+        self._consec = self._consec + 1 if clusters else 0
+        if self._consec >= c.persist_frames:
             self._last_moving_t = t
             self._last_nearest = self.nearest_moving
-        if self.in_corridor:
-            self._last_corridor_t = t
+            if self.in_corridor:
+                self._last_corridor_t = t
 
     def filter(self, t: float, vx: float, wz: float
                ) -> Tuple[float, float, str]:
@@ -221,6 +234,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                        'freeze_dist', 'corridor_half_w', 'corridor_len',
                        'clear_time',
                        'grid_res', 'lookback', 'min_cluster_points',
+                       'persist_frames',
                        'cluster_gap', 'wz_gate', 'scan_stale')
 
         def __init__(self):
