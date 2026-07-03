@@ -6,14 +6,21 @@ mesmo com o planner mandando contornar, gira só no lugar, e só para porque o
 collision manda. Grava DOIS CSVs (controle_web/logs/) pra eu (assistente) ler
 DEPOIS — nunca ao vivo:
 
-1) freeze_capture.csv — a CADEIA de velocidade + odom, 1 linha por msg:
-     t_wall, topic, vx, wz, px, py
+1) freeze_capture.csv — a CADEIA de velocidade + odom + estados, 1 linha por msg:
+     t_wall, topic, vx, wz, px, py, extra
      cmd_vel_nav  : o que o controller (DWB/RotationShim) QUER (pré-smoother)
-     nav_vel      : saída do smoother (entra no mux de autonomia; PRÉ-collision)
-     auto_vel_raw : nav+seguidor+porta arbitrados pelo mux de autonomia (PRÉ-collision)
+     nav_vel      : saída do smoother (entra no mux de autonomia)
+     follow_vel   : o que o path_follower (driver atual) QUER
+     auto_vel_pre : nav+seguidor+porta arbitrados pelo mux de autonomia (PRÉ-guard)
+     auto_vel_raw : depois do motion_guard (PRÉ-collision)
      auto_vel     : o que SOBRA depois do collision_monitor (autonomia gated)
+     unstuck_vel  : manobra do unstuck (fura o collision no mux final)
      cmd_vel      : o que vai pro motor (pós twist_mux FINAL / modelo de giro no sim)
      odom         : o que o robô FAZ (twist) + pose (px,py)
+     follow_state / guard_state / goal_active : transições (valor na col. extra)
+   → orçamento do tempo parado (07-03): `bin/pause_budget.py freeze_capture.csv`
+     atribui cada segundo parado-com-goal a uma causa (guard, collision, giro
+     engolido, zona-morta, unstuck, follower quieto...) pra achar o vilão.
 
 2) freeze_diag.csv — métricas DERIVADAS a ~5 Hz pra provar planner-vs-controller:
      t_wall, px, py, yaw_deg, plan_rel_deg, front_obst_m, cmd_nav_vx, cmd_nav_wz
@@ -33,10 +40,13 @@ import time
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import (QoSProfile, ReliabilityPolicy, HistoryPolicy,
+                       QoSDurabilityPolicy)
+from action_msgs.msg import GoalStatusArray
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener, LookupException, ConnectivityException, ExtrapolationException
 
 
@@ -64,11 +74,27 @@ class FreezeCapture(Node):
 
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          history=HistoryPolicy.KEEP_LAST, depth=20)
-        for topic in ('cmd_vel_nav', 'nav_vel', 'auto_vel_raw', 'auto_vel', 'cmd_vel'):
+        for topic in ('cmd_vel_nav', 'nav_vel', 'follow_vel', 'auto_vel_pre',
+                      'auto_vel_raw', 'auto_vel', 'unstuck_vel', 'cmd_vel'):
             self.create_subscription(Twist, topic, self._mk_twist(topic), qos)
         self.create_subscription(Odometry, 'odom', self._on_odom, qos)
         self.create_subscription(Path, 'plan', self._on_plan, qos)
         self.create_subscription(LaserScan, 'scan', self._on_scan, qos)
+        # estados (latched nos publishers) + goal ativo -> col. extra
+        latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(
+            String, 'follow_state',
+            lambda m: self._log_extra('follow_state', m.data), latched)
+        self.create_subscription(
+            String, 'motion_guard/state',
+            lambda m: self._log_extra('guard_state', m.data), latched)
+        self._goal_active = {}
+        for topic in ('navigate_to_pose/_action/status',
+                      'navigate_through_poses/_action/status'):
+            self.create_subscription(
+                GoalStatusArray, topic,
+                lambda m, t=topic: self._on_goal_status(t, m), 10)
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -90,7 +116,7 @@ class FreezeCapture(Node):
             base = '/tmp'
         self._f = open(os.path.join(base, 'freeze_capture.csv'), 'w', newline='')
         self._w = csv.writer(self._f)
-        self._w.writerow(['t_wall', 'topic', 'vx', 'wz', 'px', 'py'])
+        self._w.writerow(['t_wall', 'topic', 'vx', 'wz', 'px', 'py', 'extra'])
         self._fd = open(os.path.join(base, 'freeze_diag.csv'), 'w', newline='')
         self._wd = csv.writer(self._fd)
         self._wd.writerow(['t_wall', 'px', 'py', 'yaw_deg', 'plan_rel_deg',
@@ -104,7 +130,8 @@ class FreezeCapture(Node):
             if topic == 'cmd_vel_nav':
                 self._cmd_nav = (m.linear.x, m.angular.z)
             self._w.writerow([f'{time.time():.3f}', topic,
-                              f'{m.linear.x:.4f}', f'{m.angular.z:.4f}', '', ''])
+                              f'{m.linear.x:.4f}', f'{m.angular.z:.4f}',
+                              '', '', ''])
         return cb
 
     def _on_odom(self, m):
@@ -112,7 +139,18 @@ class FreezeCapture(Node):
         p = m.pose.pose.position
         self._w.writerow([f'{time.time():.3f}', 'odom',
                           f'{t.linear.x:.4f}', f'{t.angular.z:.4f}',
-                          f'{p.x:.3f}', f'{p.y:.3f}'])
+                          f'{p.x:.3f}', f'{p.y:.3f}', ''])
+
+    def _log_extra(self, topic, value):
+        self._w.writerow([f'{time.time():.3f}', topic, '', '', '', '', value])
+
+    def _on_goal_status(self, topic, m):
+        # ACTIVE_STATUSES do nav2 = 1,2,3 (aceito/executando/cancelando)
+        active = any(s.status in (1, 2, 3) for s in m.status_list)
+        if self._goal_active.get(topic) != active:
+            self._goal_active[topic] = active
+            self._log_extra('goal_active',
+                            '1' if any(self._goal_active.values()) else '0')
 
     # ---- entradas p/ o diag (CSV 2) ----
     def _on_plan(self, m):
