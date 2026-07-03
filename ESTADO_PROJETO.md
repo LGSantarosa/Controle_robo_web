@@ -5,6 +5,62 @@
 
 ---
 
+## 🆕 2026-07-03 (tarde) — CAÇADA AO VILÃO DAS PAUSAS: causa achada, fix escolhido, ⚠️ DEPLOY PENDENTE
+
+> **⚠️ PRIMEIRA AÇÃO SEGUNDA (2026-07-06): a Pi está ATRASADA.** main = `581f02c`
+> (limit REATIVADO) mas a Pi ficou em `75ff844` (sem limit) — o robô desligou antes
+> do deploy. **Antes de ligar a stack: `git fetch && git reset --hard origin/main`
+> + `colcon build --packages-select robot_nav` na Pi.**
+
+### O VILÃO das pausas (medido com pause_budget + freeze_capture, decisão do dono: LIMIT fica)
+- **Causa raiz PROVADA**: o `PolygonSlow` do collision_monitor (action `slowdown`,
+  ratio 0.3) escala TAMBÉM o giro-no-lugar: follower manda wz=2.4 → collision entrega
+  0.72 → **abaixo da zona-morta 1.7 = giro morto**. 34% do tempo de comando da missão
+  (107s/315s) era giro comandado que não acontecia. **Fecha o BO pausado dos "giros
+  >5s"** (a resposta de "onde 2.4 vira 0" era o PolygonSlow).
+- **Anatomia do ponto-problema (bolsão ~(5.1,-1.16) do mapa `sala`, 445-452s preso 2×)**:
+  o robô entra no bolsão por um corredor estreito e precisa de um **giro de ~180°**
+  pra sair por outra passagem estreita (observação do dono: "se ele completa o 180
+  ele sai de boa"). Girando no bolsão, o nariz VARRE as paredes (0.3-0.5m) → quando
+  cruza o setor da parede o PolygonSlow mata o giro NO MEIO → fica apontado pra
+  parede, alvo ~180° atrás, ruído troca o lado do giro (54 inversões medidas),
+  unstuck e follower brigam. Com o `limit` ativo esse ponto custou **10s** (vs 445s).
+- **Fix = PolygonSlow action `slowdown` → `limit`** (corta POR EIXO): `linear_limit
+  0.10` (mesma proteção de aproximação, 0.35×0.3) + `angular_limit 4.0` (giro NUNCA
+  capado; atuador satura 2.5; PolygonStop/approach continua zerando colisão real).
+  Commit `581f02c` (reapply de `dbe0c78`). **⏳ VALIDAR no ponto-problema segunda.**
+
+### A saga do dia (pra não repetir os erros)
+1. `dbe0c78` limit aplicado → **run ficou em ZIGUE-ZAGUE** (inversões de giro 4.1→8.1/min,
+   girando 11%→23%) → revertido (`3571a3e`). Diagnóstico do zigue-zague: com o giro
+   destravado o follower executava cada balançada do replan de 1Hz.
+2. **Por que o plano balançava ("plan enlouquecendo", dono)**: dropout de feixe rasante
+   do LD06 fazia a marca de obstáculo PISCAR no costmap → Theta* trocava de LADO a cada
+   replan (31 flips de lado em 781s SEM nada na frente). **Fix `ac3cd24`:
+   `observation_persistence 0→1.0s` (local+global)** — flips caíram pra 8. O motivo do
+   0.0 de 06-08 (fantasma <0.15m preso 1s) hoje morre no scan_safe. ✅ DEPLOYADO+testado.
+3. `6d34714` compromisso de rumo no follower (commit_dist 0.35m + turn_enter_committed
+   35° + sticky_behind 150°) → **em campo NÃO mudou nada no ponto-problema** (depois do
+   unstuck girar o robô, o erro é sempre >35° → turning re-entra "legítimo" com alvo
+   fresco do plano) → revertido a pedido (`75ff844`). ⚠️ O código está na história do
+   git — o **sticky_behind (lado grudento p/ alvo ~180°)** ainda é candidato válido se
+   sobrar alternância de lado DEPOIS do limit validado.
+4. **Lição de método**: limit sozinho = zigue-zague; persistence sozinho = não destrava
+   o 180 do bolsão. **A dupla limit+persistence é o pacote** — testamos o limit no
+   ambiente errado (antes do persistence) e quase jogamos fora o fix certo.
+
+### Estado dos knobs/ferramentas novas de hoje (tarde)
+- `bin/pause_budget.py` (offline): orçamento do tempo parado por causa + episódios.
+  Usa o freeze_capture.csv turbinado (`843388e`: follow_vel, auto_vel_pre, unstuck_vel,
+  follow_state, guard_state, goal_active na col. extra).
+- Régua pro teste de segunda (rota padrão + foco no bolsão):
+  - bolsão: tempo preso (era 445s; com limit era 10s)
+  - zigue-zague: inversões de giro/min no odom (bom=4.1, ruim=8.1)
+  - flips de lado do plano (bom=8/781s)
+  - pause_budget: wz_engolido (era 107s) e "outro" (era 96s)
+
+---
+
 ## 🆕 2026-07-03 — motion_guard ✅ APROVADO no real ("isso ta bom pra caralho") + anti-livelock do giro do unstuck
 
 > Tudo na `main` e **deployado+buildado na Pi** (`b589b42`). Sessão de campo com o dono.
