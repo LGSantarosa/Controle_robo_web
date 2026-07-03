@@ -1,7 +1,37 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-02**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-03**.
+
+---
+
+## 🆕 2026-07-03 — motion_guard ✅ APROVADO no real ("isso ta bom pra caralho") + anti-livelock do giro do unstuck
+
+> Tudo na `main` e **deployado+buildado na Pi** (`b589b42`). Sessão de campo com o dono.
+
+### motion_guard: falsos positivos RESOLVIDOS (3 fixes, 1 rodada limpa por fix)
+Dono reclamou "lento demais perto de parede/objeto MAPEADO". CSV provou: **100% do tempo em
+slowing/blocked SEM ninguém perto** (flicker re-armava o clear_time a cada ~0,85s). 3 causas
+distintas, cada uma provada por CSV antes do fix:
+1. **`persist_frames=3`** (`277b398`): só latcha com 3 scans consecutivos vendo móvel — flicker
+   de 1 frame (TF atrasado/oclusão) era 62% dos falsos. Custo ~0,3s de latência. 100%→71% ativo.
+2. **Raycast "estava LIVRE mesmo?"** (`ae8ccff`): célula ausente no snapshot ≠ livre (pode estar
+   na SOMBRA de um objeto). Snapshot agora guarda pose + mapa polar (bin 1°→alcance); móvel só se
+   o feixe velho ATRAVESSOU a célula. Mata a borda de oclusão. 71%→46%.
+3. **Polar do scan COMPLETO** (`b589b42`): CSV diagnóstico (colunas novas px,py,pyaw,vx/wz_odom,
+   cx,cy,cbear_deg em `38de948`) mostrou 25% das detecções com robô PARADO, atrás/do lado, nos
+   MESMOS lugares = **dropout de feixe rasante do LD06** (some segundos e volta; ao voltar
+   parecia móvel). Feixe inválido agora entra como alcance 0.0 = DESCONHECIDO (nunca "livre").
+**Resultado final (CSV + dono): rota solo SEM 1 freio falso (48s, 0 episódios); com gente
+passando, 24 episódios de 4-9s soltando sozinho + 2 longos (20/30s, pessoa insistindo =
+correto). Dono: "isso ta bom pra caralho".** 245 testes. Knob novo live: `persist_frames`,
+`ray_bin_deg`. ⚠️ Colunas de diagnóstico do CSV ficam até o guard assentar (remover depois).
+
+### unstuck: giro calculado (clear_turn) loopava — anti-livelock `turn_escape_after=2` (`9fcc653`)
+Campo: robô girou ~10× no lugar sem sair (log: 9× `turning reason=mapped GIRO_CALC=+6..12°` no
+mesmo ponto, ~45s). O clear_turn vinha ANTES da ré e **não entrava em nenhum histórico**
+anti-loop. Agora tem `turn_history` (mesmo padrão spin/move): 2 tentativas no mesmo ponto
+(0,5m/120s), na 3ª pula o giro e cai na ré/avanço/escape. 241→243 testes (na época).
 
 ---
 
