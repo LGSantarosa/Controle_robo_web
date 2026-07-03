@@ -329,13 +329,8 @@ collision_monitor:
       # FRONTAL; quem vem na frente ainda desacelera). Parede do lado para de
       # forçar crawl.
       points: "[[0.65, 0.32], [0.65, -0.32], [-0.45, -0.32], [-0.45, 0.32]]"
-      # 2026-07-03 slowdown -> LIMIT (ver nav2_params_pi.yaml): o slowdown 0.3
-      # escalava o giro-no-lugar pra dentro da zona-morta (2.4->0.72<1.7) =
-      # giro morto perto de parede. limit corta por eixo: linear igual protegido,
-      # giro nunca capado.
-      action_type: "limit"
-      linear_limit: 0.10
-      angular_limit: 4.0
+      action_type: "slowdown"
+      slowdown_ratio: 0.3
       min_points: 2
       visualize: True
       polygon_pub_topic: "polygon_slowdown"
