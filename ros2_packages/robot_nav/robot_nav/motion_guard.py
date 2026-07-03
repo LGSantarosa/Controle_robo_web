@@ -68,6 +68,14 @@ class GuardConfig:
                                     # todo frame; detecção começa a 2.5m).
     cluster_gap: float = 0.3        # m — distância máx p/ mesmo cluster
     wz_gate: float = 0.3            # rad/s — girando acima disso não avalia
+    ray_bin_deg: float = 1.0        # ° — bin do mapa polar do raycast (visto
+                                    # do pose antigo). Campo 07-03 (2ª rodada):
+                                    # "célula ausente" ≠ "estava livre" —
+                                    # trecho de parede saindo da SOMBRA de um
+                                    # objeto disparava móvel sustentado (71%
+                                    # do tempo freado sem ninguém perto). Só é
+                                    # móvel se o feixe velho ATRAVESSOU a
+                                    # célula (alcance > dist + grid_res).
     scan_stale: float = 1.0         # s sem scan -> pass-through
 
 
@@ -79,7 +87,7 @@ class MotionGuard:
 
     def __init__(self, cfg: GuardConfig):
         self.cfg = cfg
-        self._snaps = deque()            # (t, frozenset de células)
+        self._snaps = deque()   # (t, células, (px,py) da pose, polar bin->alcance)
         self.moving_clusters: List[List[Pt]] = []
         self.nearest_moving: float = math.inf
         self.in_corridor: bool = False
@@ -108,7 +116,18 @@ class MotionGuard:
         c = self.cfg
         self._last_scan_t = t
         cells = frozenset(self._cell(p) for p in pts)
-        self._snaps.append((t, cells))
+        px, py, pyaw = pose
+        # mapa polar visto DESTA pose (bin de bearing -> maior alcance): é o
+        # "o que o feixe atravessou" que o raycast do futuro consulta. max por
+        # bin = se algum feixe do bin passou longe, o espaço até lá era livre.
+        binw = math.radians(c.ray_bin_deg)
+        polar = {}
+        for p in pts:
+            b = int(math.floor(math.atan2(p[1] - py, p[0] - px) / binw))
+            d = math.hypot(p[0] - px, p[1] - py)
+            if d > polar.get(b, 0.0):
+                polar[b] = d
+        self._snaps.append((t, cells, (px, py), polar))
 
         # GATE DE GIRO: girando, o scan inteiro "anda" (pose/TF atrasam) ->
         # não avalia; a decisão anterior decai sozinha (clear_time no filter).
@@ -117,9 +136,8 @@ class MotionGuard:
         old = self._old_snapshot(t)
         if old is None:
             return                      # histórico curto demais ainda
-        _, old_cells = old
+        _, old_cells, (opx, opy), old_polar = old
 
-        px, py, pyaw = pose
         r2 = c.guard_radius ** 2
         moving: List[Pt] = []
         for p in pts:
@@ -130,6 +148,15 @@ class MotionGuard:
             if any((cx + dx, cy + dy) in old_cells
                    for dx in (-1, 0, 1) for dy in (-1, 0, 1)):
                 continue
+            # RAYCAST (07-03): célula ausente ≠ célula LIVRE — pode só estar
+            # na sombra de um objeto (oclusão) ou fora do alcance cortado.
+            # Móvel de verdade = o feixe velho ATRAVESSAVA essa célula (alcance
+            # no bin > distância + margem). Bin sem feixe = livre (feixe foi
+            # além do corte de alcance) -> mantém a detecção.
+            d_old = math.hypot(p[0] - opx, p[1] - opy)
+            b = int(math.floor(math.atan2(p[1] - opy, p[0] - opx) / binw))
+            if old_polar.get(b, math.inf) <= d_old + c.grid_res:
+                continue                # oclusão/superfície, não movimento
             moving.append(p)
 
         clusters = [cl for cl in self._cluster(moving)
@@ -235,7 +262,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                        'clear_time',
                        'grid_res', 'lookback', 'min_cluster_points',
                        'persist_frames',
-                       'cluster_gap', 'wz_gate', 'scan_stale')
+                       'cluster_gap', 'wz_gate', 'ray_bin_deg', 'scan_stale')
 
         def __init__(self):
             super().__init__('motion_guard')

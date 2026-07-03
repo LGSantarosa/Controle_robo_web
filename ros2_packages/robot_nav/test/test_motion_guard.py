@@ -93,6 +93,39 @@ def test_filter_idle_passes_command():
     assert (vx, wz, st) == (0.30, 1.0, 'idle')
 
 
+def test_occlusion_reveal_is_not_moving():
+    # FALSO POSITIVO residual de campo 07-03 (2ª rodada, sem ninguém perto:
+    # 71% do tempo freado): o robô anda, um trecho de parede que estava na
+    # SOMBRA de um objeto aparece -> célula "ausente" no snapshot velho era
+    # tratada como "estava livre" = móvel. Raycast: só é móvel se o feixe
+    # velho ATRAVESSOU a célula (alcance antigo > distância + margem).
+    g = _guard()
+    # occluder: blob a 1.0m (bearing ±11°) sombreia a parede x=2 em |y|<0.4;
+    # o scan velho NÃO vê esse trecho (nem células vizinhas dele)
+    occluder = [(1.0, -0.2 + y * 0.05) for y in range(9)]   # x=1, y=-0.2..0.2
+    wall_shadowed = [p for p in WALL if not (-0.4 < p[1] < 0.4)]
+    _feed_static(g, pts=wall_shadowed + occluder)
+    # o trecho sombreado "aparece" (robô moveu / borda da sombra varre)
+    revealed = [(2.0, 0.0), (2.0, 0.05), (2.0, -0.05), (2.0, 0.1)]
+    t = 0.8
+    for i in range(g.cfg.persist_frames):
+        g.observe(t + i * 0.1, wall_shadowed + occluder + revealed, POSE, 0.0)
+    assert g.moving_clusters == []          # feixe velho batia no occluder
+    assert g.filter(t + 0.2, 0.30, 0.0)[2] == 'idle'
+
+
+def test_mover_in_observed_free_space_still_detected():
+    # contraprova do raycast: pessoa aparece onde o feixe velho PASSAVA
+    # (batia na parede bem atrás / não batia em nada) -> segue detectada
+    g = _guard()
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]   # na frente da parede x=2
+    for i in range(g.cfg.persist_frames):
+        g.observe(t + i * 0.1, WALL + obj, POSE, 0.0)
+    assert len(g.moving_clusters) == 1
+    assert g.filter(t + 0.2, 0.30, 0.0)[2] == 'blocked'
+
+
 def test_flicker_single_frame_does_not_latch():
     # FALSO POSITIVO de campo 07-03: TF atrasado + borda de oclusão fazem
     # parede MAPEADA "piscar" como móvel por 1 frame enquanto o robô anda ->
