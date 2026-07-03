@@ -365,6 +365,13 @@ class UnstuckConfig:
     # girou pra esse lado aqui sem sair, vira pro OUTRO. Só com folga pra girar
     # (nearest>=spin_clear); emparedado -> cai na lógica normal (ré/escape-reverse).
     move_escape_after: int = 3     # translações no mesmo ponto antes de forçar o giro
+    # ANTI-LIVELOCK do giro CALCULADO (2026-07-03, campo: 9 giros de +6..12°
+    # seguidos no MESMO ponto, ~45s preso — o clear_turn não entrava em NENHUM
+    # histórico e vem antes da ré). Se o girinho não abriu a frente nas primeiras
+    # tentativas, não vai abrir na 9ª: depois de turn_escape_after giros
+    # calculados no mesmo ponto sem sair, PULA o clear_turn e a decisão cai na
+    # ré/avanço/escape logo abaixo (alterna giro<->translação, igual aos outros).
+    turn_escape_after: int = 2     # giros calculados no mesmo ponto antes de pular
     plan_side_min: float = 0.17    # rad (~10°) — abaixo disso o plano é ~reto à frente
     # (ambíguo) -> o lado do giro de escape cai no _spin_dir (longe do obstáculo).
     # GIRO CALCULADO (2026-06-29, dono "falta 5° pra ir reto"): quando a frente
@@ -475,6 +482,8 @@ class UnstuckSupervisor:
     # translações (ré/avanço) recentes por ponto — anti-livelock ré<->avanço
     # (move_escape_after); só as manobras NORMAIS (não os nudges de escape).
     move_history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
+    # giros CALCULADOS recentes por ponto — anti-livelock (turn_escape_after)
+    turn_history: List[Tuple[float, Tuple[float, float]]] = field(default_factory=list)
     # motivo do último disparo p/ LOG de campo (06-30: pessoa parando o robô dispara
     # rápido?). "timeout"=cauteloso 10s; "mapped"/"near"/"pinch" furam pros ~2s.
     last_fire_reason: str = ""
@@ -668,7 +677,15 @@ class UnstuckSupervisor:
         # vem offset (None) e cai na ré abaixo. Vem ANTES da ré de propósito (a
         # ideia é justamente preferir o giro pequeno à ré quando ele resolve).
         if clear_offset is not None and abs(clear_offset) >= self.cfg.clear_turn_min:
-            return self._begin_clear_turn(now, yaw, clear_offset)
+            # ANTI-LIVELOCK (2026-07-03): giro calculado já tentou
+            # turn_escape_after vezes NESTE ponto sem sair? Não resolve ->
+            # pula e cai na ré/avanço/escape abaixo (alterna, não loopa).
+            turns_here = sum(
+                1 for (tt, tp) in self.turn_history
+                if now - tt <= self.cfg.escalate_window
+                and self._dist(tp, position) <= self.cfg.same_spot_radius)
+            if turns_here < self.cfg.turn_escape_after:
+                return self._begin_clear_turn(now, yaw, clear_offset, position)
         # ANTI-LIVELOCK ré<->avanço (2026-06-30): já transladou move_escape_after
         # vezes neste mesmo ponto sem sair? Bater no mesmo eixo (ré curta <-> avanço,
         # ex. pessoa atrás deixando uma fresta) não resolve -> GIRA pra fugir dele,
@@ -722,10 +739,13 @@ class UnstuckSupervisor:
             return self._begin_spin(now, open_side, yaw, nearest_deg, position)
         return _IDLE
 
-    def _begin_clear_turn(self, now, yaw, offset) -> Command:
+    def _begin_clear_turn(self, now, yaw, offset, position) -> Command:
         # Giro CALCULADO: alvo = heading atual + offset (o quanto falta pra abrir a
         # frente rumo ao plano). Malha fechada no yaw MEDIDO (igual ao spin: a roda
         # patina, o yaw não mente). Encerra ao chegar no alvo OU no teto de tempo.
+        self.turn_history = [(tt, tp) for (tt, tp) in self.turn_history
+                             if now - tt <= self.cfg.escalate_window]
+        self.turn_history.append((now, position))
         self.state = _TURNING
         self.turn_offset = offset
         self.turn_target_yaw = _norm_angle(yaw + offset)
@@ -1006,6 +1026,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 ("spin_away_deg", 30.0),
                 # anti-livelock: 2 giros no mesmo ponto -> força translação (06-30)
                 ("spin_escape_after", 2),
+                # anti-livelock do giro CALCULADO (07-03): 2 no mesmo ponto -> pula
+                ("turn_escape_after", 2),
                 # Giro CALCULADO (2026-06-29): cap pequeno (~15°) — só ajusta o
                 # talinho que falta pra abrir a frente rumo ao plano; senão dá ré.
                 ("clear_turn_cap_deg", 30.0),     # cap da correção (nó); 2026-06-29:
@@ -1072,6 +1094,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 spin_clear=g["spin_clear"],
                 spin_away_deg=g["spin_away_deg"],
                 spin_escape_after=int(g["spin_escape_after"]),
+                turn_escape_after=int(g["turn_escape_after"]),
                 rear_stop_margin=g["rear_stop_margin"],
                 reverse_min=g["reverse_min"],
                 forward_distance=g["forward_distance"],

@@ -1407,3 +1407,50 @@ def test_no_clear_offset_reverses_as_before():
     cmd = _stuck_then(sup, clear_offset=None)
     assert cmd.lin == pytest.approx(-0.25)
     assert sup.state == "reversing"
+
+
+def test_clear_turn_capped_per_spot_then_falls_through():
+    # ANTI-LIVELOCK do giro calculado (campo 07-03: 9 giros de +6..12° seguidos
+    # no MESMO ponto, ~45s preso — o clear_turn não entrava em nenhum histórico).
+    # Depois de turn_escape_after giros no mesmo ponto sem sair, PULA o giro e
+    # deixa a decisão cair na ré/avanço abaixo (alterna giro<->translação).
+    sup = UnstuckSupervisor(_cfg())
+    t, yaw = 0.0, 0.0
+    for i in range(sup.cfg.turn_escape_after):
+        sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                   rear_gap=math.inf, front_gap=0.0, yaw=yaw, nearest=0.0,
+                   clear_offset=0.20)
+        cmd = sup.update(t + 10.1, nav_wants_move=True, position=(0.0, 0.0),
+                         rear_gap=math.inf, front_gap=0.0, yaw=yaw,
+                         nearest=0.0, clear_offset=0.20)
+        assert sup.state == "turning", f"giro {i + 1} devia disparar"
+        yaw += 0.20                     # completa o giro (chega no alvo)
+        sup.update(t + 10.2, nav_wants_move=True, position=(0.0, 0.0),
+                   rear_gap=math.inf, front_gap=0.0, yaw=yaw, nearest=0.0)
+        assert sup.state == "grace"
+        t += 15.0                       # grace expira
+        sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                   rear_gap=math.inf, front_gap=0.0, yaw=yaw, nearest=0.0)
+        t += 0.1                        # próximo ciclo re-ancora daqui
+    # 3º disparo no MESMO ponto: giro esgotado -> cai na RÉ (rear livre)
+    sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+               rear_gap=math.inf, front_gap=0.0, yaw=yaw, nearest=0.0,
+               clear_offset=0.20)
+    cmd = sup.update(t + 10.1, nav_wants_move=True, position=(0.0, 0.0),
+                     rear_gap=math.inf, front_gap=0.0, yaw=yaw, nearest=0.0,
+                     clear_offset=0.20)
+    assert sup.state == "reversing"
+    assert cmd.lin == pytest.approx(-0.25)
+
+
+def test_clear_turn_allowed_again_at_new_spot():
+    # esgotou o giro num ponto, mas robô SAIU de lá (> same_spot_radius) ->
+    # o giro calculado volta a valer no lugar novo
+    sup = UnstuckSupervisor(_cfg())
+    sup.turn_history = [(0.0, (0.0, 0.0)), (15.0, (0.0, 0.0))]   # 2 giros no (0,0)
+    far = (5.0, 0.0)                     # bem além do same_spot_radius (0.5)
+    sup.update(30.0, nav_wants_move=True, position=far, rear_gap=math.inf,
+               front_gap=0.0, yaw=0.0, nearest=0.0, clear_offset=0.20)
+    sup.update(40.2, nav_wants_move=True, position=far, rear_gap=math.inf,
+               front_gap=0.0, yaw=0.0, nearest=0.0, clear_offset=0.20)
+    assert sup.state == "turning"
