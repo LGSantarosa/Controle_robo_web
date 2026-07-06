@@ -5,7 +5,7 @@
 
 ---
 
-## 🏆 2026-07-06 — MELHOR RUN DA HISTÓRIA: vilão das pausas FECHADO em campo
+## 🏆 2026-07-06 — AS 2 MELHORES RUNS DA HISTÓRIA: vilão das pausas FECHADO em campo
 
 **Deploy `8a76116` na Pi** (limit `581f02c` + persistence `ac3cd24` + time_step
 0.02 `8ba8b7a`, build OK) → rota padrão em **LOOP, ~5 ciclos completos, 26min de
@@ -19,6 +19,15 @@ goal ativo, ZERO erro** — com o dono + outra pessoa atrapalhando de propósito
   desejado, o teste era esse). unstuck 6,4s; collision 5,6s; pior episódio 12s
   (vs 445s do bolsão antigo).
 - Inversões de giro ~7/min na janela toda — inclui desvios de gente; sem alarme.
+
+### 🏆🏆 RUN 2 (mesmo dia, ~17h) — "melhor ainda, rápido e decisivo"
+Mesma stack, dono atrapalhando de novo (mais agressivo: guard_hold 73s em 634s
+de goal). A navegação em si quase não pausou: **wz_engolido 6,0s (1,0%),
+vx_zona_morta 2,7s, unstuck 0,1s, collision 1,5s**. Único episódio a entender:
+**31s em t+626 com cmd 0.22-0.30 de avanço e odom=0** (rodas paradas sob
+comando, guard idle↔blocked) — hipótese: dono SEGURANDO o robô no fim; se não
+era ele, vira BO (cheiro de BMS/stall). CSVs arquivados na Pi:
+`controle_web/logs/run_2026-07-06_best/` (run 1) e `run_2026-07-06_best2/` (run 2).
 
 ### Régua daqui pra frente
 **Esta run é o BASELINE.** Mudança que piorar pausa real >10,5% ou wz_engolido >2%
