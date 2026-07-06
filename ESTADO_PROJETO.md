@@ -1,11 +1,34 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-03**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-06**.
 
 ---
 
-## 🆕 2026-07-03 (tarde) — CAÇADA AO VILÃO DAS PAUSAS: causa achada, fix escolhido, ⚠️ DEPLOY PENDENTE
+## 🏆 2026-07-06 — MELHOR RUN DA HISTÓRIA: vilão das pausas FECHADO em campo
+
+**Deploy `e9b7284` na Pi** (limit `581f02c` + persistence `ac3cd24` + time_step
+0.02 `088fcaa`, build OK) → rota padrão em **LOOP, ~5 ciclos completos, 26min de
+goal ativo, ZERO erro** — com o dono + outra pessoa atrapalhando de propósito
+(entrando na frente, passando perto, forçando desvio). "Caralho ele deu um baile."
+
+### Números (pause_budget do freeze_capture, janela de 31min)
+- **wz_engolido: 27,9s (1,8% do goal) — era 107s/315s (34%) em 07-03. VILÃO MORTO.**
+- Parado com goal: 279s (18%), mas 116s é idle inicial pré-missão → pausa real ~10,5%.
+- guard_hold 50s em 53 intervenções = motion_guard freando pra GENTE (comportamento
+  desejado, o teste era esse). unstuck 6,4s; collision 5,6s; pior episódio 12s
+  (vs 445s do bolsão antigo).
+- Inversões de giro ~7/min na janela toda — inclui desvios de gente; sem alarme.
+
+### Régua daqui pra frente
+**Esta run é o BASELINE.** Mudança que piorar pausa real >10,5% ou wz_engolido >2%
+em loop equivalente = regressão. Bônus deployado junto: `simulation_time_step
+0.1→0.02` no approach (banda cega de rotação por aliasing, achada no A/B do sim
+07-06 — margem −11mm virou +7mm).
+
+---
+
+## 2026-07-03 (tarde) — CAÇADA AO VILÃO DAS PAUSAS: causa achada, fix escolhido (✅ validado 07-06)
 
 > **⚠️ PRIMEIRA AÇÃO SEGUNDA (2026-07-06): a Pi está ATRASADA.** main = `581f02c`
 > (limit REATIVADO) mas a Pi ficou em `75ff844` (sem limit) — o robô desligou antes
