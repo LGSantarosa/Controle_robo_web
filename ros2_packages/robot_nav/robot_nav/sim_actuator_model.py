@@ -71,8 +71,12 @@ class SimActuatorModel(Node):
         # fica um fator único aproximado, ajustável.
         self.right_factor = self.declare_parameter('right_factor', 1.05).value
         self.left_factor = self.declare_parameter('left_factor', 1.0).value
-        # Zona-morta linear (nunca medida; entre 0.11 que trava e 0.25 que anda).
-        self.lin_deadzone = self.declare_parameter('linear_deadzone', 0.15).value
+        # Zona-morta linear. 2026-07-06 (A/B do bolsão): 0.15 -> 0.10. O real ANDA
+        # a 0.105 (aproximação mansa do slowdown 0.35*0.3, vista em todo run de
+        # campo); com 0.15 o sim ZERAVA esse crawl e travava em vão de 0.9m que o
+        # real cruza ("no sim ele é lento demais" — dono). O caso medido oposto
+        # ("parte do repouso a 0.11 e trava", atrito estático) fica no limiar.
+        self.lin_deadzone = self.declare_parameter('linear_deadzone', 0.10).value
 
         self.pub = self.create_publisher(Twist, 'cmd_vel', 10)
         self.create_subscription(Twist, 'cmd_vel_raw', self._on_cmd, 10)
