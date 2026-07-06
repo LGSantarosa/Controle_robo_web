@@ -350,7 +350,7 @@ collision_monitor:
       points: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
       action_type: "approach"
       time_before_collision: 1.0   # 1.5->1.0 em 2026-06-22 (corredor apertado: approach freava sem parar; ver nav2_params_pi.yaml)
-      simulation_time_step: 0.1
+      simulation_time_step: 0.02  # 2026-07-06: anti-aliasing de rotação (ver nav2_params_pi.yaml)
       min_points: 2
       visualize: True
       polygon_pub_topic: "polygon_stop"

@@ -570,7 +570,13 @@ collision_monitor:
       points: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
       action_type: "approach"
       time_before_collision: 1.0
-      simulation_time_step: 0.1
+      # 2026-07-06 (A/B do bolsão no SIM): 0.1 -> 0.02. Com wz=2.4 o passo de 0.1s
+      # gira ~14° por iteração e PULA a janela angular (~4°) em que um ponto a
+      # 0.33-0.35m entra no canto do footprint girando (canto varre 0.354m) —
+      # banda cega de rotação por aliasing: o robô raspava a roda em point-turn
+      # colado (margem medida no bag: -11mm!) sem o approach reagir. 0.02 = ~3°
+      # por passo, nenhuma janela escapa. CPU: 50 passos × ~450 pontos, desprezível.
+      simulation_time_step: 0.02
       min_points: 2
       visualize: True
       polygon_pub_topic: "polygon_stop"
