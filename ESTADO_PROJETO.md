@@ -7,8 +7,8 @@
 
 ## 🏆 2026-07-06 — MELHOR RUN DA HISTÓRIA: vilão das pausas FECHADO em campo
 
-**Deploy `e9b7284` na Pi** (limit `581f02c` + persistence `ac3cd24` + time_step
-0.02 `088fcaa`, build OK) → rota padrão em **LOOP, ~5 ciclos completos, 26min de
+**Deploy `8a76116` na Pi** (limit `581f02c` + persistence `ac3cd24` + time_step
+0.02 `8ba8b7a`, build OK) → rota padrão em **LOOP, ~5 ciclos completos, 26min de
 goal ativo, ZERO erro** — com o dono + outra pessoa atrapalhando de propósito
 (entrando na frente, passando perto, forçando desvio). "Caralho ele deu um baile."
 
