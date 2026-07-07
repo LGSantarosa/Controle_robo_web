@@ -133,11 +133,18 @@ primeiro gate que os usa). Comportamento idêntico, tick ocioso ~3× mais leve.
 - Cadeia de segurança coerente de ponta a ponta: gap-gate em TODAS as manobras do
   unstuck, guard nunca escala wz, collision limit por eixo, MEGA com 3 watchdogs.
 
-## Ordem sugerida de aplicação (1 por sessão/commit)
+## Status de aplicação (2026-07-07, mesma data — autorizado pelo dono)
 
-1. **A2** (2 linhas, teste junto) — segurança do giro.
-2. **A1** (respawn do motion_guard) — resiliência.
-3. **A3** (default do launch + rename) — mata a armadilha.
-4. **A4** (gate antes do snapshot) — validar no sim com "pessoa" teleop.
-5. **A5** (flush em timer) — junto com qualquer outro deploy.
-6. A6/A7: só com decisão do dono / se a CPU pedir.
+1. ✅ **A2** `42981e4` — near_r/near_deg resetam com scan 100% inválido.
+2. ✅ **A1** `e69c50f` — motion_guard com `respawn=True, respawn_delay=1.0`.
+3. ✅ **A3** `3b8967b` — default do launch = `nav2_params_pi.yaml`; fóssil
+   renomeado `nav2_params_legacy.yaml` com header de aviso.
+4. ✅ **A4** `3b1ba9b` — gate de giro ANTES do snapshot + teste de regressão
+   (pessoa que chega durante o giro agora é detectada ao terminar). **⏳ validar
+   no sim com a "pessoa" teleop** (`bin/teleop-pernas`) antes de ir pra Pi.
+5. ✅ **A5** `2d70bf6` — flush em timer 2 s no path_follower e motion_guard.
+6. ⏸️ **A6** aceito como está (recomendação da auditoria); **A7** só se a CPU pedir.
+
+Verificação: **246 testes verdes** (245+1), `colcon build` OK, smoke test de 5 s
+nos 3 nós alterados (motion_guard, path_follower, unstuck) — todos vivos.
+B1 (untracked) segue pendente de decisão do dono.

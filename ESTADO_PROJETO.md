@@ -5,6 +5,19 @@
 
 ---
 
+## 🆕 2026-07-07 — 8ª auditoria FEITA + 5 itens APLICADOS (A1..A5)
+
+> `AUDITORIA_2026-07-07.md` na raiz. Nenhum bug crítico — achados de resiliência.
+> **Aplicados no mesmo dia (autorizado): A2 `42981e4` (nearest stale no unstuck),
+> A1 `e69c50f` (motion_guard respawn=True), A3 `3b8967b` (default do launch =
+> _pi.yaml; fóssil → _legacy), A4 `3b1ba9b` (guard não snapshotta girando, +1
+> teste), A5 `2d70bf6` (flush CSV em timer 2s).** 246 testes, build OK, smoke
+> test 5s nos 3 nós OK. ⏳ A4 validar no sim com a "pessoa" teleop antes da Pi;
+> deploy na Pi = `git fetch && reset --hard origin/main` + colcon robot_nav.
+> A6 aceito como está; A7 só se a CPU pedir; B1 (untracked) pendente do dono.
+
+---
+
 ## 🏆 2026-07-06 — AS 2 MELHORES RUNS DA HISTÓRIA: vilão das pausas FECHADO em campo
 
 **Deploy `8a76116` na Pi** (limit `581f02c` + persistence `ac3cd24` + time_step
