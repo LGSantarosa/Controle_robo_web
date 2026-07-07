@@ -314,3 +314,23 @@ def test_filter_passthrough_when_disabled():
     g.observe(t, WALL + obj, POSE, 0.0)
     vx, wz, st = g.filter(t, 0.30, 1.0)
     assert (vx, wz, st) == (0.30, 1.0, 'passthrough')
+
+
+def test_no_snapshot_while_turning():
+    """8ª auditoria A4: girando (|wz| > wz_gate) o scan é BORRADO (TF atrasa) e
+    NÃO pode virar snapshot — antes ele entrava no deque e virava a referência
+    "old" logo após o giro (falso móvel pós-giro). Consequência observável:
+    quem APARECE durante o giro é comparado com o snapshot PRÉ-giro (limpo) e
+    detectado como móvel assim que o giro termina."""
+    g = _guard()
+    t = _feed_static(g)                      # histórico limpo, sem obj
+    obj = [(1.0, 0.8), (1.0, 0.9), (1.1, 0.8), (1.1, 0.9)]
+    n_snaps = len(g._snaps)
+    # pessoa chega DURANTE o giro: gated (não avalia) e agora nem snapshotta
+    for i in range(5):
+        g.observe(t + i * 0.1, WALL + obj, POSE, 2.0)
+    assert len(g._snaps) == n_snaps          # nada snapshotado girando
+    assert g.moving_clusters == []           # nem avaliado
+    # giro terminou: o "old" é o pré-giro (obj ausente) -> obj = MÓVEL
+    g.observe(t + 0.5, WALL + obj, POSE, 0.0)
+    assert len(g.moving_clusters) == 1

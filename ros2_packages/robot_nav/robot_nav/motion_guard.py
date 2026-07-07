@@ -116,6 +116,17 @@ class MotionGuard:
                 polar=None) -> None:
         c = self.cfg
         self._last_scan_t = t
+        # GATE DE GIRO (movido pra ANTES do snapshot — 8ª auditoria A4):
+        # girando, pose/TF atrasam e a nuvem projetada sai BORRADA (medido
+        # 06-30: tf_fallback 100%, p99 222ms). Antes o gate só pulava a
+        # AVALIAÇÃO, mas o snapshot borrado entrava no deque e virava a
+        # referência "old" dos primeiros ~0.5s pós-giro -> células/polar
+        # erradas -> falso móvel logo depois de girar. Agora girando não
+        # avalia NEM snapshotta; a referência pós-giro é o último snapshot
+        # PRÉ-giro (limpo, mais velho que lookback — o _old_snapshot guarda).
+        # A decisão anterior decai sozinha (clear_time no filter).
+        if abs(wz) > c.wz_gate:
+            return
         cells = frozenset(self._cell(p) for p in pts)
         px, py, pyaw = pose
         binw = math.radians(c.ray_bin_deg)
@@ -134,10 +145,6 @@ class MotionGuard:
                     polar[b] = d
         self._snaps.append((t, cells, (px, py), polar))
 
-        # GATE DE GIRO: girando, o scan inteiro "anda" (pose/TF atrasam) ->
-        # não avalia; a decisão anterior decai sozinha (clear_time no filter).
-        if abs(wz) > c.wz_gate:
-            return
         old = self._old_snapshot(t)
         if old is None:
             return                      # histórico curto demais ainda
