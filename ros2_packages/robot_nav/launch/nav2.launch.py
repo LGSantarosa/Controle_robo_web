@@ -195,11 +195,16 @@ def generate_launch_description():
         # corredor à frente = para e retoma sozinho. Filtra SÓ a autonomia
         # (auto_vel_pre -> auto_vel_raw); unstuck/manual ficam fora. Failsafe:
         # sem TF/scan -> pass-through (nunca mata a nav). wz passa intocado.
+        # respawn=True (8a auditoria A1): o guard esta na ARTERIA da autonomia
+        # (auto_vel_pre->auto_vel_raw); o pass-through cobre TF/scan faltando,
+        # mas NAO cobre o processo morto — sem respawn, um crash aqui mata a
+        # autonomia inteira (auto_vel_raw some) ate alguem relancar a stack.
         # Spec: docs/superpowers/specs/2026-07-02-motion-guard-design.md
         Node(
             package='robot_nav', executable='motion_guard',
             name='motion_guard', output=nav_output,
             parameters=[sim_time_param],
+            respawn=True, respawn_delay=1.0,
         ),
         # Collision Monitor: lê /scan_safe (sanitizado acima) e freia
         # auto_vel_raw -> auto_vel ANTES do mux FINAL. Agora protege TODA a
