@@ -131,8 +131,12 @@
   const modeSelectorEl = document.querySelector('.mode-selector');
   const speedControlEl = document.querySelector('.speed-control');
   const monitorNoticeEl = document.getElementById('monitor-notice');
+  // Card que embrulha pressed-row/gamepad-status-row: sem teleop as duas
+  // linhas somem e a casca ficava flutuando vazia — esconde ela junto.
+  const statusCardEl = document.querySelector('.status');
 
   function applyTeleopVisibility(enabled) {
+    if (statusCardEl) statusCardEl.style.display = enabled ? '' : 'none';
     if (enabled) {
       if (modeSelectorEl) modeSelectorEl.style.display = '';
       if (speedControlEl) speedControlEl.style.display = '';
