@@ -1317,6 +1317,14 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 self._near_r = float(ranges[i])
                 self._near_deg = math.degrees(
                     _norm_angle(msg.angle_min + i * msg.angle_increment))
+            else:
+                # Scan fresco mas 100% inválido (glitch/boot do LD06): sem
+                # retorno válido a folga é DESCONHECIDA, não "a última vista".
+                # 0.0 = conservador (gate nearest>=spin_clear segura o giro),
+                # igual ao que o _tick faz com scan stale. (8ª auditoria A2:
+                # manter o valor antigo deixava o giro decidir com dado morto.)
+                self._near_r = 0.0
+                self._near_deg = 0.0
 
         def _on_goal_status(self, topic, msg):
             self._goal_active[topic] = any(
