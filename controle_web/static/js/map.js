@@ -684,14 +684,14 @@
       }
     }
 
-    // Trilha percorrida — desbota do rabo pra cabeça (laranja = cor do robô)
+    // Trilha percorrida — vermelha, desbota do rabo pra cabeça
     if (trail.length > 1) {
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.5;
       for (let i = 1; i < trail.length; i++) {
         const a = worldToCanvas(trail[i - 1].x, trail[i - 1].y);
         const b = worldToCanvas(trail[i].x, trail[i].y);
         if (!a || !b) continue;
-        ctx.strokeStyle = `rgba(249,115,22,${(0.06 + 0.34 * (i / trail.length)).toFixed(3)})`;
+        ctx.strokeStyle = `rgba(239,68,68,${(0.25 + 0.65 * (i / trail.length)).toFixed(3)})`;
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       }
     }
