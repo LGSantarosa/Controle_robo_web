@@ -38,6 +38,10 @@
   // suavizar o ruído do AMCL.
   let velEst = { v: 0, w: 0, t: 0, x: 0, y: 0, yaw: 0, has: false };
 
+  // Goal único agora é ARMADO pelo botão 🎯 (clique solto no canvas só move o
+  // mapa — pedido de 07-07: mexer no mapa sem mandar o robô pro lugar).
+  let goalMode   = false;
+
   // Waypoints
   let waypoints  = [];     // [{x, y, yaw}]
   let wpMode     = false;  // modo de adição de waypoints ativo
@@ -70,6 +74,7 @@
     return { x: ax + len * Math.cos(ang), y: ay + len * Math.sin(ang) };
   }
   const btnDoor = document.getElementById('map-btn-door');
+  const btnGoal = document.getElementById('map-btn-goal');
   const doorChip = document.getElementById('map-door-chip');
   const btnCostmap = document.getElementById('map-btn-costmap');
   const btnScan = document.getElementById('map-btn-scan');
@@ -120,27 +125,46 @@
   const wpLoopChk   = document.getElementById('wp-loop');
   const wpStatusEl  = document.getElementById('wp-status');
 
+  const HINT_NAV2 = '(arraste = mover o mapa · 🎯 Ir para = mandar o robô)';
+
   function setWpMode(on) {
     wpMode = on;
+    if (on && goalMode) setGoalMode(false);
     if (btnWpMode) {
       btnWpMode.textContent = on ? '✕ Cancelar' : '+ Waypoint';
       btnWpMode.classList.toggle('active', on);
     }
-    canvas.style.cursor = on ? 'crosshair' : 'default';
+    canvas.style.cursor = on ? 'crosshair' : '';
     if (clickHint) clickHint.textContent = on
       ? 'clique = waypoint | clique+arraste = define direção'
-      : (currentMode === 'nav2' ? '(clique no mapa para enviar o robô até o ponto)' : '');
+      : (currentMode === 'nav2' ? HINT_NAV2 : '');
   }
 
   function setSetPoseMode(on) {
     setPoseMode = on;
     if (on) setWpMode(false);   // exclusivos
+    if (on && goalMode) setGoalMode(false);
     if (btnSetPose) btnSetPose.classList.toggle('active', on);
-    canvas.style.cursor = on ? 'crosshair' : 'default';
+    canvas.style.cursor = on ? 'crosshair' : '';
     if (clickHint) clickHint.textContent = on
       ? 'Definir pose: clique onde o robô está e arraste pra direção'
-      : (currentMode === 'nav2' ? '(clique no mapa para enviar o robô até o ponto)'
+      : (currentMode === 'nav2' ? HINT_NAV2
          : (currentMode === 'slam' ? '(mapeando em tempo real)' : ''));
+  }
+
+  function setGoalMode(on) {
+    goalMode = on;
+    if (on) {
+      setWpMode(false);
+      if (setPoseMode) setSetPoseMode(false);
+      doorMode = false; doorDrag = null;
+      if (btnDoor) btnDoor.classList.remove('active');
+    }
+    if (btnGoal) btnGoal.classList.toggle('active', on);
+    canvas.style.cursor = on ? 'crosshair' : '';
+    if (clickHint) clickHint.textContent = on
+      ? '🎯 clique no destino (arraste = direção final)'
+      : (currentMode === 'nav2' ? HINT_NAV2 : '');
   }
 
   function updateWpButtons() {
@@ -164,7 +188,7 @@
         panel.style.display = '';
         btnSave.disabled = false;
         clickHint.textContent = currentMode === 'nav2'
-          ? '(clique no mapa para enviar o robô até o ponto)'
+          ? HINT_NAV2
           : '(mapeando em tempo real)';
       } else {
         panel.style.display = 'none';
@@ -291,6 +315,7 @@
       render();
     });
     if (btnWpMode) btnWpMode.addEventListener('click', () => setWpMode(!wpMode));
+    if (btnGoal) btnGoal.addEventListener('click', () => setGoalMode(!goalMode));
     if (btnSetPose) btnSetPose.addEventListener('click', () => setSetPoseMode(!setPoseMode));
     socket.on('set_pose_ack', (data) => {
       if (statusEl) statusEl.textContent = data.ok
@@ -408,6 +433,7 @@
     if (btnDoor) btnDoor.addEventListener('click', () => {
       doorMode = !doorMode;
       doorDrag = null;
+      if (doorMode && goalMode) setGoalMode(false);
       btnDoor.classList.toggle('active', doorMode);
       statusEl.textContent = doorMode
         ? 'modo porta: arraste de um batente até o outro (clique numa porta p/ apagar)'
@@ -443,14 +469,17 @@
 
     canvas.addEventListener('mousedown', (ev) => {
       if (!mapInfo || !mapImage) return;
-      // Botão do meio = arrastar o mapa (funciona em qualquer modo/zoom)
-      if (ev.button === 1) {
+      // Sem nenhum modo armado, QUALQUER arrasto (esquerdo, meio ou dedo)
+      // move o mapa. Goal/waypoint/porta/pose só com o botão respectivo.
+      const armed = setPoseMode ||
+        (currentMode === 'nav2' && (wpMode || doorMode || goalMode));
+      if (ev.button === 1 || !armed) {
         ev.preventDefault();
         const p = eventToCanvasPx(ev);
         panDrag = { x0: p.cx, y0: p.cy, panX0: view.panX, panY0: view.panY };
+        canvas.style.cursor = 'grabbing';
         return;
       }
-      if (currentMode !== 'nav2' && !setPoseMode) return;
       const { cx, cy } = eventToCanvasPx(ev);
       const world = canvasToWorld(cx, cy);
       if (!world) return;
@@ -501,7 +530,7 @@
     });
 
     canvas.addEventListener('mouseup', (ev) => {
-      if (panDrag) { panDrag = null; return; }
+      if (panDrag) { panDrag = null; canvas.style.cursor = ''; return; }
       if (!mapInfo || !mapImage) return;
       if (currentMode !== 'nav2' && !setPoseMode) return;
       const { cx, cy } = eventToCanvasPx(ev);
@@ -563,10 +592,10 @@
         return;
       }
 
-      // Click simples (sem modo waypoint) → goal único.
+      // Goal único — só com o 🎯 armado (um tiro: desarma depois de enviar).
       // Click sem drag → yaw=0. Click+drag → yaw aponta na direção do drag
       // (mesma convenção dos waypoints; canvas y cresce pra baixo, ROS pra cima).
-      if (!wpMode && wpMouseDown) {
+      if (goalMode && wpMouseDown) {
         const ddx = cx - wpMouseDown.cx;
         const ddy = cy - wpMouseDown.cy;
         const dragged = Math.sqrt(ddx * ddx + ddy * ddy) > DRAG_THRESHOLD;
@@ -576,6 +605,7 @@
           lastGoal = world;
           socket.emit('nav_goal', { x: world.x, y: world.y, yaw });
           statusEl.textContent = `alvo: (${world.x.toFixed(2)}, ${world.y.toFixed(2)})`;
+          setGoalMode(false);
           render();
         }
       }

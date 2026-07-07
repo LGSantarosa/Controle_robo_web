@@ -7,7 +7,7 @@
     <meta http-equiv="Cache-Control" content="no-store" />
     <title>Controle do Robô</title>
     <!-- CSS básico da interface -->
-    <link rel="stylesheet" href="/static/css/styles.css?v=9" />
+    <link rel="stylesheet" href="/static/css/styles.css?v=10" />
   </head>
   <body>
     <!-- Topbar fixa: identidade + telemetria vital + E-STOP sempre à mão -->
@@ -153,6 +153,7 @@
         <div class="wp-toolbar" id="wp-toolbar" style="display:none">
           <div class="tb-group">
             <span class="tb-label">Rota</span>
+            <button id="map-btn-goal" class="map-btn">🎯 Ir para</button>
             <button id="btn-wp-mode" class="map-btn">+ Waypoint</button>
             <button id="btn-wp-clear" class="map-btn">Limpar</button>
             <label class="wp-loop-label">
@@ -234,7 +235,7 @@
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="/static/js/client.js?v=11"></script>
     <script src="/static/js/gamepad.js?v=3"></script>
-    <script src="/static/js/map.js?v=7"></script>
+    <script src="/static/js/map.js?v=8"></script>
     <script src="/static/js/trekking.js?v=1"></script>
   </body>
 </html>
