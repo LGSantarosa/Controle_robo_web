@@ -7,14 +7,29 @@
     <meta http-equiv="Cache-Control" content="no-store" />
     <title>Controle do Robô</title>
     <!-- CSS básico da interface -->
-    <link rel="stylesheet" href="/static/css/styles.css?v=6" />
+    <link rel="stylesheet" href="/static/css/styles.css?v=7" />
   </head>
   <body>
-    <main>
-      <h1>Controle do Robô <span id="robot-mode-badge" class="mode-badge">TELEOP</span></h1>
+    <!-- Topbar fixa: identidade + telemetria vital + E-STOP sempre à mão -->
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1>Controle do Robô</h1>
+        <span id="robot-mode-badge" class="mode-badge">TELEOP</span>
+      </div>
+      <div class="topbar-chips">
+        <span class="chip"><span class="chip-label">socket</span><span id="conn">conectando...</span></span>
+        <span class="chip"><span class="chip-label">energia</span><span id="power-chip" class="power-chip power-na">—</span></span>
+        <span class="chip"><span class="chip-label">controle</span><span id="mode-display">Teclado / Web</span></span>
+        <span class="chip chip-pose"><span class="chip-label">pose</span><span id="pose-chip">—</span></span>
+      </div>
+      <button id="btn-estop" class="estop" title="Cancela a navegação e manda stop">STOP</button>
+    </header>
+
+    <main class="layout">
+      <div class="col col-left">
 
       <!-- Seletor de modo de controle -->
-      <section class="mode-selector">
+      <section class="mode-selector card">
         <label>Modo de controle:</label>
         <button id="btn-mode-web" class="mode-btn active" data-mode="web">Teclado / Web</button>
         <button id="btn-mode-gamepad" class="mode-btn" data-mode="gamepad">Controle PS4</button>
@@ -26,7 +41,7 @@
       </section>
 
       <!-- Barra de velocidade (compartilhada entre os modos) -->
-      <section class="speed-control">
+      <section class="speed-control card">
         <div class="speed-control-row">
           <label for="speed-slider">Velocidade:</label>
           <input type="range" id="speed-slider" min="0.5" max="4.0" step="0.05" value="1.0" />
@@ -44,11 +59,8 @@
         </div>
       </section>
 
-      <!-- Status de conexão e teclas/gamepad -->
-      <section class="status">
-        <div>Socket: <span id="conn">conectando...</span></div>
-        <div>Energia: <span id="power-chip" class="power-chip power-na">—</span></div>
-        <div>Modo: <span id="mode-display">Teclado / Web</span></div>
+      <!-- Status de teclas/gamepad (socket/energia/modo moraram aqui; agora na topbar) -->
+      <section class="status card">
         <div id="pressed-row">Pressionadas: <span id="pressed">(nenhuma)</span></div>
         <div id="gamepad-status-row" style="display:none">
           Gamepad: <span id="gamepad-status">nenhum detectado</span>
@@ -56,7 +68,7 @@
       </section>
 
       <!-- Controles Web (teclado + botões de toque) -->
-      <section class="controls" id="web-controls">
+      <section class="controls card" id="web-controls">
         <p class="hint">Pressione WASD ou setas para enviar comandos. Barra de espaço = stop.</p>
         <div class="grid">
           <button data-combo="ArrowUp,ArrowLeft" class="pad diag">↖</button>
@@ -64,7 +76,7 @@
           <button data-combo="ArrowUp,ArrowRight" class="pad diag">↗</button>
 
           <button data-code="ArrowLeft" class="pad">◀</button>
-          <button data-code="Space" class="pad">⏹</button>
+          <button data-code="Space" class="pad pad-stop">⏹</button>
           <button data-code="ArrowRight" class="pad">▶</button>
 
           <button data-combo="ArrowDown,ArrowLeft" class="pad diag">↙</button>
@@ -74,7 +86,7 @@
       </section>
 
       <!-- Controles Gamepad (visualização dos eixos) -->
-      <section class="controls" id="gamepad-controls" style="display:none">
+      <section class="controls card" id="gamepad-controls" style="display:none">
         <p class="hint">Joystick esquerdo = mover. X = trava de emergência. □ = boost. ○ = ajuste fino.</p>
         <div class="gamepad-viz">
           <div class="stick-container">
@@ -111,9 +123,18 @@
         </div>
       </section>
 
+      <!-- Log visual de eventos e última entrega confirmada (ACK) -->
+      <section class="eventlog card">
+        <h2>Eventos</h2>
+        <div class="delivery-row">Entrega: <span id="delivery">aguardando...</span></div>
+        <ul id="log"></ul>
+      </section>
+
+      </div><!-- /col-left -->
+      <div class="col col-right">
 
       <!-- Mapa 2D (SLAM / Nav2) -->
-      <section class="map-panel" id="map-panel" style="display:none">
+      <section class="map-panel card" id="map-panel" style="display:none">
         <div class="map-header">
           <h2>Mapa</h2>
           <div class="map-toolbar">
@@ -128,25 +149,31 @@
           <span id="map-robot-pose">robô: —</span>
           <span id="map-click-hint"></span>
         </div>
-        <!-- Toolbar de waypoints (só NAV2) -->
+        <!-- Toolbar de waypoints (só NAV2), agrupada: Rota | Arquivos | Camadas -->
         <div class="wp-toolbar" id="wp-toolbar" style="display:none">
-          <button id="btn-wp-mode" class="map-btn">+ Waypoint</button>
-          <button id="btn-wp-clear" class="map-btn">Limpar</button>
-          <label class="wp-loop-label">
-            <input type="checkbox" id="wp-loop"> Loop
-          </label>
-          <button id="btn-wp-start" class="map-btn wp-start" disabled>▶ Iniciar</button>
-          <button id="btn-wp-stop"  class="map-btn wp-stop"  disabled>■ Parar</button>
-          <span class="wp-sep">|</span>
-          <button id="btn-wp-save" class="map-btn">💾 Salvar rota</button>
-          <button id="btn-wp-load" class="map-btn">📂 Carregar</button>
-          <select id="wp-route-select" class="wp-select" style="display:none"></select>
-          <span class="wp-sep">|</span>
-          <button id="map-btn-door" class="map-btn">🚪 Marcar porta</button>
-          <span id="map-door-chip" class="wp-status" style="display:none"></span>
-          <span class="wp-sep">|</span>
-          <button id="map-btn-costmap" class="map-btn">🗺️ Costmap</button>
-          <button id="map-btn-scan" class="map-btn">📡 Lidar</button>
+          <div class="tb-group">
+            <span class="tb-label">Rota</span>
+            <button id="btn-wp-mode" class="map-btn">+ Waypoint</button>
+            <button id="btn-wp-clear" class="map-btn">Limpar</button>
+            <label class="wp-loop-label">
+              <input type="checkbox" id="wp-loop"> Loop
+            </label>
+            <button id="btn-wp-start" class="map-btn wp-start" disabled>▶ Iniciar</button>
+            <button id="btn-wp-stop"  class="map-btn wp-stop"  disabled>■ Parar</button>
+          </div>
+          <div class="tb-group">
+            <span class="tb-label">Arquivos</span>
+            <button id="btn-wp-save" class="map-btn">💾 Salvar rota</button>
+            <button id="btn-wp-load" class="map-btn">📂 Carregar</button>
+            <select id="wp-route-select" class="wp-select" style="display:none"></select>
+          </div>
+          <div class="tb-group">
+            <span class="tb-label">Camadas</span>
+            <button id="map-btn-costmap" class="map-btn toggle">🗺️ Costmap</button>
+            <button id="map-btn-scan" class="map-btn toggle">📡 Lidar</button>
+            <button id="map-btn-door" class="map-btn">🚪 Marcar porta</button>
+            <span id="map-door-chip" class="wp-status" style="display:none"></span>
+          </div>
           <span id="wp-status" class="wp-status"></span>
         </div>
         <div class="map-canvas-wrap">
@@ -155,7 +182,7 @@
       </section>
 
       <!-- Painel TREKKING (ponto-a-ponto com fusão IMU+flow+rodas e cones via LiDAR) -->
-      <section class="trek-panel" id="trek-panel" style="display:none">
+      <section class="trek-panel card" id="trek-panel" style="display:none">
         <div class="trek-header">
           <h2>Trekking</h2>
           <div class="trek-toolbar">
@@ -195,19 +222,14 @@
         </div>
       </section>
 
-      <!-- Log visual de eventos e última entrega confirmada (ACK) -->
-      <section class="eventlog">
-        <h2>Eventos</h2>
-        <div style="margin-bottom:8px">Entrega: <span id="delivery">aguardando...</span></div>
-        <ul id="log"></ul>
-      </section>
+      </div><!-- /col-right -->
     </main>
 
     <!-- Bibliotecas cliente Socket.IO e scripts do cliente -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="/static/js/client.js?v=8"></script>
+    <script src="/static/js/client.js?v=9"></script>
     <script src="/static/js/gamepad.js?v=3"></script>
-    <script src="/static/js/map.js?v=3"></script>
+    <script src="/static/js/map.js?v=4"></script>
     <script src="/static/js/trekking.js?v=1"></script>
   </body>
 </html>

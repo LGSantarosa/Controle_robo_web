@@ -368,6 +368,31 @@
 
   document.querySelectorAll('.pad').forEach(setupPad);
 
+  // --- E-STOP (topbar) ---
+  // Sempre cancela a navegação por waypoints. Com teleop web habilitado,
+  // também solta qualquer tecla presa e manda Space (stop no controller).
+  // Com teleop off (Fase 2) o key_event seria rejeitado pelo servidor,
+  // então nem envia — o stop manual é o PS4/WASD no robô.
+  const estopBtn = document.getElementById('btn-estop');
+  if (estopBtn) {
+    estopBtn.addEventListener('click', () => {
+      socket.emit('stop_waypoints');
+      if (webTeleop) {
+        for (const code of Array.from(pressed)) {
+          pressed.delete(code);
+          send('up', code, false);
+        }
+        renderPressed();
+        send('down', 'Space', false);
+        send('up', 'Space', false);
+      }
+      appendLog('estop', 'STOP acionado (navegação cancelada' + (webTeleop ? ' + stop teleop)' : ')'));
+      estopBtn.classList.remove('fired');
+      void estopBtn.offsetWidth; // reinicia a animação de flash
+      estopBtn.classList.add('fired');
+    });
+  }
+
   function humanize(type, code, action, command) {
     const cmdPt = { forward: 'frente', backward: 'ré', left: 'esquerda', right: 'direita', stop: 'parar' };
     const actPt = { start: 'Iniciar', stop: 'Parar' };

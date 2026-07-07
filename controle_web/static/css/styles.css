@@ -1,73 +1,180 @@
-/* Estilos gerais da página */
+/* ============================================================
+   Console do robô — identidade "mission control":
+   base slate escura, acento índigo, números em mono, chips de
+   estado semânticos (verde ok / âmbar aviso / vermelho falha).
+   Tokens centralizados aqui; nada de cor solta no meio do CSS.
+   ============================================================ */
+:root {
+  --bg:        #0b1120;   /* fundo da página */
+  --panel:     #0f172a;   /* cards */
+  --panel-2:   #111827;   /* blocos internos */
+  --line:      #253048;   /* bordas */
+  --line-soft: #1c2436;
+  --text:      #e2e8f0;
+  --muted:     #94a3b8;
+  --accent:    #6366f1;   /* índigo — interação */
+  --accent-soft: #312e81;
+  --accent-text: #e0e7ff;
+  --ok:        #22c55e;
+  --ok-bg:     #064e3b;
+  --ok-text:   #6ee7b7;
+  --warn:      #f59e0b;
+  --warn-bg:   #78350f;
+  --warn-text: #fcd34d;
+  --danger:    #ef4444;
+  --danger-bg: #7f1d1d;
+  --danger-text: #fecaca;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.25);
+}
+
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #0f172a; color: #e2e8f0; }
-main { max-width: 720px; margin: 32px auto; padding: 0 16px; }
-h1 { margin: 0 0 12px; font-size: 28px; }
-.hint { opacity: 0.8; margin-bottom: 16px; font-size: 14px; }
+html, body { margin: 0; padding: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg); color: var(--text); }
 
-/* Seletor de modo de controle */
-.mode-selector { margin-bottom: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.mode-selector label { font-weight: 600; font-size: 14px; }
-.monitor-notice { margin-bottom: 16px; padding: 8px 14px; border: 1px solid #374151; border-left: 3px solid #f59e0b; background: #1f2937; color: #9ca3af; border-radius: 6px; font-size: 13px; }
-.monitor-notice strong { color: #e5e7eb; }
-.mode-btn { padding: 8px 16px; border: 2px solid #374151; background: #1f2937; color: #9ca3af; border-radius: 8px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
-.mode-btn:hover { border-color: #6366f1; color: #e2e8f0; }
-.mode-btn.active { border-color: #6366f1; background: #312e81; color: #e0e7ff; }
+/* fio de horizonte no topo — assinatura discreta do console */
+body::before { content: ''; display: block; height: 2px; background: linear-gradient(90deg, transparent, var(--accent) 30%, #38bdf8 70%, transparent); }
 
-/* Controle de velocidade (compartilhado) */
-.speed-control { background: #111827; border: 1px solid #374151; padding: 12px; border-radius: 8px; margin-bottom: 16px; }
+button { font-family: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+/* ------------------------------------------------------------
+   Topbar sticky: título + chips vitais + E-STOP
+   ------------------------------------------------------------ */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 10px 20px;
+  background: rgba(11, 17, 32, 0.92);
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--line);
+}
+.topbar-title { display: flex; align-items: center; gap: 8px; }
+.topbar-title h1 { margin: 0; font-size: 18px; letter-spacing: 0.01em; white-space: nowrap; }
+.topbar-chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--panel-2); font-size: 12.5px; white-space: nowrap;
+}
+.chip-label { text-transform: uppercase; font-size: 10px; letter-spacing: 0.08em; color: var(--muted); }
+.chip-pose span:last-child { font-family: var(--mono); }
+#conn { font-weight: 600; }
+
+/* E-STOP: sempre visível, inconfundível */
+.estop {
+  padding: 8px 18px; border-radius: 8px; cursor: pointer;
+  border: 2px solid var(--danger); background: var(--danger-bg); color: #fee2e2;
+  font-weight: 800; font-size: 14px; letter-spacing: 0.12em;
+  box-shadow: 0 0 0 rgba(239,68,68,0.0); transition: box-shadow 0.15s, transform 0.05s;
+}
+.estop:hover { box-shadow: 0 0 14px rgba(239,68,68,0.45); }
+.estop:active { transform: scale(0.96); background: #991b1b; }
+.estop.fired { animation: estop-flash 0.5s ease-out; }
+@keyframes estop-flash { 0% { background: var(--danger); color: #fff; } 100% { background: var(--danger-bg); } }
+
+/* ------------------------------------------------------------
+   Layout: 2 colunas no desktop (mapa protagonista à direita),
+   1 coluna empilhada no mobile.
+   ------------------------------------------------------------ */
+/* 1 coluna por padrão (teleop: sem mapa, coluna direita vazia); o map.js põe
+   body.layout-wide quando o modo tem painel à direita (slam/nav2/trekking). */
+.layout { max-width: 760px; margin: 20px auto; padding: 0 16px; display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
+body.layout-wide .layout { max-width: 1280px; grid-template-columns: 400px minmax(0, 1fr); }
+.col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+@media (max-width: 1023px) {
+  body.layout-wide .layout { grid-template-columns: 1fr; }
+  /* no mobile o mapa vem primeiro: é o que se olha em campo */
+  .col-right { order: -1; }
+}
+@media (max-width: 700px) {
+  .topbar { gap: 8px; padding: 8px 12px; }
+  .topbar-title h1 { font-size: 16px; }
+  /* chips descem pra uma linha própria com largura total (sem estourar) */
+  .topbar-chips { order: 3; flex-basis: 100%; }
+  .estop { margin-left: auto; }
+}
+
+/* Cards: todo painel compartilha a mesma pele */
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); margin: 0; }
+.card h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; }
+
+.hint { opacity: 0.75; margin: 0 0 14px; font-size: 13px; }
+
+/* ------------------------------------------------------------
+   Seletor de modo de controle
+   ------------------------------------------------------------ */
+.mode-selector { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mode-selector label { font-weight: 600; font-size: 13px; color: var(--muted); }
+.monitor-notice { padding: 8px 14px; border: 1px solid var(--line); border-left: 3px solid var(--warn); background: var(--panel-2); color: var(--muted); border-radius: 6px; font-size: 13px; }
+.monitor-notice strong { color: var(--text); }
+.mode-btn { padding: 8px 16px; border: 2px solid var(--line); background: var(--panel-2); color: var(--muted); border-radius: 8px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
+.mode-btn:hover { border-color: var(--accent); color: var(--text); }
+.mode-btn.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+
+/* ------------------------------------------------------------
+   Controle de velocidade (compartilhado)
+   ------------------------------------------------------------ */
 .speed-control-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-.speed-control-row label { font-weight: 600; font-size: 14px; white-space: nowrap; }
-.speed-control-row input[type="range"] { flex: 1; accent-color: #6366f1; height: 6px; cursor: pointer; }
-#speed-mult-display { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 16px; font-weight: 700; min-width: 48px; text-align: center; color: #a5b4fc; }
-.speed-control-info { font-size: 13px; opacity: 0.7; margin-bottom: 8px; display: flex; gap: 16px; }
+.speed-control-row label { font-weight: 600; font-size: 13px; white-space: nowrap; color: var(--muted); }
+.speed-control-row input[type="range"] { flex: 1; accent-color: var(--accent); height: 6px; cursor: pointer; }
+#speed-mult-display { font-family: var(--mono); font-size: 16px; font-weight: 700; min-width: 48px; text-align: center; color: #a5b4fc; }
+.speed-control-info { font-size: 13px; color: var(--muted); margin-bottom: 8px; display: flex; gap: 16px; }
+.speed-control-info strong { font-family: var(--mono); color: var(--text); }
 .speed-presets { display: flex; gap: 8px; flex-wrap: wrap; }
-.speed-preset-btn { padding: 4px 12px; border: 1px solid #374151; background: #1f2937; color: #9ca3af; border-radius: 6px; cursor: pointer; font-size: 12px; transition: all 0.15s; }
-.speed-preset-btn:hover { border-color: #6366f1; color: #e2e8f0; }
-.speed-preset-btn.active { border-color: #6366f1; background: #312e81; color: #e0e7ff; }
+.speed-preset-btn { padding: 4px 12px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 12px; transition: all 0.15s; }
+.speed-preset-btn:hover { border-color: var(--accent); color: var(--text); }
+.speed-preset-btn.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
 
-/* Bloco de status (conexão e teclas) */
-.status { background: #111827; border: 1px solid #374151; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+/* Bloco de status (teclas/gamepad) */
+.status { font-size: 14px; }
 .status div { margin-bottom: 4px; }
 .status div:last-child { margin-bottom: 0; }
+#pressed { font-family: var(--mono); font-size: 13px; }
 
-/* Controles direcionais */
+/* ------------------------------------------------------------
+   Controles direcionais
+   ------------------------------------------------------------ */
 .controls { display: flex; flex-direction: column; align-items: center; }
 .grid { display: grid; grid-template-columns: repeat(3, auto); grid-template-rows: repeat(3, auto); gap: 8px; align-items: center; justify-items: center; }
 .row { display: contents; }
-.pad { font-size: 28px; padding: 16px 20px; background: #1f2937; color: #e5e7eb; border: 1px solid #374151; border-radius: 8px; cursor: pointer; min-width: 96px; min-height: 72px; }
-.pad:active { background: #374151; }
+.pad { font-size: 26px; padding: 14px 18px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; min-width: 88px; min-height: 66px; transition: background 0.1s, border-color 0.1s; }
+.pad:hover { border-color: var(--accent); }
+.pad:active { background: #374151; border-color: var(--accent); }
+.pad-stop { color: var(--danger-text); border-color: #4c1d1d; }
+.pad-stop:hover { border-color: var(--danger); }
 
-/* Visualização do Gamepad */
+/* ------------------------------------------------------------
+   Visualização do Gamepad
+   ------------------------------------------------------------ */
 .gamepad-viz { display: flex; gap: 24px; align-items: center; justify-content: center; flex-wrap: wrap; margin: 16px 0; }
-
-/* Stick visual */
 .stick-container { text-align: center; }
 .stick-label { font-size: 12px; opacity: 0.7; margin-bottom: 8px; }
-.stick-area { width: 160px; height: 160px; background: #111827; border: 2px solid #374151; border-radius: 50%; position: relative; overflow: hidden; }
+.stick-area { width: 160px; height: 160px; background: var(--panel-2); border: 2px solid var(--line); border-radius: 50%; position: relative; overflow: hidden; }
 .stick-crosshair { position: absolute; top: 50%; left: 50%; width: 100%; height: 100%; transform: translate(-50%, -50%); pointer-events: none; }
-.stick-crosshair::before, .stick-crosshair::after {
-  content: ''; position: absolute; background: #374151;
-}
+.stick-crosshair::before, .stick-crosshair::after { content: ''; position: absolute; background: var(--line); }
 .stick-crosshair::before { width: 1px; height: 100%; left: 50%; top: 0; }
 .stick-crosshair::after { height: 1px; width: 100%; top: 50%; left: 0; }
-.stick-dot { width: 20px; height: 20px; background: #6366f1; border-radius: 50%; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); transition: left 0.05s, top 0.05s; box-shadow: 0 0 8px rgba(99,102,241,0.5); }
+.stick-dot { width: 20px; height: 20px; background: var(--accent); border-radius: 50%; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); transition: left 0.05s, top 0.05s; box-shadow: 0 0 8px rgba(99,102,241,0.5); }
 
 /* Barras de velocidade */
 .speed-display { display: flex; flex-direction: column; gap: 12px; min-width: 200px; }
 .speed-bar-container { display: flex; align-items: center; gap: 8px; }
 .speed-label { font-size: 12px; width: 60px; text-align: right; opacity: 0.7; }
 .speed-bar-bg { flex: 1; height: 16px; background: #1e293b; border-radius: 4px; overflow: hidden; border: 1px solid #334155; }
-.speed-bar { height: 100%; background: #22c55e; border-radius: 4px; transition: width 0.1s; width: 0%; }
-.speed-bar.reverse { background: #ef4444; }
-.speed-value { font-size: 12px; width: 40px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.speed-info { font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity: 0.8; }
+.speed-bar { height: 100%; background: var(--ok); border-radius: 4px; transition: width 0.1s; width: 0%; }
+.speed-bar.reverse { background: var(--danger); }
+.speed-value { font-size: 12px; width: 40px; font-family: var(--mono); }
+.speed-info { font-size: 13px; font-family: var(--mono); opacity: 0.8; }
 .speed-info div { margin-bottom: 2px; }
 
 /* Botões visuais do gamepad */
 .gamepad-buttons { display: flex; gap: 8px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
-.gp-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 50%; background: #1f2937; border: 2px solid #374151; font-size: 16px; color: #9ca3af; transition: all 0.15s; }
-.gp-btn.active { background: #312e81; border-color: #6366f1; color: #e0e7ff; box-shadow: 0 0 10px rgba(99,102,241,0.4); }
+.gp-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 50%; background: var(--panel-2); border: 2px solid var(--line); font-size: 16px; color: var(--muted); transition: all 0.15s; }
+.gp-btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); box-shadow: 0 0 10px rgba(99,102,241,0.4); }
 
 /* Estado de trava de emergência */
 .emergency { position: relative; }
@@ -75,69 +182,79 @@ h1 { margin: 0 0 12px; font-size: 28px; }
   content: 'TRAVA DE EMERGÊNCIA ATIVA';
   position: absolute; top: 0; left: 0; right: 0; bottom: 0;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(239, 68, 68, 0.15); border: 2px solid #ef4444; border-radius: 8px;
-  color: #ef4444; font-weight: 700; font-size: 18px; letter-spacing: 1px;
+  background: rgba(239, 68, 68, 0.15); border: 2px solid var(--danger); border-radius: 8px;
+  color: var(--danger); font-weight: 700; font-size: 18px; letter-spacing: 1px;
   pointer-events: none; animation: emergency-pulse 1s ease-in-out infinite alternate;
 }
 @keyframes emergency-pulse { from { opacity: 0.7; } to { opacity: 1; } }
 
 /* Badge do modo atual (TELEOP / SLAM / NAV2) ao lado do título */
-.mode-badge { display: inline-block; font-size: 11px; letter-spacing: 0.05em; padding: 3px 8px; border-radius: 4px; background: #243042; color: #aab; vertical-align: middle; margin-left: 8px; }
+.mode-badge { display: inline-block; font-size: 11px; letter-spacing: 0.05em; padding: 3px 8px; border-radius: 4px; background: #243042; color: #aab; vertical-align: middle; }
 .mode-badge.mode-slam  { background: #1e3a8a; color: #dbeafe; }
-.mode-badge.mode-nav2  { background: #065f46; color: #d1fae5; }
+.mode-badge.mode-nav2  { background: var(--ok-bg); color: #d1fae5; }
 .mode-badge.mode-teleop { background: #3f3f46; color: #e4e4e7; }
 .mode-badge.mode-trekking { background: #7c2d12; color: #fed7aa; }
 
 /* Chip de energia (power_monitor): tensão das placas hoverboard */
-.power-chip { display: inline-block; font-size: 13px; font-weight: 600; padding: 2px 8px; border-radius: 4px; }
-.power-chip.power-na   { background: #1f2937; color: #6b7280; }
-.power-chip.power-ok   { background: #064e3b; color: #6ee7b7; }
-.power-chip.power-warn { background: #78350f; color: #fcd34d; }
-.power-chip.power-trip { background: #7f1d1d; color: #fecaca; animation: power-blink 0.8s step-start infinite; }
+.power-chip { display: inline-block; font-size: 12.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; font-family: var(--mono); }
+.power-chip.power-na   { background: var(--panel-2); color: #6b7280; }
+.power-chip.power-ok   { background: var(--ok-bg); color: var(--ok-text); }
+.power-chip.power-warn { background: var(--warn-bg); color: var(--warn-text); }
+.power-chip.power-trip { background: var(--danger-bg); color: var(--danger-text); animation: power-blink 0.8s step-start infinite; }
 @keyframes power-blink { 50% { opacity: 0.35; } }
 
-/* Painel de mapa (SLAM / Nav2) */
-.map-panel { margin-top: 16px; background: #0b1220; border: 1px solid #243042; padding: 12px; border-radius: 8px; }
-.map-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.map-header h2 { margin: 0; font-size: 16px; opacity: 0.9; }
-.map-toolbar { display: flex; gap: 8px; align-items: center; }
+/* ------------------------------------------------------------
+   Painel de mapa (SLAM / Nav2)
+   ------------------------------------------------------------ */
+.map-panel { background: #0b1220; }
+.map-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.map-header h2 { margin: 0; }
+.map-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .map-status { font-size: 12px; padding: 3px 8px; border-radius: 4px; background: #243042; color: #aab; }
-.map-status.ok { background: #065f46; color: #d1fae5; }
-.map-status.err { background: #7f1d1d; color: #fee2e2; }
-.map-btn { padding: 6px 12px; font-size: 13px; border: 1px solid #374151; background: #1f2937; color: #e5e7eb; border-radius: 4px; cursor: pointer; }
+.map-status.ok { background: var(--ok-bg); color: #d1fae5; }
+.map-status.err { background: var(--danger-bg); color: #fee2e2; }
+.map-btn { padding: 6px 12px; font-size: 13px; border: 1px solid #374151; background: var(--panel-2); color: var(--text); border-radius: 6px; cursor: pointer; transition: background 0.1s, border-color 0.1s; }
 .map-btn:hover:not(:disabled) { background: #374151; }
 .map-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.map-info { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: #9ca3af; margin-bottom: 8px; }
+.map-info { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); margin-bottom: 8px; font-family: var(--mono); }
 .map-info span { white-space: nowrap; }
-.map-canvas-wrap { background: #000; border: 1px solid #243042; border-radius: 4px; display: flex; justify-content: center; }
+.map-canvas-wrap { background: #000; border: 1px solid #243042; border-radius: 6px; display: flex; justify-content: center; }
 #map-canvas { display: block; max-width: 100%; height: auto; cursor: crosshair; }
 
-/* Waypoint toolbar */
-.wp-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; padding: 8px; background: #0d1a2d; border: 1px solid #1e3a5f; border-radius: 6px; }
+/* Waypoint toolbar — grupos: Rota | Arquivos | Camadas */
+.wp-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; margin: 8px 0; }
+.tb-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px; background: #0d1a2d; border: 1px solid #1e3a5f; border-radius: 6px; }
+.tb-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: #64748b; font-weight: 700; margin-right: 2px; }
 .wp-toolbar .map-btn.active { background: #1d4ed8; border-color: #3b82f6; color: #fff; }
-.wp-toolbar .wp-start { background: #065f46; border-color: #10b981; }
+/* Toggles de camada: bolinha de estado ON/OFF antes do texto */
+.map-btn.toggle::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #475569; margin-right: 6px; vertical-align: 1px; transition: background 0.15s, box-shadow 0.15s; }
+.map-btn.toggle.active::before { background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,0.8); }
+.wp-toolbar .wp-start { background: var(--ok-bg); border-color: #10b981; }
 .wp-toolbar .wp-start:hover:not(:disabled) { background: #047857; }
-.wp-toolbar .wp-stop { background: #7f1d1d; border-color: #ef4444; }
+.wp-toolbar .wp-stop { background: var(--danger-bg); border-color: var(--danger); }
 .wp-toolbar .wp-stop:hover:not(:disabled) { background: #991b1b; }
-.wp-loop-label { font-size: 13px; color: #9ca3af; display: flex; align-items: center; gap: 4px; cursor: pointer; }
-.wp-status { font-size: 12px; color: #60a5fa; margin-left: 4px; }
-.wp-sep { color: #374151; }
-.wp-select { background: #1f2937; color: #e5e7eb; border: 1px solid #374151; border-radius: 4px; padding: 5px 8px; font-size: 13px; cursor: pointer; }
+.wp-loop-label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.wp-status { font-size: 12px; color: #60a5fa; margin-left: 4px; align-self: center; }
+.wp-select { background: var(--panel-2); color: var(--text); border: 1px solid #374151; border-radius: 4px; padding: 5px 8px; font-size: 13px; cursor: pointer; }
 
-/* Log visual de eventos */
-.eventlog { margin-top: 16px; background: #0b1220; border: 1px solid #243042; padding: 12px; border-radius: 8px; }
-.eventlog h2 { margin: 0 0 8px; font-size: 16px; opacity: 0.9; }
-.eventlog ul { list-style: none; padding: 0; margin: 0; max-height: 240px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+/* ------------------------------------------------------------
+   Log visual de eventos
+   ------------------------------------------------------------ */
+.eventlog .delivery-row { margin-bottom: 8px; font-size: 13px; color: var(--muted); }
+.eventlog .delivery-row span { color: var(--text); }
+.eventlog ul { list-style: none; padding: 0; margin: 0; max-height: 240px; overflow: auto; font-family: var(--mono); font-size: 12px; }
 .eventlog li { padding: 2px 0; border-bottom: 1px dashed #223047; }
 
-/* Painel TREKKING (ponto-a-ponto) */
-.trek-panel { margin-top: 16px; background: #1a0e07; border: 1px solid #7c2d12; padding: 12px; border-radius: 8px; }
+/* ------------------------------------------------------------
+   Painel TREKKING (ponto-a-ponto)
+   ------------------------------------------------------------ */
+.trek-panel { background: #1a0e07; border-color: #7c2d12; }
 .trek-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.trek-header h2 { margin: 0; font-size: 16px; opacity: 0.9; color: #fed7aa; }
+.trek-header h2 { margin: 0; color: #fdba74; }
 .trek-toolbar { display: flex; gap: 8px; align-items: center; }
 .trek-pill { font-size: 11px; letter-spacing: 0.05em; padding: 3px 8px; border-radius: 4px; background: #3f3f46; color: #e4e4e7; }
 .trek-pill.mode-idle   { background: #3f3f46; color: #e4e4e7; }
-.trek-pill.mode-record { background: #065f46; color: #d1fae5; }
+.trek-pill.mode-record { background: var(--ok-bg); color: #d1fae5; }
 .trek-pill.mode-play   { background: #1e3a8a; color: #dbeafe; }
 .trek-status { font-size: 12px; color: #fdba74; }
 .trek-info { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: #fdba74; margin-bottom: 8px; }
@@ -147,9 +264,9 @@ h1 { margin: 0 0 12px; font-size: 28px; }
 .trek-btn:hover:not(:disabled) { background: #431407; }
 .trek-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .trek-btn.active { background: #c2410c; border-color: #fb923c; color: #fff; }
-.trek-btn.trek-play { background: #065f46; border-color: #10b981; }
+.trek-btn.trek-play { background: var(--ok-bg); border-color: #10b981; }
 .trek-btn.trek-play:hover:not(:disabled) { background: #047857; }
-.trek-btn.trek-stop { background: #7f1d1d; border-color: #ef4444; }
+.trek-btn.trek-stop { background: var(--danger-bg); border-color: var(--danger); }
 .trek-btn.trek-stop:hover:not(:disabled) { background: #991b1b; }
 .trek-sep { color: #7c2d12; }
 .trek-input { padding: 5px 8px; font-size: 13px; background: #1a0e07; color: #fed7aa; border: 1px solid #7c2d12; border-radius: 4px; width: 130px; }

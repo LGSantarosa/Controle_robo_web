@@ -26,6 +26,11 @@
   let costmapGlobal = null;     // { img, info } — overlay do /global_costmap
   let showGlobalCostmap = false; // camada ligada/desligada (toggle na toolbar)
   let showScan = false;         // overlay do lidar — OFF por padrão (vídeo limpo)
+  let trail = [];               // rastro percorrido [{x, y}] (só visual, client-side)
+  // Velocidade estimada por diferença de poses consecutivas (não existe evento
+  // de cmd_vel/odom no socket — derivar aqui evita mexer no backend). EMA pra
+  // suavizar o ruído do AMCL.
+  let velEst = { v: 0, w: 0, t: 0, x: 0, y: 0, yaw: 0, has: false };
 
   // Waypoints
   let waypoints  = [];     // [{x, y, yaw}]
@@ -62,6 +67,33 @@
   const doorChip = document.getElementById('map-door-chip');
   const btnCostmap = document.getElementById('map-btn-costmap');
   const btnScan = document.getElementById('map-btn-scan');
+
+  // Atualiza pose (painel + chip da topbar), estimativa de velocidade e trilha.
+  const poseChip = document.getElementById('pose-chip');
+  function updatePose(x, y, yaw) {
+    robotPose = { x, y, yaw };
+    const txt = `x=${x.toFixed(2)} y=${y.toFixed(2)} yaw=${(yaw * 180 / Math.PI).toFixed(0)}°`;
+    poseEl.textContent = 'robô: ' + txt;
+    if (poseChip) poseChip.textContent = txt;
+    const t = Date.now() / 1000;
+    if (velEst.has) {
+      const dt = t - velEst.t;
+      if (dt > 0.03 && dt < 2.0) {
+        const dv = Math.hypot(x - velEst.x, y - velEst.y) / dt;
+        let dyaw = yaw - velEst.yaw;
+        dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+        const alpha = 0.3;
+        velEst.v += alpha * (dv - velEst.v);
+        velEst.w += alpha * (dyaw / dt - velEst.w);
+      }
+    }
+    velEst.x = x; velEst.y = y; velEst.yaw = yaw; velEst.t = t; velEst.has = true;
+    const last = trail[trail.length - 1];
+    if (!last || Math.hypot(x - last.x, y - last.y) > 0.04) {
+      trail.push({ x, y });
+      if (trail.length > 600) trail.shift();
+    }
+  }
 
   // Espera o socket de client.js existir. client.js cria `window.robotSocket`.
   function waitForSocket(cb) {
@@ -118,6 +150,9 @@
       currentMode = (data && data.mode) || 'teleop';
       modeBadge.textContent = currentMode.toUpperCase();
       modeBadge.className = 'mode-badge mode-' + currentMode;
+      // Layout 2 colunas só quando existe painel na direita (mapa/trekking)
+      document.body.classList.toggle('layout-wide',
+        currentMode === 'slam' || currentMode === 'nav2' || currentMode === 'trekking');
 
       if (currentMode === 'slam' || currentMode === 'nav2') {
         panel.style.display = '';
@@ -163,8 +198,7 @@
     });
 
     socket.on('robot_pose', (data) => {
-      robotPose = data;
-      poseEl.textContent = `robô: x=${data.x.toFixed(2)} y=${data.y.toFixed(2)} yaw=${(data.yaw * 180 / Math.PI).toFixed(0)}°`;
+      updatePose(data.x, data.y, data.yaw);
       render();
     });
 
@@ -180,8 +214,7 @@
       // colados. O robot_pose ao vivo segue como fallback quando o scan para.
       scan = { xs: data.xs, ys: data.ys };
       if (data.rx !== undefined) {
-        robotPose = { x: data.rx, y: data.ry, yaw: data.ryaw };
-        poseEl.textContent = `robô: x=${data.rx.toFixed(2)} y=${data.ry.toFixed(2)} yaw=${(data.ryaw * 180 / Math.PI).toFixed(0)}°`;
+        updatePose(data.rx, data.ry, data.ryaw);
       }
       // DIAG lag (2026-06-24): _age = sensor->emit (TF/CPU na Pi);
       // transp = emit->browser (rede/transporte); _fb = usou yaw velho
@@ -651,6 +684,18 @@
       }
     }
 
+    // Trilha percorrida — desbota do rabo pra cabeça (laranja = cor do robô)
+    if (trail.length > 1) {
+      ctx.lineWidth = 2;
+      for (let i = 1; i < trail.length; i++) {
+        const a = worldToCanvas(trail[i - 1].x, trail[i - 1].y);
+        const b = worldToCanvas(trail[i].x, trail[i].y);
+        if (!a || !b) continue;
+        ctx.strokeStyle = `rgba(249,115,22,${(0.06 + 0.34 * (i / trail.length)).toFixed(3)})`;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+    }
+
     // Trajetória planejada (Nav2)
     if (plan && plan.length > 1) {
       ctx.strokeStyle = '#4af';
@@ -856,6 +901,37 @@
         ctx.stroke();
         ctx.restore();
       }
+    }
+
+    // HUD de telemetria (canto superior esquerdo): v/ω estimados da pose +
+    // estado da navegação — dá pra ver POR QUE o robô parou sem abrir log.
+    if (robotPose) {
+      const lines = [
+        `v ${velEst.v.toFixed(2)} m/s   ω ${(velEst.w * 180 / Math.PI).toFixed(0)}°/s`,
+      ];
+      if (doorZone && doorZone.state !== 'idle') {
+        lines.push(`porta ${doorZone.door_id}: ${doorZone.state}`);
+      } else if (wpActive && waypoints.length) {
+        const wp = waypoints[Math.min(wpActiveIdx, waypoints.length - 1)];
+        const d = Math.hypot(wp.x - robotPose.x, wp.y - robotPose.y);
+        lines.push(`waypoint ${wpActiveIdx + 1}/${waypoints.length} — ${d.toFixed(2)} m`);
+      } else if (lastGoal) {
+        const d = Math.hypot(lastGoal.x - robotPose.x, lastGoal.y - robotPose.y);
+        lines.push(`goal a ${d.toFixed(2)} m`);
+      }
+      ctx.font = '12px ui-monospace, Menlo, Consolas, monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      const wMax = Math.max(...lines.map(l => ctx.measureText(l).width));
+      const pad = 8, lh = 16;
+      const bw = wMax + pad * 2, bh = lines.length * lh + pad;
+      ctx.fillStyle = 'rgba(8,12,24,0.72)';
+      ctx.fillRect(8, 8, bw, bh);
+      ctx.strokeStyle = 'rgba(99,102,241,0.5)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(8.5, 8.5, bw, bh);
+      ctx.fillStyle = '#c7d2fe';
+      lines.forEach((l, i) => ctx.fillText(l, 8 + pad, 8 + pad / 2 + i * lh));
     }
   }
 
