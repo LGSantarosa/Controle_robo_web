@@ -19,7 +19,11 @@ from launch_ros.descriptions import ParameterValue
 
 def generate_launch_description():
     pkg = get_package_share_directory('robot_nav')
-    default_params = os.path.join(pkg, 'config', 'nav2_params.yaml')
+    # 8a auditoria A3: default = o MESMO yaml do robo (nav2_params_pi.yaml).
+    # O antigo nav2_params.yaml (renomeado _legacy) parou em ~06-08 (NavFn, DWB
+    # sem shim, theta 0.8, /scan cru) — como default, quem lancasse este launch
+    # direto subia uma stack de um mes atras SILENCIOSAMENTE.
+    default_params = os.path.join(pkg, 'config', 'nav2_params_pi.yaml')
     # BT custom: recovery reordenado p/ BackUp ANTES de Spin (robô encurralado
     # entre paredes "volta de onde veio" em vez de girar sem espaço). Ver
     # behavior_trees/navigate_w_backup_first_recovery.xml. Caminho via share dir

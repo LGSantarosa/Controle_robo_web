@@ -1,3 +1,9 @@
+# ⚠️ LEGADO (renomeado 2026-07-07, 8a auditoria A3) — NAO USAR EM NADA NOVO.
+# Parou no tempo em ~2026-06-08: NavFn (o robo usa Theta*), DWB sem RotationShim,
+# max_vel_theta 0.8 (o robo precisa de 6.0), costmaps no /scan cru sem
+# observation_persistence. Mantido so como referencia historica do tuning antigo.
+# O arquivo VIVO (robo E sim) e' o nav2_params_pi.yaml.
+#
 # Parâmetros Nav2 para o robô hoverboard diferencial.
 # Stack: map_server + amcl + planner + controller + bt_navigator +
 #        waypoint_follower + behavior_server + velocity_smoother.
