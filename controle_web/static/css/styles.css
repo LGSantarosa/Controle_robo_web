@@ -5,13 +5,18 @@
    Tokens centralizados aqui; nada de cor solta no meio do CSS.
    ============================================================ */
 :root {
-  --bg:        #0b1120;   /* fundo da página */
-  --panel:     #0f172a;   /* cards */
-  --panel-2:   #111827;   /* blocos internos */
-  --line:      #253048;   /* bordas */
+  --bg:        #070b16;   /* fundo da página (bem mais escuro que os cards) */
+  --panel:     #141d33;   /* cards — claramente acima do fundo */
+  --panel-2:   #1c2742;   /* blocos internos */
+  --line:      #2d3b5e;   /* bordas */
   --line-soft: #1c2436;
   --text:      #e2e8f0;
   --muted:     #94a3b8;
+  /* identidade por zona */
+  --zone-ctrl: #818cf8;   /* controles / modo — índigo */
+  --zone-speed:#fbbf24;   /* velocidade — âmbar */
+  --zone-map:  #38bdf8;   /* mapa — ciano */
+  --zone-log:  #64748b;   /* eventos — neutro */
   --accent:    #6366f1;   /* índigo — interação */
   --accent-soft: #312e81;
   --accent-text: #e0e7ff;
@@ -30,7 +35,8 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg); color: var(--text); }
+html, body { margin: 0; padding: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: var(--text); }
+body { background: var(--bg) radial-gradient(ellipse 120% 60% at 50% -10%, rgba(56,101,248,0.14), transparent 60%) no-repeat; min-height: 100vh; }
 
 /* fio de horizonte no topo — assinatura discreta do console */
 body::before { content: ''; display: block; height: 2px; background: linear-gradient(90deg, transparent, var(--accent) 30%, #38bdf8 70%, transparent); }
@@ -48,12 +54,13 @@ button { font-family: inherit; }
   position: sticky; top: 0; z-index: 50;
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   padding: 10px 20px;
-  background: rgba(11, 17, 32, 0.92);
+  background: linear-gradient(180deg, #131c33, #0d1425);
   backdrop-filter: blur(6px);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid #33416b;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.5);
 }
 .topbar-title { display: flex; align-items: center; gap: 8px; }
-.topbar-title h1 { margin: 0; font-size: 18px; letter-spacing: 0.01em; white-space: nowrap; }
+.topbar-title h1 { margin: 0; font-size: 18px; letter-spacing: 0.01em; white-space: nowrap; color: #c7d2fe; }
 .topbar-chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1; min-width: 0; }
 .chip {
   display: inline-flex; align-items: center; gap: 6px;
@@ -61,8 +68,10 @@ button { font-family: inherit; }
   background: var(--panel-2); font-size: 12.5px; white-space: nowrap;
 }
 .chip-label { text-transform: uppercase; font-size: 10px; letter-spacing: 0.08em; color: var(--muted); }
-.chip-pose span:last-child { font-family: var(--mono); }
-#conn { font-weight: 600; }
+.chip-pose span:last-child { font-family: var(--mono); color: var(--zone-map); }
+#conn { font-weight: 700; }
+#conn.ok { color: #4ade80; }
+#conn.err { color: #f87171; }
 
 /* E-STOP: sempre visível, inconfundível */
 .estop {
@@ -98,9 +107,17 @@ body.layout-wide .layout { max-width: 1280px; grid-template-columns: 400px minma
   .estop { margin-left: auto; }
 }
 
-/* Cards: todo painel compartilha a mesma pele */
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); margin: 0; }
+/* Cards: pele comum + faixa de identidade colorida na borda esquerda,
+   uma cor por zona (controles índigo, velocidade âmbar, mapa ciano...) */
+.card { background: linear-gradient(180deg, var(--panel), #101830); border: 1px solid var(--line); border-left-width: 3px; border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); margin: 0; }
 .card h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; }
+.mode-selector.card, .controls.card, .status.card { border-left-color: var(--zone-ctrl); }
+.speed-control.card { border-left-color: var(--zone-speed); }
+.map-panel.card { border-left-color: var(--zone-map); }
+.eventlog.card { border-left-color: var(--zone-log); }
+.trek-panel.card { border-left-color: #fb923c; }
+.map-panel .map-header h2 { color: var(--zone-map); }
+.eventlog h2 { color: #94a3b8; }
 
 .hint { opacity: 0.75; margin: 0 0 14px; font-size: 13px; }
 
@@ -120,14 +137,14 @@ body.layout-wide .layout { max-width: 1280px; grid-template-columns: 400px minma
    ------------------------------------------------------------ */
 .speed-control-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .speed-control-row label { font-weight: 600; font-size: 13px; white-space: nowrap; color: var(--muted); }
-.speed-control-row input[type="range"] { flex: 1; accent-color: var(--accent); height: 6px; cursor: pointer; }
-#speed-mult-display { font-family: var(--mono); font-size: 16px; font-weight: 700; min-width: 48px; text-align: center; color: #a5b4fc; }
+.speed-control-row input[type="range"] { flex: 1; accent-color: var(--zone-speed); height: 6px; cursor: pointer; }
+#speed-mult-display { font-family: var(--mono); font-size: 18px; font-weight: 700; min-width: 52px; text-align: center; color: var(--zone-speed); background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.3); border-radius: 6px; padding: 2px 4px; }
 .speed-control-info { font-size: 13px; color: var(--muted); margin-bottom: 8px; display: flex; gap: 16px; }
 .speed-control-info strong { font-family: var(--mono); color: var(--text); }
 .speed-presets { display: flex; gap: 8px; flex-wrap: wrap; }
-.speed-preset-btn { padding: 4px 12px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 12px; transition: all 0.15s; }
-.speed-preset-btn:hover { border-color: var(--accent); color: var(--text); }
-.speed-preset-btn.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+.speed-preset-btn { padding: 5px 14px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); border-radius: 999px; cursor: pointer; font-size: 12px; transition: all 0.15s; }
+.speed-preset-btn:hover { border-color: var(--zone-speed); color: var(--text); }
+.speed-preset-btn.active { border-color: var(--zone-speed); background: rgba(251,191,36,0.15); color: var(--zone-speed); font-weight: 700; }
 
 /* Bloco de status (teclas/gamepad) */
 .status { font-size: 14px; }
@@ -141,11 +158,13 @@ body.layout-wide .layout { max-width: 1280px; grid-template-columns: 400px minma
 .controls { display: flex; flex-direction: column; align-items: center; }
 .grid { display: grid; grid-template-columns: repeat(3, auto); grid-template-rows: repeat(3, auto); gap: 8px; align-items: center; justify-items: center; }
 .row { display: contents; }
-.pad { font-size: 26px; padding: 14px 18px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; min-width: 88px; min-height: 66px; transition: background 0.1s, border-color 0.1s; }
-.pad:hover { border-color: var(--accent); }
-.pad:active { background: #374151; border-color: var(--accent); }
-.pad-stop { color: var(--danger-text); border-color: #4c1d1d; }
-.pad-stop:hover { border-color: var(--danger); }
+.pad { font-size: 26px; padding: 14px 18px; background: linear-gradient(180deg, #26335b, #1b2547); color: #a5b4fc; border: 1px solid #3b4a75; border-radius: 10px; cursor: pointer; min-width: 88px; min-height: 66px; transition: background 0.1s, border-color 0.1s, box-shadow 0.1s; }
+.pad:hover { border-color: var(--zone-ctrl); box-shadow: 0 0 10px rgba(129,140,248,0.25); }
+.pad:active { background: var(--accent-soft); border-color: var(--zone-ctrl); color: #fff; }
+.pad.diag { opacity: 0.85; }
+.pad-stop { color: #fca5a5; background: linear-gradient(180deg, #3d1a1f, #2a1215); border-color: #7f1d1d; }
+.pad-stop:hover { border-color: var(--danger); box-shadow: 0 0 10px rgba(239,68,68,0.3); }
+.pad-stop:active { background: var(--danger-bg); }
 
 /* ------------------------------------------------------------
    Visualização do Gamepad
@@ -189,11 +208,11 @@ body.layout-wide .layout { max-width: 1280px; grid-template-columns: 400px minma
 @keyframes emergency-pulse { from { opacity: 0.7; } to { opacity: 1; } }
 
 /* Badge do modo atual (TELEOP / SLAM / NAV2) ao lado do título */
-.mode-badge { display: inline-block; font-size: 11px; letter-spacing: 0.05em; padding: 3px 8px; border-radius: 4px; background: #243042; color: #aab; vertical-align: middle; }
-.mode-badge.mode-slam  { background: #1e3a8a; color: #dbeafe; }
-.mode-badge.mode-nav2  { background: var(--ok-bg); color: #d1fae5; }
-.mode-badge.mode-teleop { background: #3f3f46; color: #e4e4e7; }
-.mode-badge.mode-trekking { background: #7c2d12; color: #fed7aa; }
+.mode-badge { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; padding: 3px 10px; border-radius: 999px; background: #243042; color: #aab; vertical-align: middle; border: 1px solid transparent; }
+.mode-badge.mode-slam  { background: #1e3a8a; color: #dbeafe; border-color: #3b82f6; }
+.mode-badge.mode-nav2  { background: var(--ok-bg); color: #6ee7b7; border-color: #10b981; }
+.mode-badge.mode-teleop { background: #3f3f46; color: #e4e4e7; border-color: #71717a; }
+.mode-badge.mode-trekking { background: #7c2d12; color: #fed7aa; border-color: #fb923c; }
 
 /* Chip de energia (power_monitor): tensão das placas hoverboard */
 .power-chip { display: inline-block; font-size: 12.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; font-family: var(--mono); }
@@ -223,8 +242,12 @@ body.layout-wide .layout { max-width: 1280px; grid-template-columns: 400px minma
 
 /* Waypoint toolbar — grupos: Rota | Arquivos | Camadas */
 .wp-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; margin: 8px 0; }
-.tb-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px; background: #0d1a2d; border: 1px solid #1e3a5f; border-radius: 6px; }
-.tb-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: #64748b; font-weight: 700; margin-right: 2px; }
+.tb-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px; background: rgba(56,189,248,0.06); border: 1px solid #1e3a5f; border-radius: 6px; }
+.tb-group:nth-of-type(2) { background: rgba(148,163,184,0.06); border-color: #334155; }
+.tb-group:nth-of-type(3) { background: rgba(74,222,128,0.05); border-color: #14532d; }
+.tb-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: #7dd3fc; font-weight: 700; margin-right: 2px; }
+.tb-group:nth-of-type(2) .tb-label { color: #94a3b8; }
+.tb-group:nth-of-type(3) .tb-label { color: #86efac; }
 .wp-toolbar .map-btn.active { background: #1d4ed8; border-color: #3b82f6; color: #fff; }
 /* Toggles de camada: bolinha de estado ON/OFF antes do texto */
 .map-btn.toggle::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #475569; margin-right: 6px; vertical-align: 1px; transition: background 0.15s, box-shadow 0.15s; }

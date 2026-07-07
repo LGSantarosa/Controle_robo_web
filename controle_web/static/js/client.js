@@ -170,6 +170,7 @@
 
   socket.on('connect', () => {
     connEl.textContent = 'conectado';
+    connEl.className = 'ok';
     const transport = socket.io.engine.transport && socket.io.engine.transport.name;
     appendLog('socket', `conectado sid=${socket.id} transport=${transport || 'n/a'}`);
     try {
@@ -185,6 +186,7 @@
 
   socket.on('disconnect', () => {
     connEl.textContent = 'desconectado';
+    connEl.className = 'err';
     pressed.clear();
     renderPressed();
     appendLog('socket', 'desconectado');
@@ -208,6 +210,7 @@
 
   socket.on('server_status', (data) => {
     connEl.textContent = 'conectado';
+    connEl.className = 'ok';
     appendLog('socket', 'conectado');
   });
 
