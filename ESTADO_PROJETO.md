@@ -5,7 +5,32 @@
 
 ---
 
-## 🆕 2026-07-07 — 8ª auditoria FEITA + 5 itens APLICADOS (A1..A5)
+## 🆕 2026-07-07 (tarde) — GUI redesenhada + mapa hotmilk + rede de campo
+
+> Tudo DEPLOYADO na Pi e aprovado pelo dono no mesmo dia. Commits `b37e11e..68daca7`.
+
+- **GUI console**: topbar sticky (chips socket/energia/controle/pose + E-STOP),
+  layout 2 colunas (mapa protagonista; 1 coluna em teleop), cores por zona
+  (controles índigo, velocidade âmbar, mapa ciano), toolbar do mapa agrupada
+  (Rota/Arquivos/Camadas c/ toggles ON/OFF), HUD de v/ω no canvas (derivado da
+  pose no cliente), trilha laranja #f90 desbotando.
+- **Zoom/pan no mapa** `284b3b5`: roda = zoom no cursor, botões +/−/⤢, pinça no touch.
+- **Arrastar = mover o mapa** `68daca7`: goal único virou botão **🎯 Ir para**
+  (one-shot, desarma após enviar) — fim do goal acidental ao mexer no mapa.
+- **Mapa novo `hotmilk`** (598KB, maior que o sala): no repo `d7b4d21`; backup do
+  golden ativo `sala_boa_2026-07-07.*` chmod a-w na Pi. **rota1 validada no
+  hotmilk** (mesma origem do SLAM). Subir: `robot-up nav2 --map=maps/hotmilk.yaml`
+  (default do launch.sh AINDA é sala.yaml).
+- **Rede**: hotspot "Trafico de banana" autoconnect prioridade 100 (no campo:
+  ligar o hotspot ANTES do robô; acessar via robo-desktop.local no hotspot) +
+  IP fixo 192.168.18.95 na rede de casa.
+- BO conhecido (cosmético): traceback do waypoint_runner no shutdown
+  (`map_service.py:1125` — wait_for_service com nó já morto durante retry);
+  fix de 3 linhas pendente, só aparece derrubando o app com waypoints ativos.
+
+---
+
+## 2026-07-07 — 8ª auditoria FEITA + 5 itens APLICADOS (A1..A5)
 
 > `AUDITORIA_2026-07-07.md` na raiz. Nenhum bug crítico — achados de resiliência.
 > **Aplicados no mesmo dia (autorizado): A2 `42981e4` (nearest stale no unstuck),
