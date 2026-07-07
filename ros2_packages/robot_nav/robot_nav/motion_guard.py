@@ -313,6 +313,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                                 'in_corridor', 'vx_in', 'vx_out',
                                 'px', 'py', 'pyaw', 'vx_odom', 'wz_odom',
                                 'cx', 'cy', 'cbear_deg'])
+            # flush em timer (8ª auditoria A5): flush por linha a ~20 Hz
+            # castigava o SD da Pi. Padrão do freeze_capture; perde ≤2 s no pior.
+            self.create_timer(2.0, self._csv_f.flush)
             self.get_logger().info(
                 'motion_guard ativo: raio %.1fm, corredor %.2fx%.1fm, '
                 'slow %.0f%%@%.1fm..100%%@%.1fm, clear %.1fs' % (
@@ -428,7 +431,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                 round(msg.linear.x, 3), round(vx, 3),
                 *(round(v, 3) if v != '' else '' for v in pose),
                 round(self._vx, 3), round(self._wz, 3), cx, cy, cbear])
-            self._csv_f.flush()
 
     rclpy.init(args=args)
     node = MotionGuardNode()

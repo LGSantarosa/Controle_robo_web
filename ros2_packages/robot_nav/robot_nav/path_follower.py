@@ -267,6 +267,10 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             self._goal_active_any = False
             self._time = _time
             self.create_timer(1.0 / g['rate_hz'], self._tick)
+            # flush do CSV em timer (8ª auditoria A5): flush por linha a 20 Hz
+            # eram ~30k syncs/run castigando o SD da Pi. Mesmo padrão do
+            # freeze_capture; perda máx. em power-cut = 2 s de log.
+            self.create_timer(2.0, self._csv_f.flush)
             self.get_logger().info(
                 'path_follower ativo: reto %.2fm/s, carrot %.1fm, gira>%.0f° '
                 'até <%.0f°, giro %.1f–%.1f rad/s' % (
@@ -352,7 +356,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                     round(d.get('dist_aim', float('nan')), 3),
                     round(d.get('dist_goal', float('nan')), 3),
                     round(cmd.vx, 3), round(cmd.wz, 3)])
-                self._csv_f.flush()
 
     rclpy.init(args=args)
     node = PathFollowerNode()
