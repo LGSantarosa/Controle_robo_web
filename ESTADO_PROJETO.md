@@ -1,7 +1,7 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-06**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-07**.
 
 ---
 
@@ -23,10 +23,9 @@ goal ativo, ZERO erro** — com o dono + outra pessoa atrapalhando de propósito
 ### 🏆🏆 RUN 2 (mesmo dia, ~17h) — "melhor ainda, rápido e decisivo"
 Mesma stack, dono atrapalhando de novo (mais agressivo: guard_hold 73s em 634s
 de goal). A navegação em si quase não pausou: **wz_engolido 6,0s (1,0%),
-vx_zona_morta 2,7s, unstuck 0,1s, collision 1,5s**. Único episódio a entender:
-**31s em t+626 com cmd 0.22-0.30 de avanço e odom=0** (rodas paradas sob
-comando, guard idle↔blocked) — hipótese: dono SEGURANDO o robô no fim; se não
-era ele, vira BO (cheiro de BMS/stall). CSVs arquivados na Pi:
+vx_zona_morta 2,7s, unstuck 0,1s, collision 1,5s**. Episódio de **31s em t+626
+com cmd de avanço e odom=0**: ✅ RESOLVIDO 07-07 — o dono tinha DESLIGADO os
+motores no fim da run. Não é BO, descartado. CSVs arquivados na Pi:
 `controle_web/logs/run_2026-07-06_best/` (run 1) e `run_2026-07-06_best2/` (run 2).
 
 ### Régua daqui pra frente
