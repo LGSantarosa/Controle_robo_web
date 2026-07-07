@@ -27,6 +27,12 @@
   let showGlobalCostmap = false; // camada ligada/desligada (toggle na toolbar)
   let showScan = false;         // overlay do lidar — OFF por padrão (vídeo limpo)
   let trail = [];               // rastro percorrido [{x, y}] (só visual, client-side)
+  // Zoom/pan do canvas: zoom 1 = mapa inteiro (comportamento antigo).
+  // Roda do mouse = zoom no cursor; botão do meio = arrastar; pinça no touch.
+  let view = { zoom: 1, panX: 0, panY: 0 };
+  let panDrag = null;           // {x0, y0, panX0, panY0} durante drag do botão do meio
+  let pinch = null;             // {d0, zoom0, px, py} durante pinça de 2 dedos
+  let suppressTouchClick = false; // engole o touchend depois de uma pinça
   // Velocidade estimada por diferença de poses consecutivas (não existe evento
   // de cmd_vel/odom no socket — derivar aqui evita mexer no backend). EMA pra
   // suavizar o ruído do AMCL.
@@ -437,6 +443,13 @@
 
     canvas.addEventListener('mousedown', (ev) => {
       if (!mapInfo || !mapImage) return;
+      // Botão do meio = arrastar o mapa (funciona em qualquer modo/zoom)
+      if (ev.button === 1) {
+        ev.preventDefault();
+        const p = eventToCanvasPx(ev);
+        panDrag = { x0: p.cx, y0: p.cy, panX0: view.panX, panY0: view.panY };
+        return;
+      }
       if (currentMode !== 'nav2' && !setPoseMode) return;
       const { cx, cy } = eventToCanvasPx(ev);
       const world = canvasToWorld(cx, cy);
@@ -456,6 +469,14 @@
     });
 
     canvas.addEventListener('mousemove', (ev) => {
+      if (panDrag) {
+        const p = eventToCanvasPx(ev);
+        view.panX = panDrag.panX0 + (p.cx - panDrag.x0);
+        view.panY = panDrag.panY0 + (p.cy - panDrag.y0);
+        clampPan();
+        render();
+        return;
+      }
       if (setPoseMode && setPoseDrag) {
         const p = eventToCanvasPx(ev);
         setPoseDrag.curX = p.cx;
@@ -480,6 +501,7 @@
     });
 
     canvas.addEventListener('mouseup', (ev) => {
+      if (panDrag) { panDrag = null; return; }
       if (!mapInfo || !mapImage) return;
       if (currentMode !== 'nav2' && !setPoseMode) return;
       const { cx, cy } = eventToCanvasPx(ev);
@@ -568,13 +590,56 @@
     });
 
     // Touch → encaminha pros mesmos handlers de mouse (preventDefault evita rolar a página)
+    // 2 dedos = pinça (zoom+pan); cancela qualquer drag de goal/waypoint em curso.
+    const touchToCanvas = (t) => {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        cx: (t.clientX - rect.left) * (canvas.width / rect.width),
+        cy: (t.clientY - rect.top) * (canvas.height / rect.height),
+      };
+    };
     canvas.addEventListener('touchstart', (ev) => {
+      if (ev.touches.length === 2) {
+        ev.preventDefault();
+        // aborta interações de 1 dedo que já tinham começado
+        wpDrag = null; wpMouseDown = null; doorDrag = null; setPoseDrag = null;
+        suppressTouchClick = true;
+        const a = touchToCanvas(ev.touches[0]), b = touchToCanvas(ev.touches[1]);
+        const r = getDrawRect();
+        const mx = (a.cx + b.cx) / 2, my = (a.cy + b.cy) / 2;
+        pinch = {
+          d0: Math.hypot(a.cx - b.cx, a.cy - b.cy) || 1,
+          zoom0: view.zoom,
+          px: r ? (mx - r.dx) / r.scale : 0,   // pixel da imagem sob o centro da pinça
+          py: r ? (my - r.dy) / r.scale : 0,
+        };
+        render();
+        return;
+      }
       if (ev.touches.length !== 1) return;
       ev.preventDefault();
       canvas.dispatchEvent(new MouseEvent('mousedown', {
         clientX: ev.touches[0].clientX, clientY: ev.touches[0].clientY }));
     }, { passive: false });
     canvas.addEventListener('touchmove', (ev) => {
+      if (pinch && ev.touches.length === 2) {
+        ev.preventDefault();
+        const a = touchToCanvas(ev.touches[0]), b = touchToCanvas(ev.touches[1]);
+        const d = Math.hypot(a.cx - b.cx, a.cy - b.cy) || 1;
+        const mx = (a.cx + b.cx) / 2, my = (a.cy + b.cy) / 2;
+        view.zoom = Math.min(8, Math.max(1, pinch.zoom0 * (d / pinch.d0)));
+        if (view.zoom === 1) {
+          view.panX = 0; view.panY = 0;
+        } else if (mapImage) {
+          const cw = canvas.width, ch = canvas.height;
+          const scale = Math.min(cw / mapImage.width, ch / mapImage.height) * view.zoom;
+          view.panX = mx - (cw - mapImage.width * scale) / 2 - pinch.px * scale;
+          view.panY = my - (ch - mapImage.height * scale) / 2 - pinch.py * scale;
+          clampPan();
+        }
+        render();
+        return;
+      }
       if (ev.touches.length !== 1) return;
       ev.preventDefault();
       canvas.dispatchEvent(new MouseEvent('mousemove', {
@@ -582,6 +647,13 @@
     }, { passive: false });
     canvas.addEventListener('touchend', (ev) => {
       ev.preventDefault();
+      if (pinch && ev.touches.length < 2) pinch = null;
+      // depois de uma pinça, engole os touchend até soltar todos os dedos —
+      // senão o último dedo vira um "click" e manda goal sem querer
+      if (suppressTouchClick) {
+        if (ev.touches.length === 0) suppressTouchClick = false;
+        return;
+      }
       const t = ev.changedTouches[0];
       if (t) canvas.dispatchEvent(new MouseEvent('mouseup', {
         clientX: t.clientX, clientY: t.clientY }));
@@ -605,16 +677,69 @@
     };
   }
 
-  // O mapa é desenhado ajustado ao canvas (preserva aspect ratio).
+  // O mapa é desenhado ajustado ao canvas (preserva aspect ratio) e depois
+  // ampliado/deslocado pelo view (zoom/pan). worldToCanvas/canvasToWorld
+  // passam por aqui, então clicks continuam certos em qualquer zoom.
   function getDrawRect() {
     if (!mapImage) return null;
     const cw = canvas.width, ch = canvas.height;
     const iw = mapImage.width, ih = mapImage.height;
-    const scale = Math.min(cw / iw, ch / ih);
+    const scale = Math.min(cw / iw, ch / ih) * view.zoom;
     const dw = iw * scale, dh = ih * scale;
-    const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
+    const dx = (cw - dw) / 2 + view.panX;
+    const dy = (ch - dh) / 2 + view.panY;
     return { dx, dy, dw, dh, scale };
   }
+
+  // Não deixa o mapa fugir da tela ao arrastar/zoomar
+  function clampPan() {
+    const r = getDrawRect();
+    if (!r) return;
+    const limX = r.dw / 2, limY = r.dh / 2;
+    view.panX = Math.max(-limX, Math.min(limX, view.panX));
+    view.panY = Math.max(-limY, Math.min(limY, view.panY));
+  }
+
+  // Zoom multiplicativo mantendo o ponto (cx, cy) do canvas parado no lugar
+  function zoomAt(factor, cx, cy) {
+    if (!mapImage) return;
+    const r0 = getDrawRect();
+    const z1 = Math.min(8, Math.max(1, view.zoom * factor));
+    if (z1 === view.zoom) return;
+    const px = (cx - r0.dx) / r0.scale;   // pixel da imagem sob o pivô
+    const py = (cy - r0.dy) / r0.scale;
+    view.zoom = z1;
+    if (z1 === 1) {
+      view.panX = 0; view.panY = 0;       // zoom 1 = volta ao enquadramento cheio
+    } else {
+      const cw = canvas.width, ch = canvas.height;
+      const scale = Math.min(cw / mapImage.width, ch / mapImage.height) * z1;
+      view.panX = cx - (cw - mapImage.width * scale) / 2 - px * scale;
+      view.panY = cy - (ch - mapImage.height * scale) / 2 - py * scale;
+      clampPan();
+    }
+    render();
+  }
+
+  function resetZoom() {
+    view.zoom = 1; view.panX = 0; view.panY = 0;
+    render();
+  }
+
+  // Roda do mouse = zoom no cursor (não precisa de socket, liga já)
+  canvas.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    const { cx, cy } = eventToCanvasPx(ev);
+    zoomAt(ev.deltaY < 0 ? 1.25 : 0.8, cx, cy);
+  }, { passive: false });
+
+  // Botões +/−/reset sobrepostos ao canvas
+  const btnZoomIn    = document.getElementById('map-zoom-in');
+  const btnZoomOut   = document.getElementById('map-zoom-out');
+  const btnZoomReset = document.getElementById('map-zoom-reset');
+  if (btnZoomIn)    btnZoomIn.addEventListener('click', () => zoomAt(1.4, canvas.width / 2, canvas.height / 2));
+  if (btnZoomOut)   btnZoomOut.addEventListener('click', () => zoomAt(1 / 1.4, canvas.width / 2, canvas.height / 2));
+  if (btnZoomReset) btnZoomReset.addEventListener('click', resetZoom);
 
   // Converte pixel do canvas para coordenada do mundo (frame 'map').
   // Considera que o PNG já foi virado verticalmente pelo backend, então a
