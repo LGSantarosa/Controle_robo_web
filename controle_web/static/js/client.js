@@ -172,6 +172,37 @@
   // Exposto pro gamepad.js parar de fazer poll/emit quando o web é só monitor
   window._robotIsTeleopEnabled = () => webTeleop;
 
+  // ---- 🎥 Câmera POV — card visível em qualquer modo ----
+  // src do <img> só é setado com o view ligado: desligado, o navegador fecha
+  // a conexão e o servidor para de empurrar JPEG pelo WiFi.
+  const povCard = document.getElementById('pov-card');
+  const povWrap = document.getElementById('pov-wrap');
+  const povImg  = document.getElementById('pov-img');
+  const povRec  = document.getElementById('pov-rec');
+  const btnPov  = document.getElementById('btn-pov');
+  let povOn = false;
+  function setPov(on) {
+    povOn = on;
+    if (btnPov) {
+      btnPov.textContent = on ? 'Desligar' : 'Ligar';
+      btnPov.classList.toggle('active', on);
+    }
+    if (povWrap) povWrap.style.display = on ? '' : 'none';
+    if (povImg) povImg.src = on ? '/camera/stream?t=' + Date.now() : '';
+  }
+  if (btnPov) btnPov.addEventListener('click', () => setPov(!povOn));
+  socket.on('camera_status', (st) => {
+    if (!st || !povCard) return;
+    povCard.style.display = '';
+    if (btnPov) {
+      btnPov.disabled = !st.available;
+      btnPov.title = st.available ? '' : 'câmera não detectada';
+    }
+    if (povRec) povRec.style.display = st.recording ? '' : 'none';
+    // câmera caiu com o view aberto → desliga pra não ficar imagem morta
+    if (!st.available && povOn) setPov(false);
+  });
+
   socket.on('connect', () => {
     connEl.textContent = 'conectado';
     connEl.className = 'ok';

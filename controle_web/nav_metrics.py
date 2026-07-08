@@ -89,8 +89,13 @@ CSV_FIELDS = [
 class NavMetricsCollector:
     """Roda em thread própria; subscreve tópicos Nav2 e acumula por tentativa."""
 
-    def __init__(self, log_dir: str):
+    def __init__(self, log_dir: str, on_nav_start=None, on_nav_end=None):
         self._log_dir = log_dir
+        # Callbacks opcionais (ex.: câmera POV) — chamados no início e no fim
+        # (status terminal) de cada tentativa. Erros deles não podem derrubar
+        # o coletor, então sempre passam por _safe_cb.
+        self._on_nav_start = on_nav_start
+        self._on_nav_end = on_nav_end
         os.makedirs(log_dir, exist_ok=True)
         # CSV por dia — calculado a cada flush baseado em `end_ts` (clock ROS),
         # senão um servidor rodando 24h grava as tentativas do dia novo no
@@ -141,6 +146,14 @@ class NavMetricsCollector:
         self._spin_th.start()
 
         log.info(f"[NavMetrics] coletor iniciado. CSV dir: {self._log_dir}")
+
+    def _safe_cb(self, cb):
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception as e:
+            log.debug(f"[NavMetrics] callback falhou: {e}")
 
     def _now(self) -> float:
         """Tempo em segundos do clock ROS (respeita use_sim_time)."""
@@ -201,6 +214,7 @@ class NavMetricsCollector:
                     self._flush_attempt(self._attempt)
                     self._attempt = None
                     self._nav_goal_id = None
+                    self._safe_cb(self._on_nav_end)
                     break
 
         # 2) Procura ACCEPTED/EXECUTING (novo goal) — sempre o último encontrado,
@@ -226,6 +240,7 @@ class NavMetricsCollector:
                 start_y=self._last_odom_pose[1] if self._last_odom_pose else 0.0,
             )
             log.info(f"[NavMetrics] início nav {self._attempt.nav_id}")
+            self._safe_cb(self._on_nav_start)
 
     def _on_recovery_status(self, msg: GoalStatusArray, name: str):
         """Conta +1 na primeira vez que vemos cada goal_id de recovery."""

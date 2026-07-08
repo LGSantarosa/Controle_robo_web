@@ -1,5 +1,5 @@
 # Aplicação Flask com Socket.IO para receber eventos do navegador
-from flask import Flask, render_template, request
+from flask import Flask, Response, render_template, request
 from flask_socketio import SocketIO, emit
 from controllers.robot_controller import RobotController, ROS2Controller
 import logging
@@ -57,6 +57,9 @@ trekking_bridge = None
 # Monitor de tensão das placas hoverboard (diagnóstico do desarme do BMS) —
 # CSV contínuo + chip ao vivo na UI. Roda em qualquer modo com ROS.
 power_monitor = None
+# Câmera USB (C922) — POV do robô: live view na GUI + gravação do percurso.
+# Não depende de ROS; sem câmera/ffmpeg fica quieta.
+camera_service = None
 
 # rclpy.init() instala seus próprios handlers de SIGINT/SIGTERM que engolem o
 # Ctrl+C (o processo fica preso esperando o executor do ROS2 que nunca acorda).
@@ -68,6 +71,11 @@ def _shutdown_all():
     # única vez no fim, depois que todas as bridges saíram dos callbacks.
     # Sem essa ordem o contexto global cai no meio de um spin_once() e as
     # bridges restantes lançam RCLError.
+    try:
+        if camera_service is not None:
+            camera_service.shutdown()
+    except Exception:
+        pass
     try:
         if nav_metrics is not None:
             nav_metrics.shutdown()
@@ -196,12 +204,30 @@ if ROBOT_MODE == 'trekking':
         )
         trekking_bridge = None
 
+# Câmera POV — sobe em qualquer modo (live view sempre útil); a gravação
+# automática só é disparada pelos handlers/hoooks de navegação (NAV2).
+try:
+    from camera_service import CameraService
+    camera_service = CameraService(
+        log_dir=os.path.join(os.path.dirname(__file__), 'logs', 'pov'),
+        socketio=socketio,
+    )
+except Exception as e:
+    logging.getLogger(__name__).warning(
+        f"[app] Falha ao iniciar CameraService: {e}. POV desabilitado."
+    )
+    camera_service = None
+
 # Coletor de métricas só faz sentido em NAV2 (action navigate_to_pose ativa).
 if ROBOT_MODE == 'nav2':
     try:
         from nav_metrics import NavMetricsCollector
         nav_metrics = NavMetricsCollector(
-            log_dir=os.path.join(os.path.dirname(__file__), 'logs', 'nav_metrics')
+            log_dir=os.path.join(os.path.dirname(__file__), 'logs', 'nav_metrics'),
+            # Gravação POV segue as tentativas do Nav2: cada goal aceito mantém
+            # a câmera gravando; terminal arma o debounce que encerra o vídeo.
+            on_nav_start=(camera_service.nav_active if camera_service else None),
+            on_nav_end=(camera_service.nav_ended if camera_service else None),
         )
     except Exception as e:
         logging.getLogger(__name__).warning(
@@ -270,6 +296,54 @@ def index():
     # Página principal com a interface do controle
     return render_template('index.html')
 
+
+@app.route('/camera')
+def camera_page():
+    """Visualizador standalone do POV — funciona em qualquer modo/navegador.
+
+    O Chrome não renderiza multipart MJPEG navegando direto na URL do stream;
+    dentro de um <img> funciona em todos. Útil pra conferir a câmera sem
+    depender do painel do mapa (que só existe em nav2)."""
+    if camera_service is None or not camera_service.available:
+        return Response('câmera indisponível', status=503, mimetype='text/plain')
+    return Response(
+        '<!doctype html><title>POV do robô</title>'
+        '<body style="margin:0;background:#000;display:grid;place-items:center;'
+        'min-height:100vh"><img src="/camera/stream" '
+        'style="max-width:100vw;max-height:100vh"></body>',
+        mimetype='text/html')
+
+
+@app.route('/camera/stream')
+def camera_stream():
+    """Live view da câmera POV — MJPEG multipart pro <img> da GUI.
+
+    Cada cliente segura uma thread do servidor (async_mode=threading), OK pra
+    1-2 espectadores na LAN. Limitado a ~10 fps pra não afogar o WiFi do
+    hotspot — a gravação em disco segue nos 30 fps cheios, isso aqui é só view.
+    """
+    if camera_service is None or not camera_service.available:
+        return Response('câmera indisponível', status=503, mimetype='text/plain')
+
+    def gen():
+        seq = 0
+        last_yield = 0.0
+        while camera_service is not None and camera_service.available:
+            item = camera_service.wait_frame(seq, timeout=2.0)
+            if item is None:
+                continue
+            seq, jpeg = item
+            now = time.time()
+            if now - last_yield < 0.1:   # ~10 fps pro navegador
+                continue
+            last_yield = now
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n'
+                   b'Content-Length: ' + str(len(jpeg)).encode() + b'\r\n\r\n'
+                   + jpeg + b'\r\n')
+
+    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
 @socketio.on('connect')
 def handle_connect():
     # Evento de conexão de um cliente Socket.IO
@@ -281,7 +355,10 @@ def handle_connect():
         'has_map': map_bridge is not None,
         'has_trekking': trekking_bridge is not None,
         'web_teleop': WEB_TELEOP,
+        'has_camera': camera_service is not None,
     })
+    if camera_service is not None:
+        emit('camera_status', camera_service.status())
     # Reemite o último map_update cacheado — o /map do map_server é latched
     # (publicado 1x no activate), então clientes que conectam depois dessa
     # primeira emissão ficariam em "aguardando /map" sem isto.
@@ -311,6 +388,8 @@ def handle_nav_goal(data):
         yaw = _validate_yaw(data.get('yaw', 0.0))
         result = map_bridge.send_goal(x, y, yaw)
         app.logger.info(f"nav_goal from {request.remote_addr}: ({x:.2f}, {y:.2f})")
+        if result.get('ok') and camera_service is not None:
+            camera_service.nav_active('goal')
         emit('nav_goal_ack', result)
     except Exception as e:
         emit('nav_goal_ack', {'ok': False, 'error': str(e)})
@@ -395,6 +474,8 @@ def handle_start_waypoints(data):
         return
     loop = bool((data or {}).get('loop', False))
     result = map_bridge.start_waypoints(waypoints, loop)
+    if result.get('ok') and camera_service is not None:
+        camera_service.nav_active('rota')
     emit('waypoints_ack', result)
 
 
@@ -403,6 +484,9 @@ def handle_stop_waypoints():
     if map_bridge is None:
         return
     map_bridge.stop_waypoints()
+    # ■ Parar = fim da run — corta o POV na hora (sem debounce)
+    if camera_service is not None:
+        camera_service.stop_recording('parar na GUI')
 
 
 @socketio.on('save_route')

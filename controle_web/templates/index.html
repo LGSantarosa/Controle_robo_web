@@ -123,6 +123,19 @@
         </div>
       </section>
 
+      <!-- POV da câmera (C922) — live view em qualquer modo; o card só
+           aparece se o serviço de câmera subiu no servidor -->
+      <section class="pov-card card" id="pov-card" style="display:none">
+        <div class="pov-header">
+          <h2>🎥 Câmera (POV)</h2>
+          <span id="pov-rec" class="pov-rec" style="display:none">● REC</span>
+          <button id="btn-pov" class="pov-btn">Ligar</button>
+        </div>
+        <div class="pov-wrap" id="pov-wrap" style="display:none">
+          <img id="pov-img" alt="POV do robô">
+        </div>
+      </section>
+
       <!-- Log visual de eventos e última entrega confirmada (ACK) -->
       <section class="eventlog card">
         <h2>Eventos</h2>

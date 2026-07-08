@@ -246,6 +246,18 @@ body.layout-wide .layout { max-width: 1280px; grid-template-columns: 400px minma
 .map-zoom button:hover { background: #26335b; border-color: var(--zone-map); }
 .map-zoom button:active { background: var(--accent-soft); }
 
+/* Card da câmera POV — live view em qualquer modo */
+.pov-header { display: flex; align-items: center; gap: 10px; }
+.pov-header h2 { margin: 0; flex: 1; }
+.pov-btn { padding: 6px 14px; font-size: 13px; border: 1px solid #374151; background: var(--panel-2); color: var(--text); border-radius: 6px; cursor: pointer; }
+.pov-btn:hover:not(:disabled) { background: #374151; }
+.pov-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pov-btn.active { background: #1d4ed8; border-color: #3b82f6; color: #fff; }
+.pov-wrap { margin-top: 10px; border: 1px solid #243042; border-radius: 6px; overflow: hidden; background: #000; }
+.pov-wrap img { display: block; width: 100%; }
+.pov-rec { font-size: 12px; font-weight: 700; color: #fff; background: rgba(220,38,38,0.85); border-radius: 4px; padding: 2px 7px; animation: pov-blink 1.2s step-end infinite; }
+@keyframes pov-blink { 50% { opacity: 0.35; } }
+
 /* Waypoint toolbar — grupos: Rota | Arquivos | Camadas */
 .wp-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; margin: 8px 0; }
 .tb-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px; background: rgba(56,189,248,0.06); border: 1px solid #1e3a5f; border-radius: 6px; }

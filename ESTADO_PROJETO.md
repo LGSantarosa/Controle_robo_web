@@ -5,7 +5,32 @@
 
 ---
 
-## 🆕 2026-07-07 (tarde) — GUI redesenhada + mapa hotmilk + rede de campo
+## 🆕 2026-07-08 — Câmera POV (Logitech C922): gravação da run + live na GUI
+
+> Implementado no dev, **ainda NÃO testado com a câmera** nem deployado na Pi.
+> Depende de `sudo apt install ffmpeg` (na Pi e no dev pra testar local).
+
+- `controle_web/camera_service.py`: ffmpeg dono do /dev/video0, MJPEG **copy**
+  (zero re-encode, poupa a CPU da Pi), 720p@30. Thread separa os frames e
+  serve o live view + grava `logs/pov/pov_<data>_<gatilho>.mjpeg`; ao parar,
+  remux em background pra `.mkv` (cópia) e apaga o cru.
+- **Gravação segue a run**: inicia no ▶ Iniciar (rota) e no 🎯 Ir para; cada
+  goal aceito pelo Nav2 mantém viva (hook `on_nav_start/end` no nav_metrics);
+  fim de goal arma debounce de 8 s (não picota entre waypoints); ■ Parar corta
+  na hora; teto de 30 min (cobre goal via porta, que usa navigate_through_poses
+  e o nav_metrics não rastreia).
+- **GUI**: botão `🎥 POV` nas Camadas (aparece se o serviço subiu; desabilitado
+  sem câmera) abre PiP sobre o mapa com `● REC` piscando; stream `/camera/stream`
+  limitado a ~10 fps pro WiFi (gravação segue 30 fps cheios).
+- Sem câmera/ffmpeg: serviço fica quieto, replug reativa sozinho (retry 5 s).
+- 15 testes novos em `test_camera_service.py` (parser MJPEG + máquina de
+  estados da gravação); suíte do controle_web passando.
+- ⏳ Próximo: ffmpeg no dev → smoke com a C922 no PC → deploy na Pi (ffmpeg lá
+  também) → validar numa run real.
+
+---
+
+## 2026-07-07 (tarde) — GUI redesenhada + mapa hotmilk + rede de campo
 
 > Tudo DEPLOYADO na Pi e aprovado pelo dono no mesmo dia. Commits `b37e11e..68daca7`.
 
