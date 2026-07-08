@@ -28,3 +28,7 @@ firmware/**/.pio/
 .DS_Store
 .vscode/
 .idea/
+
+# Vídeos POV da câmera (grandes — ficam fora do git)
+pov_*.mkv
+pov_*.mjpeg

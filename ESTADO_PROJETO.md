@@ -5,10 +5,15 @@
 
 ---
 
-## 🆕 2026-07-08 — Câmera POV (Logitech C922): gravação da run + live na GUI
+## 🆕 2026-07-08 — Câmera POV (Logitech C922) ✅ VALIDADA EM CAMPO no mesmo dia
 
-> Implementado no dev, **ainda NÃO testado com a câmera** nem deployado na Pi.
-> Depende de `sudo apt install ffmpeg` (na Pi e no dev pra testar local).
+> **Deployada na Pi (`dd6fe9c`) e aprovada pelo dono** ("ficou do caralho, adorei"):
+> run real de 2 min gravou sozinha no ▶ da rota, parou sozinha, vídeo perfeito.
+> 294 MB / 2 min ≈ 2,5 MB/s ≈ **4,4 GB por run de 30 min** (SD da Pi: 12 GB
+> livres — atenção em runs longas). Setup feito na Pi: ffmpeg instalado
+> (precisou `dpkg --configure -a` antes) + `robo` no grupo `video`.
+> Melhoria futura opcional: gravar 960x540 ou H.264 pelo encoder de HW da Pi
+> (bcm2835) → ~0,5 GB/run. `pov_*.mkv/.mjpeg` no .gitignore.
 
 - `controle_web/camera_service.py`: ffmpeg dono do /dev/video0, MJPEG **copy**
   (zero re-encode, poupa a CPU da Pi), 720p@30. Thread separa os frames e
@@ -25,8 +30,10 @@
 - Sem câmera/ffmpeg: serviço fica quieto, replug reativa sozinho (retry 5 s).
 - 15 testes novos em `test_camera_service.py` (parser MJPEG + máquina de
   estados da gravação); suíte do controle_web passando.
-- ⏳ Próximo: ffmpeg no dev → smoke com a C922 no PC → deploy na Pi (ffmpeg lá
-  também) → validar numa run real.
+- Pra usar: subir `robot-up nav2` normal — card **🎥 Câmera (POV)** na GUI
+  (Ligar = live view), gravação automática na run, vídeos em
+  `controle_web/logs/pov/` na Pi (puxar via ssh/scp e **apagar da Pi** depois,
+  senão o SD enche em ~3 runs longas).
 
 ---
 
