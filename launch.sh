@@ -31,7 +31,7 @@ NO_LIDAR=false
 LIDAR_PORT="/dev/lidar"
 MODE="teleop"                     # teleop | slam | nav2 | trekking
 WEB_TELEOP="off"                  # off = web só visualização; --web-teleop reativa
-MAP_FILE="$SCRIPT_DIR/maps/sala.yaml"
+MAP_FILE="$SCRIPT_DIR/maps/hotmilk_portas.yaml"
 PI_PROFILE=false
 SIM=false
 WORLD_FILE="$SCRIPT_DIR/worlds/sala.sdf"   # default: sala c/ paredes+obstáculos+porta 0.93m (empty.sdf = template vazio)
