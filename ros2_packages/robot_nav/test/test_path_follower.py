@@ -6,6 +6,7 @@ from robot_nav.path_follower import (
     wrap,
     closest_index,
     carrot_point,
+    straight_deviation,
     FollowConfig,
     DecisiveFollower,
 )
@@ -143,6 +144,60 @@ def test_turn_target_reset_when_goal_lost():
     cmd = f.update((0.0, 0.0, 0.0), path_up, goal_active=False, goal_yaw=None)
     assert cmd.state == 'idle'
     assert f._turn_target is None
+
+
+def test_straight_deviation():
+    straight = [(i * 0.1, 0.0) for i in range(20)]
+    assert straight_deviation(straight, 0, 19) == pytest.approx(0.0)
+    bent = [(i * 0.1, 0.0) for i in range(11)]          # reto até (1,0)...
+    bent += [(1.0, j * 0.1) for j in range(1, 11)]      # ...canto de 90°
+    assert straight_deviation(bent, 0, len(bent) - 1) > 0.4
+    assert straight_deviation(bent, 0, 0) == pytest.approx(0.0)   # degenerado
+
+
+def test_far_carrot_on_straight_path():
+    # ZIGUE-ZAGUE da run hotmilk 07-08: carrot 0.6 + ruído lateral de 13cm =
+    # herr 12° = turn_enter -> 184 giros no lugar, 127 <10°, L/R alternado.
+    # Em trecho RETO o carrot estica (lookahead_far): o MESMO desvio de 13cm
+    # vira ~4.6° -> continua driving, corredor sai numa reta só.
+    f = _fol()
+    path = [(x * 0.05, 0.0) for x in range(80)]     # corredor reto de 4m
+    cmd = f.update((0.0, 0.13, 0.0), path, goal_active=True, goal_yaw=0.0)
+    assert cmd.state == 'driving'                   # não gira por migalha
+    assert f.dbg['la'] == pytest.approx(f.cfg.lookahead_far)
+    assert f.dbg['dist_aim'] > 1.0                  # mirou LONGE de fato
+
+
+def test_near_carrot_with_short_lookahead_would_turn():
+    # contraprova do cenário acima: com o adaptativo DESLIGADO (straight_tol=0)
+    # o mesmo desvio de 13cm dispara turning — o comportamento antigo.
+    f = DecisiveFollower(FollowConfig(straight_tol=0.0))
+    path = [(x * 0.05, 0.0) for x in range(80)]
+    cmd = f.update((0.0, 0.13, 0.0), path, goal_active=True, goal_yaw=0.0)
+    assert cmd.state == 'turning'
+    assert f.dbg['la'] == pytest.approx(f.cfg.lookahead)
+
+
+def test_near_carrot_kept_when_corner_ahead():
+    # BO de 06-27 que NÃO pode voltar: lookahead longo cortava o arco/raspava
+    # na porta. Com canto DENTRO do alcance far, o desvio da corda estoura o
+    # straight_tol -> mantém o carrot 0.6 validado (não corta a curva).
+    f = _fol()
+    path = [(i * 0.05, 0.0) for i in range(17)]         # reto até (0.8, 0)
+    path += [(0.8, j * 0.05) for j in range(1, 25)]     # canto 90° sobe
+    cmd = f.update((0.0, 0.0, 0.0), path, goal_active=True, goal_yaw=math.pi / 2)
+    assert f.dbg['la'] == pytest.approx(f.cfg.lookahead)
+    assert f.dbg['dist_aim'] < 1.0                      # mira PERTO, pré-canto
+    assert cmd.state == 'driving'                       # alinhado c/ o trecho reto
+
+
+def test_far_carrot_after_rounding_the_corner():
+    # passou o canto -> o que sobra do plano é reto -> volta a mirar longe.
+    f = _fol()
+    path = [(i * 0.05, 0.0) for i in range(17)]
+    path += [(0.8, j * 0.05) for j in range(1, 41)]     # perna longa pós-canto
+    f.update((0.8, 0.1, math.pi / 2), path, goal_active=True, goal_yaw=math.pi / 2)
+    assert f.dbg['la'] == pytest.approx(f.cfg.lookahead_far)
 
 
 def test_goal_turn_then_arrived():

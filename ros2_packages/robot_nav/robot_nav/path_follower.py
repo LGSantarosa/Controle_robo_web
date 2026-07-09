@@ -60,6 +60,24 @@ def carrot_point(path: List[Pt], i0: int, lookahead: float) -> Tuple[int, Pt]:
     return n - 1, path[-1]
 
 
+def straight_deviation(path: List[Pt], i0: int, i1: int) -> float:
+    """Máx desvio perpendicular de path[i0..i1] à corda path[i0]->path[i1].
+    ~0 = trecho reto; grande = tem canto/curva no meio."""
+    ax, ay = path[i0]
+    bx, by = path[i1]
+    ux, uy = bx - ax, by - ay
+    norm = math.hypot(ux, uy)
+    if norm < 1e-9:
+        return 0.0
+    worst = 0.0
+    for k in range(i0 + 1, i1):
+        px, py = path[k]
+        d = abs((px - ax) * uy - (py - ay) * ux) / norm
+        if d > worst:
+            worst = d
+    return worst
+
+
 @dataclass
 class FollowConfig:
     forward_speed: float = 0.30     # m/s no trecho reto (2026-06-27: 0.25->0.30 a
@@ -74,6 +92,17 @@ class FollowConfig:
                                     # avançar). Revertido p/ 0.6. O problema do maze é o
                                     # MAZE apertado demais (porta 0.93 + pinch 0.75 vs
                                     # inflação 0.45), não o follower. Ver ESTADO 06-28.
+    lookahead_far: float = 1.5      # m — carrot ESTICADO quando o plano à frente é
+                                    # RETO. Run hotmilk 07-08: carrot 0.6 amplifica
+                                    # ruído de pose (12cm lateral = 12° = turn_enter)
+                                    # -> 184 giros no lugar, 127 <10°, zigue-zague em
+                                    # corredor. A 1.5m os mesmos 12cm = ~4.6° -> segue
+                                    # reto. Só em trecho reto: curva mantém 0.6 (o 1.0
+                                    # fixo de 06-27 cortava arco/raspava — o estico é
+                                    # CONDICIONAL, não volta esse BO).
+    straight_tol: float = 0.10      # m — desvio máx da corda p/ chamar de reto
+                                    # (< meia-inflação 0.45; canto de verdade desvia
+                                    # muito mais). <=0 desliga o carrot adaptativo.
     turn_enter: float = 0.21        # rad (~12°) — acima disso COMEÇA a girar
     turn_exit: float = 0.05         # rad (~3°)  — abaixo disso PARA de girar (histerese)
     goal_xy_tol: float = 0.15       # m — chegou no goal (casa c/ goal_checker do nav2)
@@ -144,15 +173,24 @@ class DecisiveFollower:
             self._turn_target = None
             return Cmd(0.0, 0.0, 'arrived')
 
-        # 2) CARROT no plano a ~lookahead à frente (segue a FORMA do caminho)
+        # 2) CARROT no plano a ~lookahead à frente (segue a FORMA do caminho).
+        #    ADAPTATIVO (07-08): se o plano até lookahead_far é RETO (desvio da
+        #    corda <= straight_tol), mira LONGE — ruído de pose vira ângulo
+        #    pequeno e não dispara giro (fim do zigue-zague em corredor). Curva
+        #    à frente -> mira perto (0.6 validado), não corta canto.
         i0 = closest_index(path, x, y)
         ci, (ax, ay) = carrot_point(path, i0, c.lookahead)
+        la = c.lookahead
+        if c.lookahead_far > c.lookahead and c.straight_tol > 0.0:
+            cf, (fx, fy) = carrot_point(path, i0, c.lookahead_far)
+            if straight_deviation(path, i0, cf) <= c.straight_tol:
+                ci, (ax, ay), la = cf, (fx, fy), c.lookahead_far
         bearing = math.atan2(ay - y, ax - x)
         herr = wrap(bearing - yaw)
         dist_aim = math.hypot(ax - x, ay - y)
         self.dbg = {'i0': i0, 'ci': ci, 'n': len(path), 'ax': ax, 'ay': ay,
                     'herr_deg': math.degrees(herr), 'dist_aim': dist_aim,
-                    'dist_goal': dist_goal}
+                    'dist_goal': dist_goal, 'la': la}
 
         # 3) HISTERESE + ALVO CONGELADO: ao ENTRAR no giro trava o bearing-alvo
         #    (replans ~1Hz moviam o carrot NO MEIO do giro -> caçava alvo móvel,
@@ -207,6 +245,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             g = {}
             for name, default in (
                 ('forward_speed', 0.30), ('lookahead', 0.6),
+                ('lookahead_far', 1.5), ('straight_tol', 0.10),
                 ('turn_enter_deg', 12.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
@@ -217,6 +256,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
 
             self.cfg = FollowConfig(
                 forward_speed=g['forward_speed'], lookahead=g['lookahead'],
+                lookahead_far=g['lookahead_far'],
+                straight_tol=g['straight_tol'],
                 turn_enter=math.radians(g['turn_enter_deg']),
                 turn_exit=math.radians(g['turn_exit_deg']),
                 goal_xy_tol=g['goal_xy_tol'],
@@ -257,7 +298,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             self._csv = _csv.writer(self._csv_f)
             self._csv.writerow(['t', 'state', 'x', 'y', 'yaw_deg', 'i0', 'ci', 'n',
                                 'aim_x', 'aim_y', 'herr_deg', 'dist_aim',
-                                'dist_goal', 'vx', 'wz'])
+                                'dist_goal', 'vx', 'wz', 'la'])
             self._plan_path = _os.path.join(d, 'follow_plan_last.csv')
             # Snapshot do PRIMEIRO plano longo de cada goal (a FORMA do contorno —
             # o last.csv vira stub coladinho no goal). Resetado quando um novo goal
@@ -272,9 +313,10 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             # freeze_capture; perda máx. em power-cut = 2 s de log.
             self.create_timer(2.0, self._csv_f.flush)
             self.get_logger().info(
-                'path_follower ativo: reto %.2fm/s, carrot %.1fm, gira>%.0f° '
-                'até <%.0f°, giro %.1f–%.1f rad/s' % (
+                'path_follower ativo: reto %.2fm/s, carrot %.1fm (reta %.1fm, '
+                'tol %.2fm), gira>%.0f° até <%.0f°, giro %.1f–%.1f rad/s' % (
                     self.cfg.forward_speed, self.cfg.lookahead,
+                    self.cfg.lookahead_far, self.cfg.straight_tol,
                     g['turn_enter_deg'], g['turn_exit_deg'],
                     self.cfg.rot_min, self.cfg.rot_max))
 
@@ -355,7 +397,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                     round(d.get('herr_deg', float('nan')), 1),
                     round(d.get('dist_aim', float('nan')), 3),
                     round(d.get('dist_goal', float('nan')), 3),
-                    round(cmd.vx, 3), round(cmd.wz, 3)])
+                    round(cmd.vx, 3), round(cmd.wz, 3),
+                    d.get('la', '')])
 
     rclpy.init(args=args)
     node = PathFollowerNode()
