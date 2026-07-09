@@ -100,9 +100,16 @@ class FollowConfig:
                                     # reto. Só em trecho reto: curva mantém 0.6 (o 1.0
                                     # fixo de 06-27 cortava arco/raspava — o estico é
                                     # CONDICIONAL, não volta esse BO).
-    straight_tol: float = 0.10      # m — desvio máx da corda p/ chamar de reto
+    straight_tol: float = 0.18      # m — desvio máx da corda p/ chamar de reto
                                     # (< meia-inflação 0.45; canto de verdade desvia
                                     # muito mais). <=0 desliga o carrot adaptativo.
+                                    # 0.10→0.18 dono 07-09: zigue-zague residual
+                                    # concentrava nos 32-36% do tempo em carrot
+                                    # curto (0.6m); afrouxar estica em mais trechos
+                                    # ondulados -> menos tempo curto -> menos giro
+                                    # vai-e-volta (volta tinha 58% de giro
+                                    # desperdiçado). 0.18 ainda < inflação, não
+                                    # corta canto de verdade.
     turn_enter: float = 0.21        # rad (~12°) — acima disso COMEÇA a girar
     turn_exit: float = 0.05         # rad (~3°)  — abaixo disso PARA de girar (histerese)
     goal_xy_tol: float = 0.15       # m — chegou no goal (casa c/ goal_checker do nav2)
@@ -245,7 +252,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             g = {}
             for name, default in (
                 ('forward_speed', 0.30), ('lookahead', 0.6),
-                ('lookahead_far', 1.5), ('straight_tol', 0.10),
+                ('lookahead_far', 1.5), ('straight_tol', 0.18),
                 ('turn_enter_deg', 12.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
