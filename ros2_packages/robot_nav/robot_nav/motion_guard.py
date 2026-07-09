@@ -41,7 +41,11 @@ Pt = Tuple[float, float]
 @dataclass
 class GuardConfig:
     enabled: bool = True
-    guard_radius: float = 2.5       # m — só olha móvel até aqui
+    guard_radius: float = 3.5       # m — só olha móvel até aqui (2.5->3.5 dono
+                                    # 07-09: "aumentar o raio do medo", enxergar
+                                    # quem se aproxima mais cedo e desacelerar
+                                    # numa faixa maior; anti-vidro compensa o
+                                    # falso positivo que a distância extra traria)
     slow_scale: float = 0.25        # PISO do fator no vx (móvel colado)
     slow_dist: float = 0.6          # m — abaixo disso o fator satura no piso
                                     # (entre slow_dist e guard_radius a escala
@@ -56,9 +60,11 @@ class GuardConfig:
                                     # QUALQUER direção = parada total (dono
                                     # 07-02: do lado, o giro liberado rodava
                                     # atrás do plano-contorno; "para de pensar")
-    clear_time: float = 3.0         # s — limpo por isso -> retoma (1.5→3.0
+    clear_time: float = 5.0         # s — limpo por isso -> retoma (1.5→3.0
                                     # dono 07-02: gap p/ ~3 replans do nav2
-                                    # endireitarem o plano antes de andar)
+                                    # endireitarem o plano antes de andar;
+                                    # 3.0→5.0 dono 07-09: se é gente ele deve
+                                    # SEMPRE esperar mais antes de voltar a andar)
     grid_res: float = 0.15          # m — célula da grade de comparação
     lookback: float = 0.5           # s — compara com snapshot desta idade
     min_cluster_points: int = 3     # cluster menor = ruído

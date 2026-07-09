@@ -222,19 +222,21 @@ def test_filter_slow_proportional_to_distance():
         assert st == 'slowing'
         return vx
 
-    far, mid, near = vx_with_obj_at(2.2), vx_with_obj_at(1.7), vx_with_obj_at(1.3)
+    # borda do raio subiu p/ 3.5 (dono 07-09): a 3.2m quase não freia; a
+    # 2.2m/1.3m já freia progressivo (faixa de cautela agora maior).
+    far, mid, near = vx_with_obj_at(3.2), vx_with_obj_at(1.7), vx_with_obj_at(1.3)
     assert far > mid > near               # monotônico com a distância
-    assert far > 0.30 * 0.7               # na borda do raio quase não freia
+    assert far > 0.30 * 0.7               # perto da borda do raio quase não freia
 
 
 def test_defaults_catch_path_crossers_and_settle():
     # dono 07-02 (3ª rodada real): cruzava o CAMINHO além do corredor de 1.5m
-    # -> o follower saía atrás do desvio-fantasma do planner. Corredor agora
-    # cobre o raio todo (2.5) e a retomada espera 3s (≈3 replans do nav2
-    # endireitarem o plano antes de voltar a andar).
+    # -> o follower saía atrás do desvio-fantasma do planner. Corredor cobre
+    # o raio (2.5). Retomada 3.0→5.0s (dono 07-09): se é gente, espera mais
+    # antes de voltar a andar.
     cfg = GuardConfig()
     assert cfg.corridor_len == 2.5
-    assert cfg.clear_time == 3.0
+    assert cfg.clear_time == 5.0
 
 
 def test_filter_freeze_bubble_full_stop_any_direction():
