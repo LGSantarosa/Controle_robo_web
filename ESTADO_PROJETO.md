@@ -5,7 +5,26 @@
 
 ---
 
-## 🆕 2026-07-09 (tarde) — 4 correções de comportamento DEPLOYADAS na Pi (⏳ validar em campo)
+## ⏳ 2026-07-09 (fim de tarde) — 5º ajuste PRONTO no repo, AGUARDA DEPLOY (Pi desligada)
+
+> **`9b88993` NÃO está na Pi ainda** (dono desligou a Pi, não volta hoje). Ao
+> religar: `git fetch && reset --hard origin/main` + `colcon build --packages-select
+> robot_nav --symlink-install` (ou nem precisa build — .py é symlink agora).
+
+- **Zigue-zague AINDA incomoda o dono** ("melhorou em partes, mas ainda ruim").
+  2ª análise dos CSVs (ida+volta 15:00): o residual concentra nos 32-36% do
+  tempo em carrot CURTO (0.6m); na VOLTA **58% do giro era vai-e-volta** que se
+  cancela (mediana 12° = no limiar do turn_enter). Ida está boa (22%).
+- **Ajuste `9b88993`**: `straight_tol` 0.10→0.18m — estica o carrot em mais
+  trechos ondulados, reduz o tempo em curto. 21 testes verdes.
+- Se não bastar, PRÓXIMA alavanca já mapeada: alargar banda morta do giro
+  (turn_enter 12→16°, turn_exit 3→7°) — mata o vai-e-volta em qualquer trecho.
+- Assimetria ida(boa)/volta(ruim) pode ter fator externo (volta teve blocked
+  18% vs 5% — gente no corredor?). Gravar POV na próxima confirma.
+
+---
+
+## 2026-07-09 (tarde) — 4 correções de comportamento DEPLOYADAS na Pi ✅ validadas
 
 > Deploy autorizado direto pra Pi (dono assume o risco; "eu testo e te aviso").
 > `22a7f14` na Pi, robot_nav rebuildado c/ --symlink-install, defaults
