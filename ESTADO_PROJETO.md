@@ -5,7 +5,34 @@
 
 ---
 
-## 🆕 2026-07-09 — 3 runs de ~66 m com vídeo POV automático; 1 cancelada p/ investigar
+## 🆕 2026-07-09 (tarde) — 4 correções de comportamento DEPLOYADAS na Pi (⏳ validar em campo)
+
+> Deploy autorizado direto pra Pi (dono assume o risco; "eu testo e te aviso").
+> `22a7f14` na Pi, robot_nav rebuildado c/ --symlink-install, defaults
+> conferidos via import no ambiente da Pi. **Ainda NÃO rodou em campo.**
+> **Descoberta que motivou tudo**: as correções de zigue-zague e vidro estavam
+> PRONTAS no working tree do dev desde 07-08 mas nunca commitadas — as 3 runs
+> de hoje de manhã rodaram SEM elas (por isso "foi uma merda"). Handoff de
+> 07-08 falhou em avisar. Lição salva na memória.
+
+- **Zigue-zague `e4bf12a`** (path_follower): carrot adaptativo — em reta estica
+  a mira p/ 1.5m (ruído de pose vira ângulo pequeno, não dispara giro); curva
+  mantém 0.6m. Era a causa dos 184 giros no lugar da run 07-08.
+- **Anti-vidro `6fc3e06`** (motion_guard): descarta móvel cuja linha de visão
+  cruza parede do mapa (gente vista pelo vidro). 29/52 paradas da run 07-08.
+- **Mais cauteloso `22a7f14`** (motion_guard, pedido do dono hoje): guard_radius
+  2.5→3.5m (enxerga quem vem mais cedo, freia numa faixa maior) + clear_time
+  3.0→5.0s (espera mais depois que o móvel some).
+- 54 testes verdes. **⏳ PENDENTE: rodar 1 run em campo e avaliar os 4 juntos.**
+- Ideias futuras se precisar afinar: detectar "vindo NA DIREÇÃO" de verdade
+  (predição de velocidade do cluster, hoje não existe) e latchar pessoa que
+  PAROU de andar (deixa de ser 'móvel' mas segue lá) — clear_time maior é só
+  band-aid disso. corridor_len (2.5m) pode subir junto com o raio se quiser
+  detectar cruzamento à frente ainda mais cedo.
+
+---
+
+## 2026-07-09 (manhã) — 3 runs de ~66 m com vídeo POV automático; 1 cancelada
 
 > Rota longa no hotmilk, câmera gravou as 3 sozinha (inclusive separou 2 vídeos
 > com 13 s de intervalo entre runs — debounce de 8 s correto).
@@ -15,10 +42,8 @@
   0,215 m/s · 14:14 ✅ volta 64,5 m em 6 min (1 backup + 1 spin).
 - **Logs já puxados** pro dev em `log/pi_2026-07-09/` (nav_metrics + 2 CSVs de
   power; movements vazio = teleop web off, normal).
-- **⏳ PENDENTE — investigar a run cancelada das 13:45**: 68% parada até o dono
-  cancelar. Agora dá pra CRUZAR o vídeo POV (`pov_2026-07-09_13-44-59_rota.mkv`,
-  478 MB) com `power_2026-07-09_134402.csv` (12,5k amostras, stall/tensões) e o
-  nav_metrics — ver o que tinha na frente do robô em cada parada.
+- **Run cancelada das 13:45 = MORTA** (dono parou p/ apresentar o projeto a 2
+  pessoas; não é bug). NÃO investigar.
 - **⏳ PENDENTE — limpar vídeos da Pi** (`controle_web/logs/pov/`, 4 arquivos,
   1,6 GB; SD com 9,9 GB livres): o dono copia via scp → apagar da Pi depois.
 - **Melhoria candidata se 400 MB/run incomodar**: gravar H.264 no encoder de
