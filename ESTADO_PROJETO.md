@@ -23,7 +23,12 @@
 - **Mais cauteloso `22a7f14`** (motion_guard, pedido do dono hoje): guard_radius
   2.5→3.5m (enxerga quem vem mais cedo, freia numa faixa maior) + clear_time
   3.0→5.0s (espera mais depois que o móvel some).
-- 54 testes verdes. **⏳ PENDENTE: rodar 1 run em campo e avaliar os 4 juntos.**
+- 54 testes verdes. **✅ VALIDADO EM CAMPO 07-09 15:00** (ida 35m + volta,
+  ambas SUCCEEDED, 0 recovery): zigue-zague MORREU — 0 giros <10° (vs 127 na
+  run 07-08); carrot esticado 64-68% do tempo; anti-vidro descartou 722/535
+  pts de fantasma; slowing 35-39% (raio maior atuando); ida 0.261 m/s (>
+  melhor da manhã 0.215), max 0.504. Volta teve mais blocked (18% vs 5% ida) —
+  possível gente real, gravar POV na próxima p/ confirmar.
 - Ideias futuras se precisar afinar: detectar "vindo NA DIREÇÃO" de verdade
   (predição de velocidade do cluster, hoje não existe) e latchar pessoa que
   PAROU de andar (deixa de ser 'móvel' mas segue lá) — clear_time maior é só
