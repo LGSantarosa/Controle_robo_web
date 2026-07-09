@@ -1,7 +1,28 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-07**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-09**.
+
+---
+
+## 🆕 2026-07-09 — 3 runs de ~66 m com vídeo POV automático; 1 cancelada p/ investigar
+
+> Rota longa no hotmilk, câmera gravou as 3 sozinha (inclusive separou 2 vídeos
+> com 13 s de intervalo entre runs — debounce de 8 s correto).
+
+- **Runs (nav_metrics_20260709.csv)**: 13:45 CANCELED (33,5 m de 66 m, 68% do
+  tempo parada, 4 spins + 4 waits) · 14:09 ✅ 63,6 m em 4,9 min, ZERO recovery,
+  0,215 m/s · 14:14 ✅ volta 64,5 m em 6 min (1 backup + 1 spin).
+- **Logs já puxados** pro dev em `log/pi_2026-07-09/` (nav_metrics + 2 CSVs de
+  power; movements vazio = teleop web off, normal).
+- **⏳ PENDENTE — investigar a run cancelada das 13:45**: 68% parada até o dono
+  cancelar. Agora dá pra CRUZAR o vídeo POV (`pov_2026-07-09_13-44-59_rota.mkv`,
+  478 MB) com `power_2026-07-09_134402.csv` (12,5k amostras, stall/tensões) e o
+  nav_metrics — ver o que tinha na frente do robô em cada parada.
+- **⏳ PENDENTE — limpar vídeos da Pi** (`controle_web/logs/pov/`, 4 arquivos,
+  1,6 GB; SD com 9,9 GB livres): o dono copia via scp → apagar da Pi depois.
+- **Melhoria candidata se 400 MB/run incomodar**: gravar H.264 no encoder de
+  hardware da Pi (bcm2835 presente; ~10x menor) ou descer pra 960x540.
 
 ---
 
