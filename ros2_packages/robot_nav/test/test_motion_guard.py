@@ -1,7 +1,7 @@
 """Testes da lógica pura do motion_guard (sem ROS)."""
 import math
 
-from robot_nav.motion_guard import GuardConfig, MotionGuard
+from robot_nav.motion_guard import GuardConfig, MapGhostFilter, MotionGuard
 
 POSE = (0.0, 0.0, 0.0)   # robô na origem olhando +x (frame odom)
 WALL = [(2.0, y * 0.1 - 1.0) for y in range(20)]   # parede estática em x=2
@@ -314,6 +314,111 @@ def test_filter_passthrough_when_disabled():
     g.observe(t, WALL + obj, POSE, 0.0)
     vx, wz, st = g.filter(t, 0.30, 1.0)
     assert (vx, wz, st) == (0.30, 1.0, 'passthrough')
+
+
+def _grid_map(wall_x=None, w=100, h=100, res=0.05, ox=-2.5, oy=-2.5):
+    """OccupancyGrid sintético: livre (0) com coluna de parede em x=wall_x
+    (2 células ≈ 10cm, como as paredes virtuais desenhadas no hotmilk)."""
+    grid = [0] * (w * h)
+    if wall_x is not None:
+        cx = int((wall_x - ox) / res)
+        for cy in range(h):
+            grid[cy * w + cx] = 100
+            grid[cy * w + cx + 1] = 100
+    return MapGhostFilter(grid, w, h, res, ox, oy)
+
+
+def test_ghost_filter_sees_through_wall():
+    f = _grid_map(wall_x=1.0)
+    assert f.sees_through_wall((0.0, 0.0), (2.0, 0.0)) is True      # atravessa
+    assert f.sees_through_wall((0.0, 0.0), (0.8, 0.0)) is False     # aquém
+    assert f.sees_through_wall((0.0, 0.0), (0.0, 2.0)) is False     # paralelo
+
+
+def test_ghost_filter_person_against_wall_kept():
+    # pessoa REAL encostada na parede mapeada: o raio corre no livre e só
+    # tocaria a parede na ponta final (end_margin) -> NÃO descarta.
+    f = _grid_map(wall_x=1.0)
+    assert f.sees_through_wall((0.0, 0.0), (0.97, 0.0)) is False
+
+
+def test_ghost_filter_unknown_and_offmap_not_wall():
+    f = _grid_map(wall_x=None)          # sem parede nenhuma
+    assert f.sees_through_wall((0.0, 0.0), (2.0, 0.0)) is False
+    assert f.sees_through_wall((0.0, 0.0), (50.0, 0.0)) is False    # sai do mapa
+    g = _grid_map(wall_x=None)
+    g.grid = [-1] * (g.w * g.h)         # tudo DESCONHECIDO
+    assert g.sees_through_wall((0.0, 0.0), (2.0, 0.0)) is False
+
+
+def _identity_tf():
+    return (0.0, 0.0, 1.0, 0.0)         # odom == map (tx, ty, cos, sin)
+
+
+def test_mover_behind_glass_wall_ignored():
+    # O FANTASMA da run hotmilk 07-08 (29/52 paradas): LD06 vê pessoa ATRAVÉS
+    # do vidro; no mapa ali é parede virtual -> guard descarta, segue idle.
+    # (móvel a 1.0m = o mesmo dos testes de detecção; a ÚNICA diferença é a
+    # parede do MAPA em x=0.5 no meio do raio)
+    g = _guard()
+    g.ghost_map = _grid_map(wall_x=0.5)
+    g.map_tf = _identity_tf()
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
+    t = _feed_mover(g, t, obj)
+    assert g.moving_clusters == []
+    assert g.ghost_dropped == 3           # os 3 pts caíram no anti-vidro
+    assert g.filter(t, 0.30, 0.0)[2] == 'idle'
+
+
+def test_mover_in_free_space_unaffected_by_map():
+    # contraprova: mesma pessoa SEM parede no meio -> comportamento intacto
+    g = _guard()
+    g.ghost_map = _grid_map(wall_x=None)
+    g.map_tf = _identity_tf()
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
+    t = _feed_mover(g, t, obj)
+    assert len(g.moving_clusters) == 1
+    assert g.ghost_dropped == 0
+    assert g.filter(t, 0.30, 0.0)[2] == 'blocked'
+
+
+def test_ghost_filter_inert_without_map_or_tf():
+    # failsafe: sem /map (ou sem TF map<-odom) o guard age como pré-07-08 —
+    # detecta normal, nunca deixa de frear por falta de mapa.
+    for ghost_map, map_tf in ((None, _identity_tf()),
+                              (_grid_map(wall_x=0.5), None)):
+        g = _guard()
+        g.ghost_map, g.map_tf = ghost_map, map_tf
+        t = _feed_static(g)
+        obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
+        t = _feed_mover(g, t, obj)
+        assert len(g.moving_clusters) == 1
+        assert g.filter(t, 0.30, 0.0)[2] == 'blocked'
+
+
+def test_ghost_filter_disabled_by_param():
+    g = _guard(map_filter=False)
+    g.ghost_map = _grid_map(wall_x=0.5)
+    g.map_tf = _identity_tf()
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
+    t = _feed_mover(g, t, obj)
+    assert len(g.moving_clusters) == 1    # param desliga o filtro, não o guard
+
+
+def test_ghost_filter_respects_map_tf():
+    # map deslocado do odom: ponto em odom (1,0) vira (1,-2) no map — a
+    # parede em x=0.5 do MAP continua no meio do raio -> descarta do mesmo
+    # jeito (a conta é toda no frame map).
+    g = _guard()
+    g.ghost_map = _grid_map(wall_x=0.5)
+    g.map_tf = (0.0, -2.0, 1.0, 0.0)      # map = odom deslocado -2 em y
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
+    t = _feed_mover(g, t, obj)
+    assert g.moving_clusters == []
 
 
 def test_no_snapshot_while_turning():

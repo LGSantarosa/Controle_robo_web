@@ -18,6 +18,10 @@ Atuação (filtro de velocidade, só autonomia):
     passava. NUNCA escalar wz parcialmente (zona-morta 1.7 = comando fraco
     que não gira); zerar é seguro.
   - TF/scan indisponível ou enabled=false -> PASS-THROUGH (nunca mata a nav).
+  - FILTRO ANTI-VIDRO (07-08): ponto "móvel" cuja linha de visão robô->ponto
+    cruza PAREDE do mapa estático = gente vista ATRAVÉS do vidro (29/52
+    paradas da run hotmilk eram isso) -> descartado antes de latchar. Sem
+    /map ou sem TF map<-odom o filtro fica inerte (failsafe).
 
 SEM predição de cruzamento por enquanto (proposta B da spec): os pontos
 móveis já saem clusterizados pra plugar velocidade+predição depois se a
@@ -77,6 +81,63 @@ class GuardConfig:
                                     # móvel se o feixe velho ATRAVESSOU a
                                     # célula (alcance > dist + grid_res).
     scan_stale: float = 1.0         # s sem scan -> pass-through
+    map_filter: bool = True         # descarta móvel visto ATRAVÉS de parede do
+                                    # mapa estático (LD06 enxerga gente pelo
+                                    # VIDRO que no mapa é parede virtual). Run
+                                    # hotmilk 07-08: 29/52 paradas eram isso
+                                    # (50.8s freado à toa vs 29.7s por gente
+                                    # real). Sem /map ou sem TF map<-odom o
+                                    # filtro simplesmente não atua (failsafe).
+
+
+class MapGhostFilter:
+    """Mapa estático (OccupancyGrid) p/ caçar FANTASMA DE VIDRO: o LD06 enxerga
+    gente através de vidro/vão que no mapa é PAREDE (virtual ou real). Se a
+    linha de visão robô->ponto cruza parede do mapa, o retorno não pode ser
+    coisa alcançável — é reflexo/atravessou vidro -> descarta ANTES de latchar.
+
+    Só descarta com parede FRANCA no meio do caminho (>= min_wall_hits amostras
+    consecutivas ocupadas, ignorando os end_margin finais): pessoa real ENCOSTADA
+    numa parede mapeada não some (o raio até ela corre no livre), e raspão de
+    quina por jitter do AMCL não conta como travessia."""
+
+    def __init__(self, grid, width: int, height: int, res: float,
+                 ox: float, oy: float, occ_thresh: int = 65,
+                 min_wall_hits: int = 2, end_margin: float = 0.2):
+        self.grid = grid            # row-major, linha 0 = y do origin (padrão ROS)
+        self.w, self.h = width, height
+        self.res, self.ox, self.oy = res, ox, oy
+        self.occ_thresh = occ_thresh
+        self.min_wall_hits = min_wall_hits
+        self.end_margin = end_margin
+
+    def _occupied(self, x: float, y: float) -> bool:
+        cx = int((x - self.ox) / self.res)
+        cy = int((y - self.oy) / self.res)
+        if cx < 0 or cx >= self.w or cy < 0 or cy >= self.h:
+            return False            # fora do mapa != parede (unknown tb não)
+        return self.grid[cy * self.w + cx] >= self.occ_thresh
+
+    def sees_through_wall(self, a: Pt, b: Pt) -> bool:
+        """True se o segmento a->b (frame MAP) atravessa parede do mapa."""
+        d = math.hypot(b[0] - a[0], b[1] - a[1])
+        if d <= self.end_margin:
+            return False
+        step = self.res / 2.0
+        n = max(int(d / step), 1)
+        hits = 0
+        for i in range(1, n):
+            t = i / n
+            if d * (1.0 - t) < self.end_margin:
+                break               # ponta final: pode ser gente colada na parede
+            if self._occupied(a[0] + (b[0] - a[0]) * t,
+                              a[1] + (b[1] - a[1]) * t):
+                hits += 1
+                if hits >= self.min_wall_hits:
+                    return True
+            else:
+                hits = 0            # exige travessia CONSECUTIVA (raspão não vale)
+        return False
 
 
 class MotionGuard:
@@ -96,6 +157,11 @@ class MotionGuard:
         self._last_corridor_t: float = -math.inf
         self._last_scan_t: float = -math.inf
         self._consec: int = 0       # scans consecutivos vendo móvel
+        # filtro anti-vidro (setados pelo nó quando /map + TF map<-odom
+        # existem; None = filtro inerte, comportamento pré-07-08)
+        self.ghost_map: 'MapGhostFilter|None' = None
+        self.map_tf = None          # (tx, ty, cos, sin) odom->map
+        self.ghost_dropped: int = 0  # pts descartados no último observe (CSV)
 
     def _cell(self, p: Pt) -> Tuple[int, int]:
         r = self.cfg.grid_res
@@ -150,6 +216,14 @@ class MotionGuard:
             return                      # histórico curto demais ainda
         _, old_cells, (opx, opy), old_polar = old
 
+        # filtro anti-vidro (07-08): pose do robô no frame MAP, 1x por scan
+        ghost_ready = (c.map_filter and self.ghost_map is not None
+                       and self.map_tf is not None)
+        if ghost_ready:
+            tx, ty, tc, ts = self.map_tf
+            robot_map = (tx + tc * px - ts * py, ty + ts * px + tc * py)
+        self.ghost_dropped = 0
+
         r2 = c.guard_radius ** 2
         moving: List[Pt] = []
         for p in pts:
@@ -169,6 +243,15 @@ class MotionGuard:
             b = int(math.floor(math.atan2(p[1] - opy, p[0] - opx) / binw))
             if old_polar.get(b, math.inf) <= d_old + c.grid_res:
                 continue                # oclusão/superfície, não movimento
+            # ANTI-VIDRO (07-08): linha de visão robô->ponto cruza parede do
+            # MAPA -> é gente atrás do vidro (29/52 paradas da run hotmilk),
+            # não obstáculo alcançável. Descarta ANTES de clusterizar/latchar.
+            if ghost_ready:
+                p_map = (tx + tc * p[0] - ts * p[1],
+                         ty + ts * p[0] + tc * p[1])
+                if self.ghost_map.sees_through_wall(robot_map, p_map):
+                    self.ghost_dropped += 1
+                    continue
             moving.append(p)
 
         clusters = [cl for cl in self._cluster(moving)
@@ -256,7 +339,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                            qos_profile_sensor_data)
     from rcl_interfaces.msg import SetParametersResult
     from geometry_msgs.msg import Twist
-    from nav_msgs.msg import Odometry
+    from nav_msgs.msg import OccupancyGrid, Odometry
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import String
     from tf2_ros import Buffer, TransformListener, TransformException
@@ -274,7 +357,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                        'clear_time',
                        'grid_res', 'lookback', 'min_cluster_points',
                        'persist_frames',
-                       'cluster_gap', 'wz_gate', 'ray_bin_deg', 'scan_stale')
+                       'cluster_gap', 'wz_gate', 'ray_bin_deg', 'scan_stale',
+                       'map_filter')
 
         def __init__(self):
             super().__init__('motion_guard')
@@ -300,6 +384,15 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self.create_subscription(Odometry, 'odom', self._on_odom,
                                      qos_profile_sensor_data)
             self.create_subscription(Twist, 'auto_vel_pre', self._on_cmd, 10)
+            # mapa estático p/ o filtro anti-vidro (map_server publica latched;
+            # QoS transient_local pega mesmo assinando depois). Sem mapa (ex.
+            # teleop puro) o filtro fica inerte — guard igual ao pré-07-08.
+            self.create_subscription(OccupancyGrid, 'map', self._on_map,
+                                     QoSProfile(
+                                         depth=1,
+                                         reliability=ReliabilityPolicy.RELIABLE,
+                                         durability=QoSDurabilityPolicy
+                                         .TRANSIENT_LOCAL))
 
             d = 'controle_web/logs'
             _os.makedirs(d, exist_ok=True)
@@ -312,7 +405,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self._csv.writerow(['t', 'state', 'n_moving', 'nearest',
                                 'in_corridor', 'vx_in', 'vx_out',
                                 'px', 'py', 'pyaw', 'vx_odom', 'wz_odom',
-                                'cx', 'cy', 'cbear_deg'])
+                                'cx', 'cy', 'cbear_deg', 'n_ghost'])
             # flush em timer (8ª auditoria A5): flush por linha a ~20 Hz
             # castigava o SD da Pi. Padrão do freeze_capture; perde ≤2 s no pior.
             self.create_timer(2.0, self._csv_f.flush)
@@ -337,6 +430,15 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
         def _on_odom(self, msg: Odometry):
             self._wz = msg.twist.twist.angular.z
             self._vx = msg.twist.twist.linear.x
+
+        def _on_map(self, msg: OccupancyGrid):
+            i = msg.info
+            self.guard.ghost_map = MapGhostFilter(
+                msg.data, i.width, i.height, i.resolution,
+                i.origin.position.x, i.origin.position.y)
+            self.get_logger().info(
+                'filtro anti-vidro: mapa %dx%d @%.2fm carregado'
+                % (i.width, i.height, i.resolution))
 
         def _pose_odom(self):
             try:
@@ -363,6 +465,17 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             pose = self._pose_odom()
             if pose is None:
                 return
+            # TF odom->map do filtro anti-vidro (AMCL publica map<-odom).
+            # Sem ele (SLAM parado, AMCL caído) map_tf=None = filtro inerte.
+            try:
+                mtf = self.tf_buffer.lookup_transform(
+                    'map', 'odom', rclpy.time.Time())
+                mt, mq = mtf.transform.translation, mtf.transform.rotation
+                myaw = quat_to_yaw(mq.x, mq.y, mq.z, mq.w)
+                self.guard.map_tf = (mt.x, mt.y,
+                                     math.cos(myaw), math.sin(myaw))
+            except TransformException:
+                self.guard.map_tf = None
             r = np.asarray(msg.ranges, dtype=np.float32)
             a = msg.angle_min + np.arange(r.size) * msg.angle_increment
             tt, q = tf.transform.translation, tf.transform.rotation
@@ -430,7 +543,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                 int(self.guard.in_corridor),
                 round(msg.linear.x, 3), round(vx, 3),
                 *(round(v, 3) if v != '' else '' for v in pose),
-                round(self._vx, 3), round(self._wz, 3), cx, cy, cbear])
+                round(self._vx, 3), round(self._wz, 3), cx, cy, cbear,
+                self.guard.ghost_dropped or ''])
 
     rclpy.init(args=args)
     node = MotionGuardNode()
