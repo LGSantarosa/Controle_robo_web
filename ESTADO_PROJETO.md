@@ -44,8 +44,8 @@
   power; movements vazio = teleop web off, normal).
 - **Run cancelada das 13:45 = MORTA** (dono parou p/ apresentar o projeto a 2
   pessoas; não é bug). NÃO investigar.
-- **⏳ PENDENTE — limpar vídeos da Pi** (`controle_web/logs/pov/`, 4 arquivos,
-  1,6 GB; SD com 9,9 GB livres): o dono copia via scp → apagar da Pi depois.
+- ~~limpar vídeos da Pi~~ ✅ FEITO 07-09: dono copiou via scp, os 4 .mkv (1,6 GB)
+  apagados de `controle_web/logs/pov/`; SD de volta a 12 GB livres.
 - **Melhoria candidata se 400 MB/run incomodar**: gravar H.264 no encoder de
   hardware da Pi (bcm2835 presente; ~10x menor) ou descer pra 960x540.
 
