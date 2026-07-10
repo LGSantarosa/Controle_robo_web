@@ -537,3 +537,51 @@ def test_watch_ignores_mapped_wall_points():
         g.observe(td + i * 0.1, WALL + wall2, POSE, 0.0)
     vx, _, st = g.filter(td + 2.0, 0.30, 0.0)
     assert st == 'idle' and vx == 0.30
+
+
+# ------------------------------------------------------- fantasma de parede
+# Campo 07-10 (corredor reto do hotmilk): transladando rápido, feixe rasante
+# + erro de pose faz trecho da PAREDE cair em bin "livre 0.5s atrás" -> vira
+# móvel a <1m -> bolha -> parada SECA repetida (cluster ACOMPANHAVA o robô,
+# colado na parede). Cluster com quase todos os pontos EM CIMA de parede
+# MAPEADA não é gente -> descarta antes de latchar.
+
+
+def test_wall_ghost_cluster_dropped():
+    g = _guard()
+    g.ghost_map = _grid_map(wall_x=1.0)
+    g.map_tf = _identity_tf()
+    t = _feed_static(g)
+    # "móvel" novo com TODOS os pontos na linha da parede mapeada (x=1.0)
+    ghost = [(1.02, -0.1), (1.02, 0.0), (1.03, 0.1)]
+    for i in range(g.cfg.persist_frames):
+        g.observe(t + i * 0.1, WALL + ghost, POSE, 0.0)
+    assert g.moving_clusters == []
+    assert g.wall_dropped == 1
+    assert g.filter(t + 0.2, 0.30, 0.0)[2] == 'idle'   # NÃO para seco
+
+
+def test_person_near_wall_still_blocks():
+    # pessoa ENCOSTADA na parede: o corpo sobra pra fora da linha do mapa
+    # (fração na parede < limiar) -> continua latchando (bolha protege).
+    g = _guard()
+    g.ghost_map = _grid_map(wall_x=1.0)
+    g.map_tf = _identity_tf()
+    t = _feed_static(g)
+    person = [(0.75, -0.05), (0.75, 0.05), (0.8, 0.0), (0.97, 0.0)]
+    for i in range(g.cfg.persist_frames):
+        g.observe(t + i * 0.1, WALL + person, POSE, 0.0)
+    assert len(g.moving_clusters) == 1
+    assert g.filter(t + 0.2, 0.30, 0.0)[2] == 'blocked'
+
+
+def test_wall_ghost_kept_without_map():
+    # failsafe: sem /map (ou sem TF) o filtro não atua — comportamento antigo
+    # (melhor freio falso que freio nenhum de verdade).
+    g = _guard()
+    t = _feed_static(g)
+    ghost = [(1.02, -0.1), (1.02, 0.0), (1.03, 0.1)]
+    for i in range(g.cfg.persist_frames):
+        g.observe(t + i * 0.1, WALL + ghost, POSE, 0.0)
+    assert len(g.moving_clusters) == 1
+    assert g.wall_dropped == 0

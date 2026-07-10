@@ -114,6 +114,14 @@ class GuardConfig:
                                     # da zona morta (~1.7-1.9) e dá ~0.4rad/s
                                     # reais (spin_calib 06-19). blocked segue
                                     # zerando tudo.
+    wall_ghost_frac: float = 0.8    # fração dos pontos do cluster EM CIMA de
+                                    # parede do MAPA p/ descartar como
+                                    # FANTASMA DE PAREDE (campo 07-10: corredor
+                                    # reto, transladando a ~0.37m/s, trecho da
+                                    # parede virava "móvel" a <1m e parava SECO
+                                    # — o cluster acompanhava o robô). Pessoa
+                                    # encostada na parede: o corpo sobra fora
+                                    # (frac < limiar) -> mantém.
 
 
 class MapGhostFilter:
@@ -198,6 +206,8 @@ class MotionGuard:
         self.ghost_map: 'MapGhostFilter|None' = None
         self.map_tf = None          # (tx, ty, cos, sin) odom->map
         self.ghost_dropped: int = 0  # pts descartados no último observe (CSV)
+        self.wall_dropped: int = 0   # clusters descartados como fantasma de
+                                     # parede no último observe (CSV)
         # vigília do "parou-mas-está-lá" (dono 07-10)
         self._watch: List[Pt] = []          # centróides vigiados (frame odom)
         self._watch_since: float = -math.inf
@@ -296,6 +306,27 @@ class MotionGuard:
 
         clusters = [cl for cl in self._cluster(moving)
                     if len(cl) >= c.min_cluster_points]
+        # FANTASMA DE PAREDE (campo 07-10, corredor reto do hotmilk): feixe
+        # rasante + erro de pose transladando rápido faz trecho da PAREDE
+        # cair em bin "livre 0.5s atrás" -> "móvel" a <1m -> bolha -> parada
+        # SECA repetida (o cluster ACOMPANHAVA o robô, colado na parede).
+        # Cluster com >= wall_ghost_frac dos pontos em cima de parede MAPEADA
+        # não é gente -> descarta ANTES de latchar. Pessoa encostada na
+        # parede sobra fora da linha (frac < limiar) e o collision monitor
+        # cobre o resto. Failsafe: sem mapa/TF o filtro não atua.
+        self.wall_dropped = 0
+        if ghost_ready and clusters:
+            kept = []
+            for cl in clusters:
+                on_wall = sum(
+                    1 for p in cl if self.ghost_map.occupied_near(
+                        tx + tc * p[0] - ts * p[1],
+                        ty + ts * p[0] + tc * p[1], c.wall_near))
+                if on_wall >= c.wall_ghost_frac * len(cl):
+                    self.wall_dropped += 1
+                else:
+                    kept.append(cl)
+            clusters = kept
         self.moving_clusters = clusters
         self.nearest_moving = min(
             (math.hypot(p[0] - px, p[1] - py) for cl in clusters for p in cl),
@@ -448,7 +479,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                        'persist_frames',
                        'cluster_gap', 'wz_gate', 'ray_bin_deg', 'scan_stale',
                        'map_filter', 'hold_still_max', 'hold_still_radius',
-                       'wall_near', 'slow_wz_cap')
+                       'wall_near', 'slow_wz_cap', 'wall_ghost_frac')
 
         def __init__(self):
             super().__init__('motion_guard')
@@ -495,7 +526,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self._csv.writerow(['t', 'state', 'n_moving', 'nearest',
                                 'in_corridor', 'vx_in', 'vx_out',
                                 'px', 'py', 'pyaw', 'vx_odom', 'wz_odom',
-                                'cx', 'cy', 'cbear_deg', 'n_ghost'])
+                                'cx', 'cy', 'cbear_deg', 'n_ghost', 'n_wallghost'])
             # flush em timer (8ª auditoria A5): flush por linha a ~20 Hz
             # castigava o SD da Pi. Padrão do freeze_capture; perde ≤2 s no pior.
             self.create_timer(2.0, self._csv_f.flush)
@@ -634,7 +665,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                 round(msg.linear.x, 3), round(vx, 3),
                 *(round(v, 3) if v != '' else '' for v in pose),
                 round(self._vx, 3), round(self._wz, 3), cx, cy, cbear,
-                self.guard.ghost_dropped or ''])
+                self.guard.ghost_dropped or '',
+                self.guard.wall_dropped or ''])
 
     rclpy.init(args=args)
     node = MotionGuardNode()
