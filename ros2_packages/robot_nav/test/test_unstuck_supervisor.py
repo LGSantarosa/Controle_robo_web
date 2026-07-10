@@ -1473,3 +1473,42 @@ def test_guard_tail_written_in_monotonic_clock():
                 if "_guard_tail_until = " in l and "0.0" not in l)
     assert "time.monotonic()" in line
     assert "get_clock" not in line
+
+
+def _person_scene(sup, t, guard=True, rear=0.0):
+    # cena do campo 07-10: FRENTE livre, pinçado de lado, pessoa na cena
+    # (guard bloqueando). Sem o freio, o unstuck escolheria AVANÇAR.
+    return sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                      rear_gap=rear, front_gap=math.inf, side_clear=0.2,
+                      nearest=0.0, guard_blocked=guard)
+
+
+def test_guard_blocked_past_ceiling_never_advances():
+    # GOAL COADJUVANTE (dono 07-10): guard bloqueando ALÉM do teto (pessoa
+    # parada na cena) -> avanço/giro proibidos; sem vão atrás, espera parado.
+    # (antes: advancing reason=near com pessoa na cena — acertou o tênis)
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0)
+    _person_scene(sup, 0.1)                    # ancora o relógio do guard
+    _person_scene(sup, 20.3)                   # teto caiu -> re-ancora stuck
+    cmd = _person_scene(sup, 22.6)             # 2.3s travado, pinch_fire
+    assert cmd.active is False                 # NÃO avança em cima de gente
+    assert sup.state == "monitoring"
+    # contraprova: a MESMA cena sem pessoa (guard livre) avança normalmente
+    sup2 = UnstuckSupervisor(_cfg())
+    _tick(sup2, 0.0)
+    _person_scene(sup2, 0.1, guard=False)
+    cmd2 = _person_scene(sup2, 10.4, guard=False)   # >stuck_timeout: dispara
+    assert cmd2.active is True and cmd2.lin > 0.0   # avanço (frente livre)
+
+
+def test_guard_blocked_past_ceiling_allows_only_reverse():
+    # com vão CLARO atrás, a única manobra permitida perto de gente é a ré
+    # (afasta da pessoa); pessoa atrás = sem vão = o caso acima (espera).
+    sup = UnstuckSupervisor(_cfg())
+    _tick(sup, 0.0)
+    _person_scene(sup, 0.1)
+    _person_scene(sup, 20.3)
+    cmd = _person_scene(sup, 22.6, rear=math.inf)
+    assert cmd.active is True
+    assert cmd.lin == pytest.approx(-0.25)     # ré, nunca avanço

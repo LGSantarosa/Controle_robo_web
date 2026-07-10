@@ -543,7 +543,7 @@ class UnstuckSupervisor:
             return self._monitoring(now, position, rear_gap, front_gap,
                                     goal_active, open_side, obstacle_mapped, yaw,
                                     near_mapped, side_clear, nearest, nearest_deg,
-                                    clear_offset, plan_bearing)
+                                    clear_offset, plan_bearing, guard_blocked)
         if self.state == _REVERSING:
             return self._reversing(now, position, yaw, rear_gap, nearest)
         if self.state == _ADVANCING:
@@ -562,7 +562,8 @@ class UnstuckSupervisor:
                     open_side, obstacle_mapped=False, yaw=0.0,
                     near_mapped=False, side_clear=math.inf,
                     nearest=math.inf, nearest_deg=0.0,
-                    clear_offset=None, plan_bearing=0.0) -> Command:
+                    clear_offset=None, plan_bearing=0.0,
+                    guard_blocked=False) -> Command:
         if goal_active is not None:
             # status do action server do nav2 disponível: é AUTORITATIVO.
             # Mata a "ré póstuma" (goal cancelado mas flag de nav_vel_raw
@@ -652,6 +653,19 @@ class UnstuckSupervisor:
             self.last_fire_reason = "near"
         else:
             self.last_fire_reason = "pinch"
+        # GOAL COADJUVANTE (dono 07-10): o guard segue BLOQUEANDO (pessoa na
+        # cena) além do teto do standdown. Cumprir goal não justifica manobra
+        # perto de gente: avanço/giro PROIBIDOS; no máximo a ré padrão se há
+        # vão claro atrás (afasta da pessoa), senão espera parado. Campo
+        # 07-10: um advancing com pessoa na cena acertou o tênis do dono.
+        if guard_blocked:
+            self.last_fire_reason += "+guard"
+            rear_target = min(self.cfg.reverse_distance,
+                              rear_gap - self.cfg.rear_stop_margin)
+            if rear_target >= self.cfg.reverse_min:
+                return self._begin_reverse(now, position, open_side, rear_gap,
+                                           nearest_deg)
+            return _IDLE
         # DIREÇÃO pela CENA (2026-06-28, "analisar se precisa ré ou ir reto"):
         # - FRENTE LIVRE e mesmo assim travou (preso de lado / no batente da porta):
         #   AVANÇA (passa o batente). Dar ré aqui desfazia o progresso e re-aproximava
