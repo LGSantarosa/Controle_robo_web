@@ -5,6 +5,30 @@
 
 ---
 
+## 👻 2026-07-10 (fim do dia) — RUN sala/corredor: paradas SECAS "do nada" = FANTASMA DE PAREDE → fix `54c4816` (⏳ deploy)
+
+> Run com o pacote humano-prioridade ATIVO: "respeitou bem as pessoas, nenhum
+> momento perigoso" (paradas >30s = dono parou no controle pra apresentar).
+> BO restante: no corredor reto, sozinho, o robô parava SECO e voltava
+> ("como se perdesse a conexão").
+
+- **Diagnóstico (CSV)**: os `blocked` a 0.5-0.9m rumo lateral tinham cluster
+  que ACOMPANHAVA o robô (x 11.9→10.0 conforme ele andava), colado na linha
+  da parede — sempre com vx alto (0.27-0.37). Feixe rasante + erro de pose
+  transladando → trecho da PAREDE cai em bin "livre 0.5s atrás" → móvel a
+  <1m → bolha → parada TOTAL sem desacelerar; solta 5s depois (clear_time).
+  Quando o fantasma nasce a 1.2-3.5m vira slowing (por isso às vezes
+  desacelera). FP PRÉ-existente (parente dos de 07-03), não é do pacote novo.
+  Contraprova: pessoa real passando (t=716) bloqueou e soltou certinho.
+- **Fix `54c4816`**: cluster com ≥80% dos pontos em cima de parede MAPEADA
+  (`occupied_near`+`map_tf` da vigília) não latcha (`wall_ghost_frac`).
+  Pessoa encostada na parede sobra fora da linha → mantém; sem mapa → inerte.
+  Coluna `n_wallghost` no CSV pra validar em campo. 274 testes verdes.
+- ⏳ **deploy**: robô desligou; entra no próximo `fetch/reset` + colcon (o
+  mapa repintado `3828c1d` já está na Pi).
+
+---
+
 ## 🛡️ 2026-07-10 (tarde) — RUN DE CAMPO: unstuck bateu no tênis do dono → pacote "humano = prioridade" (✅ SALA; ⏳ hotmilk)
 
 > 2 runs de campo (13:32 e 13:35, ~500s). **A Pi rodou em `22a7f14`** — sem o
