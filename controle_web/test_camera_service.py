@@ -59,8 +59,8 @@ def cam(tmp_path):
     # rec_fps = fps → stride 1 (grava todo frame); a decimação tem teste próprio
     c = CameraService(log_dir=str(tmp_path), rec_fps=30, idle_grace_s=8.0,
                       max_rec_s=1800.0, autostart=False)
-    c._available = True             # finge câmera viva
-    c._remux = lambda path: None    # JPEGs falsos não remuxam — mantém o .mjpeg
+    c._available = True                  # finge câmera viva
+    c._remux = lambda path, fps: None    # JPEGs falsos não remuxam — mantém o .mjpeg
     yield c
 
 
@@ -91,7 +91,7 @@ def test_gravacao_decimada_15fps(tmp_path):
     # default rec_fps=15 com câmera a 30 → grava frame sim, frame não
     c = CameraService(log_dir=str(tmp_path), autostart=False)
     c._available = True
-    c._remux = lambda path: None
+    c._remux = lambda path, fps: None
     c.nav_active('rota')
     for i in range(4):
         c._handle_frame(jpeg(bytes([i])), now=100.0 + i / 30)
@@ -99,6 +99,21 @@ def test_gravacao_decimada_15fps(tmp_path):
     [f] = [f for f in os.listdir(str(tmp_path)) if f.endswith('.mjpeg')]
     with open(os.path.join(str(tmp_path), f), 'rb') as fh:
         assert fh.read() == jpeg(b'\x00') + jpeg(b'\x02')
+
+
+def test_remux_recebe_fps_real_da_gravacao(cam, monkeypatch):
+    # câmera entregou 2 fps reais (20 frames em 10 s) — o remux tem que
+    # carimbar 2.0, não o nominal, senão o vídeo fica acelerado
+    remuxes = []
+    cam._remux = lambda path, fps: remuxes.append(fps)
+    t = [100.0]
+    monkeypatch.setattr('camera_service.time.time', lambda: t[0])
+    cam.nav_active('rota')                 # _rec_started = 100.0
+    for i in range(20):
+        cam._handle_frame(jpeg(bytes([i])), now=100.0 + i * 0.5)
+    t[0] = 110.0
+    cam.stop_recording('teste')
+    assert remuxes == [pytest.approx(2.0)]
 
 
 def test_nav_ended_respeita_debounce(cam):

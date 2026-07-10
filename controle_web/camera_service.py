@@ -210,10 +210,14 @@ class CameraService:
             except OSError:
                 pass
             return
-        threading.Thread(target=self._remux, args=(path,), daemon=True,
+        # fps REAL da gravação, não o nominal: com pouca luz a C922 entrega
+        # menos que 30 fps (exposição automática) — carimbar 15 fixo no remux
+        # deixava o vídeo acelerado (~1,5x nas runs de campo).
+        real_fps = frames / dur if dur > 0.5 else self._rec_fps
+        threading.Thread(target=self._remux, args=(path, real_fps), daemon=True,
                          name='camera_remux').start()
 
-    def _remux(self, raw_path: str):
+    def _remux(self, raw_path: str, fps: float):
         """Embrulha o MJPEG cru em .mkv (cópia, sem re-encode). Falhou → mantém o cru."""
         if not shutil.which('ffmpeg'):
             log.warning("[Camera] ffmpeg ausente — mantendo .mjpeg cru")
@@ -222,7 +226,7 @@ class CameraService:
         try:
             rc = subprocess.run(
                 ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
-                 '-f', 'mjpeg', '-framerate', f'{self._rec_fps:g}', '-i', raw_path,
+                 '-f', 'mjpeg', '-framerate', f'{fps:.3f}', '-i', raw_path,
                  '-c:v', 'copy', out],
                 timeout=300).returncode
         except Exception as e:
