@@ -110,6 +110,14 @@ class FollowConfig:
                                     # vai-e-volta (volta tinha 58% de giro
                                     # desperdiçado). 0.18 ainda < inflação, não
                                     # corta canto de verdade.
+    stretch_offset_tol: float = 0.25  # m — só estica se o ROBÔ está a menos
+                                    # disso da linha do plano. Fora da linha,
+                                    # mirar 1.5m faz o desvio lateral virar
+                                    # ângulo < turn_enter -> converge de
+                                    # diagonal e raspa a quina em vez de entrar
+                                    # alinhado (preso 262s numa fresta no sim
+                                    # hotmilk_portas 07-10). Ruído de pose
+                                    # típico ~0.12m fica bem abaixo.
     turn_enter: float = 0.21        # rad (~12°) — acima disso COMEÇA a girar
     turn_exit: float = 0.05         # rad (~3°)  — abaixo disso PARA de girar (histerese)
     goal_xy_tol: float = 0.15       # m — chegou no goal (casa c/ goal_checker do nav2)
@@ -189,9 +197,11 @@ class DecisiveFollower:
         ci, (ax, ay) = carrot_point(path, i0, c.lookahead)
         la = c.lookahead
         if c.lookahead_far > c.lookahead and c.straight_tol > 0.0:
-            cf, (fx, fy) = carrot_point(path, i0, c.lookahead_far)
-            if straight_deviation(path, i0, cf) <= c.straight_tol:
-                ci, (ax, ay), la = cf, (fx, fy), c.lookahead_far
+            off = math.hypot(path[i0][0] - x, path[i0][1] - y)
+            if off <= c.stretch_offset_tol:
+                cf, (fx, fy) = carrot_point(path, i0, c.lookahead_far)
+                if straight_deviation(path, i0, cf) <= c.straight_tol:
+                    ci, (ax, ay), la = cf, (fx, fy), c.lookahead_far
         bearing = math.atan2(ay - y, ax - x)
         herr = wrap(bearing - yaw)
         dist_aim = math.hypot(ax - x, ay - y)
@@ -253,6 +263,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             for name, default in (
                 ('forward_speed', 0.30), ('lookahead', 0.6),
                 ('lookahead_far', 1.5), ('straight_tol', 0.18),
+                ('stretch_offset_tol', 0.25),
                 ('turn_enter_deg', 12.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
@@ -265,6 +276,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 forward_speed=g['forward_speed'], lookahead=g['lookahead'],
                 lookahead_far=g['lookahead_far'],
                 straight_tol=g['straight_tol'],
+                stretch_offset_tol=g['stretch_offset_tol'],
                 turn_enter=math.radians(g['turn_enter_deg']),
                 turn_exit=math.radians(g['turn_exit_deg']),
                 goal_xy_tol=g['goal_xy_tol'],

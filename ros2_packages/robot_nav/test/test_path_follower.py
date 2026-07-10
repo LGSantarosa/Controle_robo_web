@@ -200,6 +200,28 @@ def test_far_carrot_after_rounding_the_corner():
     assert f.dbg['la'] == pytest.approx(f.cfg.lookahead_far)
 
 
+def test_near_carrot_when_robot_off_the_line():
+    # FRESTA do sim hotmilk_portas 07-10: robô 30cm FORA da linha do plano
+    # (reto, passa por uma fresta). Mirando 1.5m o desvio virava ~11° <
+    # turn_enter -> convergia de diagonal e raspava a quina (preso 262s,
+    # 11 turnings, alinha-desalinha). Fora da linha (> stretch_offset_tol)
+    # tem que manter o carrot CURTO: 0.30m a 0.6 = ~27° -> giro decidido,
+    # reencaixa na linha ANTES da fresta.
+    f = _fol()
+    path = [(x * 0.05, 0.0) for x in range(80)]     # plano reto de 4m
+    cmd = f.update((0.0, 0.30, 0.0), path, goal_active=True, goal_yaw=0.0)
+    assert f.dbg['la'] == pytest.approx(f.cfg.lookahead)
+    assert cmd.state == 'turning'                   # reencaixa em vez de raspar
+
+
+def test_far_carrot_back_once_reattached():
+    # reencaixou na linha (offset < stretch_offset_tol) -> volta a esticar.
+    f = _fol()
+    path = [(x * 0.05, 0.0) for x in range(80)]
+    f.update((1.0, 0.10, 0.0), path, goal_active=True, goal_yaw=0.0)
+    assert f.dbg['la'] == pytest.approx(f.cfg.lookahead_far)
+
+
 def test_goal_turn_then_arrived():
     f = _fol()
     path = [(0.0, 0.0), (0.05, 0.0)]   # goal coladinho
