@@ -107,6 +107,13 @@ class GuardConfig:
                                     # MAPA não conta como presença (senão
                                     # pessoa que parou perto de parede prendia
                                     # a vigília até o teto depois de sair)
+    slow_wz_cap: float = 2.4        # teto do |wz| no slowing (dono 07-10: o
+                                    # robô girava a 4.0-4.5 do lado de gente).
+                                    # CAP, nunca escala (zona-morta do skid:
+                                    # comando fraco não gira) — 2.4 fica acima
+                                    # da zona morta (~1.7-1.9) e dá ~0.4rad/s
+                                    # reais (spin_calib 06-19). blocked segue
+                                    # zerando tudo.
 
 
 class MapGhostFilter:
@@ -385,7 +392,11 @@ class MotionGuard:
             # freia no piso slow_scale; na borda do raio quase não freia.
             span = max(c.guard_radius - c.slow_dist, 1e-6)
             k = min(1.0, max(0.0, (self._last_nearest - c.slow_dist) / span))
-            return vx * (c.slow_scale + (1.0 - c.slow_scale) * k), wz, 'slowing'
+            # giro CALMO perto de gente (dono 07-10): CAP no |wz| (nunca
+            # escala — zona-morta), o vx proporcional continua como era.
+            wz_cap = max(-c.slow_wz_cap, min(c.slow_wz_cap, wz))
+            return vx * (c.slow_scale + (1.0 - c.slow_scale) * k), wz_cap, \
+                'slowing'
         return vx, wz, 'idle'
 
     def _cluster(self, pts: List[Pt]) -> List[List[Pt]]:
@@ -437,7 +448,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                        'persist_frames',
                        'cluster_gap', 'wz_gate', 'ray_bin_deg', 'scan_stale',
                        'map_filter', 'hold_still_max', 'hold_still_radius',
-                       'wall_near')
+                       'wall_near', 'slow_wz_cap')
 
         def __init__(self):
             super().__init__('motion_guard')

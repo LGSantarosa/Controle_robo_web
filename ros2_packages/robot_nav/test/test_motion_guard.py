@@ -207,7 +207,19 @@ def test_filter_slowing_scales_vx_only():
     vx, wz, st = g.filter(t, 0.30, 2.4)
     assert st == 'slowing'
     assert 0.30 * 0.25 < vx < 0.30        # escala fica entre o piso e o cheio
-    assert wz == 2.4                      # wz NUNCA muda
+    assert wz == 2.4                      # wz NUNCA é escalado (só o cap corta)
+
+
+def test_filter_slowing_caps_wz():
+    # giro CALMO perto de gente (dono 07-10: girava a 4.0-4.5 do lado de
+    # pessoa). CAP em slow_wz_cap — nunca escala (zona-morta do skid).
+    g = _guard()
+    t = _feed_static(g)
+    obj = [(0.5, -1.5), (0.5, -1.4), (0.6, -1.5)]
+    t = _feed_mover(g, t, obj)
+    assert g.filter(t, 0.30, 4.5)[1] == 2.4
+    assert g.filter(t, 0.30, -4.5)[1] == -2.4
+    assert g.filter(t, 0.30, 1.0)[1] == 1.0     # abaixo do cap: intacto
 
 
 def test_filter_slow_proportional_to_distance():
