@@ -5,6 +5,37 @@
 
 ---
 
+## 🎯 2026-07-10 — SESSÃO DE SIM no hotmilk_portas: zigue-zague ATACADO com A/B, fresta resolvida
+
+> Mundo `worlds/hotmilk_portas.sdf` (gerado do mapa real) reproduziu FIEL o
+> zigue-zague de campo. 4 runs iteradas com o dono dirigindo os goals pela GUI;
+> eu medindo o follow_debug.csv. **Commits `db6d5d2..a343261` na main, ⏳ Pi.**
+> Veredito do dono na última run: "ta melhor mesmo".
+
+- **Fresta (passagem apertada)**: robô ficava preso alinha-desalinha na quina
+  (**262s** na 1ª run!). Causa: banda morta de drift escala com o carrot
+  (1.5m tolera ±31cm; fresta exige ±13cm ≈ ruído de pose → indistinguível
+  pela pose; e offset-ao-plano é inútil pq o plano nasce no robô a cada
+  replan, i0=0 — 1ª tentativa `db6d5d2` foi inerte por isso). **Fix
+  `2cd42c9`: gate pelo /scan_safe** — parede a <`stretch_clearance` no setor
+  frontal → não estica o carrot. Calibrado por dados: setor 60→40°
+  (`ae9fc95`, lateral do corredor entrava no gate) e limiar 0.9→0.55
+  (`3ea88fd`, 0.9 caía EM CIMA da folga típica 0.84-0.93 e flickava; fresta
+  lê 0.32). Resultado: fresta cruza com 1 engasgo de 16s (vs 262s).
+- **Vai-e-volta**: com gate 0% ativo e pose limpa, ainda 18 turnings/min e
+  **63% dos giros se cancelavam** (+14/-14 em <8s; herr de entrada mediano
+  14° = beirada do enter 12°) — replan 1Hz balança a mira. **Fix `a343261`:
+  banda morta 12/3 → 16/7°** (a alavanca já mapeada em 07-09). Run final:
+  vai-e-volta 63→**19%**, turnings 18,3→**9,4/min**, flips wz 7,5→**2,9/min**,
+  esticado 89%, v 0.255 m/s, nenhum ponto preso >16s.
+- **Se o campo ainda mostrar resíduo**: próxima alavanca = suavizar a MIRA
+  no driving (filtrar o bearing do carrot; só aceitar mudança > X°) — ataca
+  o balanço do replan na fonte. Fresta real engasgando: subir gate 0.55→0.65.
+- Régua de comparação entre runs: `analyze_zigzag.py` (scratchpad da sessão;
+  recriar é fácil — turnings/min, % vai-e-volta, % carrot esticado, flips/min).
+
+---
+
 ## 🎥 2026-07-10 — vídeo POV acelerado: causa provada + fix `5786afa` (⏳ deploy)
 
 - **Sintoma (dono)**: vídeos de campo 07-09 "parecem acelerados". Confirmado
@@ -30,7 +61,8 @@
 > **`9b88993` NÃO está na Pi ainda** (dono desligou a Pi, não volta hoje). Ao
 > religar: `git fetch && reset --hard origin/main` + `colcon build --packages-select
 > robot_nav --symlink-install` (ou nem precisa build — .py é symlink agora).
-> **+ `5786afa` (07-10, fix do vídeo acelerado) entra no mesmo deploy.**
+> **+ no mesmo deploy: `5786afa` (vídeo acelerado) e o pacote anti-zigue-zague
+> de 07-10 `db6d5d2..a343261` (gate da fresta + banda 16/7 — ver bloco 07-10).**
 
 - **Zigue-zague AINDA incomoda o dono** ("melhorou em partes, mas ainda ruim").
   2ª análise dos CSVs (ida+volta 15:00): o residual concentra nos 32-36% do
