@@ -94,6 +94,19 @@ class GuardConfig:
                                     # (50.8s freado à toa vs 29.7s por gente
                                     # real). Sem /map ou sem TF map<-odom o
                                     # filtro simplesmente não atua (failsafe).
+    hold_still_max: float = 20.0    # s — VIGÍLIA (dono 07-10): móvel que
+                                    # BLOQUEOU (bolha/corredor) e PAROU segue
+                                    # segurando o blocked enquanto o scan
+                                    # mostrar ocupação no lugar dele, até este
+                                    # teto; saiu -> solta pelo clear_time.
+                                    # Antes: pessoa parada sumia do diff em ~1s
+                                    # e o robô voltava a empurrar pra cima dela.
+    hold_still_radius: float = 0.5  # m — raio da vigília em volta do centróide
+                                    # do móvel parado (cobre pé trocado/balanço)
+    wall_near: float = 0.15         # m — ponto do scan a <isto de parede do
+                                    # MAPA não conta como presença (senão
+                                    # pessoa que parou perto de parede prendia
+                                    # a vigília até o teto depois de sair)
 
 
 class MapGhostFilter:
@@ -123,6 +136,16 @@ class MapGhostFilter:
         if cx < 0 or cx >= self.w or cy < 0 or cy >= self.h:
             return False            # fora do mapa != parede (unknown tb não)
         return self.grid[cy * self.w + cx] >= self.occ_thresh
+
+    def occupied_near(self, x: float, y: float, r: float) -> bool:
+        """Há parede do mapa a até r do ponto? Varre as células no quadrado
+        de lado 2r em passos de res (não perde parede entre amostras)."""
+        n = max(1, int(math.ceil(r / self.res)))
+        for i in range(-n, n + 1):
+            for j in range(-n, n + 1):
+                if self._occupied(x + i * self.res, y + j * self.res):
+                    return True
+        return False
 
     def sees_through_wall(self, a: Pt, b: Pt) -> bool:
         """True se o segmento a->b (frame MAP) atravessa parede do mapa."""
@@ -168,6 +191,10 @@ class MotionGuard:
         self.ghost_map: 'MapGhostFilter|None' = None
         self.map_tf = None          # (tx, ty, cos, sin) odom->map
         self.ghost_dropped: int = 0  # pts descartados no último observe (CSV)
+        # vigília do "parou-mas-está-lá" (dono 07-10)
+        self._watch: List[Pt] = []          # centróides vigiados (frame odom)
+        self._watch_since: float = -math.inf
+        self._watch_corridor: bool = False
 
     def _cell(self, p: Pt) -> Tuple[int, int]:
         r = self.cfg.grid_res
@@ -289,6 +316,51 @@ class MotionGuard:
             self._last_nearest = self.nearest_moving
             if self.in_corridor:
                 self._last_corridor_t = t
+            # VIGÍLIA (dono 07-10): móvel que BLOQUEOU (bolha/corredor) ganha
+            # vigília no lugar — pessoa que para de se mexer não pode sumir
+            # do radar em ~1s (o robô voltava a empurrar pra cima dela).
+            if self.in_corridor or self.nearest_moving < c.freeze_dist:
+                self._watch = [
+                    (sum(p[0] for p in cl) / len(cl),
+                     sum(p[1] for p in cl) / len(cl)) for cl in clusters]
+                self._watch_since = t
+                self._watch_corridor = self.in_corridor
+        elif self._watch:
+            if t - self._watch_since > c.hold_still_max:
+                self._watch = []    # teto: solta a vigília, decai no clear_time
+            else:
+                d = self._presence(pts, (px, py))
+                if d is None:
+                    self._watch = []    # saiu: decai no clear_time e retoma
+                else:
+                    self._last_moving_t = t     # ainda LÁ: renova o latch
+                    self._last_nearest = d
+                    if self._watch_corridor:
+                        self._last_corridor_t = t
+
+    def _presence(self, pts: List[Pt], robot: Pt) -> 'float|None':
+        """Alguém AINDA está no lugar vigiado? Menor distância robô->ponto
+        dentro do raio da vigília, ignorando retornos colados em parede do
+        MAPA (pessoa saiu, sobrou parede -> não é presença). None = vazio."""
+        c = self.cfg
+        ghost_ready = (c.map_filter and self.ghost_map is not None
+                       and self.map_tf is not None)
+        if ghost_ready:
+            tx, ty, tc, ts = self.map_tf
+        r2 = c.hold_still_radius ** 2
+        best = None
+        for p in pts:
+            if not any((p[0] - wx) ** 2 + (p[1] - wy) ** 2 <= r2
+                       for wx, wy in self._watch):
+                continue
+            if ghost_ready and self.ghost_map.occupied_near(
+                    tx + tc * p[0] - ts * p[1],
+                    ty + ts * p[0] + tc * p[1], c.wall_near):
+                continue            # parede mapeada, não pessoa
+            d = math.hypot(p[0] - robot[0], p[1] - robot[1])
+            if best is None or d < best:
+                best = d
+        return best
 
     def filter(self, t: float, vx: float, wz: float
                ) -> Tuple[float, float, str]:
@@ -364,7 +436,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                        'grid_res', 'lookback', 'min_cluster_points',
                        'persist_frames',
                        'cluster_gap', 'wz_gate', 'ray_bin_deg', 'scan_stale',
-                       'map_filter')
+                       'map_filter', 'hold_still_max', 'hold_still_radius',
+                       'wall_near')
 
         def __init__(self):
             super().__init__('motion_guard')

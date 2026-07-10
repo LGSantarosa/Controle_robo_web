@@ -441,3 +441,87 @@ def test_no_snapshot_while_turning():
     # giro terminou: o "old" é o pré-giro (obj ausente) -> obj = MÓVEL
     g.observe(t + 0.5, WALL + obj, POSE, 0.0)
     assert len(g.moving_clusters) == 1
+
+
+# ---------------------------------------------------------------- vigília
+# "PAROU-MAS-ESTÁ-LÁ" (dono 07-10): móvel que BLOQUEOU (bolha/corredor) e
+# parou de se mexer NÃO some — o guard vigia o lugar e segura o blocked
+# enquanto o scan mostrar ocupação ali (teto hold_still_max); saiu -> solta
+# pelo clear_time normal. Campo 07-10: pessoa parada ficava invisível em ~1s
+# e o robô voltava a empurrar pra cima dela (unstuck bateu no tênis do dono).
+
+PERSON = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]      # no corredor, dentro da bolha
+
+
+def test_stopped_blocker_still_there_keeps_blocking():
+    g = _guard()                                     # clear_time default 5.0
+    t = _feed_static(g)
+    tl = _feed_mover(g, t, PERSON)
+    # pessoa PAROU no lugar: 8s (>clear_time) de scans com ela imóvel
+    for i in range(1, 81):
+        g.observe(tl + i * 0.1, WALL + PERSON, POSE, 0.0)
+    vx, wz, st = g.filter(tl + 8.0, 0.30, 1.0)
+    assert (vx, wz, st) == (0.0, 0.0, 'blocked')
+
+
+def test_stopped_blocker_leaving_releases_by_clear_time():
+    g = _guard(clear_time=1.5)
+    t = _feed_static(g)
+    tl = _feed_mover(g, t, PERSON)
+    for i in range(1, 31):                           # parada 3s (>clear_time)
+        g.observe(tl + i * 0.1, WALL + PERSON, POSE, 0.0)
+    assert g.filter(tl + 3.0, 0.30, 0.0)[2] == 'blocked'    # vigília segurando
+    td = tl + 3.1
+    for i in range(25):                              # pessoa SAIU
+        g.observe(td + i * 0.1, WALL, POSE, 0.0)
+    vx, _, st = g.filter(td + 2.0, 0.30, 0.0)        # clear_time depois: anda
+    assert st == 'idle' and vx == 0.30
+
+
+def test_stopped_blocker_watch_has_ceiling():
+    g = _guard(clear_time=1.5, hold_still_max=3.0)
+    t = _feed_static(g)
+    tl = _feed_mover(g, t, PERSON)
+    for i in range(1, 81):                           # pessoa fica 8s, imóvel
+        g.observe(tl + i * 0.1, WALL + PERSON, POSE, 0.0)
+    assert g.filter(tl + 3.0, 0.30, 0.0)[2] == 'blocked'    # teto ainda não
+    vx, _, st = g.filter(tl + 6.0, 0.30, 0.0)        # teto+clear_time passados
+    assert st == 'idle' and vx == 0.30
+
+
+def test_stopped_far_lateral_mover_not_watched():
+    # móvel que só causou SLOWING (longe da bolha, fora do corredor) não
+    # ganha vigília: parou -> decai pelo clear_time como sempre.
+    g = _guard(clear_time=1.5)
+    t = _feed_static(g)
+    obj = [(0.5, -2.0), (0.5, -2.1), (0.6, -2.0)]
+    tl = _feed_mover(g, t, obj)
+    assert g.filter(tl, 0.30, 0.0)[2] == 'slowing'
+    for i in range(1, 31):
+        g.observe(tl + i * 0.1, WALL + obj, POSE, 0.0)
+    assert g.filter(tl + 3.0, 0.30, 0.0)[2] == 'idle'
+
+
+def test_watch_ignores_mapped_wall_points():
+    # pessoa parou COLADA numa parede do MAPA e depois saiu: o que sobra no
+    # raio da vigília é parede mapeada, não presença -> solta pelo
+    # clear_time, sem esperar o teto.
+    g = _guard(clear_time=1.5)
+    g.ghost_map = _grid_map(wall_x=1.3)
+    g.map_tf = _identity_tf()
+    wall2 = [(1.28, -0.2), (1.28, -0.1), (1.28, 0.1)]   # retornos da parede
+    # pessoa a ~0.35m da parede: célula NÃO-vizinha da wall2 (vizinha, o diff
+    # de grade come pontos do cluster e nem latcha)
+    person = [(0.9, 0.0), (0.9, 0.1), (0.95, 0.05)]
+    t = _feed_static(g, pts=WALL + wall2)
+    for i in range(g.cfg.persist_frames):            # pessoa chega (latcha)
+        g.observe(t + i * 0.1, WALL + wall2 + person, POSE, 0.0)
+    tl = t + (g.cfg.persist_frames - 1) * 0.1
+    assert g.filter(tl, 0.30, 0.0)[2] == 'blocked'
+    for i in range(1, 11):                           # parada 1s
+        g.observe(tl + i * 0.1, WALL + wall2 + person, POSE, 0.0)
+    td = tl + 1.1
+    for i in range(25):                              # pessoa SAIU; parede fica
+        g.observe(td + i * 0.1, WALL + wall2, POSE, 0.0)
+    vx, _, st = g.filter(td + 2.0, 0.30, 0.0)
+    assert st == 'idle' and vx == 0.30
