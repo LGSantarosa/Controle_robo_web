@@ -1228,9 +1228,13 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._guard_blocked = (msg.data == "blocked")
             if was and not self._guard_blocked:
                 # soltou: cauda curta pro robô re-engatar antes de o unstuck
-                # voltar a contar (evita disparo no vácuo pós-bloqueio)
-                self._guard_tail_until = self.get_clock().now().nanoseconds \
-                    * 1e-9 + 2.0
+                # voltar a contar (evita disparo no vácuo pós-bloqueio).
+                # time.monotonic(): o _tick compara com monotonic; com o
+                # relógio ROS (época) a cauda ficava True PRA SEMPRE ->
+                # guard_since nunca re-ancorava -> o teto guard_hold_max
+                # expirava de vez e o standdown MORRIA (campo 2026-07-10:
+                # unstuck avançou em cima de pessoa DURANTE blocked).
+                self._guard_tail_until = time.monotonic() + 2.0
 
         def _on_plan(self, msg):
             # só os (x,y) em frame map; o rumo é calculado no _tick com a pose

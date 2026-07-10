@@ -1454,3 +1454,22 @@ def test_clear_turn_allowed_again_at_new_spot():
     sup.update(40.2, nav_wants_move=True, position=far, rear_gap=math.inf,
                front_gap=0.0, yaw=0.0, nearest=0.0, clear_offset=0.20)
     assert sup.state == "turning"
+
+
+def test_guard_tail_written_in_monotonic_clock():
+    # REGRESSÃO campo 2026-07-10: o node gravava _guard_tail_until com o
+    # relógio ROS (época Unix ~1.78e9) mas o _tick compara com
+    # time.monotonic() (uptime, pequeno) -> depois do 1º blocked->release a
+    # cauda ficava True PRA SEMPRE -> guard_since nunca re-ancorava -> o teto
+    # guard_hold_max expirava DE VEZ e o standdown morria: o unstuck avançou
+    # em cima de pessoa DURANTE blocked (bateu no tênis do dono). A classe
+    # pura está certa (testes acima); o bug era na COLA do node, então o
+    # teste tranca a fonte: a cauda tem de ser escrita no MESMO relógio
+    # monotônico que o _tick usa.
+    import pathlib
+    import robot_nav.unstuck_supervisor as mod
+    src = pathlib.Path(mod.__file__).read_text()
+    line = next(l for l in src.splitlines()
+                if "_guard_tail_until = " in l and "0.0" not in l)
+    assert "time.monotonic()" in line
+    assert "get_clock" not in line
