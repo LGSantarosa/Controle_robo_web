@@ -1,7 +1,27 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-09**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-10**.
+
+---
+
+## 🎥 2026-07-10 — vídeo POV acelerado: causa provada + fix `5786afa` (⏳ deploy)
+
+- **Sintoma (dono)**: vídeos de campo 07-09 "parecem acelerados". Confirmado
+  **~1,5x**: run 14:09 durou 295s reais (nav_metrics) mas o vídeo tinha 197s.
+- **Causa**: o remux carimbava **15 fps FIXO**, mas a C922 entrega <30 fps com
+  pouca luz (exposição automática) → menos frames/s reais tocados a 15 =
+  acelera. No 07-08 (bancada, mais luz) entregava ~28 fps, por isso não apareceu.
+- **Fix `5786afa`**: remux usa fps REAL = frames/duração medidos na gravação.
+  17 testes verdes. Validado offline: re-carimbar o vídeo 14:09 com o fator
+  real deu **303,3s = 295,3s de run + 8s de debounce** (bate exato). É código
+  web (Flask), deploy = só o reset na Pi, sem colcon.
+- Vídeo já gravado conserta com `ffmpeg -itsscale <15/fps_real> -i in.mkv -c
+  copy out.mkv` — feito no 14:09 → `pov_2026-07-09_14-09-06_rota_fixed.mkv`
+  na raiz do dev.
+- Obs: os .mkv das 13:44 e 14:55 no dev estão **TRUNCADOS** ("file ended
+  prematurely" — possivelmente copiados enquanto o remux rodava). Já foram
+  apagados da Pi; ficou o que ficou.
 
 ---
 
@@ -10,6 +30,7 @@
 > **`9b88993` NÃO está na Pi ainda** (dono desligou a Pi, não volta hoje). Ao
 > religar: `git fetch && reset --hard origin/main` + `colcon build --packages-select
 > robot_nav --symlink-install` (ou nem precisa build — .py é symlink agora).
+> **+ `5786afa` (07-10, fix do vídeo acelerado) entra no mesmo deploy.**
 
 - **Zigue-zague AINDA incomoda o dono** ("melhorou em partes, mas ainda ruim").
   2ª análise dos CSVs (ida+volta 15:00): o residual concentra nos 32-36% do
