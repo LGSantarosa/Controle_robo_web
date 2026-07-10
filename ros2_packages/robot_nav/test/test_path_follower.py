@@ -170,10 +170,12 @@ def test_far_carrot_on_straight_path():
 
 def test_near_carrot_with_short_lookahead_would_turn():
     # contraprova do cenário acima: com o adaptativo DESLIGADO (straight_tol=0)
-    # o mesmo desvio de 13cm dispara turning — o comportamento antigo.
+    # um desvio lateral que estoura a banda (20cm a 0.6m = ~18° > turn_enter
+    # 16°) dispara turning; esticado, os mesmos 20cm seriam ~7.6° e seguiriam
+    # driving — o mecanismo do zigue-zague antigo.
     f = DecisiveFollower(FollowConfig(straight_tol=0.0))
     path = [(x * 0.05, 0.0) for x in range(80)]
-    cmd = f.update((0.0, 0.13, 0.0), path, goal_active=True, goal_yaw=0.0)
+    cmd = f.update((0.0, 0.20, 0.0), path, goal_active=True, goal_yaw=0.0)
     assert cmd.state == 'turning'
     assert f.dbg['la'] == pytest.approx(f.cfg.lookahead)
 

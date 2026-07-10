@@ -124,8 +124,19 @@ class FollowConfig:
                                     # scan: preso 262s->27s na fresta do sim
                                     # hotmilk_portas raspando a quina por chegar
                                     # de diagonal rasa. <=0 desliga o gate.
-    turn_enter: float = 0.21        # rad (~12°) — acima disso COMEÇA a girar
-    turn_exit: float = 0.05         # rad (~3°)  — abaixo disso PARA de girar (histerese)
+    turn_enter: float = 0.28        # rad (~16°) — acima disso COMEÇA a girar.
+                                    # 12->16 (07-10): no sim hotmilk_portas 63%
+                                    # dos giros eram VAI-E-VOLTA (+14/-14 que se
+                                    # cancelam, herr de entrada mediano 14° = na
+                                    # beirada do 12) — replan 1Hz balança a mira
+                                    # ±14° e a banda de 12 não engole. Mesmo
+                                    # padrão da VOLTA de campo 07-09 (58% do
+                                    # giro cancelado). Alavanca mapeada no
+                                    # ESTADO 07-09.
+    turn_exit: float = 0.12         # rad (~7°)  — abaixo disso PARA de girar
+                                    # (histerese; 3->7 junto com o enter: solta
+                                    # o giro mais cedo, precisa de ±16 de novo
+                                    # p/ re-entrar)
     goal_xy_tol: float = 0.15       # m — chegou no goal (casa c/ goal_checker do nav2)
     goal_yaw_tol: float = 0.10      # rad (~6°) — encarou o yaw do goal
     rot_k: float = 3.0              # ganho P do giro (rad/s por rad)
@@ -277,7 +288,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 # mesma parede lê 1.04m (fora do gate) e as quinas de fresta,
                 # quase À FRENTE na aproximação, continuam pegas a 0.9m.
                 ('stretch_clearance', 0.55), ('clear_sector_deg', 40.0),
-                ('turn_enter_deg', 12.0), ('turn_exit_deg', 3.0),
+                ('turn_enter_deg', 16.0), ('turn_exit_deg', 7.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
                 ('slow_radius', 0.4), ('min_speed', 0.22), ('rate_hz', 20.0),
