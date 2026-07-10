@@ -5,6 +5,46 @@
 
 ---
 
+## 🛡️ 2026-07-10 (tarde) — RUN DE CAMPO: unstuck bateu no tênis do dono → pacote "humano = prioridade" (⏳ deploy)
+
+> 2 runs de campo (13:32 e 13:35, ~500s). **A Pi rodou em `22a7f14`** — sem o
+> pacote do zigue-zague do sim E sem o fix do vídeo (o dono esqueceu o pull).
+> Boa run no geral, MAS: com gente interagindo, o unstuck disparou 21x
+> (advancing/reversing/spinning a cada ~5s) e **avançou em cima do tênis do
+> dono**. "Perto de humano o goal vira COADJUVANTE." Diagnóstico 100% por
+> CSV (freeze_capture com guard_state + nav2.log + motion_guard.csv).
+
+- **BUG RAIZ (`2b1d8bd`)**: standdown do unstuck estava MORTO — a cauda
+  pós-bloqueio era gravada com relógio ROS (época ~1.78e9) e comparada com
+  `time.monotonic()` no `_tick` → True pra sempre após o 1º blocked→release
+  → `guard_since` nunca re-ancorava → teto de 20s expirava DE VEZ. Disparos
+  DENTRO de `blocked` (ex.: t=1583.6, pessoa a 0.99m) provaram. Teste tranca
+  o relógio na fonte.
+- **VIGÍLIA (`b1de84b`)**: pessoa que PAROU sumia do diff em ~1s (guard só vê
+  o que se MEXE) e o robô voltava a empurrar. Agora móvel que BLOQUEOU
+  (bolha/corredor) deixa vigília no lugar: scan ocupado a ≤0.5m do centróide
+  → segue blocked (teto `hold_still_max` 20s); **saiu → solta** pelo
+  clear_time de 5s. Parede do MAPA não conta como presença (pessoa perto de
+  parede não prende a vigília ao sair).
+- **GOAL COADJUVANTE (`5eb17c5`)**: guard bloqueando além do teto → unstuck
+  NUNCA avança/gira; no máximo a ré padrão se há vão claro atrás, senão
+  espera parado.
+- **GIRO CALMO (`5517147`)**: no slowing o wz passava INTEIRO (4.0-4.5 de
+  comando do lado de gente). Cap `slow_wz_cap=2.4` (≈0.4 rad/s reais).
+  Nunca escala (zona-morta do skid); blocked segue zerando tudo.
+- Régua do zigue-zague nesta run SEM o pacote do sim: vai-e-volta ~50% dos
+  turnings nas 2 pernas — baseline de campo pro A/B do deploy.
+- Vídeos POV das 2 runs: puxados pro dev (`~/Videos/pov_2026-07-10/`),
+  velocidade corrigida com itsscale (1.489/1.516 — C922 a ~10fps), apagados
+  da Pi. Na Pi restam 2 vídeos de 07-09 (14:55/14:57).
+- 🔴 **MAPA com buraco**: o dono travou o caminho na run e o planner achou
+  volta por um BURACO do mapa. Dono vai re-editar o mapa (pendência DELE).
+- ⏳ **DEPLOY na Pi**: este pacote + zigue-zague do sim (`db6d5d2..a343261`)
+  + fix do vídeo (`5786afa`) vão TODOS juntos no próximo
+  `git fetch && reset && colcon build robot_nav`.
+
+---
+
 ## 🎯 2026-07-10 — SESSÃO DE SIM no hotmilk_portas: zigue-zague ATACADO com A/B, fresta resolvida
 
 > Mundo `worlds/hotmilk_portas.sdf` (gerado do mapa real) reproduziu FIEL o
