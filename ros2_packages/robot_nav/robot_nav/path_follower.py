@@ -271,7 +271,12 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             for name, default in (
                 ('forward_speed', 0.30), ('lookahead', 0.6),
                 ('lookahead_far', 1.5), ('straight_tol', 0.18),
-                ('stretch_clearance', 0.9), ('clear_sector_deg', 60.0),
+                # sector 40° (era 60 na 1ª run 07-10): a 60° a parede LATERAL
+                # do corredor (~0.67m) entrava no gate (0.67/sin60=0.77 <0.9)
+                # -> carrot curto 60% da run = zigue-zague de volta. A 40° a
+                # mesma parede lê 1.04m (fora do gate) e as quinas de fresta,
+                # quase À FRENTE na aproximação, continuam pegas a 0.9m.
+                ('stretch_clearance', 0.9), ('clear_sector_deg', 40.0),
                 ('turn_enter_deg', 12.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
