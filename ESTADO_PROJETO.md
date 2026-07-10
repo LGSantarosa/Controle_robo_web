@@ -5,7 +5,7 @@
 
 ---
 
-## 🛡️ 2026-07-10 (tarde) — RUN DE CAMPO: unstuck bateu no tênis do dono → pacote "humano = prioridade" (⏳ deploy)
+## 🛡️ 2026-07-10 (tarde) — RUN DE CAMPO: unstuck bateu no tênis do dono → pacote "humano = prioridade" (✅ SALA; ⏳ hotmilk)
 
 > 2 runs de campo (13:32 e 13:35, ~500s). **A Pi rodou em `22a7f14`** — sem o
 > pacote do zigue-zague do sim E sem o fix do vídeo (o dono esqueceu o pull).
@@ -39,9 +39,12 @@
   da Pi. Na Pi restam 2 vídeos de 07-09 (14:55/14:57).
 - 🔴 **MAPA com buraco**: o dono travou o caminho na run e o planner achou
   volta por um BURACO do mapa. Dono vai re-editar o mapa (pendência DELE).
-- ⏳ **DEPLOY na Pi**: este pacote + zigue-zague do sim (`db6d5d2..a343261`)
-  + fix do vídeo (`5786afa`) vão TODOS juntos no próximo
-  `git fetch && reset && colcon build robot_nav`.
+- ✅ **DEPLOYADO na Pi (64d5a6a) e VALIDADO NA SALA** no mesmo dia ("ele parou
+  corretamente dessa vez"): 2 blocked de ~30s com pessoa PARADA (n_moving=0),
+  disparos com gente = `near+guard`→RÉ (0 advancing), wz cravado no cap 2.4
+  (205 amostras, 0 estouros), blocked 100% saída zerada. Encadeamento
+  ré→spin perto de gente ainda existe (point-turn, não investida) — radar.
+  ⏳ validar no hotmilk (campo real) + A/B do zigue-zague (baseline ~50%).
 
 ---
 
