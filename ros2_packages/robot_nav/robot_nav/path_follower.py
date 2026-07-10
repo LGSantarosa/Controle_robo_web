@@ -110,14 +110,20 @@ class FollowConfig:
                                     # vai-e-volta (volta tinha 58% de giro
                                     # desperdiçado). 0.18 ainda < inflação, não
                                     # corta canto de verdade.
-    stretch_offset_tol: float = 0.25  # m — só estica se o ROBÔ está a menos
-                                    # disso da linha do plano. Fora da linha,
-                                    # mirar 1.5m faz o desvio lateral virar
-                                    # ângulo < turn_enter -> converge de
-                                    # diagonal e raspa a quina em vez de entrar
-                                    # alinhado (preso 262s numa fresta no sim
-                                    # hotmilk_portas 07-10). Ruído de pose
-                                    # típico ~0.12m fica bem abaixo.
+    stretch_clearance: float = 0.9  # m — só estica com ESPAÇO à frente (menor
+                                    # leitura do scan no setor frontal >= isso).
+                                    # A banda morta de drift lateral escala com
+                                    # o carrot (la*sin(turn_enter)): 1.5m tolera
+                                    # ±31cm fora do eixo; 0.6m, ±13cm. Fresta
+                                    # exige ±13cm e o ruído de pose é ~12cm ->
+                                    # IMPOSSÍVEL distinguir pela pose (e o plano
+                                    # nasce no robô a cada replan, i0=0, então
+                                    # offset ao plano é sempre ~0 — 1ª tentativa
+                                    # 07-10 falhou por isso). Passagem apertada =
+                                    # parede perto por definição -> gate pelo
+                                    # scan: preso 262s->27s na fresta do sim
+                                    # hotmilk_portas raspando a quina por chegar
+                                    # de diagonal rasa. <=0 desliga o gate.
     turn_enter: float = 0.21        # rad (~12°) — acima disso COMEÇA a girar
     turn_exit: float = 0.05         # rad (~3°)  — abaixo disso PARA de girar (histerese)
     goal_xy_tol: float = 0.15       # m — chegou no goal (casa c/ goal_checker do nav2)
@@ -162,7 +168,8 @@ class DecisiveFollower:
 
     def update(self, pose: Optional[Tuple[float, float, float]],
                path: Optional[List[Pt]], goal_active: bool,
-               goal_yaw: Optional[float]) -> Cmd:
+               goal_yaw: Optional[float],
+               front_clear: float = float('inf')) -> Cmd:
         c = self.cfg
         if pose is None or not goal_active or not path or len(path) < 2:
             self.state = 'idle'
@@ -196,12 +203,12 @@ class DecisiveFollower:
         i0 = closest_index(path, x, y)
         ci, (ax, ay) = carrot_point(path, i0, c.lookahead)
         la = c.lookahead
-        if c.lookahead_far > c.lookahead and c.straight_tol > 0.0:
-            off = math.hypot(path[i0][0] - x, path[i0][1] - y)
-            if off <= c.stretch_offset_tol:
-                cf, (fx, fy) = carrot_point(path, i0, c.lookahead_far)
-                if straight_deviation(path, i0, cf) <= c.straight_tol:
-                    ci, (ax, ay), la = cf, (fx, fy), c.lookahead_far
+        if (c.lookahead_far > c.lookahead and c.straight_tol > 0.0
+                and (c.stretch_clearance <= 0.0
+                     or front_clear >= c.stretch_clearance)):
+            cf, (fx, fy) = carrot_point(path, i0, c.lookahead_far)
+            if straight_deviation(path, i0, cf) <= c.straight_tol:
+                ci, (ax, ay), la = cf, (fx, fy), c.lookahead_far
         bearing = math.atan2(ay - y, ax - x)
         herr = wrap(bearing - yaw)
         dist_aim = math.hypot(ax - x, ay - y)
@@ -247,6 +254,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
     from action_msgs.msg import GoalStatusArray
     from geometry_msgs.msg import Twist
     from nav_msgs.msg import Path
+    from sensor_msgs.msg import LaserScan
     from std_msgs.msg import String
     from tf2_ros import Buffer, TransformListener, TransformException
 
@@ -263,7 +271,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             for name, default in (
                 ('forward_speed', 0.30), ('lookahead', 0.6),
                 ('lookahead_far', 1.5), ('straight_tol', 0.18),
-                ('stretch_offset_tol', 0.25),
+                ('stretch_clearance', 0.9), ('clear_sector_deg', 60.0),
                 ('turn_enter_deg', 12.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
@@ -276,7 +284,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 forward_speed=g['forward_speed'], lookahead=g['lookahead'],
                 lookahead_far=g['lookahead_far'],
                 straight_tol=g['straight_tol'],
-                stretch_offset_tol=g['stretch_offset_tol'],
+                stretch_clearance=g['stretch_clearance'],
                 turn_enter=math.radians(g['turn_enter_deg']),
                 turn_exit=math.radians(g['turn_exit_deg']),
                 goal_xy_tol=g['goal_xy_tol'],
@@ -304,6 +312,15 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
 
             self.create_subscription(Path, 'plan', self._on_plan,
                                      qos_profile_sensor_data)
+            # clearance frontal p/ o gate do carrot esticado: lê o /scan_safe
+            # (sanitizado, sem fantasma <0.15m — mesmo que unstuck/collision).
+            # Falha graciosa: sem scan (ou >1s velho) -> inf = estica normal
+            # (comportamento pré-gate; scan nunca derruba a nav).
+            self._front_clear = float('inf')
+            self._front_clear_t = 0.0
+            self._clear_sector = math.radians(g['clear_sector_deg'])
+            self.create_subscription(LaserScan, 'scan_safe', self._on_scan,
+                                     qos_profile_sensor_data)
             for topic in ('navigate_to_pose/_action/status',
                           'navigate_through_poses/_action/status'):
                 self.create_subscription(
@@ -317,7 +334,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             self._csv = _csv.writer(self._csv_f)
             self._csv.writerow(['t', 'state', 'x', 'y', 'yaw_deg', 'i0', 'ci', 'n',
                                 'aim_x', 'aim_y', 'herr_deg', 'dist_aim',
-                                'dist_goal', 'vx', 'wz', 'la'])
+                                'dist_goal', 'vx', 'wz', 'la', 'clear'])
             self._plan_path = _os.path.join(d, 'follow_plan_last.csv')
             # Snapshot do PRIMEIRO plano longo de cada goal (a FORMA do contorno —
             # o last.csv vira stub coladinho no goal). Resetado quando um novo goal
@@ -368,6 +385,18 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                         except OSError:
                             pass
 
+        def _on_scan(self, msg: LaserScan):
+            best = float('inf')
+            a = msg.angle_min
+            for r in msg.ranges:
+                if abs(wrap(a)) <= self._clear_sector and \
+                        msg.range_min < r < msg.range_max and r > 0.05:
+                    if r < best:
+                        best = r
+                a += msg.angle_increment
+            self._front_clear = best
+            self._front_clear_t = self._time.time()
+
         def _on_status(self, topic, msg):
             self._goal_active[topic] = any(st.status in ACTIVE
                                            for st in msg.status_list)
@@ -390,7 +419,11 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
         def _tick(self):
             goal = any(self._goal_active.values()) if self._goal_active else False
             pose = self._pose_map()
-            cmd = self.fol.update(pose, self._path, goal, self._goal_yaw)
+            clear = self._front_clear
+            if self._time.time() - self._front_clear_t > 1.0:
+                clear = float('inf')   # scan velho/ausente -> não trava o estico
+            cmd = self.fol.update(pose, self._path, goal, self._goal_yaw,
+                                  front_clear=clear)
 
             # SEGURA O MUX: com goal ativo SEMPRE publica (prio 15 não expira ->
             # o controller_server prio 10 nunca assume e briga). Sem goal -> cala.
@@ -417,7 +450,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                     round(d.get('dist_aim', float('nan')), 3),
                     round(d.get('dist_goal', float('nan')), 3),
                     round(cmd.vx, 3), round(cmd.wz, 3),
-                    d.get('la', '')])
+                    d.get('la', ''),
+                    round(clear, 2) if clear != float('inf') else ''])
 
     rclpy.init(args=args)
     node = PathFollowerNode()

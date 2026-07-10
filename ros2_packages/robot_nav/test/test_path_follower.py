@@ -200,25 +200,38 @@ def test_far_carrot_after_rounding_the_corner():
     assert f.dbg['la'] == pytest.approx(f.cfg.lookahead_far)
 
 
-def test_near_carrot_when_robot_off_the_line():
-    # FRESTA do sim hotmilk_portas 07-10: robô 30cm FORA da linha do plano
-    # (reto, passa por uma fresta). Mirando 1.5m o desvio virava ~11° <
-    # turn_enter -> convergia de diagonal e raspava a quina (preso 262s,
-    # 11 turnings, alinha-desalinha). Fora da linha (> stretch_offset_tol)
-    # tem que manter o carrot CURTO: 0.30m a 0.6 = ~27° -> giro decidido,
-    # reencaixa na linha ANTES da fresta.
+def test_near_carrot_when_passage_tight():
+    # FRESTA do sim hotmilk_portas 07-10: plano reto atravessa uma passagem
+    # apertada; com carrot 1.5m a banda morta de giro tolera ±31cm de drift
+    # lateral (la*sin(12°)) -> chega na boca 15cm fora do eixo e raspa a quina
+    # (preso 262s alinha-desalinha; a v1 do fix por offset-ao-plano falhou pq
+    # o plano NASCE no robô a cada replan). Parede perto (front_clear <
+    # stretch_clearance) -> carrot CURTO: mesmo drift vira ~27° -> giro
+    # decidido, entra alinhado.
     f = _fol()
     path = [(x * 0.05, 0.0) for x in range(80)]     # plano reto de 4m
-    cmd = f.update((0.0, 0.30, 0.0), path, goal_active=True, goal_yaw=0.0)
+    cmd = f.update((0.0, 0.30, 0.0), path, goal_active=True, goal_yaw=0.0,
+                   front_clear=0.5)
     assert f.dbg['la'] == pytest.approx(f.cfg.lookahead)
-    assert cmd.state == 'turning'                   # reencaixa em vez de raspar
+    assert cmd.state == 'turning'                   # corrige em vez de raspar
 
 
-def test_far_carrot_back_once_reattached():
-    # reencaixou na linha (offset < stretch_offset_tol) -> volta a esticar.
+def test_far_carrot_back_in_open_space():
+    # passagem venceu / espaço abriu (front_clear >= stretch_clearance) ->
+    # volta a esticar (o anti-zigue-zague das retas continua valendo).
     f = _fol()
     path = [(x * 0.05, 0.0) for x in range(80)]
-    f.update((1.0, 0.10, 0.0), path, goal_active=True, goal_yaw=0.0)
+    f.update((1.0, 0.10, 0.0), path, goal_active=True, goal_yaw=0.0,
+             front_clear=2.0)
+    assert f.dbg['la'] == pytest.approx(f.cfg.lookahead_far)
+
+
+def test_stretch_survives_missing_scan():
+    # failsafe: sem scan o default é inf -> gate não atua (igual pré-gate);
+    # o scan nunca pode matar o estico da nav inteira.
+    f = _fol()
+    path = [(x * 0.05, 0.0) for x in range(80)]
+    f.update((0.0, 0.05, 0.0), path, goal_active=True, goal_yaw=0.0)
     assert f.dbg['la'] == pytest.approx(f.cfg.lookahead_far)
 
 
