@@ -110,7 +110,7 @@ class FollowConfig:
                                     # vai-e-volta (volta tinha 58% de giro
                                     # desperdiçado). 0.18 ainda < inflação, não
                                     # corta canto de verdade.
-    stretch_clearance: float = 0.9  # m — só estica com ESPAÇO à frente (menor
+    stretch_clearance: float = 0.55 # m — só estica com ESPAÇO à frente (menor
                                     # leitura do scan no setor frontal >= isso).
                                     # A banda morta de drift lateral escala com
                                     # o carrot (la*sin(turn_enter)): 1.5m tolera
@@ -276,7 +276,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 # -> carrot curto 60% da run = zigue-zague de volta. A 40° a
                 # mesma parede lê 1.04m (fora do gate) e as quinas de fresta,
                 # quase À FRENTE na aproximação, continuam pegas a 0.9m.
-                ('stretch_clearance', 0.9), ('clear_sector_deg', 40.0),
+                ('stretch_clearance', 0.55), ('clear_sector_deg', 40.0),
                 ('turn_enter_deg', 12.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
