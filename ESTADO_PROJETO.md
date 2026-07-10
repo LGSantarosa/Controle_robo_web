@@ -27,6 +27,17 @@
 - ⏳ **deploy**: robô desligou; entra no próximo `fetch/reset` + colcon (o
   mapa repintado `3828c1d` já está na Pi).
 
+### ✅ Checklist de SEGUNDA (robô ligado, antes de qualquer run)
+1. Deploy: na Pi `git fetch && git reset --hard origin/main && colcon build
+   --packages-select robot_nav --symlink-install` → HEAD deve ser ≥`54c4816`.
+2. Relançar a stack (código novo só vale depois do relaunch).
+3. Puxar os 4 vídeos POV de 07-10 que FICARAM na Pi (15-09/15-38/15-58/16-04,
+   ~2.2GB — o download foi interrompido pelo desligamento; o parcial local
+   foi apagado). Velocidade desses já sai correta (fix deployado).
+4. Run de validação: corredor reto com pessoa atrás → paradas secas devem
+   sumir e `n_wallghost` acumular no motion_guard.csv; A/B do zigue-zague
+   contra o baseline ~50% vai-e-volta (manhã de 07-10).
+
 ---
 
 ## 🛡️ 2026-07-10 (tarde) — RUN DE CAMPO: unstuck bateu no tênis do dono → pacote "humano = prioridade" (✅ SALA; ⏳ hotmilk)
