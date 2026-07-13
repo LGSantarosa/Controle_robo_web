@@ -54,8 +54,8 @@ map_bridge = None
 nav_metrics = None
 # Ponte ROS↔Web do modo TREKKING (pose fundida, waypoints, cones, comandos)
 trekking_bridge = None
-# Monitor de tensão das placas hoverboard (diagnóstico do desarme do BMS) —
-# CSV contínuo + chip ao vivo na UI. Roda em qualquer modo com ROS.
+# Monitor de tensão das placas hoverboard — CSV contínuo + chip ao vivo na
+# UI. Roda em qualquer modo com ROS.
 power_monitor = None
 # Câmera USB (C922) — POV do robô: live view na GUI + gravação do percurso.
 # Não depende de ROS; sem câmera/ffmpeg fica quieta.
@@ -235,8 +235,8 @@ if ROBOT_MODE == 'nav2':
         )
         nav_metrics = None
 
-# Monitor de tensão: vale em todos os modos (teleop também desarma BMS se
-# encalhar). Se rclpy não importar (dev sem ROS), fica desabilitado.
+# Monitor de tensão: vale em todos os modos. Se rclpy não importar (dev sem
+# ROS), fica desabilitado.
 try:
     from power_monitor import PowerMonitor
     power_monitor = PowerMonitor(

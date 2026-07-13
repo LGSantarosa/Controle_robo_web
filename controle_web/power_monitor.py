@@ -1,14 +1,14 @@
 """
-Monitor de tensão das placas hoverboard (diagnóstico do desarme do BMS).
+Monitor de tensão das placas hoverboard.
 
 Grava CSV contínuo (tensão por placa + setpoint vs velocidade medida das
-rodas) e empurra telemetria ao vivo pro browser ('power_update'). O objetivo
-é distinguir, quando o BMS desarmar (39V→0/6V), entre:
+rodas) e empurra telemetria ao vivo pro browser ('power_update'). Detecta
+eventos elétricos na BORDA da condição: SAG gradual de tensão, STALL
+(comando forte com roda parada) e corte seco — assinaturas que separam
+sobrecarga de mau contato quando uma queda de energia acontecer.
 
-  * stall/rotor bloqueado — SAG gradual de tensão (e STALL: comando forte com
-    roda parada) ANTES do corte → sobrecarga, fix é não empurrar obstáculo;
-  * mau contato — corte SECO sem carga nenhuma → conector/solda na potência.
-
+Nasceu na investigação das quedas de 2026-06 (hipótese: desarme do BMS —
+nunca confirmada em campo); fica como telemetria geral de energia.
 Spec: docs/superpowers/specs/2026-06-11-power-monitor-design.md
 Padrão de integração igual ao nav_metrics/trekking_service: nó rclpy próprio
 em thread daemon, dentro do processo do Flask. Só OBSERVA — não publica nada

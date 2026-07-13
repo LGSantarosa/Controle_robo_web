@@ -3,9 +3,13 @@
 Estimador de pose pro modo TREKKING.
 
 Funde 3 fontes em (x, y, yaw) no frame `odom`:
-  - MPU9250 (/imu/data)       → taxa de yaw (giro); yaw INTEGRADO (mag/absoluto: TODO)
-  - PMW3901 (/optical_flow)   → velocidade no chão em (vx, vy) corpo
-  - Encoders (4 RPMs)         → velocidade no corpo, fallback quando o flow é ruim
+  - MPU6050 (/imu/data)       → taxa de yaw (giro); yaw INTEGRADO (sem mag —
+                                yaw absoluto viria de um BNO055/ICM-20948 futuro)
+  - PMW3901 (/optical_flow)   → velocidade no chão em (vx, vy) corpo. DORMENTE:
+                                o sensor foi removido do robô em 2026-07-01
+                                (0 Hz é o normal); o caminho fica pronto pra um
+                                breakout melhor no futuro.
+  - Encoders (4 RPMs)         → velocidade no corpo; hoje é a fonte de translação
 
 Saídas:
   /odom            nav_msgs/Odometry          (frame: odom→base_link) + TF

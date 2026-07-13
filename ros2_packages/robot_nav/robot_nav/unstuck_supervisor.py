@@ -642,9 +642,9 @@ class UnstuckSupervisor:
                 and side_clear >= self.cfg.side_open
                 and stuck < clear_timeout):
             return _IDLE
-        # MOTIVO do disparo (LOG de campo 2026-06-30): passou os 2 guards -> vai
-        # manobrar. "timeout"=cauteloso (10/15s, obstáculo desconhecido/pessoa); os
-        # demais FURAM pros ~2s (stuck_timeout_mapped). REMOVER após tunar.
+        # MOTIVO do disparo (vai no log de campo como reason=): "timeout" =
+        # cauteloso (10/15s, obstáculo desconhecido/pessoa); os demais FURAM
+        # pros ~2s (stuck_timeout_mapped).
         if stuck >= self.cfg.stuck_timeout:
             self.last_fire_reason = "timeout"
         elif mapped_fire:
@@ -1273,32 +1273,6 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             return _norm_angle(math.atan2(target[1] - py, target[0] - px)
                                - self._yaw)
 
-        def _gap_profile_str(self):
-            # DBG GIRO_CALC (2026-06-29, temporário): por que a ré em vez do giro?
-            # Mostra quanto a FRENTE abre (front_min_gap) em cada heading -40..+40°,
-            # o rumo do plano, e o que um cap LARGO (45°) acharia com a depth atual.
-            # Lê: "abre só 0.45 (< depth)" -> baixar depth; "abre em +22° (> cap 15)"
-            # -> subir cap. REMOVER após tunar.
-            if self._scan_raw is None:
-                return "GAPPROF no-scan"
-            ranges, amin, ainc = self._scan_raw
-            parts = []
-            for deg in range(-40, 41, 5):
-                o = math.radians(deg)
-                g = front_min_gap(ranges, amin - o, ainc, self.rear_lidar_x,
-                                  self.front_head_x, self.rear_half_width)
-                parts.append("%+d:%s" % (
-                    deg, "inf" if math.isinf(g) else "%.2f" % g))
-            wide = clearest_heading_offset(
-                ranges, amin, ainc, self.rear_lidar_x, self.front_head_x,
-                self.rear_half_width, self.clear_turn_depth, math.radians(45),
-                self.clear_turn_step, prefer_bearing=self._plan_bearing())
-            return ("GAPPROF depth=%.2f cap=%.0f plan_rel=%+.0f wide45=%s | %s"
-                    % (self.clear_turn_depth, math.degrees(self.clear_turn_cap),
-                       math.degrees(self._plan_bearing()),
-                       ("%+.0f" % math.degrees(wide)) if wide is not None
-                       else "None", " ".join(parts)))
-
         def _on_scan(self, msg):
             # time.monotonic(): freshness local, sem criar rclpy.time.Time a
             # 10 Hz nem depender de NTP (P3 da AUDITORIA_2026-06-11). O update()
@@ -1428,21 +1402,13 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                     # pessoa); "near"/"pinch"/"mapped"=furou pros ~2s. (campo 06-30)
                     extra = " reason=%s" % self.sup.last_fire_reason
                 if self.sup.state == "turning":
-                    # "propôs giro X° em vez de ré" — pra medir na próxima run
-                    # quantas rés o giro calculado substituiu (dono 2026-06-29).
-                    extra += " GIRO_CALC=%+.0f° (em vez de ré)" % math.degrees(
+                    extra += " GIRO_CALC=%+.0f°" % math.degrees(
                         self.sup.turn_offset)
                 self.get_logger().warn(
                     "unstuck: %s -> %s (pos=%.2f,%.2f stop=%s vao_re=%.2f)%s" % (
                         self._last_state, self.sup.state,
                         self._position[0], self._position[1],
                         self._stop_active, gap, extra))
-                # DBG GIRO_CALC: ao decidir RÉ, loga o perfil de vão (por que não
-                # girou?). REMOVER após tunar cap/depth. front_gap atual junto.
-                if self.sup.state == "reversing":
-                    self.get_logger().warn(
-                        "DBG front_gap=%.2f %s" % (front_gap,
-                                                   self._gap_profile_str()))
                 self._last_state = self.sup.state
             if cmd.active:
                 t = Twist()
