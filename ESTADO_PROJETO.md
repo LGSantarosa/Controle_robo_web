@@ -1,7 +1,33 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-10**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-13**.
+
+---
+
+## 🔋 2026-07-13 — Robô com bateria de volta: deploy FEITO + prep do teste de endurance
+
+- ✅ **Checklist de segunda itens 1 e 3**: Pi atualizada `3828c1d`→`721073b` +
+  colcon robot_nav OK (todo o pacote de 07-10 está na Pi); os 6 vídeos POV
+  (2.6GB: 4 de 07-10 + 2 de 07-09) puxados pro dev via rsync
+  (`~/Videos/pov_2026-07-10/` e `pov_2026-07-09/`) — conferir integridade
+  antes de apagar da Pi.
+- **Teste de BATERIA hoje** (2×12V em paralelo, carga cheia): rodar a rota
+  padrão em LOOP até a bateria desistir. Curva de descarga sai do power CSV
+  (`v_front`/`v_rear`); de brinde valida fantasma-de-parede (`n_wallghost`
+  no motion_guard.csv) e A/B do zigue-zague (baseline ~50% vai-e-volta).
+  Câmera fica LIGADA (live view) mas SEM gravar → controle novo na GUI.
+- **`0710949` POV manual na GUI**: card da câmera ganhou `Auto: ON/OFF`
+  (gravação automática nos goals) + `⏺ Gravar`/`⏹ Parar` manual. Manual não
+  morre no debounce de fim de goal (só ⏹/teto/câmera cair). Pro teste:
+  **Auto OFF** antes de dar o play.
+- **`f1ae21c` logs à prova de apagão**: nav_metrics faz checkpoint atômico
+  (~2s + fsync) do goal EM ANDAMENTO — apagão vira linha `POWERLOSS` no CSV
+  no boot seguinte (auto-cura, arquivo `attempt_checkpoint.json` some);
+  power CSV agora fsynca no flush de 1s. 77 testes do controle_web verdes.
+- ⏳ **Falta**: relançar a stack (código web novo só vale após relaunch),
+  Auto OFF na GUI, run de endurance. Itens 2 e 4 do checklist de 07-10
+  entram nessa run.
 
 ---
 
