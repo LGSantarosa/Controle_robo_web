@@ -258,9 +258,9 @@
 - **Rede**: hotspot "Trafico de banana" autoconnect prioridade 100 (no campo:
   ligar o hotspot ANTES do robô; acessar via robo-desktop.local no hotspot) +
   IP fixo 192.168.18.95 na rede de casa.
-- BO conhecido (cosmético): traceback do waypoint_runner no shutdown
-  (`map_service.py:1125` — wait_for_service com nó já morto durante retry);
-  fix de 3 linhas pendente, só aparece derrubando o app com waypoints ativos.
+- ~~BO cosmético: traceback do waypoint_runner no shutdown~~ ✅ FIXADO 07-13
+  (`fab7a05`): wait_for_service com nó destruído agora encerra a rota limpo;
+  +2 testes. Código web (Flask) — deploy = só o reset na Pi, sem colcon.
 
 ---
 
