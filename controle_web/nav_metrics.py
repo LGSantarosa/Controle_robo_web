@@ -15,6 +15,7 @@ SUCCEEDED/ABORTED/CANCELED da action NavigateToPose). Cada linha resume:
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import math
 import os
@@ -85,6 +86,13 @@ CSV_FIELDS = [
     'time_stopped_s', 'direction_reversals',
 ]
 
+# Checkpoint da tentativa EM ANDAMENTO (bateria pode morrer no meio de um
+# goal — apagão seco, sem shutdown). Reescrito a cada ~2s com fsync; no boot
+# seguinte vira linha POWERLOSS no CSV e é apagado. Goal que termina limpo
+# apaga o checkpoint junto do flush normal.
+CKPT_NAME = 'attempt_checkpoint.json'
+CKPT_INTERVAL_S = 2.0
+
 
 class NavMetricsCollector:
     """Roda em thread própria; subscreve tópicos Nav2 e acumula por tentativa."""
@@ -101,6 +109,9 @@ class NavMetricsCollector:
         # senão um servidor rodando 24h grava as tentativas do dia novo no
         # arquivo do dia anterior.
         self._csv_lock = threading.Lock()
+        self._ckpt_path = os.path.join(log_dir, CKPT_NAME)
+        self._ckpt_last = 0.0
+        self._recover_checkpoint()
 
         if not rclpy.ok():
             rclpy.init()
@@ -293,6 +304,7 @@ class NavMetricsCollector:
             if speed > self._attempt.max_linear_speed:
                 self._attempt.max_linear_speed = speed
         self._last_odom_ts = now
+        self._maybe_checkpoint(now)
 
     def _on_cmd(self, msg: Twist):
         a = self._attempt
@@ -313,13 +325,12 @@ class NavMetricsCollector:
 
     # ---------------- CSV ----------------
 
-    def _flush_attempt(self, a: NavAttempt):
-        end   = a.end_ts or a.start_ts
-        dur   = end - a.start_ts
-        avg   = (a.sum_linear_speed / a.linear_samples) if a.linear_samples else 0.0
-        row   = [
+    def _row_for(self, a: NavAttempt, end: float, status_name: str) -> list:
+        dur = end - a.start_ts
+        avg = (a.sum_linear_speed / a.linear_samples) if a.linear_samples else 0.0
+        return [
             a.nav_id, f'{a.start_ts:.3f}', f'{end:.3f}', f'{dur:.2f}',
-            STATUS_NAMES.get(a.status or 0, str(a.status)),
+            status_name,
             f'{a.start_x:.3f}', f'{a.start_y:.3f}',
             f'{a.end_x:.3f}',   f'{a.end_y:.3f}', f'{a.end_yaw:.3f}',
             f'{a.initial_plan_length_m:.3f}', a.replans,
@@ -329,7 +340,9 @@ class NavMetricsCollector:
             f'{a.distance_traveled_m:.3f}', f'{avg:.3f}', f'{a.max_linear_speed:.3f}',
             f'{a.time_stopped_s:.3f}', a.direction_reversals,
         ]
-        csv_path = self._csv_path_for(end)
+
+    def _append_row(self, row: list, end_ts: float):
+        csv_path = self._csv_path_for(end_ts)
         with self._csv_lock:
             new_file = not os.path.isfile(csv_path)
             with open(csv_path, 'a', newline='') as f:
@@ -339,6 +352,61 @@ class NavMetricsCollector:
                 w.writerow(row)
                 f.flush()
                 os.fsync(f.fileno())
+
+    def _maybe_checkpoint(self, now: float):
+        """Persiste a tentativa em andamento (~2s, atômico+fsync) — se a
+        bateria morrer no meio do goal, o boot seguinte recupera a linha."""
+        a = self._attempt
+        if a is None or now - self._ckpt_last < CKPT_INTERVAL_S:
+            return
+        self._ckpt_last = now
+        end = self._now()
+        if self._last_odom_pose:
+            # pose "final" provisória = onde o robô está agora (o flush
+            # terminal sobrescreve se o goal acabar limpo)
+            a.end_x, a.end_y, a.end_yaw = self._last_odom_pose
+        tmp = self._ckpt_path + '.tmp'
+        try:
+            with open(tmp, 'w') as f:
+                json.dump({'row': self._row_for(a, end, 'POWERLOSS'),
+                           'end_ts': end}, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self._ckpt_path)
+        except OSError as e:
+            log.debug(f"[NavMetrics] checkpoint falhou: {e}")
+
+    def _clear_checkpoint(self):
+        try:
+            os.unlink(self._ckpt_path)
+        except OSError:
+            pass
+
+    def _recover_checkpoint(self):
+        """Checkpoint sobrou de uma sessão anterior = apagão no meio de um
+        goal. Vira linha POWERLOSS no CSV do dia dele e é removido."""
+        try:
+            with open(self._ckpt_path) as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            return
+        except Exception as e:
+            log.warning(f"[NavMetrics] checkpoint ilegível ({e}) — descartado")
+            self._clear_checkpoint()
+            return
+        row = data.get('row')
+        if row:
+            self._append_row(row, float(data.get('end_ts', time.time())))
+            log.warning(f"[NavMetrics] tentativa {row[0]} interrompida por "
+                        f"queda de energia — recuperada do checkpoint pro CSV")
+        self._clear_checkpoint()
+
+    def _flush_attempt(self, a: NavAttempt):
+        end = a.end_ts or a.start_ts
+        dur = end - a.start_ts
+        row = self._row_for(a, end, STATUS_NAMES.get(a.status or 0, str(a.status)))
+        self._append_row(row, end)
+        self._clear_checkpoint()
         log.info(
             f"[NavMetrics] nav {a.nav_id} → {STATUS_NAMES.get(a.status or 0)} "
             f"em {dur:.1f}s | replans={a.replans} | "

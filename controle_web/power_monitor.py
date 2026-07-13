@@ -184,6 +184,12 @@ class PowerCsvLogger:
             now = time.monotonic()
             if now - self._last_flush >= self._flush_interval_s:
                 self._file.flush()
+                # fsync: apagão seco de bateria não espera o commit do ext4
+                # (~5s) — a curva de descarga tem que ir até o último segundo
+                try:
+                    os.fsync(self._file.fileno())
+                except OSError:
+                    pass
                 self._last_flush = now
 
     def close(self) -> None:
