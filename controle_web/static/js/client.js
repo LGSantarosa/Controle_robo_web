@@ -191,12 +191,35 @@
     if (povImg) povImg.src = on ? '/camera/stream?t=' + Date.now() : '';
   }
   if (btnPov) btnPov.addEventListener('click', () => setPov(!povOn));
+  // ⏺/⏹ manual + toggle da gravação automática (ex.: teste de bateria com
+  // live view ligado mas sem encher o SD da Pi). Estado vem do camera_status.
+  const btnPovRec  = document.getElementById('btn-pov-rec');
+  const btnPovAuto = document.getElementById('btn-pov-auto');
+  let povRecording = false;
+  let povAuto = true;
+  if (btnPovRec) btnPovRec.addEventListener('click', () => {
+    socket.emit('camera_record', { action: povRecording ? 'stop' : 'start' });
+  });
+  if (btnPovAuto) btnPovAuto.addEventListener('click', () => {
+    socket.emit('camera_auto', { on: !povAuto });
+  });
   socket.on('camera_status', (st) => {
     if (!st || !povCard) return;
     povCard.style.display = '';
     if (btnPov) {
       btnPov.disabled = !st.available;
       btnPov.title = st.available ? '' : 'câmera não detectada';
+    }
+    povRecording = !!st.recording;
+    if ('auto_record' in st) povAuto = !!st.auto_record;
+    if (btnPovRec) {
+      btnPovRec.disabled = !st.available && !povRecording;
+      btnPovRec.textContent = povRecording ? '⏹ Parar' : '⏺ Gravar';
+      btnPovRec.classList.toggle('active', povRecording);
+    }
+    if (btnPovAuto) {
+      btnPovAuto.textContent = povAuto ? 'Auto: ON' : 'Auto: OFF';
+      btnPovAuto.classList.toggle('active', povAuto);
     }
     if (povRec) povRec.style.display = st.recording ? '' : 'none';
     // câmera caiu com o view aberto → desliga pra não ficar imagem morta

@@ -15,6 +15,10 @@
 # Teto de max_rec_s corta gravação esquecida (ex.: goal via porta usa
 # navigate_through_poses, que o nav_metrics não rastreia → sem nav_ended).
 #
+# Controle manual pela GUI (ex.: teste de bateria com live view mas sem encher
+# o SD): set_auto_record(False) faz os hooks de navegação virarem no-op;
+# start_manual() grava até ⏹/teto/câmera cair — nav_ended não encerra manual.
+#
 # Ao fechar um arquivo, um remux ffmpeg em background embrulha o MJPEG cru em
 # .mkv com timestamps (assistível em qualquer player); o cru é apagado se der
 # certo. Sem câmera plugada o serviço fica quieto tentando de novo a cada 5 s
@@ -102,7 +106,9 @@ class CameraService:
         self._rec_path = ''
         self._rec_started = 0.0
         self._rec_frames = 0
+        self._rec_manual = False  # gravação manual só para no ⏹/teto/câmera
         self._idle_since = None   # ts do último nav_ended sem novo goal
+        self._auto_record = True  # hooks de navegação disparam gravação?
 
         self._available = False
         self._running = True
@@ -124,6 +130,8 @@ class CameraService:
             return {
                 'available': self._available,
                 'recording': self._rec_file is not None,
+                'manual': self._rec_manual,
+                'auto_record': self._auto_record,
                 'file': os.path.basename(self._rec_path) if self._rec_file else '',
             }
 
@@ -139,6 +147,8 @@ class CameraService:
     def nav_active(self, label: str = 'nav'):
         """Navegação (re)começou — inicia gravação se parada, cancela debounce."""
         with self._rec_lock:
+            if not self._auto_record:
+                return
             self._idle_since = None
             if self._rec_file is not None:
                 return
@@ -151,8 +161,33 @@ class CameraService:
     def nav_ended(self):
         """Goal terminou — arma o debounce; para de vez se nada novo chegar."""
         with self._rec_lock:
-            if self._rec_file is not None and self._idle_since is None:
+            if (self._rec_file is not None and not self._rec_manual
+                    and self._idle_since is None):
                 self._idle_since = time.time()
+
+    def set_auto_record(self, on: bool):
+        """Liga/desliga a gravação automática nos hooks de navegação.
+
+        Não mexe numa gravação em andamento (auto some pelo debounce/■;
+        manual só pelo ⏹)."""
+        with self._rec_lock:
+            self._auto_record = bool(on)
+        self._emit_status()
+
+    def start_manual(self):
+        """⏺ da GUI — grava até o ⏹/teto/câmera cair (nav_ended não encerra).
+
+        Se já havia gravação automática rolando, ela vira manual (adota) —
+        não picota o arquivo."""
+        with self._rec_lock:
+            if self._rec_file is not None:
+                self._rec_manual = True
+                self._idle_since = None
+            elif self._available:
+                self._start_recording_locked('manual', manual=True)
+            else:
+                log.info("[Camera] ⏺ manual sem câmera — ignorado")
+        self._emit_status()
 
     def stop_recording(self, reason: str = 'stop'):
         """Parada imediata (■ Parar, shutdown, câmera caiu)."""
@@ -175,7 +210,7 @@ class CameraService:
 
     # ---------------- Gravação (interno) ----------------
 
-    def _start_recording_locked(self, label: str):
+    def _start_recording_locked(self, label: str, manual: bool = False):
         ts = time.strftime('%Y-%m-%d_%H-%M-%S')
         self._rec_path = os.path.join(self._log_dir, f'pov_{ts}_{label}.mjpeg')
         try:
@@ -187,6 +222,7 @@ class CameraService:
         self._rec_started = time.time()
         self._rec_frames = 0
         self._rec_seen = 0
+        self._rec_manual = manual
         self._idle_since = None
         log.info(f"[Camera] ● gravando POV → {os.path.basename(self._rec_path)}")
 
@@ -195,6 +231,7 @@ class CameraService:
             return
         f, path, frames = self._rec_file, self._rec_path, self._rec_frames
         self._rec_file = None
+        self._rec_manual = False
         self._idle_since = None
         try:
             f.close()

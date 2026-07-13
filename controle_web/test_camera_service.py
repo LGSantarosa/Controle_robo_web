@@ -166,6 +166,70 @@ def test_nav_active_sem_camera_e_noop(tmp_path):
     assert c.status()['recording'] is False
 
 
+# ---------------- Controle manual / auto_record ----------------
+
+def test_auto_off_nav_active_nao_grava(cam):
+    cam.set_auto_record(False)
+    cam.nav_active('rota')
+    cam._handle_frame(jpeg(), now=100.0)
+    assert cam.status()['recording'] is False
+    assert rec_files(cam) == []
+
+
+def test_auto_volta_a_gravar(cam):
+    cam.set_auto_record(False)
+    cam.set_auto_record(True)
+    cam.nav_active('rota')
+    assert cam.status()['recording'] is True
+
+
+def test_manual_grava_e_para(cam):
+    cam.start_manual()
+    st = cam.status()
+    assert st['recording'] is True and st['manual'] is True
+    assert 'manual' in st['file']
+    cam._handle_frame(jpeg(b'f1'), now=100.0)
+    cam.stop_recording('manual')
+    assert cam.status()['recording'] is False
+    assert len(rec_files(cam)) == 1
+
+
+def test_manual_ignora_nav_ended(cam, monkeypatch):
+    # gravação manual não morre no debounce de fim de goal — só no ⏹/teto
+    monkeypatch.setattr('camera_service.time.time', lambda: 100.0)
+    cam.start_manual()
+    cam.nav_ended()
+    cam._handle_frame(jpeg(), now=200.0)   # muito além do grace de 8 s
+    assert cam.status()['recording'] is True
+
+
+def test_manual_respeita_teto(cam, monkeypatch):
+    monkeypatch.setattr('camera_service.time.time', lambda: 100.0)
+    cam.start_manual()
+    cam._handle_frame(jpeg(), now=100.0)
+    cam._handle_frame(jpeg(), now=100.0 + 1801.0)
+    assert cam.status()['recording'] is False
+
+
+def test_manual_adota_gravacao_auto(cam, monkeypatch):
+    # ⏺ com gravação de nav rolando: mesmo arquivo, mas para de obedecer o idle
+    monkeypatch.setattr('camera_service.time.time', lambda: 100.0)
+    cam.nav_active('rota')
+    path_antes = cam.status()['file']
+    cam.nav_ended()          # arma o debounce
+    cam.start_manual()       # adota → cancela o debounce
+    cam._handle_frame(jpeg(), now=200.0)
+    st = cam.status()
+    assert st['recording'] is True and st['manual'] is True
+    assert st['file'] == path_antes
+
+
+def test_manual_sem_camera_e_noop(tmp_path):
+    c = CameraService(log_dir=str(tmp_path), autostart=False)   # available=False
+    c.start_manual()
+    assert c.status()['recording'] is False
+
+
 def test_wait_frame_entrega_e_respeita_seq(cam):
     cam._handle_frame(jpeg(b'a'), now=100.0)
     seq, frame = cam.wait_frame(0, timeout=0.1)

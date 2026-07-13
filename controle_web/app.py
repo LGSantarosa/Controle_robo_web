@@ -449,6 +449,30 @@ def handle_set_scan_layer(data):
     emit('scan_layer_ack', map_bridge.set_scan_layer(on))
 
 
+@socketio.on('camera_record')
+def handle_camera_record(data):
+    """⏺/⏹ manual da POV pela GUI (data = {'action': 'start'|'stop'})."""
+    if camera_service is None:
+        emit('camera_ack', {'ok': False, 'error': 'sem câmera neste modo'})
+        return
+    action = (data or {}).get('action', '')
+    if action == 'start':
+        camera_service.start_manual()
+    elif action == 'stop':
+        camera_service.stop_recording('manual')
+    emit('camera_ack', {'ok': True, 'action': action})
+
+
+@socketio.on('camera_auto')
+def handle_camera_auto(data):
+    """Liga/desliga a gravação automática da POV nos goals de navegação."""
+    if camera_service is None:
+        emit('camera_ack', {'ok': False, 'error': 'sem câmera neste modo'})
+        return
+    camera_service.set_auto_record((data or {}).get('on', True))
+    emit('camera_ack', {'ok': True, 'auto_record': camera_service.status()['auto_record']})
+
+
 @socketio.on('start_waypoints')
 def handle_start_waypoints(data):
     if map_bridge is None:
