@@ -1122,8 +1122,14 @@ class MapBridge:
             self._sock.emit('waypoint_status', {'active': True, 'index': i, 'total': total})
             # Limpa o costmap local antes de enviar o próximo goal — evita
             # que o robô fique preso em células de custo alto após parar.
-            if self._clear_costmap_srv.wait_for_service(timeout_sec=1.0):
-                self._clear_costmap_srv.call_async(Empty.Request())
+            try:
+                if self._clear_costmap_srv.wait_for_service(timeout_sec=1.0):
+                    self._clear_costmap_srv.call_async(Empty.Request())
+            except Exception:
+                # Nó rclpy destruído (shutdown com waypoints ativos): encerra
+                # a rota em vez de estourar traceback na thread do runner.
+                self._wp_stop.set()
+                return
             time.sleep(0.5)
             if not self._wp_stop.is_set():
                 self._wp_send_goal_action(wp['x'], wp['y'], wp.get('yaw', 0.0))
