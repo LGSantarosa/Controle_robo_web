@@ -109,8 +109,9 @@
 - **Se o campo ainda mostrar resíduo**: próxima alavanca = suavizar a MIRA
   no driving (filtrar o bearing do carrot; só aceitar mudança > X°) — ataca
   o balanço do replan na fonte. Fresta real engasgando: subir gate 0.55→0.65.
-- Régua de comparação entre runs: `analyze_zigzag.py` (scratchpad da sessão;
-  recriar é fácil — turnings/min, % vai-e-volta, % carrot esticado, flips/min).
+- Régua de comparação entre runs: `bin/analyze_zigzag.py` (VERSIONADO em
+  `88ad244`; smoke-testado 07-13 no CSV de campo 07-09 — turnings/min,
+  % vai-e-volta, % carrot esticado, flips/min).
 
 ---
 
