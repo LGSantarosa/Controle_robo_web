@@ -5,6 +5,33 @@
 
 ---
 
+## 🔋 2026-07-13 (tarde) — TESTE DE ENDURANCE FEITO: Pi (2×12V) = ~62min, o gargalo
+
+> rota1 em LOOP na sala até apagar, POV live SEM gravar (Auto OFF novo na GUI).
+> CSVs puxados pro dev em `log/pi_2026-07-13/`. Dono + outras pessoas
+> circulando pela sala a run toda.
+
+- **RESPOSTA: ~62min / 649m** (13:57→14:59, apagão seco). Tração mal gastou:
+  vF 42.14→40.31 / vR 41.48→39.67 (~0.3V/10min, linear) → sozinha daria
+  ~3.5-4h. **As 12V da Pi mandam no jogo.** Se quiser mais autonomia:
+  alimentar a Pi da tração (36V→5V) ou mais capacidade; INA219 se quiser
+  a curva da Pi (hoje ninguém mede ela).
+- **Navegação impecável em 1h ininterrupta**: 90 goals, 89 SUCCEEDED /
+  1 ABORTED c/ retry ok, 58.6min de goal ativo, recoveries raras.
+- **👻 fantasma de parede ✅ validado na sala**: filtro vivo (898 clusters
+  descartados via `n_wallghost`), 30 blockeds (~8%) todos explicados por
+  GENTE (vigília correta — dono confirmou circulação). Carimbo final =
+  corredor do hotmilk.
+- **🌀 zigue-zague**: vai-e-volta 33% (282/854 turnings) vs baseline campo
+  ~50% — melhorou; sim deu 19%. A/B definitivo segue sendo no hotmilk.
+- **Apagão pegou ENTRE goals** (0.25s após waypoint concluir) → sem linha
+  POWERLOSS mesmo (nada ativo a perder); fsync do power CSV segurou até o
+  último 0.25s. 🟡 Radar: follow_debug PERDEU ~35s no apagão (flush sem
+  fsync; última linha truncada) — se quiser, aplicar fsync nos CSVs do
+  robot_nav; STALL falso em point-turn (rodas se mexendo no meas) anotado.
+
+---
+
 ## 🔋 2026-07-13 — Robô com bateria de volta: deploy FEITO + prep do teste de endurance
 
 - ✅ **Checklist de segunda itens 1 e 3**: Pi atualizada `3828c1d`→`721073b` +
