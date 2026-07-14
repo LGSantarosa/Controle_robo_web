@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Robô</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <!-- Adicionar à Tela de Início no iPad = abre em tela cheia sem barra.
+       Tela não dormir: Ajustes > Geral > Bloqueio Automático > Nunca
+       (iOS 9 não tem wake-lock). -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <style>
+    html, body { margin: 0; padding: 0; background: #000; overflow: hidden;
+                 width: 100%; height: 100%; }
+    #face { display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="face"></canvas>
+  <script src="{{ url_for('static', filename='face.js') }}"></script>
+</body>
+</html>
