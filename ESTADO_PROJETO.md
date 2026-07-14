@@ -40,6 +40,20 @@
   humano-prioridade CONTINUA mandando (guard blocked ≠ interação: nunca
   avançar em cima da pessoa — lição do tênis 07-10); encarar = point-turn
   fechado na IMU (autoridade 6.0), wz cap 2.4 perto de gente.
+- **🧠 ARQUITETURA seguir-pessoa (conversa 07-14, TUDO robô 1 — NUC é upgrade
+  futuro DESTE robô)**: LLM NÃO rastreia (loop de 15-30Hz vs segundos de
+  latência) — rastrear pessoa = "tap-to-track" clássico: detector (YOLO nano,
+  folga no NUC/OpenVINO) + tracker de ID (ByteTrack/DeepSORT). **Fusão:
+  câmera = IDENTIDADE** (qual pessoa é o alvo, re-ID quando some e volta;
+  FOV ~78° só frente), **LiDAR = GEOMETRIA** (rumo/distância 360° no escuro,
+  cbear_deg já validado no guard) → controle vira/segue pelo lidar, câmera
+  só tranca o alvo. **LLM = camada de DECISÃO do modo interação** (com quem
+  interagir, o que falar, quando voltar pra rota — 1 decisão a cada segundos,
+  não o loop). Dono vai SUBIR a C922 pra logo abaixo do rosto/iPad no tripé
+  (vê torso/rosto em vez de perna; atenção: vibração no alto do tripé e
+  alcance do cabo USB até a Pi; POV de rota muda de perspectiva). **Ordem
+  sugerida: fase 2 olhos (lidar puro) → modo interação lidar-puro → câmera/
+  NUC entra só pra dar identidade ao alvo** — cada etapa funciona sozinha.
 - **⏳ TESTE PENDENTE do tripé no lidar**: pernas DENTRO do raio de ignorar
   (0.15m) viram +inf → costmap descarta (inf_is_valid=false), guard trata
   como desconhecido (nunca "livre") → sem BO por design. Risco real = perna
