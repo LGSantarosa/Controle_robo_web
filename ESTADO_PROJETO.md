@@ -1,7 +1,39 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-13**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-14**.
+
+---
+
+## 🏆 2026-07-14 — CARIMBO NO HOTMILK: zigue-zague A/B GANHO + fantasma de parede validado no campo
+
+> Ida e volta na rota longa do hotmilk, robô 100% solo ("foi muito bom" — dono).
+> As 3 tentativas 13:19-13:30 foram canceladas pelo dono (configurando música
+> pro pessoal ouvir o robô chegando — NÃO investigar). CSVs em
+> `log/pi_2026-07-14/`; vídeos POV em `~/Videos/pov_2026-07-14/`.
+
+- **🌀 Zigue-zague FECHADO (A/B na mesma rota vs baseline 07-09)**: turnings/min
+  ida 12,3→**3,9** (↓3x) / volta 14,4→**8,5**; flips_wz/min ida 7,9→**1,8** /
+  volta 10,2→**4,7**; girando ida 19→12%. **IDA RECORDE: 55,6m SUCCEEDED
+  direto a 0,321 m/s de média** (melhor histórico era 0,261). Resíduo: dos
+  giros que sobram, ~metade ainda se cancela (vai-e-volta 46-53%) — raro o
+  bastante pra não incomodar; alavanca futura = filtrar a mira do carrot.
+- **👻 Fantasma de parede CARIMBADO**: 718 clusters descartados (`n_wallghost`),
+  **zero parada seca solo** — todos os 8 blockeds das pernas solo tinham gente
+  real (n_moving até 5 na volta = plateia da música; volta ficou 28% blocked,
+  por isso mais lenta que a ida).
+- **2 ABORTED na volta = degradação graciosa, não BO de comportamento**: pico
+  de atraso TF/scan ~2s → RotationShim falha transform → nav2 aborta → runner
+  reenviou sozinho e completou. No 1º, spin de recovery estourou o tempo com o
+  guard segurando (4 pessoas perto — correto). 🟡 Radar: collision_monitor
+  chegou a IGNORAR o scan por ~2s ("timestamps differ 1.7-2.1s") — suspeita
+  CPU da Pi sob carga (POV gravando + multidão de clusters).
+- Baterias nem sentiram (41,7/41,0V no fim). Pi estava em `38bc0e9` (só docs
+  atrás da main).
+- 🟡 Radar acumulado: (1) pico lag TF/scan ~2s sob carga; (2) fsync nos CSVs
+  do robot_nav (follow_debug perdeu 35s no apagão 07-13); (3) STALL falso em
+  point-turn; (4) vídeos POV antigos de 07-09/10 ainda na Pi (~2,6GB) —
+  conferir os já puxados e apagar lá.
 
 ---
 
