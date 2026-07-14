@@ -5,6 +5,52 @@
 
 ---
 
+## 🙂 2026-07-14 (tarde) — CARA DO ROBÔ no iPad 2 (✅ fase 1) + IDEIAS DE INTERATIVIDADE (anotadas, dono em reunião)
+
+> Tripé em cima do robô vai segurar um iPad 2 = a CARA do robô. iPad 2 para no
+> iOS 9.3.5 (WebKit 2015): a GUI principal (porta 5000) morre em silêncio nele
+> (ES6). Solução: app SEPARADO em `face_web/` na **porta 7000**, ES5 puro.
+
+- ✅ **Fase 1 FEITA e aprovada no iPad real** (`f4ab989`): olhos robóticos ciano
+  (estilo Cozmo/EVE), piscada 3-7s, olhar vagando, micro-expressões (happy ^^,
+  squint) a cada 30-60s. `face_web/face_app.py` (Flask standalone, rodar com
+  `python3 face_web/face_app.py`), `static/face.js` ES5 com aviso no topo,
+  **teste de léxico barra sintaxe pós-ES5** (pegou até "Promise" em comentário).
+  Tela cheia no iPad: Safari → Compartilhar → Adicionar à Tela de Início (meta
+  apple-mobile-web-app-capable já na página); Bloqueio Automático = Nunca.
+  ⏳ deploy: subir o face_app na Pi (iPad aponta pro IP dela :7000).
+- **📷 Câmera do iPad = IMPOSSÍVEL** (getUserMedia só iOS 11+; app nativo iOS 9
+  inviável). iPad = tela burra. Visão de câmera se um dia precisar = C922 na
+  Pi, mas CPU já é gargalo (lag TF/scan hoje) → LiDAR é o caminho.
+- **⏭️ FASE 2 — olhos SEGUEM a pessoa via LiDAR (desenhada, não começada)**:
+  motion_guard JÁ calcula `cbear_deg` (rumo do cluster móvel mais próximo, hoje
+  só no CSV) e já publica `motion_guard/state`. Plano: (1) publisher aditivo
+  `motion_guard/status` JSON (estado+distância+cbear_deg); (2) face_app na Pi
+  assina via rclpy e expõe `GET /state`; (3) face.js XHR ~4Hz mira os olhos no
+  rumo + humor real (slowing=arregalado seguindo, blocked="opa licença", sem
+  goal=sonolento). Validável 100% no SIM (pessoa de 2 pernas teleop do
+  sala_grande, `bin/teleop-pernas`).
+- **💡 IDEIA DO DONO — MODO INTERAÇÃO (anotar, discutir na volta)**: o robô
+  DECIDE quem seguir/interagir. Enquanto a pessoa estiver dentro do "raio de
+  interação": vira DE FRENTE pra pessoa (point-turn, nunca arco) e interage
+  (interações em si = definir depois); pessoa foi embora → retoma o caminho
+  prévio (se tinha). Notas técnicas pra hora do design: precisa suspender/
+  retomar o goal nav2 (pausa + resume do waypoint runner); escolher/latchar o
+  cluster-alvo (parente da vigília do guard); raio de interação = knob novo;
+  humano-prioridade CONTINUA mandando (guard blocked ≠ interação: nunca
+  avançar em cima da pessoa — lição do tênis 07-10); encarar = point-turn
+  fechado na IMU (autoridade 6.0), wz cap 2.4 perto de gente.
+- **⏳ TESTE PENDENTE do tripé no lidar**: pernas DENTRO do raio de ignorar
+  (0.15m) viram +inf → costmap descarta (inf_is_valid=false), guard trata
+  como desconhecido (nunca "livre") → sem BO por design. Risco real = perna
+  na BEIRADA (~0.13-0.16m do centro): ruído vaza pra fora do filtro → "parede"
+  fantasma a 16cm → PolygonStop/guard latcham. Se acontecer: subir
+  `min_valid_range` (0.15→0.18-0.20, ainda dentro do footprint 0.25) — o
+  param é lido SÓ NO BOOT do scan_sanitizer (launch nem passa valor; ros2
+  param set ao vivo NÃO funciona). Sombra: 3 pernas ≈ 30-40° cegos (ok).
+
+---
+
 ## 🏆 2026-07-14 — CARIMBO NO HOTMILK: zigue-zague A/B GANHO + fantasma de parede validado no campo
 
 > Ida e volta na rota longa do hotmilk, robô 100% solo ("foi muito bom" — dono).
