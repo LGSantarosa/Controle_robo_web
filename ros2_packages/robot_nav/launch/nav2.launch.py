@@ -147,10 +147,17 @@ def generate_launch_description():
         # min_points=2 na PolygonStop, 2 pontinhos congelavam o robô no meio
         # da PORTA (captura 2026-06-12). /scan -> /scan_safe só troca esses
         # por inf; SLAM/costmaps/cone_detector seguem no /scan cru.
+        # 2026-07-14: min_valid_range 0.15 -> 0.23. O tripé da "cara" (iPad)
+        # montado EM CIMA do robô põe 3 pernas no feixe do lidar, a 0.17-0.21m
+        # do centro (setores ~60/182/306°, 100% dos scans). Corpo tem meia-
+        # largura 0.25m, então retorno <0.23m segue fisicamente impossível de
+        # ser obstáculo real — corta as pernas sem comer nada encostado no
+        # para-choque. Filtro por RAIO (não por setor) pra sobreviver a
+        # remontagem do tripé girado.
         Node(
             package='robot_nav', executable='scan_sanitizer',
             name='scan_sanitizer', output=nav_output,
-            parameters=[sim_time_param],
+            parameters=[sim_time_param, {'min_valid_range': 0.23}],
         ),
         # Diagnóstico "congela perto do goal" (2026-06-24): grava a cadeia
         # cmd_vel_nav/nav_vel/cmd_vel + odom num CSV (controle_web/logs/
