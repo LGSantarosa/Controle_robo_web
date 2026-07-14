@@ -54,14 +54,21 @@
   alcance do cabo USB até a Pi; POV de rota muda de perspectiva). **Ordem
   sugerida: fase 2 olhos (lidar puro) → modo interação lidar-puro → câmera/
   NUC entra só pra dar identidade ao alvo** — cada etapa funciona sozinha.
-- **⏳ TESTE PENDENTE do tripé no lidar**: pernas DENTRO do raio de ignorar
-  (0.15m) viram +inf → costmap descarta (inf_is_valid=false), guard trata
-  como desconhecido (nunca "livre") → sem BO por design. Risco real = perna
-  na BEIRADA (~0.13-0.16m do centro): ruído vaza pra fora do filtro → "parede"
-  fantasma a 16cm → PolygonStop/guard latcham. Se acontecer: subir
-  `min_valid_range` (0.15→0.18-0.20, ainda dentro do footprint 0.25) — o
-  param é lido SÓ NO BOOT do scan_sanitizer (launch nem passa valor; ros2
-  param set ao vivo NÃO funciona). Sombra: 3 pernas ≈ 30-40° cegos (ok).
+- **✅ TESTE DO TRIPÉ NO LIDAR FEITO 07-14 — filtro deployado (`bb979ff`)**:
+  medido no real, pernas a **0.17-0.21m** do centro (setores ~60°/182°/306°,
+  100% dos scans) — FORA do corte antigo de 0.15. Fix: `min_valid_range`
+  0.15→**0.23** via nav2.launch.py (corpo=0.25m ⇒ retorno <0.23 é
+  fisicamente impossível; filtro por RAIO sobrevive a remontagem girada).
+  Validado ao vivo: /scan cru ~16 pts/scan de perna, **/scan_safe = 0**;
+  AMCL ~90% match com tripé (localização firme). GUI overlay 📡 mostra /scan
+  cru → 3 pontos seguem visíveis (cosmético). Futuro SLAM usa /scan cru →
+  pernas entrariam no mapa (tirar tripé ou apontar pro scan_safe nesse dia).
+  **⏳ próxima ligada** (bateria acabou): subir launch 1x limpo (hoje teve
+  launch DUPLICADO respawnando nós — matar com `pkill -f "[r]os2 launch"` +
+  `"[r]os-args"`, padrão com colchete pra não se matar) e ler
+  /motion_guard/state (latched, echo c/ `--qos-durability transient_local`)
+  + costmap no footprint → confirmar que aceitaria andar; depois teste real
+  com tripé PRESO.
 
 ---
 
