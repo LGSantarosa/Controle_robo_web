@@ -63,3 +63,65 @@ def test_face_js_es5_puro():
     ]
     for pat, nome in proibidos:
         assert not re.search(pat, js), 'sintaxe pos-ES5 no face.js: ' + nome
+
+
+# ---- fase 2: /state (olhos seguem a pessoa) ------------------------------
+
+def _grava_json(tmp_path, cbear, idade_s=0.0):
+    import json
+    import time
+    p = tmp_path / 'face.json'
+    p.write_text(json.dumps({'ts': 0, 'cbear_deg': cbear}))
+    if idade_s:
+        velho = time.time() - idade_s
+        os.utime(str(p), (velho, velho))
+    return str(p)
+
+
+def test_state_sem_arquivo():
+    import time
+    import face_state
+    assert face_state.read_state('/nao/existe.json', time.time()) == \
+        {'person': False}
+
+
+def test_state_stale(tmp_path):
+    import time
+    import face_state
+    p = _grava_json(tmp_path, 30, idade_s=5.0)
+    assert face_state.read_state(p, time.time()) == {'person': False}
+
+
+def test_state_null_e_pessoa_atras(tmp_path):
+    import time
+    import face_state
+    assert face_state.read_state(_grava_json(tmp_path, None),
+                                 time.time()) == {'person': False}
+    assert face_state.read_state(_grava_json(tmp_path, 135),
+                                 time.time()) == {'person': False}
+
+
+def test_state_pessoa_na_frente_mapeia_e_flipa(tmp_path):
+    import time
+    import face_state
+    p = _grava_json(tmp_path, 45)
+    assert face_state.read_state(p, time.time()) == \
+        {'person': True, 'x': 0.5}
+    assert face_state.read_state(p, time.time(), sign=-1.0) == \
+        {'person': True, 'x': -0.5}
+
+
+def test_state_json_corrompido(tmp_path):
+    import time
+    import face_state
+    p = tmp_path / 'face.json'
+    p.write_text('{meia lin')
+    assert face_state.read_state(str(p), time.time()) == {'person': False}
+
+
+def test_state_route(tmp_path):
+    pytest.importorskip('flask')
+    import face_app
+    face_app.STATE_FILE = _grava_json(tmp_path, 45)
+    st = face_app.app.test_client().get('/state').get_json()
+    assert st == {'person': True, 'x': 0.5}

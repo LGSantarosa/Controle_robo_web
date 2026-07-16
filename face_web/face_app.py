@@ -8,10 +8,26 @@ ES5 puro — leia o aviso no topo de static/face.js antes de mexer; o
 test_face_app.py barra sintaxe moderna.
 
 Rodar: python3 face_web/face_app.py   (escuta em 0.0.0.0:7000)
+
+Fase 2 (olhos seguem a pessoa): o motion_guard grava o rumo do cluster
+móvel mais próximo em /tmp/motion_guard_face.json; a rota /state lê e
+devolve pro face.js (poll XHR). Spec:
+docs/superpowers/specs/2026-07-16-face-follow-design.md
 """
-from flask import Flask, render_template
+import os
+import time
+
+from flask import Flask, jsonify, render_template
+
+import face_state
 
 app = Flask(__name__)
+
+# Sinal do espelhamento olho×mundo: depende de pra onde o iPad aponta no
+# tripé — flipar pra -1.0 na demo se o olho seguir pro lado errado.
+FACE_GAZE_SIGN = 1.0
+STATE_FILE = os.environ.get('FACE_STATE_FILE',
+                            '/tmp/motion_guard_face.json')
 
 
 @app.route('/')
@@ -19,9 +35,11 @@ def face():
     return render_template('face.html')
 
 
-# Gancho da fase 2 (cara REATIVA): uma rota /state vai devolver o humor
-# derivado do estado real do robô (guard blocked, goal ativo, idle...) e o
-# face.js passa a chamá-la por XHR. Hoje é decorativo puro — nada a fazer.
+@app.route('/state')
+def state():
+    """Fase 2 (cara reativa): rumo da pessoa vindo do motion_guard."""
+    return jsonify(face_state.read_state(STATE_FILE, time.time(),
+                                         sign=FACE_GAZE_SIGN))
 
 
 if __name__ == '__main__':
