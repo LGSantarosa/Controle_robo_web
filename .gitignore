@@ -32,3 +32,6 @@ firmware/**/.pio/
 # Vídeos POV da câmera (grandes — ficam fora do git)
 pov_*.mkv
 pov_*.mjpeg
+
+# relatório solto na raiz (dono mandou ignorar 07-16)
+Relat*rio rob* educa*.pdf
