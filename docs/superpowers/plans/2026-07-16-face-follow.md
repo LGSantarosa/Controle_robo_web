@@ -41,7 +41,7 @@ Spec: `docs/superpowers/specs/2026-07-16-face-follow-design.md`.
   (True = gravou); atributo `last_error: str|None`. JSON gravado:
   `{"ts": 10.0, "cbear_deg": 30}` (ou `null`). Task 2 lê esse arquivo.
 
-- [ ] **Step 1: testes que falham** — acrescentar ao fim de
+- [x] **Step 1: testes que falham** — acrescentar ao fim de
   `test/test_motion_guard.py`:
 
 ```python
@@ -78,11 +78,11 @@ def test_face_state_file_io_error_nao_propaga(tmp_path):
     assert w.last_error
 ```
 
-- [ ] **Step 2: rodar e ver falhar** —
+- [x] **Step 2: rodar e ver falhar** —
   `cd ros2_packages/robot_nav && python3 -m pytest test/test_motion_guard.py -q`
   Esperado: 3 FAIL com `ImportError: cannot import name 'FaceStateFile'`.
 
-- [ ] **Step 3: implementar** — em `motion_guard.py`: adicionar `import json`
+- [x] **Step 3: implementar** — em `motion_guard.py`: adicionar `import json`
   e `import os` no bloco de imports (linha ~33); classe módulo-level antes de
   `def main(...)` (linha ~451):
 
@@ -137,10 +137,10 @@ class FaceStateFile:
                 self._face.last_error = None
 ```
 
-- [ ] **Step 4: rodar e ver passar** — mesmo comando do Step 2.
+- [x] **Step 4: rodar e ver passar** — mesmo comando do Step 2.
   Esperado: 45 passed.
 
-- [ ] **Step 5: commit** —
+- [x] **Step 5: commit** —
   `git add ros2_packages/robot_nav && git commit -m "motion_guard: publica rumo da pessoa pro face_web (JSON atômico em /tmp)"`
 
 ---
@@ -159,7 +159,7 @@ class FaceStateFile:
   -> dict` — `{'person': False}` ou `{'person': True, 'x': -1..1}`;
   `GET /state` devolve isso em JSON. Task 3 consome via XHR.
 
-- [ ] **Step 1: testes que falham** — acrescentar ao `test_face_app.py`
+- [x] **Step 1: testes que falham** — acrescentar ao `test_face_app.py`
   (usa o `sys.path.insert` que já existe lá):
 
 ```python
@@ -225,11 +225,11 @@ def test_state_route(tmp_path):
     assert st == {'person': True, 'x': 0.5}
 ```
 
-- [ ] **Step 2: rodar e ver falhar** —
+- [x] **Step 2: rodar e ver falhar** —
   `python3 -m pytest face_web/test_face_app.py -q`
   Esperado: 5 FAIL (`No module named 'face_state'`) + rota skip local.
 
-- [ ] **Step 3: implementar** — criar `face_web/face_state.py`:
+- [x] **Step 3: implementar** — criar `face_web/face_state.py`:
 
 ```python
 """Lê o /tmp/motion_guard_face.json (motion_guard, fase 2 da cara) e vira
@@ -288,12 +288,12 @@ def state():
   (docstring do módulo: atualizar a frase do gancho pra dizer que o /state
   existe e de onde vem o dado.)
 
-- [ ] **Step 4: rodar e ver passar** —
+- [x] **Step 4: rodar e ver passar** —
   `python3 -m pytest face_web/test_face_app.py -q` → esperado: 9 passed,
   2 skipped (os 2 de flask — o venv do controle_web tem flask mas NÃO tem
   pytest, verificado; a rota real é exercitada no smoke manual da Task 3).
 
-- [ ] **Step 5: commit** —
+- [x] **Step 5: commit** —
   `git add face_web && git commit -m "face_web: rota /state — rumo da pessoa lido do JSON do motion_guard"`
 
 ---
@@ -308,15 +308,15 @@ def state():
 **Interfaces:**
 - Consumes: `GET /state` da Task 2 (`{"person":true,"x":0.5}`).
 
-- [ ] **Step 1: ampliar teste de pedaços** — em
+- [x] **Step 1: ampliar teste de pedaços** — em
   `test_face_js_expressoes_completas`, acrescentar à lista `pedaco`:
   `'pollState'`, `"'/state'"`, `'personHoldUntil'`.
 
-- [ ] **Step 2: rodar e ver falhar** —
+- [x] **Step 2: rodar e ver falhar** —
   `python3 -m pytest face_web/test_face_app.py -q` → 1 FAIL
   ("sumiu do face.js: pollState").
 
-- [ ] **Step 3: implementar** — em `face.js`:
+- [x] **Step 3: implementar** — em `face.js`:
 
   (a) junto do bloco de estado (após `var nextGazeAt = now() + 2;`):
 
@@ -368,11 +368,11 @@ def state():
   setInterval(pollState, 300);
 ```
 
-- [ ] **Step 4: rodar e ver passar** —
+- [x] **Step 4: rodar e ver passar** —
   `python3 -m pytest face_web/test_face_app.py -q` → tudo verde (léxico ES5
   incluso).
 
-- [ ] **Step 5: smoke manual no dev** — rodar
+- [x] **Step 5: smoke manual no dev** — rodar
   `controle_web/.venv/bin/python3 face_web/face_app.py`, abrir
   `http://localhost:7000`, e num outro terminal simular a pessoa andando:
 
@@ -387,7 +387,7 @@ done
   escrita (stale) + 3s de hold, voltam a vagar. `curl localhost:7000/state`
   pra ver o JSON cru.
 
-- [ ] **Step 6: commit** —
+- [x] **Step 6: commit** —
   `git add face_web && git commit -m "face_web: olhos travam na pessoa (poll ES5 no /state, hold 3s)"`
 
 ---
