@@ -662,6 +662,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                 self.guard.observe(self._now(), [], pose, self._wz,
                                    polar=polar)
                 self._last_pose = pose
+                self._face_tick()
                 return
             c, s = math.cos(yaw), math.sin(yaw)
             xl, yl = r[ok] * np.cos(a[ok]), r[ok] * np.sin(a[ok])
@@ -669,6 +670,35 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                            (tt.y + xl * s + yl * c).tolist()))
             self.guard.observe(self._now(), pts, pose, self._wz, polar=polar)
             self._last_pose = pose
+            self._face_tick()
+
+        def _person_centroid(self):
+            """(cx, cy, cbear_deg) do cluster móvel mais PRÓXIMO (o que
+            manda na decisão), ou ('', '', '') sem pessoa/pose."""
+            if not self.guard.moving_clusters or self._last_pose is None:
+                return '', '', ''
+            px, py, pyaw = self._last_pose
+            cl = min(self.guard.moving_clusters,
+                     key=lambda cl: min(math.hypot(p[0] - px, p[1] - py)
+                                        for p in cl))
+            cx = round(sum(p[0] for p in cl) / len(cl), 2)
+            cy = round(sum(p[1] for p in cl) / len(cl), 2)
+            cbear = round(math.degrees(
+                (math.atan2(cy - py, cx - px) - pyaw + math.pi)
+                % (2 * math.pi) - math.pi))
+            return cx, cy, cbear
+
+        def _face_tick(self):
+            # cara fase 2 no callback do SCAN (flui sempre que o lidar
+            # roda), não no do cmd — auto_vel_pre fica MUDO sem goal ativo
+            # e o olho tem que seguir gente com o robô parado sem rota.
+            _, _, cbear = self._person_centroid()
+            self._face.update(self._now(), cbear if cbear != '' else None)
+            if self._face.last_error:
+                self.get_logger().warn(
+                    'face state: ' + self._face.last_error,
+                    throttle_duration_sec=10.0)
+                self._face.last_error = None
 
         def _on_cmd(self, msg: Twist):
             t = self._now()
@@ -684,24 +714,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                     self.get_logger().warn(
                         'pass-through (scan/TF indisponível ou disabled)',
                         throttle_duration_sec=5.0)
-            cx = cy = cbear = ''
-            if self.guard.moving_clusters and self._last_pose is not None:
-                px, py, pyaw = self._last_pose
-                # centróide do cluster mais PRÓXIMO (o que manda na decisão)
-                cl = min(self.guard.moving_clusters,
-                         key=lambda cl: min(math.hypot(p[0] - px, p[1] - py)
-                                            for p in cl))
-                cx = round(sum(p[0] for p in cl) / len(cl), 2)
-                cy = round(sum(p[1] for p in cl) / len(cl), 2)
-                cbear = round(math.degrees(
-                    (math.atan2(cy - py, cx - px) - pyaw + math.pi)
-                    % (2 * math.pi) - math.pi))
-            self._face.update(t, cbear if cbear != '' else None)
-            if self._face.last_error:
-                self.get_logger().warn(
-                    'face state: ' + self._face.last_error,
-                    throttle_duration_sec=10.0)
-                self._face.last_error = None
+            cx, cy, cbear = self._person_centroid()
             pose = self._last_pose or ('', '', '')
             self._csv.writerow([
                 round(t, 3), state, len(self.guard.moving_clusters),
