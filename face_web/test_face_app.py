@@ -41,6 +41,7 @@ def test_face_js_expressoes_completas():
     # quebra em silêncio no iPad — este teste transforma isso em CI.
     js = open(os.path.join(BASE, 'static', 'face.js')).read()
     for pedaco in ['drawBrow', 'drawMouth', 'setMood', 'touchstart',
+                   'requestFullscreen',
                    "happy", "squint", "focused", "yawn"]:
         assert pedaco in js, 'sumiu do face.js: ' + pedaco
 

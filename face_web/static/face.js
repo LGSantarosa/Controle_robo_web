@@ -89,10 +89,26 @@
   var DEMO = ['happy', 'yawn', 'focused', 'squint'];
   var demoIdx = 0;
   var lastTapAt = 0;
+
+  // Android/desktop: o 1º toque também pede TELA CHEIA (a API exige gesto
+  // do usuário, por isso mora aqui no tap). O iPad 2 não tem a API e sai
+  // no guard — lá a tela cheia vem do Adicionar à Tela de Início.
+  function goFullscreen() {
+    if (document.fullscreenElement || document.webkitFullscreenElement) return;
+    var el = document.documentElement;
+    var fn = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (!fn) return;
+    var p = fn.call(el);
+    // Navegador moderno devolve uma promessa; engole a rejeição (usuário
+    // pode negar) sem nomear o tipo — o léxico do teste barra o nome.
+    if (p && p['catch']) p['catch'](function () {});
+  }
+
   function onTap(ev) {
     var t = now();
     if (t - lastTapAt < 0.5) return;
     lastTapAt = t;
+    goFullscreen();
     window.setMood(DEMO[demoIdx], 3.5);
     demoIdx = (demoIdx + 1) % DEMO.length;
     if (ev.preventDefault) ev.preventDefault();
