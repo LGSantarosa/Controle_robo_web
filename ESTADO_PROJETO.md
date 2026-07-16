@@ -23,13 +23,17 @@
   dev: `http://robo-desktop.local:7000` HTTP 200. iPad aponta pra essa URL.
   Roda com o python do `.venv` do controle_web (flask só existe lá).
   Reiniciar após deploy: `systemctl --user restart face_web`.
-- **⏳ CARA v2: boca + sobrancelhas (local no dev, AGUARDA aprovação do dono)**:
-  humores novos `focused` (franze, semicerra, olhar trava no centro) e `yawn`
-  (bocejo animado ~4s, envelope de seno) além de happy/squint; boca de lábios
-  em quadrática (fechada = traço curvo, aberta = "O"); pose interpolada por
-  lerp (sem salto seco); micro-expressões sorteiam entre os 4. ES5 puro
-  mantido + teste novo dos humores (3 passed). NÃO commitado — rodando em
-  `localhost:7000` no dev pro dono ver (`setMood('yawn')` etc no console).
+- **✅ CARA v2: boca + sobrancelhas + toque (`feb2a70`, APROVADA no dev;
+  ⏳ deploy)**: humores novos `focused` (franze, semicerra, olhar trava no
+  centro) e `yawn` (bocejo animado ~4s, envelope de seno) além de
+  happy/squint; boca de lábios em quadrática (fechada = traço curvo, aberta
+  = "O"); pose interpolada por lerp (sem salto seco); micro-expressões
+  sorteiam entre os 4. **Toque/clique na tela roda a fila
+  happy→yawn→focused→squint** (pra demonstrar; trava de 0.5s pro click
+  fantasma do iPad). ES5 puro mantido + teste novo dos humores. **Dono
+  desligou a Pi antes do deploy** — na próxima ligada: `git fetch && git
+  reset --hard origin/main` + `systemctl --user restart face_web` (só isso;
+  é código web, sem colcon).
 - **⏳ Segue pendente da última ligada**: validação do tripé (launch 1x
   LIMPO — matar órfãos com `pkill -f "[r]os2 launch"` + `"[r]os-args"` —,
   ler `/motion_guard/state` + costmap no footprint, depois run real com
