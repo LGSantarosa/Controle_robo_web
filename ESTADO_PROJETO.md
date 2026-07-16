@@ -5,6 +5,41 @@
 
 ---
 
+## 🔋🙂 2026-07-16 (tarde) — Re-teste de bateria (hovers tripam, Pi nova segue viva) + CARA FASE 2 pronta (⏳ deploy)
+
+> Robô rodou a rota em loop 13:54→14:47 com as BATERIAS NOVAS da Pi
+> (2×12V paralelo, mesma config). CSVs em `log/pi_2026-07-16/`.
+
+- **🔌 Quem morreu foram os HOVERS, não a Pi** — e eles NÃO estavam com
+  carga cheia: começaram a run em **40,4V** (07-13, cheios, era 42,4V) —
+  praticamente de onde o teste passado parou. Taxa de descarga igual
+  (~2V/h). Morte = **trip simultâneo dos 2 BMS** (`trip_front|trip_rear`
+  no MESMO 0,1s) a 38,7/38,1V, longe do cutoff ~34V, no meio de um pico
+  de point-turn (450/-450) — o já conhecido BMS desarmando sob pico, com
+  pack meio-vazio ajudando. Run: 69 goals (66 SUCCEEDED/3 ABORTED c/
+  retry), ~490m em ~53min.
+- **🏆 Baterias novas da Pi JÁ BATERAM as antigas**: Pi bootou 13:43 e
+  seguia viva 1h07+ depois com a stack CHEIA rodando (antigas: apagão aos
+  62min). Número final pendente — dono deixou a stack ligada até a Pi
+  morrer sozinha e avisa; **NÃO mexer na Pi durante a drenagem** (deploy
+  mudaria a carga do teste).
+- **🙂 CARA FASE 2 IMPLEMENTADA (olhos seguem a pessoa) — ⏳ deploy**:
+  spec `65287d3` + plano `d606495`, código em 3 commits: motion_guard
+  grava `/tmp/motion_guard_face.json` (FaceStateFile: atômico, ≤5Hz,
+  null na transição, I/O nunca derruba o guard — `f9a8008`); face_app
+  ganha `GET /state` com mapeamento ±90°→±1 e `FACE_GAZE_SIGN` +
+  `face_state.py` puro (`f49492c`); face.js polla /state a cada 300ms e
+  trava o gazeTarget com hold de 3s, pessoa vence o vagar e o `focused`
+  (`a7407f2`). 277 testes robot_nav + 8 face_web verdes; smoke manual ok
+  (curl varreu +45/-80/atrás/null/stale). **Deploy na próxima ligada**
+  (a Pi está em `a8b3259` — cara v2 `feb2a70` TAMBÉM pendente):
+  `git fetch && git reset --hard origin/main` + **colcon build robot_nav**
+  (motion_guard mudou!) + `systemctl --user restart face_web`. Demo com o
+  dono na frente pra acertar o sinal (`FACE_GAZE_SIGN=-1.0` se o olho for
+  pro lado errado). Próximo da interatividade = MODO INTERAÇÃO (corpo
+  gira ≤15° pra acompanhar, desiste se a pessoa sair do raio — ideia do
+  dono, spec separado, mexe em cmd_vel/guard/nav2).
+
 ## 🧹 2026-07-16 — Faxina de vídeos ✅ + face_web como serviço na Pi ✅ + boca/sobrancelhas (⏳ aprovação)
 
 > Volta ao robô 1 (o repo do robô 2/livox segue em pausa). Pi estava ligada,
