@@ -5,7 +5,9 @@ import json
 import os
 
 STALE_S = 1.5     # arquivo mais velho que isso = stack caída, sem pessoa
-MAX_DEG = 90.0    # pessoa atrás da tela: ninguém vê a cara, ignora
+BEHIND_DEG = 90.0  # pessoa atrás da tela: ninguém vê a cara, ignora
+FULL_DEG = 45.0    # daqui pra fora o olho já crava no canto (pedido do dono
+                   # 07-16: com 90° o olho "virava bem pouco")
 
 
 def read_state(path, now, sign=1.0):
@@ -17,6 +19,7 @@ def read_state(path, now, sign=1.0):
     except (OSError, ValueError):
         return {'person': False}
     cbear = data.get('cbear_deg')
-    if cbear is None or abs(cbear) > MAX_DEG:
+    if cbear is None or abs(cbear) > BEHIND_DEG:
         return {'person': False}
-    return {'person': True, 'x': round(sign * cbear / MAX_DEG, 3)}
+    x = max(-1.0, min(1.0, cbear / FULL_DEG))
+    return {'person': True, 'x': round(sign * x, 3)}

@@ -105,11 +105,15 @@ def test_state_null_e_pessoa_atras(tmp_path):
 def test_state_pessoa_na_frente_mapeia_e_flipa(tmp_path):
     import time
     import face_state
-    p = _grava_json(tmp_path, 45)
+    p = _grava_json(tmp_path, 30)
     assert face_state.read_state(p, time.time()) == \
-        {'person': True, 'x': 0.5}
+        {'person': True, 'x': 0.667}
     assert face_state.read_state(p, time.time(), sign=-1.0) == \
-        {'person': True, 'x': -0.5}
+        {'person': True, 'x': -0.667}
+    # de FULL_DEG (45°) até BEHIND_DEG o olho fica cravado no canto
+    p = _grava_json(tmp_path, 70)
+    assert face_state.read_state(p, time.time()) == \
+        {'person': True, 'x': 1.0}
 
 
 def test_state_json_corrompido(tmp_path):
@@ -123,6 +127,6 @@ def test_state_json_corrompido(tmp_path):
 def test_state_route(tmp_path):
     pytest.importorskip('flask')
     import face_app
-    face_app.STATE_FILE = _grava_json(tmp_path, 45)
+    face_app.STATE_FILE = _grava_json(tmp_path, 30)
     st = face_app.app.test_client().get('/state').get_json()
-    assert st == {'person': True, 'x': 0.5}
+    assert st == {'person': True, 'x': 0.667}

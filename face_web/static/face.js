@@ -293,7 +293,9 @@
       var st = null;
       try { st = JSON.parse(xhr.responseText); } catch (e) { return; }
       if (st && st.person) {
-        gazeTarget.x = st.x;
+        // 1.6x: pessoa desloca o olho BEM mais que o vagar (que fica em
+        // ±1) — senão "vira bem pouco" e não parece que está olhando.
+        gazeTarget.x = st.x * 1.6;
         gazeTarget.y = 0.1;
         personHoldUntil = now() + 3;
       }
