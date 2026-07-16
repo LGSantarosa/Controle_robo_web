@@ -1,4 +1,4 @@
-/* face.js — olhos do robô (roda no iPad 2 / iOS 9.3.5!)
+/* face.js — cara do robô: olhos, sobrancelhas e boca (roda no iPad 2 / iOS 9.3.5!)
  *
  * ATENÇÃO: este arquivo é ES5 PURO de propósito. O iPad 2 parou no WebKit
  * de 2015: nada de sintaxe nem API pós-2015 — só var, function e XHR. Um
@@ -36,21 +36,78 @@
   var blinkPhase = 'idle';            // idle | closing | opening
   var nextBlinkAt = now() + 2;
 
-  var mood = 'neutral';               // neutral | happy | squint
+  var mood = 'neutral';               // neutral | happy | squint | focused | yawn
   var moodUntil = 0;
   var nextMoodAt = now() + rand(8, 20);
+  var yawnStart = 0;                  // época do bocejo em curso
+  var yawnDur = 4;
+
+  // Cada humor é um alvo de "pose" da cara; o frame interpola até lá (lerp),
+  // então trocar de humor nunca dá salto seco.
+  //   browLift: sobrancelha sobe(+)/desce(-) — em unidades de m*0.04 px
+  //   browTilt: rad; positivo = ponta INTERNA desce (cara de concentrado)
+  //   eyeOpen : escala da abertura do olho (a piscada multiplica por cima)
+  //   mouthCurve: positivo = canto da boca pra cima (sorriso)
+  //   mouthOpen : 0 fechada .. 1 escancarada (bocejo)
+  //   mouthW  : largura da boca em fração de m
+  var MOODS = {
+    neutral: { browLift: 0.0,  browTilt: 0.0,   eyeOpen: 1.0,  mouthCurve: 0.18,  mouthOpen: 0.04, mouthW: 0.26 },
+    happy:   { browLift: 0.5,  browTilt: -0.12, eyeOpen: 1.0,  mouthCurve: 1.0,   mouthOpen: 0.25, mouthW: 0.40 },
+    squint:  { browLift: -0.2, browTilt: 0.10,  eyeOpen: 0.45, mouthCurve: 0.10,  mouthOpen: 0.03, mouthW: 0.22 },
+    focused: { browLift: -0.8, browTilt: 0.35,  eyeOpen: 0.55, mouthCurve: -0.08, mouthOpen: 0.02, mouthW: 0.20 },
+    yawn:    { browLift: 0.9,  browTilt: -0.15, eyeOpen: 0.15, mouthCurve: 0.05,  mouthOpen: 1.0,  mouthW: 0.24 }
+  };
+
+  // Pose atual da cara (começa no neutro; o tick a puxa pro alvo do humor).
+  var P = {
+    browLift: 0, browTilt: 0, eyeOpen: 1,
+    mouthCurve: 0.18, mouthOpen: 0.04, mouthW: 0.26
+  };
 
   // Global de propósito: gancho da fase 2 (cara reativa ao estado do robô)
-  // e útil pra brincar no console do navegador: setMood('happy', 5)
+  // e útil pra brincar no console do navegador: setMood('happy', 5),
+  // setMood('yawn'), setMood('focused', 8)
   window.setMood = function (m, secs) {
     mood = m;
-    moodUntil = now() + (secs || 2.5);
+    if (m === 'yawn') {
+      // Bocejo é uma ANIMAÇÃO com começo/meio/fim, não um estado parado:
+      // a duração é dele, ignora secs.
+      yawnStart = now();
+      yawnDur = rand(3.5, 4.5);
+      moodUntil = yawnStart + yawnDur;
+    } else {
+      moodUntil = now() + (secs || 2.5);
+    }
   };
+
+  function lerp(a, b, k) { return a + (b - a) * k; }
+
+  // Toque/clique = próxima expressão da fila — pra demonstrar pros outros
+  // sem precisar do console. Fila fixa (não sorteio): quem demonstra sabe
+  // o que vem. No iPad o touchstart também gera um click ~300ms depois;
+  // o preventDefault + a janela de 0.5s seguram o disparo duplo.
+  var DEMO = ['happy', 'yawn', 'focused', 'squint'];
+  var demoIdx = 0;
+  var lastTapAt = 0;
+  function onTap(ev) {
+    var t = now();
+    if (t - lastTapAt < 0.5) return;
+    lastTapAt = t;
+    window.setMood(DEMO[demoIdx], 3.5);
+    demoIdx = (demoIdx + 1) % DEMO.length;
+    if (ev.preventDefault) ev.preventDefault();
+  }
+  canvas.addEventListener('touchstart', onTap, false);
+  canvas.addEventListener('mousedown', onTap, false);
 
   // ---- comportamento -------------------------------------------------------
   function tick(t) {
     // Olhar vagando: alvo novo a cada 4-10s, chega devagar (lerp).
-    if (t >= nextGazeAt) {
+    // Concentrado NÃO vaga: trava o olhar no centro (encarar = concentração).
+    if (mood === 'focused') {
+      gazeTarget.x = 0;
+      gazeTarget.y = 0;
+    } else if (t >= nextGazeAt) {
       gazeTarget.x = rand(-1, 1);
       gazeTarget.y = rand(-0.5, 0.5);
       nextGazeAt = t + rand(4, 10);
@@ -73,15 +130,45 @@
       }
     }
 
-    // Micro-expressão a cada 30-60s, dura 2-3s, volta pro neutro.
+    // Micro-expressão a cada 30-60s, volta pro neutro sozinha.
     if (mood === 'neutral' && t >= nextMoodAt) {
-      mood = (Math.random() < 0.6) ? 'happy' : 'squint';
-      moodUntil = t + rand(2, 3);
+      var r = Math.random();
+      var m2 = 'happy';
+      if (r >= 0.35 && r < 0.55) m2 = 'squint';
+      else if (r >= 0.55 && r < 0.80) m2 = 'focused';
+      else if (r >= 0.80) m2 = 'yawn';
+      window.setMood(m2, (m2 === 'focused') ? rand(3, 5) : rand(2, 3));
     }
     if (mood !== 'neutral' && t >= moodUntil) {
       mood = 'neutral';
       nextMoodAt = t + rand(30, 60);
     }
+
+    // Alvo de pose do humor atual. Bocejo é dinâmico: um envelope de seno
+    // (0 no início, pico no meio, 0 no fim) mistura neutro e bocejo — a
+    // boca escancara e fecha, os olhos vão junto.
+    var T = MOODS[mood] || MOODS.neutral;
+    if (mood === 'yawn') {
+      var p = (t - yawnStart) / yawnDur;
+      if (p < 0) p = 0;
+      if (p > 1) p = 1;
+      var e = Math.sin(Math.PI * p);
+      var N = MOODS.neutral, Y = MOODS.yawn;
+      T = {
+        browLift: lerp(N.browLift, Y.browLift, e),
+        browTilt: lerp(N.browTilt, Y.browTilt, e),
+        eyeOpen: lerp(N.eyeOpen, Y.eyeOpen, e),
+        mouthCurve: lerp(N.mouthCurve, Y.mouthCurve, e),
+        mouthOpen: lerp(N.mouthOpen, Y.mouthOpen, e),
+        mouthW: lerp(N.mouthW, Y.mouthW, e)
+      };
+    }
+    P.browLift += (T.browLift - P.browLift) * 0.14;
+    P.browTilt += (T.browTilt - P.browTilt) * 0.14;
+    P.eyeOpen += (T.eyeOpen - P.eyeOpen) * 0.14;
+    P.mouthCurve += (T.mouthCurve - P.mouthCurve) * 0.14;
+    P.mouthOpen += (T.mouthOpen - P.mouthOpen) * 0.14;
+    P.mouthW += (T.mouthW - P.mouthW) * 0.14;
   }
 
   // ---- desenho -------------------------------------------------------------
@@ -95,20 +182,59 @@
     ctx.closePath();
   }
 
+  // Sobrancelha: barra arredondada acima do olho, girada pelo tilt.
+  // side = -1 (esquerda) / +1 (direita): espelha o giro pra ponta interna
+  // descer nos DOIS lados quando browTilt é positivo.
+  function drawBrow(cx, cy, side, ew, eh, m) {
+    var bw = ew * 0.92;
+    var bh = m * 0.045;
+    var topY = cy - eh / 2 - m * 0.075 - P.browLift * m * 0.04;
+    ctx.save();
+    ctx.translate(cx, topY);
+    ctx.rotate(-side * P.browTilt);
+    roundRect(-bw / 2, -bh / 2, bw, bh, bh / 2);
+    ctx.fillStyle = EYE_COLOR;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Boca: dois lábios em curva quadrática partindo dos cantos. Fechada, o
+  // traço grosso vira uma linha curva (sorriso/neutra); aberta, o meio
+  // desce e vira um "O" arredondado (bocejo).
+  function drawMouth(mx, my, m) {
+    var mw = P.mouthW * m;
+    var lift = P.mouthCurve * mw * 0.30;   // canto sobe em relação ao centro
+    var gape = P.mouthOpen * m * 0.20;     // abertura vertical
+    var x0 = mx - mw / 2, x1 = mx + mw / 2;
+    var yEdge = my - lift;
+    ctx.strokeStyle = EYE_COLOR;
+    ctx.fillStyle = EYE_COLOR;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(m * 0.022, 4);
+    ctx.beginPath();
+    ctx.moveTo(x0, yEdge);
+    ctx.quadraticCurveTo(mx, my + lift - gape * 0.6, x1, yEdge);
+    ctx.quadraticCurveTo(mx, my + lift + gape * 1.6, x0, yEdge);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
   function draw() {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
 
     var m = Math.min(W, H);
     var ew = m * 0.30;                       // largura do olho
-    var eh = m * 0.42;                       // altura de olho aberto
+    var eh = m * 0.38;                       // altura de olho aberto
     var half = ew * 0.55 + ew / 2;           // centro do olho até o meio
 
-    var open = 1 - blink;
-    if (mood === 'squint') open *= 0.45;
+    var open = (1 - blink) * P.eyeOpen;
     var ehNow = Math.max(eh * open, eh * 0.06);   // nunca some de vez
 
-    var cy = H / 2 + gaze.y * eh * 0.25;
+    // Olhos um pouco acima do meio pra sobrar lugar pra boca embaixo.
+    var cy = H * 0.44 + gaze.y * eh * 0.25;
     var offX = gaze.x * ew * 0.35;
     var r, i, cx;
 
@@ -125,7 +251,10 @@
         ctx.arc(cx, cy + ehNow * 0.55, ew * 0.75, 0, Math.PI * 2);
         ctx.fill();
       }
+      drawBrow(cx, cy, i, ew, eh, m);
     }
+
+    drawMouth(W / 2 + offX * 0.5, cy + eh * 0.72, m);
   }
 
   function frame() {

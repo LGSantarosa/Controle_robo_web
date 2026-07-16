@@ -35,6 +35,16 @@ def test_face_html_ipad_pronto():
     assert 'canvas' in html
 
 
+def test_face_js_expressoes_completas():
+    # A cara tem olhos + sobrancelhas + boca, e todos os humores prometidos.
+    # Se alguém remover um humor, o gancho da fase 2 (setMood via /state)
+    # quebra em silêncio no iPad — este teste transforma isso em CI.
+    js = open(os.path.join(BASE, 'static', 'face.js')).read()
+    for pedaco in ['drawBrow', 'drawMouth', 'setMood', 'touchstart',
+                   "happy", "squint", "focused", "yawn"]:
+        assert pedaco in js, 'sumiu do face.js: ' + pedaco
+
+
 def test_face_js_es5_puro():
     js = open(os.path.join(BASE, 'static', 'face.js')).read()
     proibidos = [
