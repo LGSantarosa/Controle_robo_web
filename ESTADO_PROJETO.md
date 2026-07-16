@@ -1,9 +1,39 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-14**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-16**.
 
 ---
+
+## 🧹 2026-07-16 — Faxina de vídeos ✅ + face_web como serviço na Pi ✅ + boca/sobrancelhas (⏳ aprovação)
+
+> Volta ao robô 1 (o repo do robô 2/livox segue em pausa). Pi estava ligada,
+> stack de navegação DESLIGADA o dia todo — nada de teste de campo.
+
+- **✅ Vídeos POV: Pi zerada.** Descoberta: além dos 6 antigos (07-09 ×2,
+  07-10 ×4, ~2,6GB), havia **5 vídeos de 07-14 (~1,3GB) nunca puxados**
+  (o ESTADO de 07-14 dizia "vídeos no dev" mas só o 13:19 de 4,4MB tinha
+  vindo). Puxados via rsync pra `~/Videos/pov_2026-07-14/`. **Todos os 12
+  arquivos conferidos por md5sum (Pi × dev, 100% match) ANTES de apagar.**
+  SD da Pi: 7,6G → **12G livres**.
+- **✅ face_web deployado como serviço systemd de USUÁRIO** (`a8b3259`):
+  unit versionada em `face_web/face_web.service` (symlink em
+  `~/.config/systemd/user/`), `enable --now` + `loginctl enable-linger robo`
+  → a cara sobe em QUALQUER boot da Pi, independente da stack. Validado do
+  dev: `http://robo-desktop.local:7000` HTTP 200. iPad aponta pra essa URL.
+  Roda com o python do `.venv` do controle_web (flask só existe lá).
+  Reiniciar após deploy: `systemctl --user restart face_web`.
+- **⏳ CARA v2: boca + sobrancelhas (local no dev, AGUARDA aprovação do dono)**:
+  humores novos `focused` (franze, semicerra, olhar trava no centro) e `yawn`
+  (bocejo animado ~4s, envelope de seno) além de happy/squint; boca de lábios
+  em quadrática (fechada = traço curvo, aberta = "O"); pose interpolada por
+  lerp (sem salto seco); micro-expressões sorteiam entre os 4. ES5 puro
+  mantido + teste novo dos humores (3 passed). NÃO commitado — rodando em
+  `localhost:7000` no dev pro dono ver (`setMood('yawn')` etc no console).
+- **⏳ Segue pendente da última ligada**: validação do tripé (launch 1x
+  LIMPO — matar órfãos com `pkill -f "[r]os2 launch"` + `"[r]os-args"` —,
+  ler `/motion_guard/state` + costmap no footprint, depois run real com
+  tripé PRESO). Precisa do robô ligado + dono presente.
 
 ## 🙂 2026-07-14 (tarde) — CARA DO ROBÔ no iPad 2 (✅ fase 1) + IDEIAS DE INTERATIVIDADE (anotadas, dono em reunião)
 
