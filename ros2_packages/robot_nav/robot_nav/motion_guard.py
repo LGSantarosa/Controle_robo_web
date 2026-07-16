@@ -30,7 +30,9 @@ versão A reagir tarde em campo.
 Spec: docs/superpowers/specs/2026-07-02-motion-guard-design.md
 A lógica (MotionGuard) é pura p/ testar sem ROS; main() é a cola de I/O.
 """
+import json
 import math
+import os
 from collections import deque
 from dataclasses import dataclass
 from typing import List, Tuple
@@ -448,6 +450,43 @@ class MotionGuard:
         return clusters
 
 
+class FaceStateFile:
+    """Rumo da pessoa pro face_web (cara fase 2): JSON minúsculo em tmpfs.
+
+    Atômico (tmp + os.replace), ≤5Hz com cluster; na transição pra
+    sem-cluster grava UMA vez cbear_deg=null e silencia. I/O NUNCA propaga
+    (a cara é decorativa; o guard não pode cair por ela).
+    """
+
+    def __init__(self, path: str = '/tmp/motion_guard_face.json',
+                 min_period: float = 0.2):
+        self.path = path
+        self.min_period = min_period
+        self.last_error: 'str|None' = None
+        self._last_write_t = -math.inf
+        self._had_person = False
+
+    def update(self, t: float, cbear_deg: 'int|None') -> bool:
+        if cbear_deg is None:
+            if not self._had_person:
+                return False
+            self._had_person = False
+        else:
+            if t - self._last_write_t < self.min_period:
+                return False
+            self._had_person = True
+        try:
+            tmp = self.path + '.tmp'
+            with open(tmp, 'w') as f:
+                json.dump({'ts': round(t, 3), 'cbear_deg': cbear_deg}, f)
+            os.replace(tmp, self.path)
+        except OSError as e:
+            self.last_error = str(e)
+            return False
+        self._last_write_t = t
+        return True
+
+
 def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
     import csv as _csv
     import os as _os
@@ -496,6 +535,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self._vx = 0.0
             self._last_pose = None
             self._last_state = None
+            self._face = FaceStateFile()
 
             self.pub = self.create_publisher(Twist, 'auto_vel_raw', 10)
             self.pub_state = self.create_publisher(
@@ -656,6 +696,12 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                 cbear = round(math.degrees(
                     (math.atan2(cy - py, cx - px) - pyaw + math.pi)
                     % (2 * math.pi) - math.pi))
+            self._face.update(t, cbear if cbear != '' else None)
+            if self._face.last_error:
+                self.get_logger().warn(
+                    'face state: ' + self._face.last_error,
+                    throttle_duration_sec=10.0)
+                self._face.last_error = None
             pose = self._last_pose or ('', '', '')
             self._csv.writerow([
                 round(t, 3), state, len(self.guard.moving_clusters),

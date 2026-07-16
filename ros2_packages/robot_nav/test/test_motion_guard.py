@@ -585,3 +585,36 @@ def test_wall_ghost_kept_without_map():
         g.observe(t + i * 0.1, WALL + ghost, POSE, 0.0)
     assert len(g.moving_clusters) == 1
     assert g.wall_dropped == 0
+
+
+# ---- FaceStateFile (cara fase 2: rumo da pessoa pro face_web) -----------
+
+def test_face_state_file_grava_e_throttla(tmp_path):
+    import json
+    from robot_nav.motion_guard import FaceStateFile
+    p = str(tmp_path / 'face.json')
+    w = FaceStateFile(path=p, min_period=0.2)
+    assert w.update(10.0, 30) is True
+    assert json.load(open(p)) == {'ts': 10.0, 'cbear_deg': 30}
+    assert w.update(10.1, 35) is False           # dentro do throttle
+    assert w.update(10.3, 35) is True            # passou 0.2s
+    assert json.load(open(p))['cbear_deg'] == 35
+
+
+def test_face_state_file_transicao_null_uma_vez(tmp_path):
+    import json
+    from robot_nav.motion_guard import FaceStateFile
+    p = str(tmp_path / 'face.json')
+    w = FaceStateFile(path=p, min_period=0.2)
+    assert w.update(10.0, None) is False         # sem pessoa antes: nada
+    w.update(10.0, 30)
+    assert w.update(10.05, None) is True         # transição FURA o throttle
+    assert json.load(open(p))['cbear_deg'] is None
+    assert w.update(10.1, None) is False         # já silenciou
+
+
+def test_face_state_file_io_error_nao_propaga(tmp_path):
+    from robot_nav.motion_guard import FaceStateFile
+    w = FaceStateFile(path=str(tmp_path / 'nao_existe' / 'face.json'))
+    assert w.update(10.0, 30) is False           # dir não existe: engole
+    assert w.last_error
