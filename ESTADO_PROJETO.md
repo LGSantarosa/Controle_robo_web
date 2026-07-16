@@ -30,10 +30,12 @@
   = "O"); pose interpolada por lerp (sem salto seco); micro-expressões
   sorteiam entre os 4. **Toque/clique na tela roda a fila
   happy→yawn→focused→squint** (pra demonstrar; trava de 0.5s pro click
-  fantasma do iPad). ES5 puro mantido + teste novo dos humores. **Dono
-  desligou a Pi antes do deploy** — na próxima ligada: `git fetch && git
-  reset --hard origin/main` + `systemctl --user restart face_web` (só isso;
-  é código web, sem colcon).
+  fantasma do iPad). O 1º toque também pede TELA CHEIA via Fullscreen API
+  (`2c1dc59`) — **validado pelo dono no celular Android** ("ficou bom");
+  iPad 2 não tem a API e sai no guard. ES5 puro mantido + teste novo dos
+  humores. **Dono desligou a Pi antes do deploy** — na próxima ligada:
+  `git fetch && git reset --hard origin/main` + `systemctl --user restart
+  face_web` (só isso; é código web, sem colcon).
 - **⏳ Segue pendente da última ligada**: validação do tripé (launch 1x
   LIMPO — matar órfãos com `pkill -f "[r]os2 launch"` + `"[r]os-args"` —,
   ler `/motion_guard/state` + costmap no footprint, depois run real com
