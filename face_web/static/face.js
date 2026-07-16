@@ -32,6 +32,12 @@
   var gazeTarget = { x: 0, y: 0 };
   var nextGazeAt = now() + 2;
 
+  // Fase 2: enquanto now() < personHoldUntil, tem pessoa na mira — o
+  // pollState manda no gazeTarget e o vagar/focused ficam de fora. O hold
+  // de 3s segura o olhar quando a pessoa PARA (ela some dos clusters
+  // móveis do lidar) — sem ping-pong pessoa/vagando.
+  var personHoldUntil = 0;
+
   var blink = 0;                      // 0 = aberto, 1 = fechado
   var blinkPhase = 'idle';            // idle | closing | opening
   var nextBlinkAt = now() + 2;
@@ -120,7 +126,9 @@
   function tick(t) {
     // Olhar vagando: alvo novo a cada 4-10s, chega devagar (lerp).
     // Concentrado NÃO vaga: trava o olhar no centro (encarar = concentração).
-    if (mood === 'focused') {
+    if (t < personHoldUntil) {
+      // pessoa na mira: gazeTarget é do pollState, ninguém mexe
+    } else if (mood === 'focused') {
       gazeTarget.x = 0;
       gazeTarget.y = 0;
     } else if (t >= nextGazeAt) {
@@ -272,6 +280,27 @@
 
     drawMouth(W / 2 + offX * 0.5, cy + eh * 0.72, m);
   }
+
+  // ---- fase 2: olhos seguem a pessoa (poll no /state) --------------------
+  // XHR puro (iPad 2!). Qualquer falha — rede, JSON, timeout — é tratada
+  // como "sem pessoa": o hold expira sozinho e a cara volta a vagar.
+  function pollState() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/state', true);
+    xhr.timeout = 250;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4 || xhr.status !== 200) return;
+      var st = null;
+      try { st = JSON.parse(xhr.responseText); } catch (e) { return; }
+      if (st && st.person) {
+        gazeTarget.x = st.x;
+        gazeTarget.y = 0.1;
+        personHoldUntil = now() + 3;
+      }
+    };
+    xhr.send();
+  }
+  setInterval(pollState, 300);
 
   function frame() {
     tick(now());

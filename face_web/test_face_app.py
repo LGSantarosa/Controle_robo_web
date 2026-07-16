@@ -42,6 +42,7 @@ def test_face_js_expressoes_completas():
     js = open(os.path.join(BASE, 'static', 'face.js')).read()
     for pedaco in ['drawBrow', 'drawMouth', 'setMood', 'touchstart',
                    'requestFullscreen',
+                   'pollState', "'/state'", 'personHoldUntil',
                    "happy", "squint", "focused", "yawn"]:
         assert pedaco in js, 'sumiu do face.js: ' + pedaco
 
