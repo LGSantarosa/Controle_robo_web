@@ -1,0 +1,27 @@
+# Cara do robô (face_web) como serviço systemd de USUÁRIO na Pi.
+#
+# Por quê: o iPad fica pendurado no tripé em cima do robô; a cara tem que
+# estar de pé sempre que a Pi ligar, independente da stack de navegação
+# (launch.sh) estar rodando ou não. O app é decorativo e não toca ROS.
+#
+# Instalar (1x, na Pi):
+#   mkdir -p ~/.config/systemd/user
+#   ln -sf ~/workspace/Controle_robo_web/face_web/face_web.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now face_web
+#   loginctl enable-linger robo   # sobe no boot sem precisar de login
+#
+# Usa o python do venv do controle_web (flask só existe lá).
+
+[Unit]
+Description=Cara do robo (face_web) - olhos pro iPad 2 na porta 7000
+After=network.target
+
+[Service]
+WorkingDirectory=/home/robo/workspace/Controle_robo_web
+ExecStart=/home/robo/workspace/Controle_robo_web/controle_web/.venv/bin/python3 face_web/face_app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
