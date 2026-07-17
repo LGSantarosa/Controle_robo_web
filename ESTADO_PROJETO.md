@@ -1,7 +1,50 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-16**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-17**.
+
+---
+
+## 🙂🎥🌀 2026-07-17 — Cara fase 2 COMPLETA em campo, rota autônoma na RUA, causa do zigue-zague achada
+
+- **🙂 CARA FASE 2 ✅ VALIDADA EM CAMPO** ("ele tá me olhando mesmo"):
+  olhos seguem a pessoa; iterações do dia (todas deployadas): ease pessoa
+  0.10 + banda morta ~4° (0.18 flicava — ruído do rumo do lidar), FULL_DEG
+  45→90° + alvo 2.2x + clamp na borda = **olho COLA na lateral a 90°**
+  (`9026d7a`, `1638ff8`). **🔊 SOM**: `ola.mp3`/`licenca.mp3` (gTTS pt-BR)
+  — "Olá!" quando pessoa nova aparece (cooldown 30s), **"Com licença!"
+  quando o guard trava por pessoa com rota ativa** (motion_guard grava o
+  verdict no face JSON, só com cmd <1s fresco). iOS: 1º TAP destrava o
+  áudio (e já solta o Olá). Validado: "funcionou, pediu licença kkkk".
+  Recarregar a página no iPad após deploy (cache). Próximo = MODO INTERAÇÃO.
+- **🔋 TESTE DE BATERIA FECHADO: Pi ~4h35+ na mesma carga SEM morrer**
+  (s1 07-16 13:43→16:25 = 2h42; 07-17 09:37→11h+ com stack em parte) vs
+  62min das antigas = **4x+**. **Gargalo agora = BMS dos hovers**: tripou
+  DE NOVO na rua (11:12:03, 2 BMS, 40,4V, 1min de rota) — mesmo padrão,
+  packs não-cheios. Próximo teste de tração: partir de 42,4V cheios.
+- **🤖 RUA: rota autônoma completa SEM controle** (11:21→11:26, 76m,
+  0,247 m/s) — primeira vez em piso externo. Vídeo POV + CSVs em
+  `log/pi_2026-07-17/` no dev.
+- **🎥 Vídeo acelerado: fix REAL = `36581c8` (⏳ deploy)** — descoberto que
+  `5786afa` era insuficiente: o parser mjpeg do ffmpeg IGNORA `-framerate`
+  após ~30 frames e crava 15fps. Fix = `-bsf:v setts` reescreve os pts no
+  mux (validado no órfão da rua: 252,9s exatos). mkv da rota completa
+  (remuxado na Pi c/ código velho) vai chegar acelerado — consertar no dev.
+- **🌀 ZIGUE-ZAGUE: causa da run de hoje ≠ mira** (mira estável, pulos
+  0,7°): é **OVERSHOOT no giro** — entra a −16°, "sai" e a amostra
+  seguinte mostra +16° do outro lado (pose lagada + inércia) → 52% dos
+  giros se cancelavam, 12,3 turnings/min (A/B 07-14 tinha 3,9). **Fix
+  `464c959` (⏳ deploy + validação): saída PREDITIVA do giro**
+  (`turn_stop_tau` 0.25s, parâmetro ROS): solta o giro quando o yaw
+  previsto em tau cruza a banda; taxa = derivada do yaw c/ EMA + clamp
+  2 rad/s (salto do AMCL não adianta a saída). Microsim c/ lag 300ms:
+  8 giros/7 flips → 1/0. Validar na mesma rota com `analyze_zigzag`.
+- **🐛 GUARDADO p/ depois**: retomada pós-blocked dá curva de ~70° pro
+  lado antes de voltar à rota (hipótese: costmap ainda com o fantasma da
+  pessoa → replan contorna; confirmar causa nos logs antes de mexer).
+- **⏳ PENDENTE DEPLOY na próxima ligada da Pi** (fetch/reset + colcon via
+  start.sh): `36581c8` (setts) + `464c959` (turn_stop_tau). Vídeo mkv da
+  rota: download retoma sozinho quando a Pi ligar (rsync --partial).
 
 ---
 
