@@ -136,8 +136,10 @@
       gazeTarget.y = rand(-0.5, 0.5);
       nextGazeAt = t + rand(4, 10);
     }
-    gaze.x += (gazeTarget.x - gaze.x) * 0.04;
-    gaze.y += (gazeTarget.y - gaze.y) * 0.04;
+    // Pessoa na mira acompanha rápido (0.18); o vagar continua manso (0.04).
+    var gazeK = (t < personHoldUntil) ? 0.18 : 0.04;
+    gaze.x += (gazeTarget.x - gaze.x) * gazeK;
+    gaze.y += (gazeTarget.y - gaze.y) * gazeK;
 
     // Piscada a cada 3-7s: fecha rápido, abre um pouco mais devagar.
     if (blinkPhase === 'idle' && t >= nextBlinkAt) blinkPhase = 'closing';
