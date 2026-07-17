@@ -261,10 +261,15 @@ class CameraService:
             return
         out = raw_path.rsplit('.', 1)[0] + '.mkv'
         try:
+            # setts reescreve os pts no mux: o parser mjpeg do ffmpeg IGNORA
+            # -framerate depois de ~30 frames e crava 15fps (visto 07-17 na
+            # C922) — era isso que mantinha o vídeo acelerado mesmo com o
+            # fps real calculado.
             rc = subprocess.run(
                 ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
                  '-f', 'mjpeg', '-framerate', f'{fps:.3f}', '-i', raw_path,
-                 '-c:v', 'copy', out],
+                 '-c:v', 'copy',
+                 '-bsf:v', f'setts=ts=round(N/{fps:.6f}/TB)', out],
                 timeout=300).returncode
         except Exception as e:
             log.warning(f"[Camera] remux falhou ({e}) — mantendo {raw_path}")
