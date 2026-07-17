@@ -146,6 +146,88 @@ def test_turn_target_reset_when_goal_lost():
     assert f._turn_target is None
 
 
+# ---- saída PREDITIVA do giro (07-17: overshoot na run real) --------------
+# Campo 07-17: giros saíam do turning já com ±16° do OUTRO lado (deviam sair
+# em ≤7°) — entre medir o yaw e o robô parar existe atraso (pose lagada +
+# inércia), então 52% dos giros só desfaziam o anterior. Fix: parar quando o
+# yaw PREVISTO daqui a turn_stop_tau segundos cruza a banda de saída.
+
+def _spin_towards(f, target, rate, ticks, start_err):
+    """Gira a `rate` rad/s rumo ao alvo congelado; devolve (herr, cmd) por tick."""
+    dt = f.cfg.tick_dt
+    path = [(x * 0.1, 0.0) for x in range(80)]     # reto +x, longe do goal
+    f.state = 'turning'
+    f._turn_target = target
+    out = []
+    yaw = target - start_err
+    for _ in range(ticks):
+        cmd = f.update((0.0, 0.0, yaw), path, goal_active=True, goal_yaw=0.0)
+        out.append((target - yaw, cmd))
+        if cmd.state != 'turning':
+            break
+        yaw += rate * dt
+    return out
+
+
+def test_predictive_exit_stops_before_the_band():
+    # girando a 1 rad/s com tau 0.25: tem que soltar o giro ~0.25 rad ANTES
+    # da banda velha (0.12), i.e. com herr ainda ~0.3-0.4.
+    cfg = FollowConfig(turn_stop_tau=0.25, tick_dt=0.05)
+    f = DecisiveFollower(cfg)
+    hist = _spin_towards(f, target=0.9, rate=1.0, ticks=40, start_err=0.9)
+    herr_exit, cmd_exit = hist[-1]
+    assert cmd_exit.state == 'driving'
+    assert herr_exit > cfg.turn_exit + 0.1        # saiu bem antes da banda
+    assert herr_exit < cfg.turn_exit + 0.35       # mas não cedo demais
+
+
+def test_tau_zero_keeps_old_exit_behavior():
+    cfg = FollowConfig(turn_stop_tau=0.0, tick_dt=0.05)
+    f = DecisiveFollower(cfg)
+    hist = _spin_towards(f, target=0.9, rate=1.0, ticks=40, start_err=0.9)
+    herr_exit, cmd_exit = hist[-1]
+    assert cmd_exit.state == 'driving'
+    assert herr_exit <= cfg.turn_exit + 0.06      # banda velha (1 tick de folga)
+
+
+def test_predictive_exit_ignores_wrong_direction_rate():
+    # yaw ANDANDO PRA LONGE do alvo (ex.: pose corrigida pelo AMCL): a
+    # previsão não pode soltar o giro mais cedo.
+    cfg = FollowConfig(turn_stop_tau=0.25, tick_dt=0.05)
+    f = DecisiveFollower(cfg)
+    hist = _spin_towards(f, target=0.9, rate=-0.8, ticks=10, start_err=0.5)
+    assert all(cmd.state == 'turning' for _, cmd in hist)
+
+
+def test_microsim_lagged_plant_predictive_cuts_reversals():
+    # Planta com atraso de atuação (0.3s): o wz comandado só vira yaw depois
+    # de 6 ticks — reproduz o overshoot do campo. Com tau=0.3 os flips de
+    # sinal do wz têm que despencar vs tau=0.
+    def run(tau):
+        cfg = FollowConfig(turn_stop_tau=tau, tick_dt=0.05)
+        f = DecisiveFollower(cfg)
+        path = [(x * 0.1, 0.0) for x in range(200)]
+        x = y = 0.0
+        yaw = 0.6                                  # começa torto
+        delay = [0.0] * 6                          # 0.3s de atraso
+        flips = 0
+        prev_wz = 0.0
+        for _ in range(400):
+            cmd = f.update((x, y, yaw), path, goal_active=True, goal_yaw=0.0)
+            if cmd.wz * prev_wz < 0:
+                flips += 1
+            if abs(cmd.wz) > 1e-9:
+                prev_wz = cmd.wz
+            delay.append(cmd.wz * 0.4)             # ~resposta real 0.6·(cmd−1.7)
+            wz_real = delay.pop(0)
+            yaw += wz_real * cfg.tick_dt
+            x += cmd.vx * math.cos(yaw) * cfg.tick_dt
+            y += cmd.vx * math.sin(yaw) * cfg.tick_dt
+        return flips
+
+    assert run(0.3) < run(0.0)
+
+
 def test_straight_deviation():
     straight = [(i * 0.1, 0.0) for i in range(20)]
     assert straight_deviation(straight, 0, 19) == pytest.approx(0.0)

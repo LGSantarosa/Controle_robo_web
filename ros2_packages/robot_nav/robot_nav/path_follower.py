@@ -137,6 +137,18 @@ class FollowConfig:
                                     # (histerese; 3->7 junto com o enter: solta
                                     # o giro mais cedo, precisa de ±16 de novo
                                     # p/ re-entrar)
+    turn_stop_tau: float = 0.25     # s — saída PREDITIVA do giro (07-17): o
+                                    # robô continua girando ~tau depois do
+                                    # comando parar (pose lagada + inércia);
+                                    # na run real ele saía do giro já ±16° do
+                                    # OUTRO lado e 52% dos giros só desfaziam
+                                    # o anterior. Solta o giro quando o yaw
+                                    # PREVISTO em tau segundos cruza a banda.
+                                    # 0.0 = comportamento antigo. A histerese
+                                    # (re-entrar pede 16°) protege se tau
+                                    # passar do ponto.
+    tick_dt: float = 0.05           # s — período do update() (nó seta
+                                    # 1/rate_hz); usado só pra derivar o yaw.
     goal_xy_tol: float = 0.15       # m — chegou no goal (casa c/ goal_checker do nav2)
     goal_yaw_tol: float = 0.10      # rad (~6°) — encarou o yaw do goal
     rot_k: float = 3.0              # ganho P do giro (rad/s por rad)
@@ -168,6 +180,8 @@ class DecisiveFollower:
         self.cfg = cfg
         self.state = 'idle'
         self._turn_target = None  # bearing (map) congelado durante o turning
+        self._prev_yaw = None     # p/ derivar a taxa de giro medida
+        self._yaw_rate = 0.0      # rad/s, EMA (ruído de pose não vira taxa)
         self.dbg = {}        # diagnóstico do último update (logado pelo nó)
 
     def _turn_cmd(self, herr: float) -> float:
@@ -185,9 +199,19 @@ class DecisiveFollower:
         if pose is None or not goal_active or not path or len(path) < 2:
             self.state = 'idle'
             self._turn_target = None
+            self._prev_yaw = None
+            self._yaw_rate = 0.0
             return Cmd(0.0, 0.0, 'idle')
 
         x, y, yaw = pose
+        if self._prev_yaw is not None and c.tick_dt > 0.0:
+            inst = wrap(yaw - self._prev_yaw) / c.tick_dt
+            # clamp no máximo físico (~1.7 rad/s real, ver spin_calib): salto
+            # de pose (correção do AMCL) não pode virar "taxa" e adiantar a
+            # saída preditiva do giro.
+            inst = max(-2.0, min(2.0, inst))
+            self._yaw_rate += 0.3 * (inst - self._yaw_rate)
+        self._prev_yaw = yaw
         gx, gy = path[-1]
         dist_goal = math.hypot(gx - x, gy - y)
 
@@ -233,7 +257,13 @@ class DecisiveFollower:
         if self.state == 'turning':
             if self._turn_target is not None:
                 herr = wrap(self._turn_target - yaw)
-            if abs(herr) <= c.turn_exit:
+            # saída preditiva: onde o yaw vai ESTAR quando o robô de fato
+            # parar (taxa medida × tau). Projetado no sinal do erro: taxa na
+            # direção errada (ex.: salto de pose do AMCL) só ATRASA a saída,
+            # nunca adianta.
+            herr_pred = (herr - self._yaw_rate * c.turn_stop_tau) \
+                * math.copysign(1.0, herr)
+            if abs(herr) <= c.turn_exit or herr_pred <= c.turn_exit:
                 self.state = 'driving'
                 self._turn_target = None
         else:
@@ -292,6 +322,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
                 ('slow_radius', 0.4), ('min_speed', 0.22), ('rate_hz', 20.0),
+                ('turn_stop_tau', 0.25),
             ):
                 self.declare_parameter(name, default)
                 g[name] = self.get_parameter(name).value
@@ -306,7 +337,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 goal_xy_tol=g['goal_xy_tol'],
                 goal_yaw_tol=math.radians(g['goal_yaw_tol_deg']),
                 rot_k=g['rot_k'], rot_min=g['rot_min'], rot_max=g['rot_max'],
-                slow_radius=g['slow_radius'], min_speed=g['min_speed'])
+                slow_radius=g['slow_radius'], min_speed=g['min_speed'],
+                turn_stop_tau=g['turn_stop_tau'],
+                tick_dt=1.0 / g['rate_hz'])
             self.fol = DecisiveFollower(self.cfg)
 
             self._path: Optional[List[Pt]] = None
