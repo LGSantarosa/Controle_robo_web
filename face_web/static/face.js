@@ -136,8 +136,9 @@
       gazeTarget.y = rand(-0.5, 0.5);
       nextGazeAt = t + rand(4, 10);
     }
-    // Pessoa na mira acompanha rápido (0.18); o vagar continua manso (0.04).
-    var gazeK = (t < personHoldUntil) ? 0.18 : 0.04;
+    // Pessoa na mira acompanha mais rápido que o vagar, mas sem perseguir
+    // tremida (0.18 flicava na tela — dono, 07-17).
+    var gazeK = (t < personHoldUntil) ? 0.10 : 0.04;
     gaze.x += (gazeTarget.x - gaze.x) * gazeK;
     gaze.y += (gazeTarget.y - gaze.y) * gazeK;
 
@@ -297,7 +298,10 @@
       if (st && st.person) {
         // 1.6x: pessoa desloca o olho BEM mais que o vagar (que fica em
         // ±1) — senão "vira bem pouco" e não parece que está olhando.
-        gazeTarget.x = st.x * 1.6;
+        // Banda morta: o rumo do lidar treme alguns graus parado; alvo só
+        // mexe se mudou de verdade (~4°), senão o olho flicava (07-17).
+        var nx = st.x * 1.6;
+        if (Math.abs(nx - gazeTarget.x) > 0.08) gazeTarget.x = nx;
         gazeTarget.y = 0.1;
         personHoldUntil = now() + 3;
       }

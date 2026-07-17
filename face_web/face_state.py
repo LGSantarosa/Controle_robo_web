@@ -4,10 +4,11 @@ sistema e reaproveitável (o futuro MODO INTERAÇÃO lê o mesmo arquivo)."""
 import json
 import os
 
-STALE_S = 1.5     # arquivo mais velho que isso = stack caída, sem pessoa
-BEHIND_DEG = 90.0  # pessoa atrás da tela: ninguém vê a cara, ignora
-FULL_DEG = 45.0    # daqui pra fora o olho já crava no canto (pedido do dono
-                   # 07-16: com 90° o olho "virava bem pouco")
+STALE_S = 1.5      # arquivo mais velho que isso = stack caída, sem pessoa
+BEHIND_DEG = 100.0  # pessoa atrás da tela: ninguém vê a cara, ignora
+FULL_DEG = 90.0     # pedido do dono 07-17: pessoa a 90° = olho colado na
+                    # lateral; o meio do caminho quem engorda é o 1.6x do
+                    # face.js (o crave a 45° de antes ficou brusco)
 
 
 def read_state(path, now, sign=1.0):
