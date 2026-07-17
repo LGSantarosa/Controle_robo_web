@@ -466,7 +466,8 @@ class FaceStateFile:
         self._last_write_t = -math.inf
         self._had_person = False
 
-    def update(self, t: float, cbear_deg: 'int|None') -> bool:
+    def update(self, t: float, cbear_deg: 'int|None',
+               state: 'str|None' = None) -> bool:
         if cbear_deg is None:
             if not self._had_person:
                 return False
@@ -478,7 +479,8 @@ class FaceStateFile:
         try:
             tmp = self.path + '.tmp'
             with open(tmp, 'w') as f:
-                json.dump({'ts': round(t, 3), 'cbear_deg': cbear_deg}, f)
+                json.dump({'ts': round(t, 3), 'cbear_deg': cbear_deg,
+                           'state': state}, f)
             os.replace(tmp, self.path)
         except OSError as e:
             self.last_error = str(e)
@@ -535,6 +537,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self._vx = 0.0
             self._last_pose = None
             self._last_state = None
+            self._last_cmd_t = -math.inf
             self._face = FaceStateFile()
 
             self.pub = self.create_publisher(Twist, 'auto_vel_raw', 10)
@@ -693,7 +696,12 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             # roda), não no do cmd — auto_vel_pre fica MUDO sem goal ativo
             # e o olho tem que seguir gente com o robô parado sem rota.
             _, _, cbear = self._person_centroid()
-            self._face.update(self._now(), cbear if cbear != '' else None)
+            t = self._now()
+            # state só com cmd FRESCO: sem goal o auto_vel_pre cala e o
+            # último verdict ficaria fossilizado — 'blocked' velho faria a
+            # cara pedir licença pra sempre.
+            state = self._last_state if t - self._last_cmd_t < 1.0 else None
+            self._face.update(t, cbear if cbear != '' else None, state)
             if self._face.last_error:
                 self.get_logger().warn(
                     'face state: ' + self._face.last_error,
@@ -702,6 +710,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
 
         def _on_cmd(self, msg: Twist):
             t = self._now()
+            self._last_cmd_t = t
             vx, wz, state = self.guard.filter(t, msg.linear.x, msg.angular.z)
             out = Twist()
             out.linear.x = vx

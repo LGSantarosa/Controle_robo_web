@@ -595,10 +595,23 @@ def test_face_state_file_grava_e_throttla(tmp_path):
     p = str(tmp_path / 'face.json')
     w = FaceStateFile(path=p, min_period=0.2)
     assert w.update(10.0, 30) is True
-    assert json.load(open(p)) == {'ts': 10.0, 'cbear_deg': 30}
+    assert json.load(open(p)) == {'ts': 10.0, 'cbear_deg': 30, 'state': None}
     assert w.update(10.1, 35) is False           # dentro do throttle
     assert w.update(10.3, 35) is True            # passou 0.2s
     assert json.load(open(p))['cbear_deg'] == 35
+
+
+def test_face_state_file_grava_estado_do_guard(tmp_path):
+    # 'blocked' vai junto -> face_web pede "com licença" (cara fase 2.1)
+    import json
+    from robot_nav.motion_guard import FaceStateFile
+    p = str(tmp_path / 'face.json')
+    w = FaceStateFile(path=p, min_period=0.2)
+    assert w.update(10.0, 20, state='blocked') is True
+    assert json.load(open(p)) == \
+        {'ts': 10.0, 'cbear_deg': 20, 'state': 'blocked'}
+    assert w.update(10.3, 20, state='slowing') is True
+    assert json.load(open(p))['state'] == 'slowing'
 
 
 def test_face_state_file_transicao_null_uma_vez(tmp_path):

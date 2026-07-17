@@ -48,6 +48,43 @@
   var yawnStart = 0;                  // época do bocejo em curso
   var yawnDur = 4;
 
+  // ---- som (iOS só toca áudio DEPOIS de um toque na tela) ---------------
+  // O 1º tap destrava: toca o "Olá" audível (confirma que o som funciona)
+  // e destrava o "licença" com play+pause mascarado pelo olá.
+  var sndOla = new Audio('/static/ola.mp3');
+  var sndLicenca = new Audio('/static/licenca.mp3');
+  sndOla.preload = 'auto';
+  sndLicenca.preload = 'auto';
+  var sndUnlocked = false;
+  var nextOlaAt = 0;
+  var nextLicencaAt = 0;
+
+  function playSnd(a) {
+    if (!sndUnlocked) return;
+    try {
+      a.currentTime = 0;
+      var p = a.play();
+      if (p && p['catch']) p['catch'](function () {});
+    } catch (e) {}
+  }
+
+  function unlockAudio() {
+    if (sndUnlocked) return;
+    sndUnlocked = true;
+    nextOlaAt = now() + 8;            // acabou de dar olá no tap
+    try {
+      var p = sndOla.play();
+      if (p && p['catch']) p['catch'](function () {});
+      var q = sndLicenca.play();
+      var calaLicenca = function () {
+        sndLicenca.pause();
+        sndLicenca.currentTime = 0;
+      };
+      if (q && q['then']) q['then'](calaLicenca)['catch'](function () {});
+      else calaLicenca();
+    } catch (e) {}
+  }
+
   // Cada humor é um alvo de "pose" da cara; o frame interpola até lá (lerp),
   // então trocar de humor nunca dá salto seco.
   //   browLift: sobrancelha sobe(+)/desce(-) — em unidades de m*0.04 px
@@ -115,6 +152,7 @@
     if (t - lastTapAt < 0.5) return;
     lastTapAt = t;
     goFullscreen();
+    unlockAudio();
     window.setMood(DEMO[demoIdx], 3.5);
     demoIdx = (demoIdx + 1) % DEMO.length;
     if (ev.preventDefault) ev.preventDefault();
@@ -263,6 +301,12 @@
     // Olhos um pouco acima do meio pra sobrar lugar pra boca embaixo.
     var cy = H * 0.44 + gaze.y * eh * 0.25;
     var offX = gaze.x * ew * 0.35;
+    // Pessoa a 90° = olho COLADO na lateral (dono 07-17): o alvo pede
+    // além da borda e o clamp encosta o olho de fora na moldura da tela.
+    var maxOff = W / 2 - half - ew / 2 - m * 0.02;
+    if (maxOff < 0) maxOff = 0;
+    if (offX > maxOff) offX = maxOff;
+    if (offX < -maxOff) offX = -maxOff;
     var r, i, cx;
 
     for (i = -1; i <= 1; i += 2) {
@@ -296,14 +340,26 @@
       var st = null;
       try { st = JSON.parse(xhr.responseText); } catch (e) { return; }
       if (st && st.person) {
-        // 1.6x: pessoa desloca o olho BEM mais que o vagar (que fica em
-        // ±1) — senão "vira bem pouco" e não parece que está olhando.
+        // 2.2x: pessoa desloca o olho BEM mais que o vagar (que fica em
+        // ±1) — a 90° o alvo passa da borda e o clamp do draw() cola o
+        // olho na lateral.
         // Banda morta: o rumo do lidar treme alguns graus parado; alvo só
         // mexe se mudou de verdade (~4°), senão o olho flicava (07-17).
-        var nx = st.x * 1.6;
-        if (Math.abs(nx - gazeTarget.x) > 0.08) gazeTarget.x = nx;
+        var nx = st.x * 2.2;
+        var tp = now();
+        if (Math.abs(nx - gazeTarget.x) > 0.11) gazeTarget.x = nx;
         gazeTarget.y = 0.1;
-        personHoldUntil = now() + 3;
+        // Pessoa NOVA (hold tinha expirado = ficou 3s+ sem ninguém): olá!
+        if (tp >= personHoldUntil && tp >= nextOlaAt) {
+          playSnd(sndOla);
+          nextOlaAt = tp + 30;
+        }
+        // Guard segurando o robô por causa dela com rota ativa: licença.
+        if (st.blocked && tp >= nextLicencaAt) {
+          playSnd(sndLicenca);
+          nextLicencaAt = tp + 15;
+        }
+        personHoldUntil = tp + 3;
       }
     };
     xhr.send();

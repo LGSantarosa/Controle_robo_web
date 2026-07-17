@@ -23,4 +23,7 @@ def read_state(path, now, sign=1.0):
     if cbear is None or abs(cbear) > BEHIND_DEG:
         return {'person': False}
     x = max(-1.0, min(1.0, cbear / FULL_DEG))
-    return {'person': True, 'x': round(sign * x, 3)}
+    # blocked = guard segurando o robô POR CAUSA da pessoa com rota ativa
+    # (motion_guard só grava state com cmd fresco) -> cara pede licença.
+    return {'person': True, 'x': round(sign * x, 3),
+            'blocked': data.get('state') == 'blocked'}

@@ -68,11 +68,11 @@ def test_face_js_es5_puro():
 
 # ---- fase 2: /state (olhos seguem a pessoa) ------------------------------
 
-def _grava_json(tmp_path, cbear, idade_s=0.0):
+def _grava_json(tmp_path, cbear, idade_s=0.0, state=None):
     import json
     import time
     p = tmp_path / 'face.json'
-    p.write_text(json.dumps({'ts': 0, 'cbear_deg': cbear}))
+    p.write_text(json.dumps({'ts': 0, 'cbear_deg': cbear, 'state': state}))
     if idade_s:
         velho = time.time() - idade_s
         os.utime(str(p), (velho, velho))
@@ -107,16 +107,28 @@ def test_state_pessoa_na_frente_mapeia_e_flipa(tmp_path):
     import face_state
     p = _grava_json(tmp_path, 30)
     assert face_state.read_state(p, time.time()) == \
-        {'person': True, 'x': 0.333}
+        {'person': True, 'x': 0.333, 'blocked': False}
     assert face_state.read_state(p, time.time(), sign=-1.0) == \
-        {'person': True, 'x': -0.333}
+        {'person': True, 'x': -0.333, 'blocked': False}
     p = _grava_json(tmp_path, 70)
     assert face_state.read_state(p, time.time()) == \
-        {'person': True, 'x': 0.778}
+        {'person': True, 'x': 0.778, 'blocked': False}
     # de FULL_DEG (90°) até BEHIND_DEG o olho fica cravado no canto
     p = _grava_json(tmp_path, 95)
     assert face_state.read_state(p, time.time()) == \
-        {'person': True, 'x': 1.0}
+        {'person': True, 'x': 1.0, 'blocked': False}
+
+
+def test_state_blocked_pessoa_barrando(tmp_path):
+    # guard segurando o robô por causa da pessoa -> "com licença" na cara
+    import time
+    import face_state
+    p = _grava_json(tmp_path, 10, state='blocked')
+    assert face_state.read_state(p, time.time()) == \
+        {'person': True, 'x': 0.111, 'blocked': True}
+    # slowing/idle NÃO é blocked; JSON velho sem 'state' também não
+    p = _grava_json(tmp_path, 10, state='slowing')
+    assert face_state.read_state(p, time.time())['blocked'] is False
 
 
 def test_state_json_corrompido(tmp_path):
@@ -132,4 +144,12 @@ def test_state_route(tmp_path):
     import face_app
     face_app.STATE_FILE = _grava_json(tmp_path, 30)
     st = face_app.app.test_client().get('/state').get_json()
-    assert st == {'person': True, 'x': 0.333}
+    assert st == {'person': True, 'x': 0.333, 'blocked': False}
+
+
+def test_audio_da_cara_existe():
+    # "Olá" na chegada + "com licença" no blocked: se o mp3 sumir do static,
+    # o iPad falha em silêncio — vira CI aqui.
+    for nome in ['ola.mp3', 'licenca.mp3']:
+        p = os.path.join(BASE, 'static', nome)
+        assert os.path.getsize(p) > 1000, 'audio sumiu/vazio: ' + nome
