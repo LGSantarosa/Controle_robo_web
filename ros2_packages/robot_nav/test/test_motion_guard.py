@@ -27,6 +27,24 @@ def _feed_mover(g, t, obj, frames=None, dt=0.1, wz=0.0, pose=POSE):
     return t + (n - 1) * dt
 
 
+def _plan(hdg, n=6, step=0.2):
+    """plano reto (frame map) com rumo `hdg` a partir da origem."""
+    return [(i * step * math.cos(hdg), i * step * math.sin(hdg))
+            for i in range(n)]
+
+
+def _blocked_past_clear(g, clear_time=1.5):
+    """põe o guard em blocked, limpa o corredor e devolve um t já além do
+    clear_time (com scans frescos chegando). Deixa _was_blocked latchado."""
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]     # no corredor
+    tl = _feed_mover(g, t, obj)
+    assert g.filter(tl + 0.1, 0.30, 0.0)[2] == 'blocked'   # latcha _was_blocked
+    g.observe(tl + 0.1, WALL, POSE, 0.0)           # corredor limpo
+    g.observe(tl + 2.4, WALL, POSE, 0.0)           # scan fresco > clear_time
+    return tl
+
+
 def test_static_wall_not_moving():
     g = _guard()
     _feed_static(g)
@@ -328,6 +346,94 @@ def test_filter_passthrough_when_disabled():
     g.observe(t, WALL + obj, POSE, 0.0)
     vx, wz, st = g.filter(t, 0.30, 1.0)
     assert (vx, wz, st) == (0.30, 1.0, 'passthrough')
+
+
+def test_settling_releases_when_plan_stable():
+    # plano assentado no fim do clear_time -> libera na hora (sem regressão
+    # no caso bom: pessoa sumiu rápido, o plano já está limpo).
+    g = _guard(clear_time=1.5)
+    tl = _blocked_past_clear(g)
+    for ti in (tl + 1.6, tl + 2.0, tl + 2.4):
+        g.observe_plan(ti, _plan(0.0))
+    vx, _, st = g.filter(tl + 2.4, 0.30, 0.0)
+    assert st == 'idle' and vx == 0.30
+
+
+def test_settling_holds_while_plan_oscillates():
+    g = _guard(clear_time=1.5)
+    tl = _blocked_past_clear(g)
+    for ti, hdg in [(tl + 1.6, 0.35), (tl + 2.0, -0.35), (tl + 2.4, 0.35)]:
+        g.observe_plan(ti, _plan(hdg))     # ±20°, amplitude 40° > tol
+    vx, wz, st = g.filter(tl + 2.4, 0.30, 0.0)
+    assert st == 'settling' and vx == 0.0 and wz == 0.0
+
+
+def test_settling_holds_on_slow_constant_drift():
+    # o CASO FEIO (pessoa saindo ANDANDO): o rumo do plano deriva devagar e
+    # constante. Delta entre replans (6°) < tol, mas AMPLITUDE (18°) > tol.
+    # Passa com amplitude, FALHARIA com critério de delta.
+    g = _guard(clear_time=1.5)
+    tl = _blocked_past_clear(g)
+    for ti, deg in [(tl + 1.5, 0), (tl + 1.8, 6),
+                    (tl + 2.1, 12), (tl + 2.4, 18)]:
+        g.observe_plan(ti, _plan(math.radians(deg)))
+    _, _, st = g.filter(tl + 2.4, 0.30, 0.0)
+    assert st == 'settling'
+
+
+def test_settling_force_releases_after_settle_max():
+    # plano instável o tempo todo, mas o settling tem teto próprio.
+    g = _guard(clear_time=1.5, settle_max=1.0)
+    tl = _blocked_past_clear(g)
+    for ti, hdg in [(tl + 1.8, 0.35), (tl + 1.9, -0.35), (tl + 2.0, 0.35)]:
+        g.observe_plan(ti, _plan(hdg))     # >=3 amostras, amplitude 40° > tol
+    assert g.filter(tl + 2.0, 0.30, 0.0)[2] == 'settling'   # settle_since=tl+2.0
+    # relógio anda além do settle_max com o plano ainda balançando
+    g.observe(tl + 3.5, WALL, POSE, 0.0)
+    for ti, hdg in [(tl + 3.3, 0.35), (tl + 3.4, -0.35), (tl + 3.5, 0.35)]:
+        g.observe_plan(ti, _plan(hdg))
+    vx, _, st = g.filter(tl + 3.5, 0.30, 0.0)
+    assert st == 'idle' and vx == 0.30     # soltou à força
+
+
+def test_settling_no_plan_behaves_like_today():
+    # nunca chega /plan -> fail-open, sequência idêntica ao teste sem settling.
+    g = _guard(clear_time=1.5)
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
+    tl = _feed_mover(g, t, obj)
+    assert g.filter(tl + 0.8, 0.30, 0.0)[2] == 'blocked'
+    g.observe(tl + 0.8, WALL, POSE, 0.0)
+    g.observe(tl + 2.4, WALL, POSE, 0.0)
+    vx, _, st = g.filter(tl + 2.4, 0.30, 0.0)
+    assert st == 'idle' and vx == 0.30
+
+
+def test_settling_does_not_zero_reverse():
+    g = _guard(clear_time=1.5)
+    tl = _blocked_past_clear(g)
+    for ti, hdg in [(tl + 1.6, 0.35), (tl + 2.0, -0.35), (tl + 2.4, 0.35)]:
+        g.observe_plan(ti, _plan(hdg))
+    vx, wz, st = g.filter(tl + 2.4, -0.20, 1.0)   # ré passa no settling
+    assert st == 'settling' and vx == -0.20 and wz == 0.0
+
+
+def test_settling_disabled_behaves_like_today():
+    g = _guard(clear_time=1.5, settle_enabled=False)
+    tl = _blocked_past_clear(g)
+    for ti, hdg in [(tl + 1.6, 0.35), (tl + 2.0, -0.35), (tl + 2.4, 0.35)]:
+        g.observe_plan(ti, _plan(hdg))     # plano instável seria ignorado
+    vx, _, st = g.filter(tl + 2.4, 0.30, 0.0)
+    assert st == 'idle' and vx == 0.30
+
+
+def test_plan_heading_uses_lookahead_arc():
+    # plano reto 0.6m e depois cotovelo pra +y: o rumo medido é o do trecho
+    # inicial (lookahead 0.6m), não o do cotovelo.
+    g = _guard(settle_lookahead=0.6)
+    poses = [(0.0, 0.0), (0.3, 0.0), (0.6, 0.0), (0.6, 0.3), (0.6, 0.6)]
+    g.observe_plan(1.0, poses)
+    assert abs(g._plan_hdg[-1][1]) < math.radians(5)
 
 
 def _grid_map(wall_x=None, w=100, h=100, res=0.05, ox=-2.5, oy=-2.5):

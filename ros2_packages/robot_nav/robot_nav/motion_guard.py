@@ -124,6 +124,26 @@ class GuardConfig:
                                     # — o cluster acompanhava o robô). Pessoa
                                     # encostada na parede: o corpo sobra fora
                                     # (frac < limiar) -> mantém.
+    settle_enabled: bool = True     # soltar o blocked por PLANO ASSENTADO e
+                                    # não só pelo relógio (bug da curva ~70° ao
+                                    # retomar pós-blocked, repro no sim 07-20):
+                                    # no fim do clear_time o global plan ainda
+                                    # nasce CONTORNANDO a pessoa que segue no
+                                    # costmap; o robô arranca comprometido com
+                                    # um desvio que morre em ~2s. Enquanto o
+                                    # rumo do plano balança, ESTENDE o blocked
+                                    # (robô parado). False = pré-07-20 exato.
+    settle_window: float = 1.0      # s — janela deslizante do rumo do plano
+    settle_tol_deg: float = 8.0     # ° — AMPLITUDE (máx-mín) na janela abaixo
+                                    # disso = assentado. ~metade do erro de
+                                    # mira medido no release ruim (15-19°).
+    settle_max: float = 4.0         # s — teto do settling desde o fim do
+                                    # clear_time; folgado abaixo do
+                                    # guard_hold_max=20s do unstuck.
+    settle_min_samples: int = 3     # não declarar assentado com 1 amostra solta
+    settle_plan_stale: float = 1.0  # s sem /plan fresco -> libera (fail-open)
+    settle_lookahead: float = 0.6   # m — arco do início do plano até o ponto
+                                    # que define o rumo (mira além do 1º passo)
 
 
 class MapGhostFilter:
@@ -214,6 +234,12 @@ class MotionGuard:
         self._watch: List[Pt] = []          # centróides vigiados (frame odom)
         self._watch_since: float = -math.inf
         self._watch_corridor: bool = False
+        # assentamento do plano (07-20): rumo do início do /plan numa janela
+        # deslizante; o release pós-blocked espera a amplitude cair.
+        self._plan_hdg = deque()            # (t, rumo em frame map, rad)
+        self._last_plan_t: float = -math.inf
+        self._was_blocked: bool = False     # esteve em blocked desde o último idle
+        self._settle_since: float = -math.inf   # t em que o clear_time venceu
 
     def _cell(self, p: Pt) -> Tuple[int, int]:
         r = self.cfg.grid_res
@@ -419,7 +445,22 @@ class MotionGuard:
             # enquanto a pessoa ainda passava). Zerar é seguro — o perigo da
             # zona-morta é ESCALAR wz (comando fraco que não gira), não zerar.
             # Ré (vx<0, afasta do móvel à frente) continua passando.
+            self._was_blocked = True
+            self._settle_since = -math.inf      # o relógio ainda nem venceu
             return (0.0 if vx > 0.0 else vx), 0.0, 'blocked'
+        # o clear_time venceu. Antes de arrancar, o plano tem que estar
+        # ASSENTADO — senão o robô sai comprometido com o contorno da pessoa
+        # que ainda está no costmap (curva ~70° do bug de 07-20). Enquanto o
+        # rumo balança, ESTENDE o blocked (só para; ré ainda passa), com teto
+        # settle_max. fail-open: sem plano/settle_enabled=False cai no de hoje.
+        if self._was_blocked and c.settle_enabled:
+            if self._settle_since == -math.inf:
+                self._settle_since = t
+            if (t - self._settle_since < c.settle_max
+                    and not self._plan_settled(t)):
+                return (0.0 if vx > 0.0 else vx), 0.0, 'settling'
+        self._was_blocked = False
+        self._settle_since = -math.inf
         if t - self._last_moving_t < c.clear_time:
             # escala PROPORCIONAL à distância do móvel: colado (<=slow_dist)
             # freia no piso slow_scale; na borda do raio quase não freia.
@@ -431,6 +472,51 @@ class MotionGuard:
             return vx * (c.slow_scale + (1.0 - c.slow_scale) * k), wz_cap, \
                 'slowing'
         return vx, wz, 'idle'
+
+    def observe_plan(self, t: float, poses: List[Pt]) -> None:
+        """rumo do início do plano global (frame map) na janela deslizante.
+
+        Rumo ABSOLUTO de propósito: relativo ao robô, o giro do próprio robô
+        entraria na medida e um plano parado pareceria instável.
+        """
+        c = self.cfg
+        if len(poses) < 2:
+            return
+        self._last_plan_t = t
+        x0, y0 = poses[0]
+        tip = poses[-1]
+        acc = 0.0
+        for a, b in zip(poses, poses[1:]):
+            acc += math.hypot(b[0] - a[0], b[1] - a[1])
+            if acc >= c.settle_lookahead:
+                tip = b
+                break
+        dx, dy = tip[0] - x0, tip[1] - y0
+        if math.hypot(dx, dy) < 1e-6:
+            return          # plano degenerado (robô em cima do goal)
+        self._plan_hdg.append((t, math.atan2(dy, dx)))
+        while self._plan_hdg and t - self._plan_hdg[0][0] > c.settle_window:
+            self._plan_hdg.popleft()
+
+    def _plan_settled(self, t: float) -> bool:
+        """AMPLITUDE (máx-mín, wrap ±π) na janela < settle_tol_deg.
+
+        Amplitude e não delta entre replans: um plano que gira devagar e
+        constante tem delta pequeno a cada ciclo e amplitude grande — é
+        exatamente o caso da pessoa saindo ANDANDO, o pior do bug.
+        Todo caminho de dúvida devolve True (fail-open: settling só PARA).
+        """
+        c = self.cfg
+        if t - self._last_plan_t > c.settle_plan_stale:
+            return True                     # sem plano fresco -> libera
+        while self._plan_hdg and t - self._plan_hdg[0][0] > c.settle_window:
+            self._plan_hdg.popleft()
+        if len(self._plan_hdg) < c.settle_min_samples:
+            return True
+        ref = self._plan_hdg[0][1]
+        rel = [(h - ref + math.pi) % (2 * math.pi) - math.pi
+               for _, h in self._plan_hdg]
+        return (max(rel) - min(rel)) <= math.radians(c.settle_tol_deg)
 
     def _cluster(self, pts: List[Pt]) -> List[List[Pt]]:
         """agrupamento single-link por distância <= cluster_gap (N pequeno)."""
@@ -500,7 +586,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                            qos_profile_sensor_data)
     from rcl_interfaces.msg import SetParametersResult
     from geometry_msgs.msg import Twist
-    from nav_msgs.msg import OccupancyGrid, Odometry
+    from nav_msgs.msg import OccupancyGrid, Odometry, Path
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import String
     from tf2_ros import Buffer, TransformListener, TransformException
@@ -520,7 +606,10 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                        'persist_frames',
                        'cluster_gap', 'wz_gate', 'ray_bin_deg', 'scan_stale',
                        'map_filter', 'hold_still_max', 'hold_still_radius',
-                       'wall_near', 'slow_wz_cap', 'wall_ghost_frac')
+                       'wall_near', 'slow_wz_cap', 'wall_ghost_frac',
+                       'settle_enabled', 'settle_window', 'settle_tol_deg',
+                       'settle_max', 'settle_min_samples',
+                       'settle_plan_stale', 'settle_lookahead')
 
         def __init__(self):
             super().__init__('motion_guard')
@@ -548,6 +637,10 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self.create_subscription(Odometry, 'odom', self._on_odom,
                                      qos_profile_sensor_data)
             self.create_subscription(Twist, 'auto_vel_pre', self._on_cmd, 10)
+            # plano global do nav2 p/ o release assentado (07-20). Já vem em
+            # frame map -> sem TF. Sem plano o guard cai no release temporal
+            # de hoje (fail-open no _plan_settled).
+            self.create_subscription(Path, 'plan', self._on_plan, 10)
             # mapa estático p/ o filtro anti-vidro (map_server publica latched;
             # QoS transient_local pega mesmo assinando depois). Sem mapa (ex.
             # teleop puro) o filtro fica inerte — guard igual ao pré-07-08.
@@ -575,10 +668,13 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self.create_timer(2.0, self._csv_f.flush)
             self.get_logger().info(
                 'motion_guard ativo: raio %.1fm, corredor %.2fx%.1fm, '
-                'slow %.0f%%@%.1fm..100%%@%.1fm, clear %.1fs' % (
+                'slow %.0f%%@%.1fm..100%%@%.1fm, clear %.1fs, '
+                'settle %s %.1f°/%.1fs' % (
                     cfg.guard_radius, cfg.corridor_half_w * 2,
                     cfg.corridor_len, cfg.slow_scale * 100, cfg.slow_dist,
-                    cfg.guard_radius, cfg.clear_time))
+                    cfg.guard_radius, cfg.clear_time,
+                    'on' if cfg.settle_enabled else 'off',
+                    cfg.settle_tol_deg, cfg.settle_max))
 
         def _on_set_params(self, params):
             for p in params:
@@ -590,6 +686,11 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
 
         def _now(self) -> float:
             return self.get_clock().now().nanoseconds * 1e-9
+
+        def _on_plan(self, msg: Path):
+            self.guard.observe_plan(
+                self._now(),
+                [(p.pose.position.x, p.pose.position.y) for p in msg.poses])
 
         def _on_odom(self, msg: Odometry):
             self._wz = msg.twist.twist.angular.z
@@ -716,10 +817,14 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             out.linear.x = vx
             out.angular.z = wz
             self.pub.publish(out)
-            if state != self._last_state:
-                self._last_state = state
-                self.pub_state.publish(String(data=state))
-                if state == 'passthrough':
+            # 'settling' é 'blocked' NO FIO: unstuck_supervisor casa a string
+            # EXATA 'blocked' pro standdown (BO 07-10: ré em cima de pessoa
+            # durante blocked). O estado fino fica só no CSV, pra análise.
+            wire = 'blocked' if state == 'settling' else state
+            if wire != self._last_state:
+                self._last_state = wire
+                self.pub_state.publish(String(data=wire))
+                if wire == 'passthrough':
                     self.get_logger().warn(
                         'pass-through (scan/TF indisponível ou disabled)',
                         throttle_duration_sec=5.0)
