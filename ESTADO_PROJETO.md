@@ -5,6 +5,41 @@
 
 ---
 
+## 🌀 2026-07-17 (tarde) — SIM hotmilk: pacote anti-zigue-zague v2 (✅ COMMITADO no dev 07-20, ⚠️ NÃO deployado na Pi)
+
+- **✅ COMMITADO no dev 07-20; ⚠️ NÃO deployado na Pi** (buildado e validado no
+  sim, 294 testes ok c/ o settle junto). NÃO deployar sem mais runs de base —
+  decisão do dono: acumular runs no sim antes de "tornar oficial" e ir pro real.
+- **Sessão de iteração no sim (hotmilk_portas)**: o fix preditivo `464c959`
+  sozinho NÃO bastava — 4 descobertas em sequência, cada uma medida no
+  `follow_debug.csv`:
+  1. **`turn_exit` 7°→3°**: com exit 7° + wz=0 travado no driving, sair 7°
+     torto = andar em diagonal até estourar os 16° = dente-de-serra ETERNA
+     (matematicamente impossível andar reto). 
+  2. **`turn_stop_tau` 0.25→0.10**: deslize pós-parada MEDIDO no sim =
+     2-4°/~0.15s; 0.25 (chute da run de campo) soltava o giro cedo demais
+     (resíduo 8-12°) e spike de pose descontava até 24° na previsão.
+  3. **MIRA FILTRADA (a peça-chave)**: o Theta* replaneja 1Hz nascendo no
+     robô e a mira salta ±13-15° por replan (pivô biestável nas paredes
+     infladas do corredor). Robô alinhado justo PERSEGUIA o balanço
+     (vai-e-volta 4→15!). Fix: EMA na direção da mira — `aim_tau` 2.0s
+     (carrot esticado) + `aim_tau_short` 0.8s (carrot curto/curva; a 0.6m o
+     ruído vira 2.5x mais graus — era o "começo meme + volta péssima" na
+     zona da casa x<3). Filtro contínuo na troca de modo; 1º avistamento
+     semeia cru (canto sem lag). Tudo param ROS.
+  4. **Resultado (run final ~536s/138m, 3 pernas)**: corredor da ida =
+     **2 giros** ("bom demais" — dono); volta 5; vai-e-volta 7 total
+     (0,8/min); girando 9%. Trecho NOVO x30-40 teve 8 giros — conferir se
+     repete (característica do lugar?). CSVs: `log/sim_2026-07-17_zigzag/`.
+- **Lição de infra**: launch duplo deixou path_follower ÓRFÃO rodando junto
+  (2 publicando cmd_vel = "girar sozinho", CSV corrompido) — investigar por
+  que o pkill do launch.sh não pegou; matar órfãos antes de rodar.
+- **Próximo**: mais runs no sim p/ base estatística → commit do pacote →
+  validar no real (lá o `turn_stop_tau` pode precisar subir de 0.10 — lag
+  de pose sob carga; knob ROS, não mexer código).
+
+---
+
 ## 🙂🎥🌀 2026-07-17 — Cara fase 2 COMPLETA em campo, rota autônoma na RUA, causa do zigue-zague achada
 
 - **🙂 CARA FASE 2 ✅ VALIDADA EM CAMPO** ("ele tá me olhando mesmo"):

@@ -133,11 +133,17 @@ class FollowConfig:
                                     # padrão da VOLTA de campo 07-09 (58% do
                                     # giro cancelado). Alavanca mapeada no
                                     # ESTADO 07-09.
-    turn_exit: float = 0.12         # rad (~7°)  — abaixo disso PARA de girar
-                                    # (histerese; 3->7 junto com o enter: solta
-                                    # o giro mais cedo, precisa de ±16 de novo
-                                    # p/ re-entrar)
-    turn_stop_tau: float = 0.25     # s — saída PREDITIVA do giro (07-17): o
+    turn_exit: float = 0.05         # rad (~3°)  — abaixo disso PARA de girar
+                                    # (histerese; re-entrar pede turn_enter).
+                                    # 7->3 (07-17, sim hotmilk): no driving o wz
+                                    # é 0 travado, então sair 7° torto = andar
+                                    # em diagonal até estourar os 16° -> dente-
+                                    # de-serra no corredor RETO (64 giros, 51
+                                    # <10°). Sair alinhado (~3°) é o que deixa
+                                    # o reto ser reto; o vai-e-volta que motivou
+                                    # os 7° hoje é coberto pela saída preditiva
+                                    # (turn_stop_tau) + histerese de 16°.
+    turn_stop_tau: float = 0.10     # s — saída PREDITIVA do giro (07-17): o
                                     # robô continua girando ~tau depois do
                                     # comando parar (pose lagada + inércia);
                                     # na run real ele saía do giro já ±16° do
@@ -147,6 +153,39 @@ class FollowConfig:
                                     # 0.0 = comportamento antigo. A histerese
                                     # (re-entrar pede 16°) protege se tau
                                     # passar do ponto.
+                                    # 0.25->0.10 (07-17, sim hotmilk): deslize
+                                    # MEDIDO no CSV pós-parada = 2-4° em ~0.15s
+                                    # (tau ~0.10); com 0.25 a previsão soltava
+                                    # o giro ~6° antes do necessário (resíduo
+                                    # 8-12°) e um spike de yaw_rate (salto de
+                                    # pose AMCL) descontava até 24° -> saída com
+                                    # 25.8° de resíduo e vai-e-volta 4->10. Se
+                                    # o REAL (lag de pose maior sob carga)
+                                    # voltar a ter overshoot, subir o param
+                                    # turn_stop_tau via ROS — não voltar o
+                                    # default às cegas.
+    aim_tau: float = 2.0            # s — EMA na DIREÇÃO da mira, só com carrot
+                                    # ESTICADO (trecho reto). Sim hotmilk 07-17:
+                                    # a mira salta 13-15° entre replans (Theta*
+                                    # 1Hz pivota ora numa parede inflada ora na
+                                    # outra — biestável em corredor); apertar o
+                                    # alinhamento (exit 3° + tau 0.10) fez o
+                                    # robô PERSEGUIR o balanço: vai-e-volta
+                                    # 4->15. Filtrado (tau 2s, swing 1Hz):
+                                    # ±14° -> ±3.4°, nunca estoura o turn_enter
+                                    # -> corredor reto fica reto. <=0 desliga
+                                    # (mira crua no esticado).
+    aim_tau_short: float = 0.8      # s — EMA da mira no carrot CURTO (curva).
+                                    # Run 07-17 pós-filtro: zona curva perto da
+                                    # casa (x 1-2.5 do hotmilk) seguia chovendo
+                                    # giro (8-12/30s) — a 0.6m o mesmo ruído
+                                    # lateral vira 2.5x mais graus e a mira
+                                    # crua persegue replan. 0.8s engole o
+                                    # balanço 1Hz (±20°->±9°) e ainda entra no
+                                    # canto em <1s (~20cm a 0.25m/s; histerese
+                                    # 16° já atrasava parecido). 1º avistamento
+                                    # de canto NÃO tem lag (filtro semeia cru).
+                                    # <=0 desliga (mira crua no curto).
     tick_dt: float = 0.05           # s — período do update() (nó seta
                                     # 1/rate_hz); usado só pra derivar o yaw.
     goal_xy_tol: float = 0.15       # m — chegou no goal (casa c/ goal_checker do nav2)
@@ -182,6 +221,7 @@ class DecisiveFollower:
         self._turn_target = None  # bearing (map) congelado durante o turning
         self._prev_yaw = None     # p/ derivar a taxa de giro medida
         self._yaw_rate = 0.0      # rad/s, EMA (ruído de pose não vira taxa)
+        self._aim_filt = None     # bearing (map) filtrado da mira (só esticado)
         self.dbg = {}        # diagnóstico do último update (logado pelo nó)
 
     def _turn_cmd(self, herr: float) -> float:
@@ -201,6 +241,7 @@ class DecisiveFollower:
             self._turn_target = None
             self._prev_yaw = None
             self._yaw_rate = 0.0
+            self._aim_filt = None
             return Cmd(0.0, 0.0, 'idle')
 
         x, y, yaw = pose
@@ -245,6 +286,25 @@ class DecisiveFollower:
             if straight_deviation(path, i0, cf) <= c.straight_tol:
                 ci, (ax, ay), la = cf, (fx, fy), c.lookahead_far
         bearing = math.atan2(ay - y, ax - x)
+        # MIRA FILTRADA (07-17): EMA temporal na direção da mira — o replan
+        # 1Hz do Theta* balança a mira ±14° (pivô biestável nas paredes
+        # infladas) e o robô alinhado justo perseguia cada balançada
+        # (vai-e-volta 4->15 no sim hotmilk). Tau por modo: esticado filtra
+        # forte (corredor reto fica reto); curto filtra leve (engole o
+        # chilique sem atrasar canto — 1º avistamento semeia cru, sem lag).
+        # Filtro é CONTÍNUO na troca de modo (resetar a cada flap curto<->
+        # esticado, comum na zona curva, viraria mira crua de novo).
+        tau = c.aim_tau if la == c.lookahead_far else c.aim_tau_short
+        if tau > 0.0:
+            if self._aim_filt is None:
+                self._aim_filt = bearing
+            else:
+                alpha = 1.0 - math.exp(-c.tick_dt / tau)
+                self._aim_filt = wrap(
+                    self._aim_filt + alpha * wrap(bearing - self._aim_filt))
+            bearing = self._aim_filt
+        else:
+            self._aim_filt = None
         herr = wrap(bearing - yaw)
         dist_aim = math.hypot(ax - x, ay - y)
         self.dbg = {'i0': i0, 'ci': ci, 'n': len(path), 'ax': ax, 'ay': ay,
@@ -318,11 +378,12 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 # mesma parede lê 1.04m (fora do gate) e as quinas de fresta,
                 # quase À FRENTE na aproximação, continuam pegas a 0.9m.
                 ('stretch_clearance', 0.55), ('clear_sector_deg', 40.0),
-                ('turn_enter_deg', 16.0), ('turn_exit_deg', 7.0),
+                ('turn_enter_deg', 16.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
                 ('slow_radius', 0.4), ('min_speed', 0.22), ('rate_hz', 20.0),
-                ('turn_stop_tau', 0.25),
+                ('turn_stop_tau', 0.10), ('aim_tau', 2.0),
+                ('aim_tau_short', 0.8),
             ):
                 self.declare_parameter(name, default)
                 g[name] = self.get_parameter(name).value
@@ -338,7 +399,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 goal_yaw_tol=math.radians(g['goal_yaw_tol_deg']),
                 rot_k=g['rot_k'], rot_min=g['rot_min'], rot_max=g['rot_max'],
                 slow_radius=g['slow_radius'], min_speed=g['min_speed'],
-                turn_stop_tau=g['turn_stop_tau'],
+                turn_stop_tau=g['turn_stop_tau'], aim_tau=g['aim_tau'],
+                aim_tau_short=g['aim_tau_short'],
                 tick_dt=1.0 / g['rate_hz'])
             self.fol = DecisiveFollower(self.cfg)
 

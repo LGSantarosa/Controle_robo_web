@@ -199,6 +199,80 @@ def test_predictive_exit_ignores_wrong_direction_rate():
     assert all(cmd.state == 'turning' for _, cmd in hist)
 
 
+# ---- MIRA FILTRADA (07-17: replan 1Hz balança a mira ±14° em corredor) ----
+# Sim hotmilk: Theta* nasce no robô e pivota ora numa parede inflada ora na
+# outra — a mira salta 13-15° por replan. Alinhamento justo (exit 3°) fez o
+# robô perseguir o balanço (vai-e-volta 4->15). EMA na direção da mira, só
+# com carrot esticado (trecho reto); curva = cru + reset.
+
+def _tilted(ang, n=40):
+    return [(math.cos(ang) * k * 0.1, math.sin(ang) * k * 0.1)
+            for k in range(n)]
+
+
+def test_aim_filter_ignores_replan_wobble():
+    # alinhado no corredor; replans alternam a mira ±20° (acima do turn_enter
+    # 16°) a cada 1s. Filtrado (tau 2s) o swing vira ~±5° -> NUNCA gira.
+    f = _fol()
+    for _ in range(10):                             # seed: corredor reto +x
+        cmd = f.update((0.0, 0.0, 0.0), _tilted(0.0), goal_active=True,
+                       goal_yaw=0.0)
+        assert cmd.state == 'driving'
+    ang = math.radians(20)
+    for cycle in range(6):                          # 6s de wobble ±20°
+        path = _tilted(ang if cycle % 2 == 0 else -ang)
+        for _ in range(20):                         # 1s por replan
+            cmd = f.update((0.0, 0.0, 0.0), path, goal_active=True,
+                           goal_yaw=0.0)
+            assert cmd.state == 'driving'           # sem filtro viraria turning
+
+
+def test_aim_filter_seeds_raw_on_first_sight_of_curve():
+    # canto de verdade a 0.3m visto do ZERO: o filtro semeia com a mira crua
+    # (sem histórico não há lag) -> gira no MESMO tick.
+    f = _fol()
+    path = [(k * 0.1, 0.0) for k in range(4)]       # reto +x até 0.3
+    path += [(0.3, k * 0.1) for k in range(1, 30)]  # canto 90° sobe +y
+    cmd = f.update((0.0, 0.0, 0.0), path, goal_active=True,
+                   goal_yaw=math.pi / 2)
+    assert cmd.state == 'turning'
+
+
+def test_aim_filter_short_mode_damps_wobble_but_takes_the_corner():
+    # modo CURTO forçado (straight_tol=0 desliga o estico): replans balançando
+    # ±20° a 1Hz não viram giro (tau_short 0.8 -> ~±11°); canto REAL
+    # persistente de 45° entra no giro em <1s.
+    f = DecisiveFollower(FollowConfig(straight_tol=0.0))
+    for _ in range(10):                              # semeia alinhado
+        st = f.update((0.0, 0.0, 0.0), _tilted(0.0), goal_active=True,
+                      goal_yaw=0.0).state
+    assert st == 'driving'
+    ang = math.radians(20)
+    for cycle in range(4):                           # 4s de wobble ±20°
+        path = _tilted(ang if cycle % 2 == 0 else -ang)
+        for _ in range(20):
+            cmd = f.update((0.0, 0.0, 0.0), path, goal_active=True,
+                           goal_yaw=0.0)
+            assert cmd.state == 'driving'            # cru dispararia turn_enter
+    corner = _tilted(math.radians(45))               # canto real persistente
+    states = [f.update((0.0, 0.0, 0.0), corner, goal_active=True,
+                       goal_yaw=0.0).state for _ in range(20)]  # 1s
+    assert 'turning' in states
+
+
+def test_aim_filter_tracks_slow_real_change():
+    # mudança REAL e persistente de 30° (não wobble): o filtro converge e o
+    # robô entra no giro em ~2-3s — atraso aceitável, não paralisia.
+    f = _fol()
+    for _ in range(10):
+        f.update((0.0, 0.0, 0.0), _tilted(0.0), goal_active=True,
+                 goal_yaw=0.0)
+    path = _tilted(math.radians(30))
+    states = [f.update((0.0, 0.0, 0.0), path, goal_active=True,
+                       goal_yaw=0.0).state for _ in range(80)]  # 4s
+    assert 'turning' in states
+
+
 def test_microsim_lagged_plant_predictive_cuts_reversals():
     # Planta com atraso de atuação (0.3s): o wz comandado só vira yaw depois
     # de 6 ticks — reproduz o overshoot do campo. Com tau=0.3 os flips de
