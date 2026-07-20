@@ -985,6 +985,9 @@ class UnstuckSupervisor:
 def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
     import json
 
+    import csv as _csv
+    import os as _os
+
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import (QoSProfile, ReliabilityPolicy, HistoryPolicy,
@@ -1218,6 +1221,20 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                     CollisionMonitorState, "collision_monitor_state",
                     self._on_collision, 10)
 
+            # CSV de diagnóstico das RÉS (fecha o gap B3): cada tick grava o
+            # MOTIVO (reason) + os sinais que decidem a ré, pra revisar cada
+            # disparo com dado na mão em vez de teorizar. Padrão do motion_guard
+            # (flush em timer; flush por linha a 10Hz castiga o SD da Pi).
+            d = "controle_web/logs"
+            _os.makedirs(d, exist_ok=True)
+            self._csv_f = open(_os.path.join(d, "unstuck.csv"), "w", newline="")
+            self._csv = _csv.writer(self._csv_f)
+            self._csv.writerow([
+                "t", "state", "reason", "active", "lin", "ang", "nav_wants",
+                "x", "y", "stuck_s", "rear_gap", "front_gap", "side_clear",
+                "nearest", "guard_blocked", "obstacle_mapped", "near_mapped"])
+            self.create_timer(2.0, self._csv_f.flush)
+
             self.create_timer(1.0 / g["rate_hz"], self._tick)
             self.get_logger().info(
                 "unstuck_supervisor ativo (sem-deslocamento %.0fs -> ré %.2fm "
@@ -1383,6 +1400,8 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                     self.rear_half_width, self.clear_turn_depth,
                     self.clear_turn_cap, self.clear_turn_step,
                     prefer_bearing=self._plan_bearing())
+            guard_blocked = (self._guard_blocked
+                             or now < self._guard_tail_until)
             cmd = self.sup.update(
                 now, nav_wants_move=self._nav_wants_move,
                 position=self._position, rear_gap=gap, front_gap=front_gap,
@@ -1393,8 +1412,22 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 nearest_deg=(self._near_deg if scan_fresh else 0.0),
                 clear_offset=clear_offset,
                 plan_bearing=self._plan_bearing(),
-                guard_blocked=(self._guard_blocked
-                               or now < self._guard_tail_until))
+                guard_blocked=guard_blocked)
+            # CSV: uma linha por tick (t = relógio ROS, casa com motion_guard.csv;
+            # stuck_s = tempo parado desde a âncora). reason só é fresco quando
+            # dispara, mas gravo sempre (mostra o último motivo).
+            def _f(v):
+                return round(v, 3) if isinstance(v, float) and math.isfinite(v) else (
+                    "" if isinstance(v, float) else v)
+            self._csv.writerow([
+                round(self.get_clock().now().nanoseconds * 1e-9, 3),
+                self.sup.state, self.sup.last_fire_reason,
+                int(cmd.active), _f(cmd.lin), _f(cmd.ang),
+                int(self._nav_wants_move),
+                _f(self._position[0]), _f(self._position[1]),
+                round(now - self.sup.anchor_t, 2) if self.sup.anchor else "",
+                _f(gap), _f(front_gap), _f(side_clear), _f(nearest),
+                int(guard_blocked), int(obstacle_mapped), int(near_mapped)])
             if self.sup.state != self._last_state:
                 extra = ""
                 if self._last_state == "monitoring":
