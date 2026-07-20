@@ -138,8 +138,9 @@ class GuardConfig:
                                     # disso = assentado. ~metade do erro de
                                     # mira medido no release ruim (15-19°).
     settle_max: float = 4.0         # s — teto do settling desde o fim do
-                                    # clear_time; folgado abaixo do
-                                    # guard_hold_max=20s do unstuck.
+                                    # clear_time (curto: o settling só ESTENDE o
+                                    # blocked por alguns ciclos até o plano
+                                    # assentar).
     settle_min_samples: int = 3     # não declarar assentado com 1 amostra solta
     settle_plan_stale: float = 1.0  # s sem /plan fresco -> libera (fail-open)
     settle_lookahead: float = 0.6   # m — arco do início do plano até o ponto

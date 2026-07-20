@@ -298,10 +298,6 @@ class UnstuckConfig:
     # LiDAR, livre no /map) segue o stuck_timeout cheio. Ver
     # docs/superpowers/specs/2026-06-22-unstuck-recovery-contextual-design.md
     stuck_timeout_mapped: float = 2.0
-    # Teto do standdown do motion_guard (dono 2026-07-02): guard preso em
-    # 'blocked' por mais que isso SEM nada mudar -> o unstuck reativa (o guard
-    # pode estar vendo um falso-móvel; não morrer de fome esperando).
-    guard_hold_max: float = 20.0
     stuck_radius: float = 0.05     # deslocou menos que isso = "parado"
     # 2026-06-27 BO: o robô point-turnando (vx=0, girando no lugar) NÃO desloca,
     # então o unstuck achava que travou e dava RÉ no meio do giro legítimo do
@@ -461,7 +457,6 @@ class UnstuckSupervisor:
     anchor_t: float = 0.0
     anchor_yaw: float = 0.0        # yaw quando ancorou (rotação reseta o stuck)
     mapped_since: Optional[float] = None  # desde quando o bloqueio à frente é parede mapeada
-    guard_since: Optional[float] = None   # desde quando o motion_guard bloqueia (teto do standdown)
     maneuver_start_t: float = 0.0
     maneuver_start_pos: Tuple[float, float] = (0.0, 0.0)
     reverse_target: float = 0.0    # quanto recuar NESTA manobra (<= reverse_distance)
@@ -504,23 +499,18 @@ class UnstuckSupervisor:
                guard_blocked: bool = False) -> Command:
         if nav_wants_move:
             self.last_nav_t = now
-        if guard_blocked:
-            if self.guard_since is None:
-                self.guard_since = now
-        else:
-            self.guard_since = None
-        if (guard_blocked and self.state == _MONITORING
-                and now - self.guard_since <= self.cfg.guard_hold_max):
-            # CAUTELA ≠ TRAVADO (2026-07-02): o motion_guard segurou a
-            # autonomia de propósito (coisa se MEXENDO no corredor à frente).
-            # Parado assim não é encalhe — em campo o unstuck disparava
-            # pinch/ré em cima da PESSOA que causou a parada. Enquanto o
-            # guard bloqueia: não acumula stuck, não dispara mapped/pinch;
-            # re-ancora (o relógio recomeça do zero quando o guard soltar).
-            # Manobra JÁ em andamento não é abortada (só novos disparos) —
-            # o unstuck_vel (prio 30) nem passa pelo motion_guard.
-            # TETO guard_hold_max (dono 07-02): bloqueado além disso sem nada
-            # mudar -> deixa de segurar e o unstuck volta a contar/agir.
+        if guard_blocked and self.state == _MONITORING:
+            # STANDDOWN TOTAL enquanto o guard bloqueia (dono 2026-07-20, opção
+            # B): a parada é a PESSOA, não encalhe. O unstuck cutucando (ré/giro)
+            # só ATRAPALHA — não tira o robô de lá (thrash medido no unstuck.csv:
+            # 0,58m líquido em 60s, quase tudo em ré) e manobrar perto de gente é
+            # PERIGOSO (BO tênis 07-10 + quase-batida na pessoa ATRÁS, físico
+            # 07-20). Confia no guard: ele solta quando dá pra seguir (pessoa sai,
+            # ou vira 'slowing' e o robô contorna). SEM TETO de propósito —
+            # manobrar perto de gente nunca é a saída; se o guard travar em
+            # falso-móvel, o bug é DELE (tem os filtros de fantasma). Manobra JÁ
+            # em curso (state != _MONITORING) NÃO é abortada; o _guard_tail_until
+            # (2s pós-soltar) evita disparo no vácuo logo depois.
             self.anchor = None
             self.mapped_since = None
             return _IDLE
@@ -653,19 +643,10 @@ class UnstuckSupervisor:
             self.last_fire_reason = "near"
         else:
             self.last_fire_reason = "pinch"
-        # GOAL COADJUVANTE (dono 07-10): o guard segue BLOQUEANDO (pessoa na
-        # cena) além do teto do standdown. Cumprir goal não justifica manobra
-        # perto de gente: avanço/giro PROIBIDOS; no máximo a ré padrão se há
-        # vão claro atrás (afasta da pessoa), senão espera parado. Campo
-        # 07-10: um advancing com pessoa na cena acertou o tênis do dono.
-        if guard_blocked:
-            self.last_fire_reason += "+guard"
-            rear_target = min(self.cfg.reverse_distance,
-                              rear_gap - self.cfg.rear_stop_margin)
-            if rear_target >= self.cfg.reverse_min:
-                return self._begin_reverse(now, position, open_side, rear_gap,
-                                           nearest_deg)
-            return _IDLE
+        # NB (2026-07-20, opção B): enquanto guard_blocked o _monitoring NEM É
+        # ALCANÇADO — o standdown total no topo do update() retorna _IDLE antes.
+        # Removida a ré "goal-coadjuvante" (07-10) que disparava perto de gente:
+        # era código inalcançável agora e perigoso (quase batia na pessoa atrás).
         # DIREÇÃO pela CENA (2026-06-28, "analisar se precisa ré ou ir reto"):
         # - FRENTE LIVRE e mesmo assim travou (preso de lado / no batente da porta):
         #   AVANÇA (passa o batente). Dar ré aqui desfazia o progresso e re-aproximava
@@ -1017,7 +998,6 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
                 # os 10 s). block_range = front_gap acima disso não conta como
                 # bloqueio à frente. Lookup no /map cru (sem inflação).
                 ("stuck_timeout_mapped", 2.0),
-                ("guard_hold_max", 20.0),
                 ("block_range", 0.5),
                 ("map_occ_threshold", 65),
                 # 0.22 (não 0.15): absorve o offset de registro pose↔mapa (~0.2 m
@@ -1092,7 +1072,6 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self.cfg = UnstuckConfig(
                 stuck_timeout=g["stuck_timeout"],
                 stuck_timeout_mapped=g["stuck_timeout_mapped"],
-                guard_hold_max=g["guard_hold_max"],
                 stuck_radius=g["stuck_radius"],
                 stuck_yaw=g["stuck_yaw"],
                 reverse_distance=g["reverse_distance"],
@@ -1258,13 +1237,11 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             was = self._guard_blocked
             self._guard_blocked = (msg.data == "blocked")
             if was and not self._guard_blocked:
-                # soltou: cauda curta pro robô re-engatar antes de o unstuck
-                # voltar a contar (evita disparo no vácuo pós-bloqueio).
-                # time.monotonic(): o _tick compara com monotonic; com o
-                # relógio ROS (época) a cauda ficava True PRA SEMPRE ->
-                # guard_since nunca re-ancorava -> o teto guard_hold_max
-                # expirava de vez e o standdown MORRIA (campo 2026-07-10:
-                # unstuck avançou em cima de pessoa DURANTE blocked).
+                # soltou: cauda curta (2s) pro robô re-engatar antes de o unstuck
+                # voltar a contar (evita disparo no vácuo logo após o bloqueio,
+                # enquanto o plano ainda assenta). time.monotonic(): o _tick
+                # compara com monotonic; com o relógio ROS (época) a cauda ficava
+                # True pra sempre e o standdown nunca soltava.
                 self._guard_tail_until = time.monotonic() + 2.0
 
         def _on_plan(self, msg):

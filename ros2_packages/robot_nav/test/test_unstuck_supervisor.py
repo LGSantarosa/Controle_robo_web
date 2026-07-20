@@ -297,39 +297,37 @@ def test_unstuck_rearms_after_guard_clears():
     assert cmd.lin == pytest.approx(-0.25)
 
 
-def test_guard_hold_expires_after_20s():
-    # teto do standdown (dono 07-02): guard preso em blocked por >20s sem
-    # nada mudar -> o unstuck REATIVA (volta a contar e age nos timers dele).
-    sup = UnstuckSupervisor(_cfg())
-    _tick(sup, 0.0)
-    for t in (5.0, 10.0, 20.0, 24.9):
-        cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
-                         rear_gap=math.inf, front_gap=0.0, nearest=0.0,
-                         guard_blocked=True)
-        assert cmd.active is False            # segurado (< 20s de bloqueio)
-    sup.update(25.1, nav_wants_move=True, position=(0.0, 0.0),
-               rear_gap=math.inf, front_gap=0.0, nearest=0.0,
-               guard_blocked=True)            # 20.1s: hold caiu, re-ancora
-    cmd = sup.update(35.3, nav_wants_move=True, position=(0.0, 0.0),
-                     rear_gap=math.inf, front_gap=0.0, nearest=0.0,
-                     guard_blocked=True)      # 10.2s parado pós-teto -> age
-    assert cmd.active is True
-    assert cmd.lin == pytest.approx(-0.25)
-
-
-def test_guard_hold_timer_resets_when_block_clears():
-    # bloqueio intermitente (pessoa indo e vindo) NÃO acumula pro teto:
-    # cada soltada zera o relógio dos 20s.
+def test_guard_blocked_new_block_stands_down():
+    # opção B (07-20): qualquer guard_blocked -> standdown, independente do
+    # histórico (bloqueio intermitente não deixa estado "stale" que dispare).
     sup = UnstuckSupervisor(_cfg())
     _tick(sup, 0.0)
     sup.update(10.1, nav_wants_move=True, position=(0.0, 0.0),
                guard_blocked=True)
     sup.update(25.0, nav_wants_move=True, position=(0.0, 0.0),
-               guard_blocked=False)           # soltou: zera o teto
+               guard_blocked=False)           # soltou
     cmd = sup.update(30.0, nav_wants_move=True, position=(0.0, 0.0),
                      rear_gap=math.inf, front_gap=0.0, nearest=0.0,
-                     guard_blocked=True)      # bloqueio NOVO (5s < 20s)
+                     guard_blocked=True)      # bloqueio NOVO -> standdown
     assert cmd.active is False
+
+
+def test_guard_blocked_never_fires_any_maneuver():
+    # Opção B (dono 07-20): enquanto o guard bloqueia (pessoa na cena), o unstuck
+    # NÃO manobra — nem ré, nem giro. Confia no guard (ele solta quando dá pra
+    # seguir). Antes: teto de 20s soltava e o near/goal-coadjuvante disparava
+    # ré/giro À TOA (thrash medido no unstuck.csv: 0.58m líquido em 60s, quase
+    # tudo ré; + a ré perigosa perto de gente). Agora: standdown total, SEM teto.
+    sup = UnstuckSupervisor(_cfg())
+    # near_mapped=True (parede do mapa perto) = o gatilho `near` que disparava
+    # rápido; guard_blocked o tempo todo desde t=0.
+    sup.update(0.0, nav_wants_move=True, position=(0.0, 0.0), front_gap=0.0,
+               near_mapped=True, nearest=0.0, guard_blocked=True)
+    for t in (5.0, 20.5, 40.0, 90.0):      # muito além de qualquer teto antigo
+        cmd = sup.update(t, nav_wants_move=True, position=(0.0, 0.0),
+                         rear_gap=math.inf, front_gap=0.0, near_mapped=True,
+                         nearest=0.0, guard_blocked=True)
+        assert cmd.active is False, f"manobrou em t={t}s de bloqueio (era pra esperar)"
 
 
 def test_guard_blocked_does_not_abort_running_maneuver():
@@ -1483,32 +1481,21 @@ def _person_scene(sup, t, guard=True, rear=0.0):
                       nearest=0.0, guard_blocked=guard)
 
 
-def test_guard_blocked_past_ceiling_never_advances():
-    # GOAL COADJUVANTE (dono 07-10): guard bloqueando ALÉM do teto (pessoa
-    # parada na cena) -> avanço/giro proibidos; sem vão atrás, espera parado.
-    # (antes: advancing reason=near com pessoa na cena — acertou o tênis)
+def test_guard_blocked_never_maneuvers_on_person():
+    # opção B (dono 07-20): guard bloqueando (pessoa na cena) -> o unstuck NÃO
+    # manobra, mesmo muito depois e MESMO com vão claro atrás. Reverter/avançar/
+    # girar perto de gente é o perigo (tênis 07-10 + quase-batida atrás 07-20);
+    # confia no guard. (antes: reason=near/+guard disparava ré/giro à toa.)
     sup = UnstuckSupervisor(_cfg())
     _tick(sup, 0.0)
-    _person_scene(sup, 0.1)                    # ancora o relógio do guard
-    _person_scene(sup, 20.3)                   # teto caiu -> re-ancora stuck
-    cmd = _person_scene(sup, 22.6)             # 2.3s travado, pinch_fire
-    assert cmd.active is False                 # NÃO avança em cima de gente
+    _person_scene(sup, 0.1)
+    _person_scene(sup, 20.3)                   # muito além do antigo teto de 20s
+    assert _person_scene(sup, 22.6).active is False            # sem vão atrás
+    assert _person_scene(sup, 40.0, rear=math.inf).active is False  # COM vão atrás: idem
     assert sup.state == "monitoring"
-    # contraprova: a MESMA cena sem pessoa (guard livre) avança normalmente
+    # contraprova: a MESMA cena SEM pessoa (guard livre) avança normalmente
     sup2 = UnstuckSupervisor(_cfg())
     _tick(sup2, 0.0)
     _person_scene(sup2, 0.1, guard=False)
     cmd2 = _person_scene(sup2, 10.4, guard=False)   # >stuck_timeout: dispara
     assert cmd2.active is True and cmd2.lin > 0.0   # avanço (frente livre)
-
-
-def test_guard_blocked_past_ceiling_allows_only_reverse():
-    # com vão CLARO atrás, a única manobra permitida perto de gente é a ré
-    # (afasta da pessoa); pessoa atrás = sem vão = o caso acima (espera).
-    sup = UnstuckSupervisor(_cfg())
-    _tick(sup, 0.0)
-    _person_scene(sup, 0.1)
-    _person_scene(sup, 20.3)
-    cmd = _person_scene(sup, 22.6, rear=math.inf)
-    assert cmd.active is True
-    assert cmd.lin == pytest.approx(-0.25)     # ré, nunca avanço
