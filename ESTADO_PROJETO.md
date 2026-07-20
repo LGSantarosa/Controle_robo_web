@@ -1,15 +1,71 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-17**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-20**.
 
 ---
 
-## 🌀 2026-07-17 (tarde) — SIM hotmilk: pacote anti-zigue-zague v2 (✅ COMMITADO no dev 07-20, ⚠️ NÃO deployado na Pi)
+## 🛡️ 2026-07-20 — motion_guard/unstuck: parada por pessoa + testado no REAL
 
-- **✅ COMMITADO no dev 07-20; ⚠️ NÃO deployado na Pi** (buildado e validado no
-  sim, 294 testes ok c/ o settle junto). NÃO deployar sem mais runs de base —
-  decisão do dono: acumular runs no sim antes de "tornar oficial" e ir pro real.
+Sessão focada em como o robô lida com **pessoa na frente** — 3 mudanças, todas
+commitadas, pushadas e **deployadas na Pi** (`2f4b082`, bundle com o zigzag v2):
+
+**1. motion_guard `settle` (`cbfb442`) — mata a curva de ~70° pós-blocked.**
+O guard agora solta por **PLANO ASSENTADO**, não pelo relógio: depois do
+`clear_time`, só libera quando o rumo do `/plan` para de balançar (amplitude da
+janela < `settle_tol_deg` 8°). Publica `blocked` no fio (settling só no CSV) pra
+preservar o standdown do unstuck. Validado qualitativo no sim ("sumiu o giro do
+nada"). Spec/plano em `docs/superpowers/{specs,plans}/2026-07-20-motion-guard-settling*`.
+
+**2. unstuck: CSV de diagnóstico (`4b5c61c`) — fecha o gap B3.**
+`controle_web/logs/unstuck.csv`, 1 linha/tick com `reason`
+(timeout/mapped/near/pinch/+guard) + rear/front/side/nearest/guard_blocked/
+stuck_s/pose. Casa com `motion_guard.csv` pelo `t`. **Toda ré agora deixa rastro.**
+
+**3. unstuck opção B (`2f4b082`) — enquanto `guard_blocked`, NÃO manobra.**
+As "rés à toa" eram `reason=near+guard` (robô perto de parede do mapa + guard
+segurando pessoa): o teto de 20s soltava, o `near` disparava ré/giro em ~3s à
+toa, pessoa ainda lá → **thrash** (0,58m líquido em 60s, quase tudo ré, medido no
+`unstuck.csv`) + a ré perigosa perto de gente. **Fix:** standdown total enquanto
+guard bloqueia, SEM teto. Removido `guard_hold_max` (knob+param) e a ré
+`goal-coadjuvante` (07-10). Manobra já em curso não é abortada; cauda de 2s
+pós-soltar mantida. Validado no sim (162s guard-blocked → 0 manobras).
+
+### 🧪 Testado no REAL 07-20 (relato do dono)
+- ✅ **B FUNCIONOU com gente de verdade** — "quando tinha alguém ele parava
+  corretamente", sem thrash de ré perto de pessoa.
+- 🔴 **INÍCIO da run: robô "ENDOIDOU", QUASE BATEU no dono** (só não bateu porque
+  ele foi pra trás), "parecia perdido". **PRIORIDADE (segurança).** A revisar com
+  os CSVs. Suspeitos (NÃO concluir sem ler): zigzag v2 (1º real, bundle), AMCL no
+  início, recovery.
+- 🟡 **Parou ~20s "à toa" sem ninguém** = **guard falso-positivo** (achou que viu
+  pessoa → `blocked` → vigília ~20s). Com o B ele espera esse tempo. Tuning do
+  guard (ghost filters), separado do unstuck.
+- 🎥 Vídeo da run: `/home/rbe-luis/pov_2026-07-20_rota.mkv` (dev; o "endoidou" é
+  no comecinho). POV pode estar acelerado.
+
+### ⚠️ Handoff / o que falta
+- **Puxar os CSVs do run do "endoidou" ANTES de relançar a stack** na Pi (são
+  sobrescritos com `w` no próximo launch): `follow_debug/motion_guard/unstuck.csv`.
+  07-20 a Pi foi desligada antes de puxar.
+- **BOs abertos**: (a) 🔴 review do "endoidou" no início; (b) 🟡 guard
+  falso-positivo (parada ~20s sem gente); (c) ré recuando em cima de gente ATRÁS
+  (caso físico parede+pessoa atrás — leitura traseira/`pinch`); (d) 🔴 DEADLOCK
+  point-turn capado pelo collision (PolygonStop `approach` < theta_deadzone 1.7);
+  (e) validação real do zigzag v2.
+- **Lição de método (dono, explícita)**: ler os CSVs/conversar e confirmar a
+  CAUSA com dado ANTES de mexer — errei 2x nesta sessão por adivinhar (standdown
+  por collision [tópico morto no sim] e guard_hold_max 20→120 [fora do escopo],
+  ambos revertidos).
+
+---
+
+## 🌀 2026-07-17 (tarde) — SIM hotmilk: pacote anti-zigue-zague v2 (✅ COMMITADO no dev 07-20 `a97de6d`, ✅ DEPLOYADO na Pi 07-20 no bundle)
+
+- **✅ COMMITADO `a97de6d` + ✅ DEPLOYADO na Pi 07-20** (no bundle com settle+B).
+  1º teste no real 07-20 (ver seção 07-20). ⏳ Ainda falta a validação DEDICADA
+  do zigzag no real (a run de 07-20 foi focada no unstuck/guard; e o "endoidou"
+  no início pode ser ele — a revisar com CSVs).
 - **Sessão de iteração no sim (hotmilk_portas)**: o fix preditivo `464c959`
   sozinho NÃO bastava — 4 descobertas em sequência, cada uma medida no
   `follow_debug.csv`:
