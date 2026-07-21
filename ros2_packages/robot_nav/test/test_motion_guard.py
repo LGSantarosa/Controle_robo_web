@@ -720,6 +720,22 @@ def test_face_state_file_grava_estado_do_guard(tmp_path):
     assert json.load(open(p))['state'] == 'slowing'
 
 
+def test_face_state_keeps_fresh_when_blocked_without_gaze(tmp_path):
+    # pessoa PARADA barrando: cbear some (null) mas state='blocked' -> o
+    # arquivo TEM que seguir fresco (throttle), senão fica stale e a cara
+    # para de pedir licença. Sem bloqueio + sem cbear -> silencia (1x).
+    import json
+    from robot_nav.motion_guard import FaceStateFile
+    p = str(tmp_path / 'face.json')
+    w = FaceStateFile(path=p, min_period=0.2)
+    assert w.update(10.0, None, state='blocked') is True     # grava sem cbear
+    assert json.load(open(p)) == {'ts': 10.0, 'cbear_deg': None, 'state': 'blocked'}
+    assert w.update(10.1, None, state='blocked') is False    # throttle 5Hz
+    assert w.update(10.3, None, state='blocked') is True     # segue gravando
+    assert w.update(10.6, None, state='idle') is True        # destravou: null 1x
+    assert w.update(10.9, None, state='idle') is False       # agora silencia
+
+
 # ------------------------------------------- pessoa à frente (07-21, v2)
 # Vigília SEMEADA POR MOVIMENTO (ideia do dono): quem se MEXEU no corredor à
 # frente é gente; parou -> o vulto tamanho-de-gente carrega enquanto ela fica;

@@ -624,14 +624,19 @@ class FaceStateFile:
 
     def update(self, t: float, cbear_deg: 'int|None',
                state: 'str|None' = None) -> bool:
-        if cbear_deg is None:
-            if not self._had_person:
-                return False
-            self._had_person = False
-        else:
+        # Mantém o arquivo FRESCO enquanto há alvo de olhar OU o guard está
+        # 'blocked' (pessoa PARADA barrando some do detector de movimento, mas
+        # a cara tem que seguir pedindo licença). Sem alvo e sem bloqueio:
+        # grava o null UMA vez e silencia (a cara volta a vagar).
+        keep = cbear_deg is not None or state == 'blocked'
+        if keep:
             if t - self._last_write_t < self.min_period:
                 return False
             self._had_person = True
+        else:
+            if not self._had_person:
+                return False
+            self._had_person = False
         try:
             tmp = self.path + '.tmp'
             with open(tmp, 'w') as f:

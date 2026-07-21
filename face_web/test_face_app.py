@@ -83,23 +83,34 @@ def test_state_sem_arquivo():
     import time
     import face_state
     assert face_state.read_state('/nao/existe.json', time.time()) == \
-        {'person': False}
+        {'person': False, 'blocked': False}
 
 
 def test_state_stale(tmp_path):
     import time
     import face_state
     p = _grava_json(tmp_path, 30, idade_s=5.0)
-    assert face_state.read_state(p, time.time()) == {'person': False}
+    assert face_state.read_state(p, time.time()) == {'person': False, 'blocked': False}
 
 
 def test_state_null_e_pessoa_atras(tmp_path):
     import time
     import face_state
     assert face_state.read_state(_grava_json(tmp_path, None),
-                                 time.time()) == {'person': False}
+                                 time.time()) == {'person': False, 'blocked': False}
     assert face_state.read_state(_grava_json(tmp_path, 135),
-                                 time.time()) == {'person': False}
+                                 time.time()) == {'person': False, 'blocked': False}
+
+
+def test_state_blocked_sem_alvo_de_olhar(tmp_path):
+    # pessoa PARADA na frente: some do detector de movimento (cbear null),
+    # mas o guard segue 'blocked' por ela -> reporta blocked mesmo sem alvo,
+    # pra cara CONTINUAR pedindo licença enquanto travado.
+    import time
+    import face_state
+    p = _grava_json(tmp_path, None, state='blocked')
+    assert face_state.read_state(p, time.time()) == \
+        {'person': False, 'blocked': True}
 
 
 def test_state_pessoa_na_frente_mapeia_e_flipa(tmp_path):
@@ -136,7 +147,7 @@ def test_state_json_corrompido(tmp_path):
     import face_state
     p = tmp_path / 'face.json'
     p.write_text('{meia lin')
-    assert face_state.read_state(str(p), time.time()) == {'person': False}
+    assert face_state.read_state(str(p), time.time()) == {'person': False, 'blocked': False}
 
 
 def test_state_route(tmp_path):

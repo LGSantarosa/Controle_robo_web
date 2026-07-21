@@ -14,16 +14,19 @@ FULL_DEG = 90.0     # pedido do dono 07-17: pessoa a 90° = olho colado na
 def read_state(path, now, sign=1.0):
     try:
         if now - os.stat(path).st_mtime > STALE_S:
-            return {'person': False}
+            return {'person': False, 'blocked': False}
         with open(path) as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return {'person': False}
-    cbear = data.get('cbear_deg')
-    if cbear is None or abs(cbear) > BEHIND_DEG:
-        return {'person': False}
-    x = max(-1.0, min(1.0, cbear / FULL_DEG))
+        return {'person': False, 'blocked': False}
     # blocked = guard segurando o robô POR CAUSA da pessoa com rota ativa
     # (motion_guard só grava state com cmd fresco) -> cara pede licença.
-    return {'person': True, 'x': round(sign * x, 3),
-            'blocked': data.get('state') == 'blocked'}
+    # SEMPRE reportado, mesmo sem alvo de olhar: pessoa PARADA some do
+    # detector de movimento (cbear null) mas o guard segue 'blocked' por ela
+    # -> a cara tem que CONTINUAR pedindo licença enquanto está travado.
+    blocked = data.get('state') == 'blocked'
+    cbear = data.get('cbear_deg')
+    if cbear is None or abs(cbear) > BEHIND_DEG:
+        return {'person': False, 'blocked': blocked}
+    x = max(-1.0, min(1.0, cbear / FULL_DEG))
+    return {'person': True, 'x': round(sign * x, 3), 'blocked': blocked}

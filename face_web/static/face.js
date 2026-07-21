@@ -339,25 +339,32 @@
       if (xhr.readyState !== 4 || xhr.status !== 200) return;
       var st = null;
       try { st = JSON.parse(xhr.responseText); } catch (e) { return; }
-      if (st && st.person) {
+      if (!st) return;
+      var tp = now();
+      // Guard travado POR UMA PESSOA -> pede licença, e CONTINUA pedindo
+      // enquanto está preso (a cada 8s). FORA do if(person) de propósito:
+      // pessoa PARADA some do detector de movimento (person/x ficam falsos),
+      // mas o guard segue 'blocked' por ela — era por isso que ele calava
+      // depois do 1º pedido quando alguém parava na frente por muito tempo.
+      if (st.blocked && tp >= nextLicencaAt) {
+        playSnd(sndLicenca);
+        nextLicencaAt = tp + 8;
+      } else if (!st.blocked) {
+        nextLicencaAt = 0;   // destravou -> próximo bloqueio pede na hora
+      }
+      if (st.person) {
         // 2.2x: pessoa desloca o olho BEM mais que o vagar (que fica em
         // ±1) — a 90° o alvo passa da borda e o clamp do draw() cola o
         // olho na lateral.
         // Banda morta: o rumo do lidar treme alguns graus parado; alvo só
         // mexe se mudou de verdade (~4°), senão o olho flicava (07-17).
         var nx = st.x * 2.2;
-        var tp = now();
         if (Math.abs(nx - gazeTarget.x) > 0.11) gazeTarget.x = nx;
         gazeTarget.y = 0.1;
         // Pessoa NOVA (hold tinha expirado = ficou 3s+ sem ninguém): olá!
         if (tp >= personHoldUntil && tp >= nextOlaAt) {
           playSnd(sndOla);
           nextOlaAt = tp + 30;
-        }
-        // Guard segurando o robô por causa dela com rota ativa: licença.
-        if (st.blocked && tp >= nextLicencaAt) {
-          playSnd(sndLicenca);
-          nextLicencaAt = tp + 15;
         }
         personHoldUntil = tp + 3;
       }
