@@ -230,6 +230,8 @@ KNOWN_NODE_PATTERNS=(
     "robot_nav/unstuck_supervisor"
     "robot_nav/scan_sanitizer"
     "robot_nav/door_crossing"
+    "robot_nav/path_follower"
+    "robot_nav/motion_guard"
     "twist_mux"
     "joy_node"
     "teleop_node"
@@ -253,6 +255,20 @@ kill_known_nodes() {
     done
 }
 kill_known_nodes
+
+# Órfãos que NÃO são nós ROS mas seguram ESTADO de uma run anterior. O app.py
+# (web) mantém a thread da rota (_wp_runner) viva; num relaunch do Nav2 ela
+# reencontra o action server e RE-MANDA o goal da run passada -> o robô saía
+# girando/andando "sozinho" no boot (goal de uma run vazando pra outra). Um
+# Ctrl+C limpo mata o app.py (foreground) via trap, mas kill -9 / terminal
+# fechado deixa órfão. Também mata launch/ros2-launch anteriores (duplo-launch
+# = dois stacks brigando no cmd_vel = motor travando/arrastando). Exclui o
+# processo ATUAL ($$) e o pai ($PPID) pra não se auto-matar.
+pkill -9 -f 'python3 app.py'          2>/dev/null
+pkill -9 -f 'ros2 launch robot_nav'   2>/dev/null
+for _pid in $(pgrep -f '[l]aunch\.sh' 2>/dev/null); do
+    [ "$_pid" != "$$" ] && [ "$_pid" != "$PPID" ] && kill -9 "$_pid" 2>/dev/null
+done
 
 # --- [opcional] Flash da MEGA (firmware/mega_bridge) ---
 # Default: auto. Hash de src/, include/ e platformio.ini define quando
