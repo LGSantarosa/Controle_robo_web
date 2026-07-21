@@ -395,17 +395,15 @@ class MotionGuard:
                     break
             if self.in_corridor:
                 break
-        # CORREDOR DE RELEASE (07-21): ocupação à frente do RUMO DO PLANO com
-        # TODOS os pontos do scan (pessoa parada some do diff de movimento mas
-        # continua no scan — é isso que tem que segurar o release). Sem plano
-        # fresco cai no rumo do robô (fail-open).
-        if (self._plan_hdg and t - self._last_plan_t <= c.settle_plan_stale
-                and self.map_tf is not None):
-            _, _, mc, ms = self.map_tf          # cos/sin do yaw map<-odom
-            dir_odom = self._plan_hdg[-1][1] - math.atan2(ms, mc)
-        else:
-            dir_odom = pyaw                     # fail-open: rumo do robô
-        cos_d, sin_d = math.cos(dir_odom), math.sin(dir_odom)
+        # CORREDOR DE RELEASE (07-21): ocupação à FRENTE DO ROBÔ com TODOS os
+        # pontos do scan (pessoa parada some do diff de movimento mas continua
+        # no scan — é isso que tem que segurar o release). Rumo do ROBÔ e não
+        # do /plan de propósito (bug do real 07-21): parado, o nav2 replaneja
+        # CONTORNANDO a pessoa que virou obstáculo -> o rumo do plano aponta
+        # pro desvio (ao lado dela) -> o corredor lia "livre" e o robô saía
+        # desviando de quem estava reto na frente. A frente do robô é onde ele
+        # empurraria = onde a pessoa está.
+        cos_d, sin_d = math.cos(pyaw), math.sin(pyaw)
         occ: List[Pt] = []
         for p in pts:
             dx, dy = p[0] - px, p[1] - py

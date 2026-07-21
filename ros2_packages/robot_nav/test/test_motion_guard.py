@@ -762,6 +762,20 @@ def test_corridor_clear_when_only_far_wall():
     assert g._corridor_clear_since != math.inf
 
 
+def test_corridor_follows_robot_not_plan_detour():
+    # BUG do real (07-21): pessoa parada NA FRENTE, mas o /plan contorna ela ->
+    # se o corredor seguir o rumo do PLANO, lê "livre" e o robô sai desviando.
+    # O corredor tem que olhar a FRENTE DO ROBÔ. (map_tf setado p/ o rumo do
+    # plano valer em odom — sem ele o código já cai no rumo do robô.)
+    g = _guard()
+    g.map_tf = _identity_tf()                  # odom == map
+    t = _feed_static(g)
+    g.observe_plan(t, _plan(math.pi / 2))      # plano DESVIA pra +y (contorno)
+    person = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]   # pessoa RETO na frente (+x)
+    g.observe(t, WALL + person, POSE, 0.0)
+    assert g._corridor_occupied is True        # segue ocupado: NÃO solta pro desvio
+
+
 def test_vigilia_watch_empty_when_release_by_corridor():
     # com a flag ligada a vigília NÃO arma (o _watch nunca popula)
     g = _guard()                              # release_by_corridor=True default
