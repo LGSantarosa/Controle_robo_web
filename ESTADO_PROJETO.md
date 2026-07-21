@@ -1,7 +1,63 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-20**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-21**.
+
+---
+
+## 🧍 2026-07-21 — guard cego pra pessoa PARADA + launch faxina + cara pede licença (branch, ⏳Pi desligada)
+
+Sessão longa a partir dos 2 BOs da run 07-20. **Tudo na branch
+`motion-guard-release-corredor`, NÃO mergeado na `main`, Pi desligada no fim.**
+
+**Diagnóstico da run 07-20 (pelos CSVs):** o "endoidou no início" (#1) foi o
+`path_follower` disparando **0,30 m/s reto em cima do dono parado**, com o guard
+freando tarde (lag scan/TF ~2s + **só detecta MOVIMENTO** → pessoa parada quase
+invisível); menor distância real 0,4m, só não bateu porque ele recuou. O
+"falso-positivo ~20s" (#2) foi a vigília antiga (`hold_still_max=20s`) segurando
+`blocked` ~27s com `n_moving=0` (pessoa saiu, sobrou retorno perto do centróide
+velho).
+
+**Guard — vigília SEMEADA POR MOVIMENTO (`f50911e`, ideia do dono).** Duas
+tentativas minhas falharam no real antes (release por corredor do `/plan`
+`87f7e1b`, e corredor no rumo do robô `b373959` — o `/plan` contorna a pessoa e
+o release soltava pro desvio). A que ficou usa o **detector de movimento como
+identificador de pessoa**: quem se MEXEU (e passou `persist_frames`) no corredor
+à frente = gente (`_person_seeded`); PAROU → o vulto tamanho-de-gente
+(`person_min_pts=5`/`_span≥0.12m`) CARREGA a pessoa; saiu → solta em
+`release_confirm=1.2s`. Não semeia por tranqueira (não moveu) nem fantasma fino.
+Flag `release_by_corridor` (False = vigília antiga, rollback). Probe e
+corredor-do-plano REMOVIDOS. Real confirmou `blocked` persistindo ~30s com a
+pessoa parada (`n_moving=0`). 300 testes verdes.
+
+**`launch.sh` — faxina completa no boot (`6c6cbe7`).** Goal de uma run VAZAVA pra
+outra: o `kill_known_nodes` **não matava o `app.py`** (web, roda separado), cuja
+thread da rota (`_wp_runner`) re-mandava o goal quando o Nav2 voltava → robô
+girava "sozinho" no boot (rodas travando/arrastando = também duplo-launch). Boot
+agora mata `python3 app.py`, `ros2 launch robot_nav` e `launch.sh` anteriores
+(exclui `$$`/`$PPID`) + `path_follower`/`motion_guard` (que escapavam da lista).
+
+**Cara — pede "com licença" REPETIDO a cada 8s enquanto travada por pessoa
+(`a8fca0e`+`40ed243`).** Só pedia 1x: (1) o disparo estava dentro do `if(person)`
+no `face.js` e pessoa PARADA some do detector; (2) `read_state` só reportava
+`blocked` junto do cbear; (3) `FaceStateFile` silenciava ao perder o cbear →
+arquivo stale. Fix: `FaceStateFile` segue gravando enquanto `state=='blocked'`;
+`read_state` reporta `blocked` SEMPRE; `face.js` dispara por `st.blocked` fora do
+`if(person)`, 8s, throttle fixo (o guard pisca `blocked↔passthrough` e resetar =
+rajada). **Validado na dev sem Pi/sim**: `face_app` (:7000) + faker do JSON
+`/tmp/motion_guard_face.json` → `/state` deu `blocked:true,person:false` e a cara
+pediu licença a cada 8s. ⚠️ **`face_app.py` roda SEPARADO** (Flask :7000, NÃO no
+launch.sh) — reiniciar EXIGE `pkill -f face_app.py` + subir de novo + recarregar
+iPad (foi ele não reiniciar que atrasou o teste).
+
+### ⏳ Deploy da branch na Pi (pendente — 5 passos)
+`git reset` da branch → `colcon build robot_nav` → relança a stack 1x →
+**reinicia o `face_app`** → recarrega o iPad.
+
+### 🔴 Aberto
+- **#1 arranque disparando reto em cima de pessoa parada** (freio tardio por lag
+  + só-movimento) — separado, não tocado.
+- **Merge da branch pra `main`** quando validar no real.
 
 ---
 
