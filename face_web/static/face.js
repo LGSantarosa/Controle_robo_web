@@ -346,11 +346,13 @@
       // pessoa PARADA some do detector de movimento (person/x ficam falsos),
       // mas o guard segue 'blocked' por ela — era por isso que ele calava
       // depois do 1º pedido quando alguém parava na frente por muito tempo.
+      // throttle FIXO de 8s (sem reset ao destravar): o guard pisca
+      // blocked<->passthrough sob carga de scan, e resetar o relógio fazia
+      // disparar em rajada ("monte de licença rapidão"). 8s é global — pede
+      // pra quem estiver barrando na hora, seja quem for.
       if (st.blocked && tp >= nextLicencaAt) {
         playSnd(sndLicenca);
         nextLicencaAt = tp + 8;
-      } else if (!st.blocked) {
-        nextLicencaAt = 0;   // destravou -> próximo bloqueio pede na hora
       }
       if (st.person) {
         // 2.2x: pessoa desloca o olho BEM mais que o vagar (que fica em
