@@ -145,6 +145,18 @@ class GuardConfig:
     settle_plan_stale: float = 1.0  # s sem /plan fresco -> libera (fail-open)
     settle_lookahead: float = 0.6   # m — arco do início do plano até o ponto
                                     # que define o rumo (mira além do 1º passo)
+    # RELEASE POR CORREDOR (07-21): soltar o blocked quando o corredor à
+    # frente do PLANO fica livre, em vez de segurar pelo ponto velho da
+    # vigília (falso-positivo de ~27s na run 07-20: pessoa saiu e o guard
+    # ficou preso 24s pois sobrava retorno a 0.5m do centróide velho).
+    release_by_corridor: bool = True   # False = vigília antiga exata (rollback)
+    release_len: float = 1.5           # m — alcance do corredor de release
+    release_confirm: float = 1.2       # s — corredor limpo contínuo p/ soltar
+    probe_after: float = 10.0          # s — travado antes do micro-passo
+    probe_vx: float = 0.05             # m/s — creep do micro-passo de teste
+    probe_dist: float = 0.15           # m — deslocamento máx de um probe
+    probe_person_min_pts: int = 5      # cluster >= isto pontos = parece pessoa
+    probe_person_min_span: float = 0.12  # m — extensão >= isto = parece pessoa
 
 
 class MapGhostFilter:
@@ -241,6 +253,14 @@ class MotionGuard:
         self._last_plan_t: float = -math.inf
         self._was_blocked: bool = False     # esteve em blocked desde o último idle
         self._settle_since: float = -math.inf   # t em que o clear_time venceu
+        # release por corredor (07-21)
+        self._pose: 'Pt|None' = None            # última pose (odom) do observe
+        self._corridor_occupied: bool = False   # há ponto não-parede no corredor
+        self._corridor_clear_since: float = -math.inf  # t em que ficou livre
+        self._corridor_person_like: bool = False  # ocupante do corredor parece gente
+        self._blocked_since: float = -math.inf  # início do blocked contínuo
+        self._probe_start: 'Pt|None' = None     # pose no início do creep
+        self._probe_done: bool = False          # já gastou o probe_dist deste bloqueio
 
     def _cell(self, p: Pt) -> Tuple[int, int]:
         r = self.cfg.grid_res
@@ -274,6 +294,7 @@ class MotionGuard:
             return
         cells = frozenset(self._cell(p) for p in pts)
         px, py, pyaw = pose
+        self._pose = (px, py)
         binw = math.radians(c.ray_bin_deg)
         # mapa polar visto DESTA pose (bin de bearing -> maior alcance): é o
         # "o que o feixe atravessou" que o raycast do futuro consulta.
@@ -374,6 +395,42 @@ class MotionGuard:
                     break
             if self.in_corridor:
                 break
+        # CORREDOR DE RELEASE (07-21): ocupação à frente do RUMO DO PLANO com
+        # TODOS os pontos do scan (pessoa parada some do diff de movimento mas
+        # continua no scan — é isso que tem que segurar o release). Sem plano
+        # fresco cai no rumo do robô (fail-open).
+        if (self._plan_hdg and t - self._last_plan_t <= c.settle_plan_stale
+                and self.map_tf is not None):
+            _, _, mc, ms = self.map_tf          # cos/sin do yaw map<-odom
+            dir_odom = self._plan_hdg[-1][1] - math.atan2(ms, mc)
+        else:
+            dir_odom = pyaw                     # fail-open: rumo do robô
+        cos_d, sin_d = math.cos(dir_odom), math.sin(dir_odom)
+        occ: List[Pt] = []
+        for p in pts:
+            dx, dy = p[0] - px, p[1] - py
+            xb = dx * cos_d + dy * sin_d
+            yb = -dx * sin_d + dy * cos_d
+            if not (0.0 < xb <= c.release_len and abs(yb) <= c.corridor_half_w):
+                continue
+            if ghost_ready and self.ghost_map.occupied_near(
+                    tx + tc * p[0] - ts * p[1],
+                    ty + ts * p[0] + tc * p[1], c.wall_near):
+                continue                        # parede mapeada não é presença
+            occ.append(p)
+        self._corridor_occupied = bool(occ)
+        if self._corridor_occupied:
+            self._corridor_clear_since = math.inf
+            occ_clusters = [cl for cl in self._cluster(occ)
+                            if len(cl) >= c.min_cluster_points]
+            self._corridor_person_like = any(
+                len(cl) >= c.probe_person_min_pts
+                or self._span(cl) >= c.probe_person_min_span
+                for cl in occ_clusters)
+        else:
+            if self._corridor_clear_since == math.inf:
+                self._corridor_clear_since = t
+            self._corridor_person_like = False
         # PERSISTÊNCIA: só latcha com persist_frames scans consecutivos vendo
         # móvel — 1 frame isolado é flicker de TF atrasado/borda de oclusão
         # (falso positivo de campo 07-03), não pessoa. Frame limpo zera.
@@ -386,13 +443,14 @@ class MotionGuard:
             # VIGÍLIA (dono 07-10): móvel que BLOQUEOU (bolha/corredor) ganha
             # vigília no lugar — pessoa que para de se mexer não pode sumir
             # do radar em ~1s (o robô voltava a empurrar pra cima dela).
-            if self.in_corridor or self.nearest_moving < c.freeze_dist:
+            if (not c.release_by_corridor
+                    and (self.in_corridor or self.nearest_moving < c.freeze_dist)):
                 self._watch = [
                     (sum(p[0] for p in cl) / len(cl),
                      sum(p[1] for p in cl) / len(cl)) for cl in clusters]
                 self._watch_since = t
                 self._watch_corridor = self.in_corridor
-        elif self._watch:
+        elif self._watch and not c.release_by_corridor:
             if t - self._watch_since > c.hold_still_max:
                 self._watch = []    # teto: solta a vigília, decai no clear_time
             else:
@@ -448,7 +506,42 @@ class MotionGuard:
             # Ré (vx<0, afasta do móvel à frente) continua passando.
             self._was_blocked = True
             self._settle_since = -math.inf      # o relógio ainda nem venceu
+            if self._blocked_since == -math.inf:
+                self._blocked_since = t
             return (0.0 if vx > 0.0 else vx), 0.0, 'blocked'
+        # RELEASE POR CORREDOR (07-21): o clear_time pode ter vencido, mas se o
+        # robô esteve em blocked e o corredor à frente do plano ainda não
+        # confirmou livre por release_confirm, SEGURA (substitui a vigília).
+        # fail-open: sem /plan fresco cai no caminho temporal de hoje.
+        plan_fresh = bool(self._plan_hdg) and t - self._last_plan_t <= c.settle_plan_stale
+        if c.release_by_corridor and self._was_blocked and plan_fresh:
+            clear_ok = (self._corridor_clear_since != math.inf
+                        and t - self._corridor_clear_since >= c.release_confirm)
+            if not clear_ok:
+                if self._blocked_since == -math.inf:
+                    self._blocked_since = t
+                # MICRO-PASSO BLINDADO: travado demais por retorno que NÃO
+                # parece pessoa -> creep curto p/ desprender (fantasma/quina).
+                # Se parece gente, NUNCA cutuca (segue blocked). Bolha dura /
+                # collision_monitor cobrem o backstop físico do creep.
+                if (t - self._blocked_since > c.probe_after
+                        and self._corridor_occupied
+                        and not self._corridor_person_like
+                        and not self._probe_done):
+                    if self._probe_start is None:
+                        self._probe_start = self._pose
+                    moved = None
+                    if self._pose is not None and self._probe_start is not None:
+                        moved = math.hypot(self._pose[0] - self._probe_start[0],
+                                           self._pose[1] - self._probe_start[1])
+                    if moved is not None and moved >= c.probe_dist:
+                        self._probe_done = True   # gastou o passo; volta a parar
+                    else:
+                        return c.probe_vx, 0.0, 'probing'
+                return (0.0 if vx > 0.0 else vx), 0.0, 'blocked'
+        self._blocked_since = -math.inf
+        self._probe_start = None
+        self._probe_done = False
         # o clear_time venceu. Antes de arrancar, o plano tem que estar
         # ASSENTADO — senão o robô sai comprometido com o contorno da pessoa
         # que ainda está no costmap (curva ~70° do bug de 07-20). Enquanto o
@@ -536,6 +629,13 @@ class MotionGuard:
                     clusters.remove(other)
         return clusters
 
+    @staticmethod
+    def _span(cl: List[Pt]) -> float:
+        """diagonal do bounding-box do cluster (m) — extensão espacial."""
+        xs = [p[0] for p in cl]
+        ys = [p[1] for p in cl]
+        return math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+
 
 class FaceStateFile:
     """Rumo da pessoa pro face_web (cara fase 2): JSON minúsculo em tmpfs.
@@ -610,7 +710,10 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                        'wall_near', 'slow_wz_cap', 'wall_ghost_frac',
                        'settle_enabled', 'settle_window', 'settle_tol_deg',
                        'settle_max', 'settle_min_samples',
-                       'settle_plan_stale', 'settle_lookahead')
+                       'settle_plan_stale', 'settle_lookahead',
+                       'release_by_corridor', 'release_len', 'release_confirm',
+                       'probe_after', 'probe_vx', 'probe_dist',
+                       'probe_person_min_pts', 'probe_person_min_span')
 
         def __init__(self):
             super().__init__('motion_guard')
@@ -670,12 +773,14 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self.get_logger().info(
                 'motion_guard ativo: raio %.1fm, corredor %.2fx%.1fm, '
                 'slow %.0f%%@%.1fm..100%%@%.1fm, clear %.1fs, '
-                'settle %s %.1f°/%.1fs' % (
+                'settle %s %.1f°/%.1fs, release %s %.1fm/%.1fs' % (
                     cfg.guard_radius, cfg.corridor_half_w * 2,
                     cfg.corridor_len, cfg.slow_scale * 100, cfg.slow_dist,
                     cfg.guard_radius, cfg.clear_time,
                     'on' if cfg.settle_enabled else 'off',
-                    cfg.settle_tol_deg, cfg.settle_max))
+                    cfg.settle_tol_deg, cfg.settle_max,
+                    'corridor' if cfg.release_by_corridor else 'vigilia',
+                    cfg.release_len, cfg.release_confirm))
 
         def _on_set_params(self, params):
             for p in params:

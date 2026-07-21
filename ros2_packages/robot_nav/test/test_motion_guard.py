@@ -572,7 +572,7 @@ PERSON = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]      # no corredor, dentro da bolh
 
 
 def test_stopped_blocker_still_there_keeps_blocking():
-    g = _guard()                                     # clear_time default 5.0
+    g = _guard(release_by_corridor=False)            # clear_time default 5.0
     t = _feed_static(g)
     tl = _feed_mover(g, t, PERSON)
     # pessoa PAROU no lugar: 8s (>clear_time) de scans com ela imóvel
@@ -583,7 +583,7 @@ def test_stopped_blocker_still_there_keeps_blocking():
 
 
 def test_stopped_blocker_leaving_releases_by_clear_time():
-    g = _guard(clear_time=1.5)
+    g = _guard(clear_time=1.5, release_by_corridor=False)
     t = _feed_static(g)
     tl = _feed_mover(g, t, PERSON)
     for i in range(1, 31):                           # parada 3s (>clear_time)
@@ -597,7 +597,7 @@ def test_stopped_blocker_leaving_releases_by_clear_time():
 
 
 def test_stopped_blocker_watch_has_ceiling():
-    g = _guard(clear_time=1.5, hold_still_max=3.0)
+    g = _guard(clear_time=1.5, hold_still_max=3.0, release_by_corridor=False)
     t = _feed_static(g)
     tl = _feed_mover(g, t, PERSON)
     for i in range(1, 81):                           # pessoa fica 8s, imóvel
@@ -610,7 +610,7 @@ def test_stopped_blocker_watch_has_ceiling():
 def test_stopped_far_lateral_mover_not_watched():
     # móvel que só causou SLOWING (longe da bolha, fora do corredor) não
     # ganha vigília: parou -> decai pelo clear_time como sempre.
-    g = _guard(clear_time=1.5)
+    g = _guard(clear_time=1.5, release_by_corridor=False)
     t = _feed_static(g)
     obj = [(0.5, -2.0), (0.5, -2.1), (0.6, -2.0)]
     tl = _feed_mover(g, t, obj)
@@ -624,7 +624,7 @@ def test_watch_ignores_mapped_wall_points():
     # pessoa parou COLADA numa parede do MAPA e depois saiu: o que sobra no
     # raio da vigília é parede mapeada, não presença -> solta pelo
     # clear_time, sem esperar o teto.
-    g = _guard(clear_time=1.5)
+    g = _guard(clear_time=1.5, release_by_corridor=False)
     g.ghost_map = _grid_map(wall_x=1.3)
     g.map_tf = _identity_tf()
     wall2 = [(1.28, -0.2), (1.28, -0.1), (1.28, 0.1)]   # retornos da parede
@@ -718,6 +718,151 @@ def test_face_state_file_grava_estado_do_guard(tmp_path):
         {'ts': 10.0, 'cbear_deg': 20, 'state': 'blocked'}
     assert w.update(10.3, 20, state='slowing') is True
     assert json.load(open(p))['state'] == 'slowing'
+
+
+# ------------------------------------------------ release por corredor (07-21)
+# Troca a vigília por-ponto-velho (falso-positivo de ~27s na run 07-20) por um
+# release que solta quando o corredor à frente do PLANO fica livre, com um
+# micro-passo de teste só se travar demais por um retorno que não parece pessoa.
+
+def test_release_params_default():
+    c = GuardConfig()
+    assert c.release_by_corridor is True
+    assert c.release_len == 1.5
+    assert c.release_confirm == 1.2
+    assert c.probe_after == 10.0
+    assert c.probe_vx == 0.05
+    assert c.probe_dist == 0.15
+    assert c.probe_person_min_pts == 5
+    assert c.probe_person_min_span == 0.12
+
+
+def test_state_fields_init():
+    g = _guard()
+    assert g._corridor_occupied is False
+    assert g._corridor_person_like is False
+    assert g._probe_start is None
+    assert g._probe_done is False
+
+
+def test_corridor_occupied_by_point_ahead():
+    g = _guard()
+    t = _feed_static(g)                        # WALL@x=2 (fora do release_len=1.5)
+    g.observe_plan(t, _plan(0.0))
+    g.observe(t, WALL + [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)], POSE, 0.0)
+    assert g._corridor_occupied is True
+
+
+def test_corridor_clear_when_only_far_wall():
+    g = _guard()
+    t = _feed_static(g)                        # só WALL@x=2, além de 1.5m
+    g.observe_plan(t, _plan(0.0))
+    g.observe(t, WALL, POSE, 0.0)
+    assert g._corridor_occupied is False
+    assert g._corridor_clear_since != math.inf
+
+
+def test_vigilia_watch_empty_when_release_by_corridor():
+    # com a flag ligada a vigília NÃO arma (o _watch nunca popula)
+    g = _guard()                              # release_by_corridor=True default
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]    # bloqueia (na bolha/corredor)
+    _feed_mover(g, t, obj)
+    assert g._watch == []
+
+
+def test_vigilia_watch_arms_when_flag_off():
+    g = _guard(release_by_corridor=False)
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
+    _feed_mover(g, t, obj)                        # móvel na bolha -> arma a vigília
+    assert g._watch != []
+
+
+def test_release_when_corridor_clears():
+    # clear_time curto (freeze segura até ele; o release por corredor atua
+    # DEPOIS). Pessoa sai -> solta em ~clear_time+release_confirm, não 20s.
+    g = _guard(clear_time=1.5)
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
+    tl = _feed_mover(g, t, obj)
+    g.observe_plan(tl, _plan(0.0))
+    assert g.filter(tl + 0.1, 0.30, 0.0)[2] == 'blocked'   # latcha _was_blocked
+    last = tl + 0.1
+    for k in range(1, 26):
+        last = tl + 0.1 + k * 0.1
+        g.observe(last, WALL, POSE, 0.0)
+        g.observe_plan(last, _plan(0.0))
+    assert g.filter(tl + 0.8, 0.30, 0.0)[2] == 'blocked'   # freeze ainda segura
+    assert g.filter(last, 0.30, 0.0)[2] in ('slowing', 'idle')  # ~tl+2.6: soltou
+
+
+def test_stay_blocked_while_person_stands():
+    g = _guard(clear_time=1.5)
+    t = _feed_static(g)
+    person = [(1.0, y * 0.05 - 0.15) for y in range(8)]   # 8 pts, span ~0.35
+    tl = _feed_mover(g, t, person)
+    g.observe_plan(tl, _plan(0.0))
+    assert g.filter(tl + 0.05, 0.30, 0.0)[2] == 'blocked'  # latcha _was_blocked
+    last = tl + 0.05
+    for k in range(1, 260):
+        last = tl + k * 0.1
+        g.observe(last, WALL + person, POSE, 0.0)
+        g.observe_plan(last, _plan(0.0))
+    assert g.filter(last + 0.05, 0.30, 0.0)[2] == 'blocked'
+
+
+def test_fail_open_without_plan():
+    # sem /plan o release por corredor não atua: solta pelo caminho temporal
+    g = _guard(clear_time=1.5, settle_enabled=False)   # isola do settling
+    t = _feed_static(g)
+    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
+    tl = _feed_mover(g, t, obj)
+    assert g.filter(tl + 0.1, 0.30, 0.0)[2] == 'blocked'
+    g.observe(tl + 0.1, WALL, POSE, 0.0)
+    g.observe(tl + 2.4, WALL, POSE, 0.0)               # > clear_time, SEM plano
+    assert g.filter(tl + 2.4, 0.30, 0.0)[2] in ('slowing', 'idle')
+
+
+def _hold_occupied(g, obj, secs):
+    """bloqueia e mantém `obj` no corredor por `secs`, plano fresco. Latcha
+    _was_blocked/_blocked_since via um filter durante o freeze. Retorna t."""
+    t = _feed_static(g)
+    tl = _feed_mover(g, t, obj)
+    g.observe_plan(tl, _plan(0.0))
+    assert g.filter(tl + 0.1, 0.30, 0.0)[2] == 'blocked'   # latcha _blocked_since
+    last = tl + 0.1
+    for k in range(1, int(secs / 0.1)):
+        last = tl + 0.1 + k * 0.1
+        g.observe(last, WALL + obj, POSE, 0.0)
+        g.observe_plan(last, _plan(0.0))
+    return last
+
+
+def test_probe_fires_on_nonperson_after_timeout():
+    g = _guard()
+    ghost = [(1.0, 0.0), (1.0, 0.05), (1.02, 0.0)]   # 3 pts, span ~0.05 < 0.12
+    last = _hold_occupied(g, ghost, secs=11.0)       # > probe_after=10
+    vx, wz, st = g.filter(last + 0.05, 0.30, 0.0)
+    assert st == 'probing'
+    assert 0.0 < vx <= g.cfg.probe_vx
+    assert wz == 0.0
+
+
+def test_no_probe_on_personlike():
+    g = _guard()
+    person = [(1.0, y * 0.05 - 0.15) for y in range(8)]  # 8 pts, span ~0.35
+    last = _hold_occupied(g, person, secs=11.0)
+    vx, wz, st = g.filter(last + 0.05, 0.30, 0.0)
+    assert st == 'blocked'
+    assert vx == 0.0
+
+
+def test_no_probe_before_timeout():
+    g = _guard()
+    ghost = [(1.0, 0.0), (1.0, 0.05), (1.02, 0.0)]
+    last = _hold_occupied(g, ghost, secs=5.0)        # < probe_after
+    assert g.filter(last + 0.05, 0.30, 0.0)[2] == 'blocked'
 
 
 def test_face_state_file_transicao_null_uma_vez(tmp_path):
