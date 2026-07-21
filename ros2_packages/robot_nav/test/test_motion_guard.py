@@ -720,179 +720,101 @@ def test_face_state_file_grava_estado_do_guard(tmp_path):
     assert json.load(open(p))['state'] == 'slowing'
 
 
-# ------------------------------------------------ release por corredor (07-21)
-# Troca a vigília por-ponto-velho (falso-positivo de ~27s na run 07-20) por um
-# release que solta quando o corredor à frente do PLANO fica livre, com um
-# micro-passo de teste só se travar demais por um retorno que não parece pessoa.
+# ------------------------------------------- pessoa à frente (07-21, v2)
+# Vigília SEMEADA POR MOVIMENTO (ideia do dono): quem se MEXEU no corredor à
+# frente é gente; parou -> o vulto tamanho-de-gente carrega enquanto ela fica;
+# saiu -> solta em release_confirm. Não semeia por tranqueira (não moveu) nem
+# por fantasma fino (não é tamanho-de-gente). Corredor no rumo do ROBÔ.
+
+PERSON_FRONT = [(1.4, y * 0.05 - 0.1) for y in range(6)]   # 6 pts, ~1.4m à frente
+#   fora da bolha (freeze_dist 1.2) e dentro do release_len 1.5 -> isola o
+#   bloqueio-por-pessoa do freeze de movimento.
+
 
 def test_release_params_default():
     c = GuardConfig()
     assert c.release_by_corridor is True
     assert c.release_len == 1.5
     assert c.release_confirm == 1.2
-    assert c.probe_after == 10.0
-    assert c.probe_vx == 0.05
-    assert c.probe_dist == 0.15
-    assert c.probe_person_min_pts == 5
-    assert c.probe_person_min_span == 0.12
+    assert c.person_min_pts == 5
+    assert c.person_min_span == 0.12
 
 
 def test_state_fields_init():
     g = _guard()
-    assert g._corridor_occupied is False
-    assert g._corridor_person_like is False
-    assert g._probe_start is None
-    assert g._probe_done is False
+    assert g._person_seeded is False
+    assert g._last_person_front_t == -math.inf
 
 
-def test_corridor_occupied_by_point_ahead():
+def test_moving_person_in_front_seeds_and_blocks():
     g = _guard()
-    t = _feed_static(g)                        # WALL@x=2 (fora do release_len=1.5)
-    g.observe_plan(t, _plan(0.0))
-    g.observe(t, WALL + [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)], POSE, 0.0)
-    assert g._corridor_occupied is True
-
-
-def test_corridor_clear_when_only_far_wall():
-    g = _guard()
-    t = _feed_static(g)                        # só WALL@x=2, além de 1.5m
-    g.observe_plan(t, _plan(0.0))
-    g.observe(t, WALL, POSE, 0.0)
-    assert g._corridor_occupied is False
-    assert g._corridor_clear_since != math.inf
-
-
-def test_corridor_follows_robot_not_plan_detour():
-    # BUG do real (07-21): pessoa parada NA FRENTE, mas o /plan contorna ela ->
-    # se o corredor seguir o rumo do PLANO, lê "livre" e o robô sai desviando.
-    # O corredor tem que olhar a FRENTE DO ROBÔ. (map_tf setado p/ o rumo do
-    # plano valer em odom — sem ele o código já cai no rumo do robô.)
-    g = _guard()
-    g.map_tf = _identity_tf()                  # odom == map
     t = _feed_static(g)
-    g.observe_plan(t, _plan(math.pi / 2))      # plano DESVIA pra +y (contorno)
-    person = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]   # pessoa RETO na frente (+x)
-    g.observe(t, WALL + person, POSE, 0.0)
-    assert g._corridor_occupied is True        # segue ocupado: NÃO solta pro desvio
+    tl = _feed_mover(g, t, PERSON_FRONT)           # pessoa ANDANDO à frente
+    assert g._person_seeded is True
+    assert g.filter(tl + 0.05, 0.30, 0.0)[2] == 'blocked'
 
 
-def test_vigilia_watch_empty_when_release_by_corridor():
-    # com a flag ligada a vigília NÃO arma (o _watch nunca popula)
-    g = _guard()                              # release_by_corridor=True default
-    t = _feed_static(g)
-    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]    # bloqueia (na bolha/corredor)
-    _feed_mover(g, t, obj)
-    assert g._watch == []
-
-
-def test_vigilia_watch_arms_when_flag_off():
-    g = _guard(release_by_corridor=False)
-    t = _feed_static(g)
-    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
-    _feed_mover(g, t, obj)                        # móvel na bolha -> arma a vigília
-    assert g._watch != []
-
-
-def test_release_when_corridor_clears():
-    # clear_time curto (freeze segura até ele; o release por corredor atua
-    # DEPOIS). Pessoa sai -> solta em ~clear_time+release_confirm, não 20s.
+def test_standing_person_keeps_blocking_past_clear_time():
+    # #1: pessoa entra andando (semeia), PARA e fica. O vulto carrega ->
+    # segue blocked muito além do clear_time (antes o guard a contornava).
     g = _guard(clear_time=1.5)
     t = _feed_static(g)
-    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
-    tl = _feed_mover(g, t, obj)
-    g.observe_plan(tl, _plan(0.0))
-    assert g.filter(tl + 0.1, 0.30, 0.0)[2] == 'blocked'   # latcha _was_blocked
-    last = tl + 0.1
-    for k in range(1, 26):
-        last = tl + 0.1 + k * 0.1
-        g.observe(last, WALL, POSE, 0.0)
-        g.observe_plan(last, _plan(0.0))
-    assert g.filter(tl + 0.8, 0.30, 0.0)[2] == 'blocked'   # freeze ainda segura
-    assert g.filter(last, 0.30, 0.0)[2] in ('slowing', 'idle')  # ~tl+2.6: soltou
-
-
-def test_stay_blocked_while_person_stands():
-    g = _guard(clear_time=1.5)
-    t = _feed_static(g)
-    person = [(1.0, y * 0.05 - 0.15) for y in range(8)]   # 8 pts, span ~0.35
-    tl = _feed_mover(g, t, person)
-    g.observe_plan(tl, _plan(0.0))
-    assert g.filter(tl + 0.05, 0.30, 0.0)[2] == 'blocked'  # latcha _was_blocked
-    last = tl + 0.05
-    for k in range(1, 260):
+    tl = _feed_mover(g, t, PERSON_FRONT)           # andando: semeia
+    assert g.filter(tl + 0.05, 0.30, 0.0)[2] == 'blocked'
+    last = tl
+    for k in range(1, 120):                        # 12s parada, imóvel
         last = tl + k * 0.1
-        g.observe(last, WALL + person, POSE, 0.0)
-        g.observe_plan(last, _plan(0.0))
+        g.observe(last, WALL + PERSON_FRONT, POSE, 0.0)
+    assert g._person_seeded is True
     assert g.filter(last + 0.05, 0.30, 0.0)[2] == 'blocked'
 
 
-def test_fail_open_without_plan():
-    # sem /plan o release por corredor não atua: solta pelo caminho temporal
-    g = _guard(clear_time=1.5, settle_enabled=False)   # isola do settling
+def test_releases_after_person_leaves():
+    g = _guard(clear_time=1.5)
     t = _feed_static(g)
-    obj = [(1.0, 0.0), (1.0, 0.1), (1.1, 0.0)]
-    tl = _feed_mover(g, t, obj)
-    assert g.filter(tl + 0.1, 0.30, 0.0)[2] == 'blocked'
-    g.observe(tl + 0.1, WALL, POSE, 0.0)
-    g.observe(tl + 2.4, WALL, POSE, 0.0)               # > clear_time, SEM plano
-    assert g.filter(tl + 2.4, 0.30, 0.0)[2] in ('slowing', 'idle')
+    tl = _feed_mover(g, t, PERSON_FRONT)
+    for k in range(1, 20):                          # fica parada ~2s
+        g.observe(tl + k * 0.1, WALL + PERSON_FRONT, POSE, 0.0)
+    td = tl + 2.0
+    assert g.filter(td, 0.30, 0.0)[2] == 'blocked'
+    for k in range(1, 25):                          # SAIU: corredor vazio
+        g.observe(td + k * 0.1, WALL, POSE, 0.0)
+    assert g._person_seeded is False
+    assert g.filter(td + 2.0, 0.30, 0.0)[2] in ('slowing', 'idle')
 
 
-def _hold_occupied(g, obj, secs):
-    """bloqueia e mantém `obj` no corredor por `secs`, plano fresco. Latcha
-    _was_blocked/_blocked_since via um filter durante o freeze. Retorna t."""
+def test_no_block_on_static_furniture_never_moved():
+    # #2: vulto tamanho-de-gente que NUNCA se mexeu (tranqueira) -> não semeia
+    # -> não bloqueia (não congela à toa onde não tem gente).
+    g = _guard()
+    _feed_static(g, pts=WALL + PERSON_FRONT)        # presente desde sempre
+    for k in range(1, 60):                          # 6s parado
+        g.observe(0.8 + k * 0.1, WALL + PERSON_FRONT, POSE, 0.0)
+    assert g._person_seeded is False
+    assert g.filter(0.8 + 6.0, 0.30, 0.0)[2] == 'idle'
+
+
+def test_no_hold_on_thin_phantom_after_leaving():
+    # pessoa some e sobra um retorno FINO (não tamanho-de-gente) no lugar ->
+    # não carrega -> solta (era o buraco da vigília antiga que segurava 27s).
+    g = _guard(clear_time=1.5)
     t = _feed_static(g)
-    tl = _feed_mover(g, t, obj)
-    g.observe_plan(tl, _plan(0.0))
-    assert g.filter(tl + 0.1, 0.30, 0.0)[2] == 'blocked'   # latcha _blocked_since
-    last = tl + 0.1
-    for k in range(1, int(secs / 0.1)):
-        last = tl + 0.1 + k * 0.1
-        g.observe(last, WALL + obj, POSE, 0.0)
-        g.observe_plan(last, _plan(0.0))
-    return last
+    tl = _feed_mover(g, t, PERSON_FRONT)
+    assert g.filter(tl + 0.05, 0.30, 0.0)[2] == 'blocked'
+    phantom = [(1.4, 0.0), (1.4, 0.03)]             # 2 pts, span ~0.03: fino
+    for k in range(1, 25):
+        g.observe(tl + 0.1 + k * 0.1, WALL + phantom, POSE, 0.0)
+    assert g.filter(tl + 2.6, 0.30, 0.0)[2] in ('slowing', 'idle')
 
 
-def test_probe_fires_on_nonperson_after_timeout():
-    g = _guard()
-    ghost = [(1.0, 0.0), (1.0, 0.05), (1.02, 0.0)]   # 3 pts, span ~0.05 < 0.12
-    last = _hold_occupied(g, ghost, secs=11.0)       # > probe_after=10
-    vx, wz, st = g.filter(last + 0.05, 0.30, 0.0)
-    assert st == 'probing'
-    assert 0.0 < vx <= g.cfg.probe_vx
-    assert wz == 0.0
-
-
-def test_no_probe_on_personlike():
-    g = _guard()
-    person = [(1.0, y * 0.05 - 0.15) for y in range(8)]  # 8 pts, span ~0.35
-    last = _hold_occupied(g, person, secs=11.0)
-    vx, wz, st = g.filter(last + 0.05, 0.30, 0.0)
-    assert st == 'blocked'
-    assert vx == 0.0
-
-
-def test_no_probe_before_timeout():
-    g = _guard()
-    ghost = [(1.0, 0.0), (1.0, 0.05), (1.02, 0.0)]
-    last = _hold_occupied(g, ghost, secs=5.0)        # < probe_after
-    assert g.filter(last + 0.05, 0.30, 0.0)[2] == 'blocked'
-
-
-def test_face_state_file_transicao_null_uma_vez(tmp_path):
-    import json
-    from robot_nav.motion_guard import FaceStateFile
-    p = str(tmp_path / 'face.json')
-    w = FaceStateFile(path=p, min_period=0.2)
-    assert w.update(10.0, None) is False         # sem pessoa antes: nada
-    w.update(10.0, 30)
-    assert w.update(10.05, None) is True         # transição FURA o throttle
-    assert json.load(open(p))['cbear_deg'] is None
-    assert w.update(10.1, None) is False         # já silenciou
-
-
-def test_face_state_file_io_error_nao_propaga(tmp_path):
-    from robot_nav.motion_guard import FaceStateFile
-    w = FaceStateFile(path=str(tmp_path / 'nao_existe' / 'face.json'))
-    assert w.update(10.0, 30) is False           # dir não existe: engole
-    assert w.last_error
+def test_person_ignores_plan_detour():
+    # robô frame, não plano: pessoa reto na frente + /plan curvo -> blocked
+    # (não solta pro desvio que o nav2 planeja em volta dela).
+    g = _guard(clear_time=1.5)
+    g.map_tf = _identity_tf()
+    t = _feed_static(g)
+    tl = _feed_mover(g, t, PERSON_FRONT)
+    for k in range(1, 20):
+        g.observe(tl + k * 0.1, WALL + PERSON_FRONT, POSE, 0.0)
+        g.observe_plan(tl + k * 0.1, _plan(math.pi / 2))   # plano desvia +y
+    assert g.filter(tl + 2.0, 0.30, 0.0)[2] == 'blocked'

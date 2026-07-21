@@ -150,13 +150,10 @@ class GuardConfig:
     # vigília (falso-positivo de ~27s na run 07-20: pessoa saiu e o guard
     # ficou preso 24s pois sobrava retorno a 0.5m do centróide velho).
     release_by_corridor: bool = True   # False = vigília antiga exata (rollback)
-    release_len: float = 1.5           # m — alcance do corredor de release
-    release_confirm: float = 1.2       # s — corredor limpo contínuo p/ soltar
-    probe_after: float = 10.0          # s — travado antes do micro-passo
-    probe_vx: float = 0.05             # m/s — creep do micro-passo de teste
-    probe_dist: float = 0.15           # m — deslocamento máx de um probe
-    probe_person_min_pts: int = 5      # cluster >= isto pontos = parece pessoa
-    probe_person_min_span: float = 0.12  # m — extensão >= isto = parece pessoa
+    release_len: float = 1.5           # m — alcance do corredor à frente
+    release_confirm: float = 1.2       # s — sem gente na frente por isso -> solta
+    person_min_pts: int = 5            # cluster >= isto pontos = parece pessoa
+    person_min_span: float = 0.12      # m — extensão >= isto = parece pessoa
 
 
 class MapGhostFilter:
@@ -253,14 +250,9 @@ class MotionGuard:
         self._last_plan_t: float = -math.inf
         self._was_blocked: bool = False     # esteve em blocked desde o último idle
         self._settle_since: float = -math.inf   # t em que o clear_time venceu
-        # release por corredor (07-21)
-        self._pose: 'Pt|None' = None            # última pose (odom) do observe
-        self._corridor_occupied: bool = False   # há ponto não-parede no corredor
-        self._corridor_clear_since: float = -math.inf  # t em que ficou livre
-        self._corridor_person_like: bool = False  # ocupante do corredor parece gente
-        self._blocked_since: float = -math.inf  # início do blocked contínuo
-        self._probe_start: 'Pt|None' = None     # pose no início do creep
-        self._probe_done: bool = False          # já gastou o probe_dist deste bloqueio
+        # pessoa à frente (07-21) — vigília semeada por movimento, escopo frontal
+        self._last_person_front_t: float = -math.inf  # t da última gente à frente
+        self._person_seeded: bool = False       # o detector já viu gente à frente
 
     def _cell(self, p: Pt) -> Tuple[int, int]:
         r = self.cfg.grid_res
@@ -294,7 +286,6 @@ class MotionGuard:
             return
         cells = frozenset(self._cell(p) for p in pts)
         px, py, pyaw = pose
-        self._pose = (px, py)
         binw = math.radians(c.ray_bin_deg)
         # mapa polar visto DESTA pose (bin de bearing -> maior alcance): é o
         # "o que o feixe atravessou" que o raycast do futuro consulta.
@@ -395,40 +386,6 @@ class MotionGuard:
                     break
             if self.in_corridor:
                 break
-        # CORREDOR DE RELEASE (07-21): ocupação à FRENTE DO ROBÔ com TODOS os
-        # pontos do scan (pessoa parada some do diff de movimento mas continua
-        # no scan — é isso que tem que segurar o release). Rumo do ROBÔ e não
-        # do /plan de propósito (bug do real 07-21): parado, o nav2 replaneja
-        # CONTORNANDO a pessoa que virou obstáculo -> o rumo do plano aponta
-        # pro desvio (ao lado dela) -> o corredor lia "livre" e o robô saía
-        # desviando de quem estava reto na frente. A frente do robô é onde ele
-        # empurraria = onde a pessoa está.
-        cos_d, sin_d = math.cos(pyaw), math.sin(pyaw)
-        occ: List[Pt] = []
-        for p in pts:
-            dx, dy = p[0] - px, p[1] - py
-            xb = dx * cos_d + dy * sin_d
-            yb = -dx * sin_d + dy * cos_d
-            if not (0.0 < xb <= c.release_len and abs(yb) <= c.corridor_half_w):
-                continue
-            if ghost_ready and self.ghost_map.occupied_near(
-                    tx + tc * p[0] - ts * p[1],
-                    ty + ts * p[0] + tc * p[1], c.wall_near):
-                continue                        # parede mapeada não é presença
-            occ.append(p)
-        self._corridor_occupied = bool(occ)
-        if self._corridor_occupied:
-            self._corridor_clear_since = math.inf
-            occ_clusters = [cl for cl in self._cluster(occ)
-                            if len(cl) >= c.min_cluster_points]
-            self._corridor_person_like = any(
-                len(cl) >= c.probe_person_min_pts
-                or self._span(cl) >= c.probe_person_min_span
-                for cl in occ_clusters)
-        else:
-            if self._corridor_clear_since == math.inf:
-                self._corridor_clear_since = t
-            self._corridor_person_like = False
         # PERSISTÊNCIA: só latcha com persist_frames scans consecutivos vendo
         # móvel — 1 frame isolado é flicker de TF atrasado/borda de oclusão
         # (falso positivo de campo 07-03), não pessoa. Frame limpo zera.
@@ -460,6 +417,43 @@ class MotionGuard:
                     self._last_nearest = d
                     if self._watch_corridor:
                         self._last_corridor_t = t
+
+        # PESSOA À FRENTE (07-21) — o DETECTOR DE MOVIMENTO como identificador
+        # de pessoa (ideia do dono): quem se MEXEU (e persistiu) no corredor à
+        # frente é gente; parou -> o VULTO tamanho-de-gente naquele lugar
+        # CARREGA a pessoa enquanto ela fica; sumiu -> solta (release_confirm
+        # no filter). NÃO semeia por tranqueira (não moveu) nem por fantasma
+        # fino (não é tamanho-de-gente) -> não congela à toa (falso-positivo de
+        # ontem). Rumo do ROBÔ, não do /plan: parado, o nav2 replaneja
+        # CONTORNANDO a pessoa e o corredor apontaria pro desvio.
+        cos_d, sin_d = math.cos(pyaw), math.sin(pyaw)
+
+        def _in_front(p: Pt) -> bool:
+            dx, dy = p[0] - px, p[1] - py
+            xb = dx * cos_d + dy * sin_d
+            yb = -dx * sin_d + dy * cos_d
+            return 0.0 < xb <= c.release_len and abs(yb) <= c.corridor_half_w
+
+        # MÓVEL que já LATCHOU (persist_frames) e está à frente = gente agora
+        moving_in_front = (self._last_moving_t == t
+                           and any(_in_front(p)
+                                   for cl in self.moving_clusters for p in cl))
+        # vulto ESTÁTICO tamanho-de-gente à frente (scan cru, tira parede do mapa)
+        occ = [p for p in pts if _in_front(p) and not (
+            ghost_ready and self.ghost_map.occupied_near(
+                tx + tc * p[0] - ts * p[1],
+                ty + ts * p[0] + tc * p[1], c.wall_near))]
+        person_static = any(
+            len(cl) >= c.person_min_pts or self._span(cl) >= c.person_min_span
+            for cl in self._cluster(occ) if len(cl) >= c.min_cluster_points)
+
+        if moving_in_front:
+            self._person_seeded = True
+            self._last_person_front_t = t        # detector: gente na frente
+        elif person_static and self._person_seeded:
+            self._last_person_front_t = t        # parou: o vulto é ela, carrega
+        else:
+            self._person_seeded = False          # sem gente e sem vulto -> reset
 
     def _presence(self, pts: List[Pt], robot: Pt) -> 'float|None':
         """Alguém AINDA está no lugar vigiado? Menor distância robô->ponto
@@ -504,42 +498,19 @@ class MotionGuard:
             # Ré (vx<0, afasta do móvel à frente) continua passando.
             self._was_blocked = True
             self._settle_since = -math.inf      # o relógio ainda nem venceu
-            if self._blocked_since == -math.inf:
-                self._blocked_since = t
             return (0.0 if vx > 0.0 else vx), 0.0, 'blocked'
-        # RELEASE POR CORREDOR (07-21): o clear_time pode ter vencido, mas se o
-        # robô esteve em blocked e o corredor à frente do plano ainda não
-        # confirmou livre por release_confirm, SEGURA (substitui a vigília).
-        # fail-open: sem /plan fresco cai no caminho temporal de hoje.
-        plan_fresh = bool(self._plan_hdg) and t - self._last_plan_t <= c.settle_plan_stale
-        if c.release_by_corridor and self._was_blocked and plan_fresh:
-            clear_ok = (self._corridor_clear_since != math.inf
-                        and t - self._corridor_clear_since >= c.release_confirm)
-            if not clear_ok:
-                if self._blocked_since == -math.inf:
-                    self._blocked_since = t
-                # MICRO-PASSO BLINDADO: travado demais por retorno que NÃO
-                # parece pessoa -> creep curto p/ desprender (fantasma/quina).
-                # Se parece gente, NUNCA cutuca (segue blocked). Bolha dura /
-                # collision_monitor cobrem o backstop físico do creep.
-                if (t - self._blocked_since > c.probe_after
-                        and self._corridor_occupied
-                        and not self._corridor_person_like
-                        and not self._probe_done):
-                    if self._probe_start is None:
-                        self._probe_start = self._pose
-                    moved = None
-                    if self._pose is not None and self._probe_start is not None:
-                        moved = math.hypot(self._pose[0] - self._probe_start[0],
-                                           self._pose[1] - self._probe_start[1])
-                    if moved is not None and moved >= c.probe_dist:
-                        self._probe_done = True   # gastou o passo; volta a parar
-                    else:
-                        return c.probe_vx, 0.0, 'probing'
-                return (0.0 if vx > 0.0 else vx), 0.0, 'blocked'
-        self._blocked_since = -math.inf
-        self._probe_start = None
-        self._probe_done = False
+        # PESSOA À FRENTE (07-21): cluster TAMANHO-DE-GENTE no corredor à
+        # frente do ROBÔ (scan cru, tira parede do mapa) -> ESPERA, mexendo-se
+        # ou não. Fecha o #1 (guard era cego pra pessoa PARADA e a contornava).
+        # Segura enquanto vê gente na frente; saiu -> solta em release_confirm.
+        # NÃO congela à toa: só para por GENTE, nunca por tranqueira/fantasma
+        # (esse era o falso-positivo de ontem). map_tf/plano não entram — é o
+        # rumo do robô, senão soltava pro desvio que o nav2 planeja em volta.
+        if (c.release_by_corridor
+                and t - self._last_person_front_t < c.release_confirm):
+            self._was_blocked = True
+            self._settle_since = -math.inf
+            return (0.0 if vx > 0.0 else vx), 0.0, 'blocked'
         # o clear_time venceu. Antes de arrancar, o plano tem que estar
         # ASSENTADO — senão o robô sai comprometido com o contorno da pessoa
         # que ainda está no costmap (curva ~70° do bug de 07-20). Enquanto o
@@ -710,8 +681,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                        'settle_max', 'settle_min_samples',
                        'settle_plan_stale', 'settle_lookahead',
                        'release_by_corridor', 'release_len', 'release_confirm',
-                       'probe_after', 'probe_vx', 'probe_dist',
-                       'probe_person_min_pts', 'probe_person_min_span')
+                       'person_min_pts', 'person_min_span')
 
         def __init__(self):
             super().__init__('motion_guard')
