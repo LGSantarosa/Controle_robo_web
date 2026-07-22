@@ -370,7 +370,9 @@
       // idle->following = fala "Irei te seguir"; ->lost = fala "não te vendo".
       var fs = st.follow_state || 'idle';
       if (fs !== prevFollow) {
-        if (fs === 'following' && prevFollow === 'idle') playSnd(sndSeguir);
+        // travou (armed/idle -> following) = "Irei te seguir"; -> lost = "não
+        // te vendo". Reaquisição (lost -> following) não repete a saudação.
+        if (fs === 'following' && prevFollow !== 'lost') playSnd(sndSeguir);
         else if (fs === 'lost') playSnd(sndNaoVejo);
         prevFollow = fs;
       }

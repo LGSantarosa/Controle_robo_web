@@ -209,17 +209,24 @@
   // perder a pessoa por tempo) a rota retoma sozinha no backend.
   const btnFollow = document.getElementById('btn-follow');
   let followState = 'idle';
+  function followActive() {
+    return followState === 'armed' || followState === 'following'
+        || followState === 'lost';
+  }
   function renderFollow() {
     if (!btnFollow) return;
-    const active = (followState === 'following' || followState === 'lost');
-    btnFollow.textContent = active ? '🚶 Parar de seguir' : '🚶 Seguir';
+    const active = followActive();
+    if (followState === 'armed') btnFollow.textContent = '🚶 Aguardando…';
+    else if (active) btnFollow.textContent = '🚶 Parar de seguir';
+    else btnFollow.textContent = '🚶 Seguir';
     btnFollow.classList.toggle('active', active);
-    btnFollow.title = active ? ('seguindo (' + followState + ')')
-                             : 'robô segue a pessoa à frente';
+    btnFollow.title = followState === 'armed'
+      ? 'seguir ARMADO — espera alguém se mexer na frente'
+      : (active ? ('seguindo (' + followState + ')')
+                : 'robô segue a pessoa à frente (arma e espera movimento)');
   }
   if (btnFollow) btnFollow.addEventListener('click', () => {
-    const active = (followState === 'following' || followState === 'lost');
-    socket.emit('follow', { action: active ? 'stop' : 'start' });
+    socket.emit('follow', { action: followActive() ? 'stop' : 'start' });
   });
   socket.on('follow_state', (d) => {
     followState = (d && d.state) || 'idle';

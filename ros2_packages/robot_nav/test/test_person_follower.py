@@ -112,11 +112,24 @@ def test_tick_start_trava_e_fala():
     assert pf.state == 'following' and pf.just_spoke == 'start' and pf.target is not None
 
 
-def test_tick_start_sem_ninguem_fica_idle():
+def test_tick_start_arma_e_espera_movimento():
+    # clicar Seguir ARMA o modo e ESPERA algo se mexer (não exige movimento
+    # no instante do clique). Trava quando um móvel aparece no cone.
     pf = _pf()
     pf.start()
-    pf.tick(0.0, [], POSE)
-    assert pf.state == 'idle' and pf.no_target is True
+    assert pf.state == 'armed'
+    pf.tick(0.0, [], POSE)                     # ninguém -> segue ARMADO
+    assert pf.state == 'armed'
+    pf.tick(0.5, [(1.0, 0.0, 0.0)], POSE)      # só parado (parede) -> não trava
+    assert pf.state == 'armed'
+    pf.tick(1.0, _clusters_at(2.0), POSE)      # apareceu MÓVEL -> trava e fala
+    assert pf.state == 'following' and pf.just_spoke == 'start'
+
+
+def test_stop_de_armed_volta_ending():
+    pf = _pf()
+    pf.start(); assert pf.state == 'armed'
+    pf.stop(); assert pf.state == 'ending'
 
 
 def test_tick_following_mantem_rumo_no_gap_curto():

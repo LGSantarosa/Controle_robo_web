@@ -20,7 +20,7 @@ Target = namedtuple('Target', 'cx cy')
 class FollowConfig:
     stop_dist: float = 1.5
     stop_hyst: float = 0.2
-    vx_max: float = 0.4          # 0.25 era lento demais p/ acompanhar (sim 07-22)
+    vx_max: float = 0.5          # 0.25/0.4 = lerdo p/ acompanhar (sim 07-22)
     # giro do skid-steer: PISO rot_min fura a zona-morta ~1.7 (senão rasteja e
     # NÃO gira), teto rot_max, ganho P rot_k — mesmos do path_follower validado.
     rot_k: float = 3.0           # rad/s por rad de erro
@@ -55,7 +55,6 @@ class PersonFollower:
         self.state = 'idle'
         self.target = None
         self._driving = False
-        self._start_req = False
         self.just_spoke = None      # 'start'|'lost'|None — evento de fala (consumido pelo nó)
         self.no_target = False      # start pedido mas ninguém no cone
         self._last_seen = 0.0
@@ -118,17 +117,21 @@ class PersonFollower:
 
     # --- máquina de estados ---
     def start(self):
-        self._start_req = True
-        self.no_target = False
+        """Clicar Seguir ARMA o modo: fica esperando um móvel aparecer no cone
+        (não exige movimento no instante do clique)."""
+        if self.state in ('idle', 'ending'):
+            self.state = 'armed'
+            self.target = None
+            self._driving = False
+            self.no_target = False
 
     def stop(self):
-        if self.state in ('following', 'lost'):
+        if self.state in ('armed', 'following', 'lost'):
             self.state = 'ending'
 
     def reset(self):
         self.state = 'idle'
         self.target = None
-        self._start_req = False
         self._driving = False
         self.just_spoke = None
         self.no_target = False
@@ -137,16 +140,17 @@ class PersonFollower:
         """Avança a máquina UMA vez com o relógio `t` (s, travado na fonte).
         Retorna (vx, wz) — não-zero só em following com alvo casado."""
         if self.state == 'idle':
-            if self._start_req:
-                self._start_req = False
-                tgt = self.acquire(clusters, pose)
-                if tgt is not None:
-                    self.target = tgt
-                    self.state = 'following'
-                    self.just_spoke = 'start'
-                    self._last_seen = t
-                else:
-                    self.no_target = True
+            return 0.0, 0.0
+
+        if self.state == 'armed':
+            # espera um MÓVEL no cone (acquire só pega movendo=1); trava quando
+            # aparece. Fica armado indefinidamente até travar ou o dono parar.
+            tgt = self.acquire(clusters, pose)
+            if tgt is not None:
+                self.target = tgt
+                self.state = 'following'
+                self.just_spoke = 'start'
+                self._last_seen = t
             return 0.0, 0.0
 
         if self.state == 'following':
