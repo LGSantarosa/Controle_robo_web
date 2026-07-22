@@ -49,6 +49,7 @@ class PersonFollower:
         self.cfg = cfg
         self.state = 'idle'
         self.target = None
+        self._driving = False
 
     def acquire(self, clusters, pose):
         """Trava o cluster mais PRÓXIMO dentro do alcance e do cone frontal."""
@@ -73,3 +74,26 @@ class PersonFollower:
         if best is not None:
             self.target = best
         return best
+
+    def control(self, dist, bearing_deg):
+        """(vx, wz) desejados pra encarar e manter stop_dist. vx >= 0 (não recua)."""
+        cfg = self.cfg
+        # --- giro: encara o alvo ---
+        if abs(bearing_deg) < cfg.face_deadband_deg:
+            wz = 0.0
+        else:
+            wz = math.radians(bearing_deg) * cfg.wz_kp
+            wz = max(-cfg.wz_cap, min(cfg.wz_cap, wz))
+        # --- avanço: mantém stop_dist, com histerese p/ não pulsar ---
+        if self._driving:
+            if dist <= cfg.stop_dist:
+                self._driving = False
+        else:
+            if dist > cfg.stop_dist + cfg.stop_hyst:
+                self._driving = True
+        aligned = abs(bearing_deg) < cfg.drive_align_deg
+        if self._driving and aligned:
+            vx = min(cfg.vx_max, max(0.0, dist - cfg.stop_dist))
+        else:
+            vx = 0.0
+        return vx, wz
