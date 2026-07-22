@@ -1148,6 +1148,12 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             self._scan_raw = None      # (ranges, angle_min, angle_increment) p/ o giro calculado
             self._plan = []            # pontos (x,y) do /plan (frame map) — rumo do giro
             self._last_state = self.sup.state
+            # SEGUIR PESSOA (2026-07-22): o unstuck "só age com goal ativo", mas
+            # no seguir não há goal nav2 -> travava em parede pra sempre. Trata
+            # 'following' como autonomia ativa. O gate guard_blocked mantém o
+            # unstuck QUIETO perto de PESSOA (só age em parede/obstáculo).
+            self._following = False
+            self._follow_wants_move = False
 
             be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
                             history=HistoryPolicy.KEEP_LAST)
@@ -1165,6 +1171,11 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             # nome mudou — o collision saiu de cima do smoother e foi pro mux de
             # autonomia. Continua sendo a intenção do nav p/ o gate _nav_wants_move.
             self.create_subscription(Twist, "nav_vel", self._on_nav_raw, 10)
+            # SEGUIR PESSOA: estado (latched) + velocidade desejada do follower.
+            self.create_subscription(String, "follow_person_state",
+                                     self._on_follow_state, latched)
+            self.create_subscription(Twist, "follow_person_vel",
+                                     self._on_follow_vel, 10)
             self.create_subscription(LaserScan, "scan", self._on_scan, be)
             # /plan (Theta*) p/ o RUMO do giro calculado: ao girar pra abrir a
             # frente, prefere a heading mais próxima de onde o plano quer ir.
@@ -1232,6 +1243,17 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
         def _on_nav_raw(self, msg):
             self._nav_wants_move = (abs(msg.linear.x) > self.nav_move_lin
                                     or abs(msg.angular.z) > self.nav_move_ang)
+
+        def _on_follow_state(self, msg):
+            self._following = (msg.data == "following")
+            if not self._following:
+                self._follow_wants_move = False
+
+        def _on_follow_vel(self, msg):
+            # só conta como "autonomia quer se mover" enquanto seguindo
+            self._follow_wants_move = self._following and (
+                abs(msg.linear.x) > self.nav_move_lin
+                or abs(msg.angular.z) > self.nav_move_ang)
 
         def _on_guard_state(self, msg):
             was = self._guard_blocked
@@ -1360,6 +1382,10 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             # status visto em algum tópico? OR entre eles; nunca visto -> None
             goal_active = (any(self._goal_active.values())
                            if self._goal_active else None)
+            # SEGUIR PESSOA conta como autonomia ativa (não há goal nav2 no
+            # seguir). guard_blocked segura o unstuck quieto perto de pessoa.
+            if self._following:
+                goal_active = True
             obstacle_mapped = self._obstacle_mapped() if scan_fresh else False
             # "conheço esse obstáculo?": há parede MAPEADA perto do robô (qualquer
             # lado — ex. batente da porta). Se sim, a recovery age mais RÁPIDO (não é
@@ -1380,7 +1406,7 @@ def main(args=None):  # pragma: no cover - I/O glue, validado na bancada
             guard_blocked = (self._guard_blocked
                              or now < self._guard_tail_until)
             cmd = self.sup.update(
-                now, nav_wants_move=self._nav_wants_move,
+                now, nav_wants_move=(self._nav_wants_move or self._follow_wants_move),
                 position=self._position, rear_gap=gap, front_gap=front_gap,
                 goal_active=goal_active, open_side=self._open_side,
                 yaw=self._yaw, door_active=self._door_active,
