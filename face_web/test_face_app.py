@@ -93,6 +93,20 @@ def test_state_stale(tmp_path):
     assert face_state.read_state(p, time.time()) == {'person': False, 'blocked': False}
 
 
+def test_read_follow(tmp_path):
+    import json
+    import time
+    import face_state
+    p = tmp_path / 'follow.json'
+    p.write_text(json.dumps({'ts': 1.0, 'follow_state': 'following',
+                             'speak': None, 'cbear_deg': 10}))
+    assert face_state.read_follow(str(p), time.time()) == {'follow_state': 'following'}
+    # ausente ou velho -> idle
+    assert face_state.read_follow('/nao/existe.json', time.time()) == {'follow_state': 'idle'}
+    old = time.time() + 100  # 'agora' 100s à frente do mtime -> stale
+    assert face_state.read_follow(str(p), old) == {'follow_state': 'idle'}
+
+
 def test_state_null_e_pessoa_atras(tmp_path):
     import time
     import face_state

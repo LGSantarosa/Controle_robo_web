@@ -30,3 +30,17 @@ def read_state(path, now, sign=1.0):
         return {'person': False, 'blocked': blocked}
     x = max(-1.0, min(1.0, cbear / FULL_DEG))
     return {'person': True, 'x': round(sign * x, 3), 'blocked': blocked}
+
+
+def read_follow(path, now):
+    """Estado do SEGUIR PESSOA (person_follower -> /tmp/person_follow_face.json).
+    Arquivo velho/ausente = 'idle' (stack caída ou modo desligado). A cara usa
+    as TRANSIÇÕES desse estado pra falar ('Irei te seguir' / 'não te vendo')."""
+    try:
+        if now - os.stat(path).st_mtime > STALE_S:
+            return {'follow_state': 'idle'}
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {'follow_state': 'idle'}
+    return {'follow_state': data.get('follow_state') or 'idle'}

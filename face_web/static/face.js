@@ -53,11 +53,16 @@
   // e destrava o "licença" com play+pause mascarado pelo olá.
   var sndOla = new Audio('/static/ola.mp3');
   var sndLicenca = new Audio('/static/licenca.mp3');
+  var sndSeguir = new Audio('/static/seguir_inicio.mp3');
+  var sndNaoVejo = new Audio('/static/nao_te_vejo.mp3');
   sndOla.preload = 'auto';
   sndLicenca.preload = 'auto';
+  sndSeguir.preload = 'auto';
+  sndNaoVejo.preload = 'auto';
   var sndUnlocked = false;
   var nextOlaAt = 0;
   var nextLicencaAt = 0;
+  var prevFollow = 'idle';   // p/ falar nas transições do seguir
 
   function playSnd(a) {
     if (!sndUnlocked) return;
@@ -82,6 +87,13 @@
       };
       if (q && q['then']) q['then'](calaLicenca)['catch'](function () {});
       else calaLicenca();
+      // destrava os sons do seguir do mesmo jeito (play mascarado + pause)
+      [sndSeguir, sndNaoVejo].forEach(function (s) {
+        var r = s.play();
+        var cala = function () { s.pause(); s.currentTime = 0; };
+        if (r && r['then']) r['then'](cala)['catch'](function () {});
+        else cala();
+      });
     } catch (e) {}
   }
 
@@ -353,6 +365,14 @@
       if (st.blocked && tp >= nextLicencaAt) {
         playSnd(sndLicenca);
         nextLicencaAt = tp + 8;
+      }
+      // Seguir pessoa: fala nas TRANSIÇÕES (robusto vs. eventos transientes).
+      // idle->following = fala "Irei te seguir"; ->lost = fala "não te vendo".
+      var fs = st.follow_state || 'idle';
+      if (fs !== prevFollow) {
+        if (fs === 'following' && prevFollow === 'idle') playSnd(sndSeguir);
+        else if (fs === 'lost') playSnd(sndNaoVejo);
+        prevFollow = fs;
       }
       if (st.person) {
         // 2.2x: pessoa desloca o olho BEM mais que o vagar (que fica em

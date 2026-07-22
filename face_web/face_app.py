@@ -28,6 +28,8 @@ app = Flask(__name__)
 FACE_GAZE_SIGN = 1.0
 STATE_FILE = os.environ.get('FACE_STATE_FILE',
                             '/tmp/motion_guard_face.json')
+FOLLOW_FILE = os.environ.get('FACE_FOLLOW_FILE',
+                             '/tmp/person_follow_face.json')
 
 
 @app.route('/')
@@ -37,9 +39,12 @@ def face():
 
 @app.route('/state')
 def state():
-    """Fase 2 (cara reativa): rumo da pessoa vindo do motion_guard."""
-    return jsonify(face_state.read_state(STATE_FILE, time.time(),
-                                         sign=FACE_GAZE_SIGN))
+    """Fase 2 (cara reativa): rumo da pessoa (motion_guard) + estado do
+    SEGUIR PESSOA (person_follower) pras falas da cara."""
+    now = time.time()
+    s = face_state.read_state(STATE_FILE, now, sign=FACE_GAZE_SIGN)
+    s.update(face_state.read_follow(FOLLOW_FILE, now))
+    return jsonify(s)
 
 
 if __name__ == '__main__':
