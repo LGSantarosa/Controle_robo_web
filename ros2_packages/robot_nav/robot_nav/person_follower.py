@@ -59,10 +59,16 @@ class PersonFollower:
         self._lost_since = 0.0
 
     def acquire(self, clusters, pose):
-        """Trava o cluster mais PRÓXIMO dentro do alcance e do cone frontal."""
+        """Trava o cluster MÓVEL mais próximo dentro do alcance e do cone
+        frontal. Clusters chegam como (cx, cy[, movendo]); parede estática
+        (movendo=0) NÃO vira alvo. Sem o flag = trata como móvel."""
         cfg = self.cfg
         best, best_d = None, math.inf
-        for cx, cy in clusters:
+        for c in clusters:
+            cx, cy = c[0], c[1]
+            moving = c[2] if len(c) > 2 else 1.0
+            if not moving:
+                continue
             d, b = _rel(cx, cy, pose)
             if d <= cfg.acquire_range and abs(b) <= cfg.acquire_cone_deg / 2 and d < best_d:
                 best, best_d = Target(cx, cy), d
@@ -74,7 +80,8 @@ class PersonFollower:
             return None
         tx, ty = self.target
         best, best_d = None, self.cfg.assoc_gate
-        for cx, cy in clusters:
+        for c in clusters:
+            cx, cy = c[0], c[1]
             d = math.hypot(cx - tx, cy - ty)
             if d <= best_d:
                 best, best_d = Target(cx, cy), d
@@ -259,7 +266,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
 
         def _on_targets(self, msg):
             d = list(msg.data)
-            self._targets = [(d[i], d[i + 1]) for i in range(0, len(d) - 1, 2)]
+            # triplas (cx, cy, movendo)
+            self._targets = [(d[i], d[i + 1], d[i + 2])
+                             for i in range(0, len(d) - 2, 3)]
 
         def _on_cmd(self, msg):
             if not self.enabled:

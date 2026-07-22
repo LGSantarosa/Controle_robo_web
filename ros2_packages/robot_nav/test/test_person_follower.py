@@ -35,6 +35,22 @@ def test_acquire_none_se_fora_do_alcance_ou_cone():
     assert pf.acquire([], POSE) is None                    # vazio
 
 
+def test_acquire_ignora_estatico_so_trava_movel():
+    # clusters chegam como (cx, cy, movendo). Só trava quem se MOVE (parede
+    # estática perto não vira alvo); ausência do flag = trata como móvel.
+    pf = _pf(acquire_range=3.0, acquire_cone_deg=60.0)
+    clusters = [(1.0, 0.0, 0.0), (2.0, 0.0, 1.0)]   # parado perto + móvel longe
+    assert pf.acquire(clusters, POSE) == Target(2.0, 0.0)   # ignora o parado
+
+
+def test_associate_rastreia_alvo_que_parou():
+    # depois de travado, o alvo que PAROU (movendo=0) continua sendo rastreado
+    pf = _pf(assoc_gate=0.6)
+    pf.target = Target(2.0, 0.0)
+    t = pf.associate([(2.1, 0.0, 0.0)])   # parou, mas dentro do gate
+    assert t == Target(2.1, 0.0) and pf.target == Target(2.1, 0.0)
+
+
 def test_associate_segue_salto_pequeno():
     pf = _pf(assoc_gate=0.6)
     pf.target = Target(2.0, 0.0)

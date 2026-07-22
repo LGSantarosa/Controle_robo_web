@@ -605,15 +605,28 @@ class MotionGuard:
         ys = [p[1] for p in cl]
         return math.hypot(max(xs) - min(xs), max(ys) - min(ys))
 
-    def person_centroids(self) -> List[Pt]:
-        """Centróides (odom) dos clusters móveis atuais — candidatos a pessoa
-        pro person_follower (seguir pessoa). Já vêm filtrados de fantasma-de-
-        parede. Limitação v1: só quem se MOVE aparece; pessoa 100% parada
-        some (o follower recupera quando ela se mexe de novo)."""
-        out: List[Pt] = []
+    def person_centroids(self, pts: List[Pt]) -> List[tuple]:
+        """(cx, cy, movendo) por cluster do scan atual (odom) — candidatos a
+        pessoa pro person_follower. `movendo`=1.0 se o cluster casa com um
+        moving_cluster (grid-diff); estáticos entram com 0.0 pra o follower
+        CONTINUAR rastreando a pessoa quando ela para. Sem filtro de parede
+        aqui: o acquire do follower usa só os móveis (parede não anda) e a
+        associação usa o gate — parede longe não sequestra o alvo."""
+        mov = []
         for cl in self.moving_clusters:
             n = len(cl)
-            out.append((sum(p[0] for p in cl) / n, sum(p[1] for p in cl) / n))
+            mov.append((sum(p[0] for p in cl) / n, sum(p[1] for p in cl) / n))
+        gap = self.cfg.cluster_gap
+        out = []
+        for cl in self._cluster(pts):
+            if len(cl) < self.cfg.min_cluster_points:
+                continue
+            n = len(cl)
+            cx = sum(p[0] for p in cl) / n
+            cy = sum(p[1] for p in cl) / n
+            moving = 1.0 if any(math.hypot(cx - mx, cy - my) <= gap
+                                for mx, my in mov) else 0.0
+            out.append((cx, cy, moving))
         return out
 
 
@@ -866,7 +879,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                                    polar=polar)
                 self._last_pose = pose
                 self._face_tick()
-                self._follow_targets_tick()
+                self._follow_targets_tick([])
                 return
             c, s = math.cos(yaw), math.sin(yaw)
             xl, yl = r[ok] * np.cos(a[ok]), r[ok] * np.sin(a[ok])
@@ -875,14 +888,14 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self.guard.observe(self._now(), pts, pose, self._wz, polar=polar)
             self._last_pose = pose
             self._face_tick()
-            self._follow_targets_tick()
+            self._follow_targets_tick(pts)
 
-        def _follow_targets_tick(self):
+        def _follow_targets_tick(self, pts):
             if self._follow_pub is None:
                 return
             data = []
-            for cx, cy in self.guard.person_centroids():
-                data.extend((float(cx), float(cy)))
+            for cx, cy, moving in self.guard.person_centroids(pts):
+                data.extend((float(cx), float(cy), float(moving)))
             self._follow_pub.publish(Float32MultiArray(data=data))
 
         def _person_centroid(self):

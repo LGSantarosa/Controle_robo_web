@@ -836,13 +836,18 @@ def test_person_ignores_plan_detour():
     assert g.filter(tl + 2.0, 0.30, 0.0)[2] == 'blocked'
 
 
-def test_person_centroids_devolve_movel_em_odom():
-    # person_follower consome estes centróides (odom, já filtrados de parede)
+def test_person_centroids_marca_movel_e_estatico():
+    # person_follower consome (cx, cy, movendo): usa movendo=1 pra TRAVAR e
+    # qualquer um pra RASTREAR (pessoa parada segue sendo alvo).
     g = _guard()
-    t = _feed_static(g)
-    obj = [(1.0, 0.8), (1.0, 0.9), (1.1, 0.8), (1.1, 0.9)]   # móvel a ~1.05,0.85
+    t = _feed_static(g)                                      # WALL parado no histórico
+    obj = [(1.0, 0.8), (1.0, 0.9), (1.1, 0.8), (1.1, 0.9)]   # NOVO -> móvel
     g.observe(t, WALL + obj, POSE, 0.0)
-    cs = g.person_centroids()
-    assert len(cs) == 1
-    cx, cy = cs[0]
-    assert abs(cx - 1.05) < 0.1 and abs(cy - 0.85) < 0.1
+    cs = g.person_centroids(WALL + obj)
+    # o obj a ~(1.05,0.85) entra como MÓVEL
+    obj_c = [c for c in cs if abs(c[0] - 1.05) < 0.2 and abs(c[1] - 0.85) < 0.2]
+    assert len(obj_c) == 1 and obj_c[0][2] == 1.0
+    # a parede (x=2, estática) entra como movendo=0 (o follower só trava
+    # móvel, mas rastreia estático pelo gate)
+    wall_c = [c for c in cs if c[0] > 1.8]
+    assert wall_c and all(c[2] == 0.0 for c in wall_c)
