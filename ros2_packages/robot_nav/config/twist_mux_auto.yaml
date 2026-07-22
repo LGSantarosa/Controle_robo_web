@@ -4,6 +4,7 @@
 # UM comando (cmd_vel_out -> auto_vel_raw no launch) que vai pro collision_monitor:
 #
 #   smoother(nav_vel) / path_follower(follow_vel) / door_crossing(door_vel)
+#     / person_follower(follow_person_vel)
 #     -> [twist_mux_auto] -> auto_vel_raw -> [collision_monitor] -> auto_vel
 #     -> [twist_mux FINAL] (prio 10) -> cmd_vel -> rodas
 #
@@ -13,7 +14,8 @@
 # o reflexo (resgate e override sempre funcionam). Se o collision não sobe/cai,
 # auto_vel some e a autonomia não anda (collision OBRIGATÓRIO), mas o humano segue.
 #
-# Mantém a ordem relativa que existia no mux único: door (20) > seguidor (15) > nav (10).
+# Ordem: door (20) > follow_person (17) > seguidor (15) > nav (10). No seguir a
+# rota fica pausada (path_follower mudo) -> follow_person não disputa com follow_vel.
 #
 # ⚠️ A chave de topo DEVE ser o NOME DO NÓ (twist_mux_auto), não "twist_mux": o ROS
 # casa params pelo nome do nó. Com a chave errada o nó sobe com DEFAULTS (sem
@@ -28,6 +30,10 @@ twist_mux_auto:
         topic: door_vel      # door_crossing (travessia de porta) — assume a manobra
         timeout: 0.5
         priority: 20
+      follow_person:
+        topic: follow_person_vel  # person_follower (seguir pessoa) — rota pausada no seguir
+        timeout: 0.5
+        priority: 17
       follower:
         topic: follow_vel    # path_follower (reto+giro decisivo) — ignora o controller_server
         timeout: 0.5

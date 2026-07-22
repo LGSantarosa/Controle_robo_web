@@ -176,6 +176,17 @@ def generate_launch_description():
             name='path_follower', output=nav_output,
             parameters=[sim_time_param],
         ),
+        # Seguir pessoa (2026-07-22): tap-to-track por lidar. Consome
+        # follow_person_targets (do motion_guard) + follow_cmd (do app.py),
+        # publica follow_person_vel (prio 17 no twist_mux_auto) -> herda TODA
+        # a segurança a jusante (guard/collision/unstuck/E-stop): "mesmo medo,
+        # só muda o alvo final". follow_enabled desligado ignora START.
+        # Spec: docs/superpowers/specs/2026-07-22-seguir-pessoa-design.md
+        Node(
+            package='robot_nav', executable='person_follower',
+            name='person_follower', output=nav_output,
+            parameters=[sim_time_param, {'follow_enabled': True}],
+        ),
         # Travessia de porta: alinha no eixo de porta MARCADA e atravessa
         # reto vigiando o vão (door_vel, prio 20 no twist_mux). Publica
         # /door_zone = gate da máscara de batente no scan_sanitizer.
@@ -214,7 +225,7 @@ def generate_launch_description():
         Node(
             package='robot_nav', executable='motion_guard',
             name='motion_guard', output=nav_output,
-            parameters=[sim_time_param],
+            parameters=[sim_time_param, {'publish_follow_targets': True}],
             respawn=True, respawn_delay=1.0,
         ),
         # Collision Monitor: lê /scan_safe (sanitizado acima) e freia
