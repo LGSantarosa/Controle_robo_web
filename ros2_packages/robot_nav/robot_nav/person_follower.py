@@ -191,3 +191,115 @@ class FollowFaceFile:
             return False
         self._last_write_t = t
         return True
+
+
+# knobs afináveis ao vivo (mesma disciplina do motion_guard): mutam a MESMA
+# ref de cfg que o tick lê -> `ros2 param set /person_follower <x> <v>` pega
+# no tick seguinte. Exceção: lost_grace/lost_timeout também são lidos ao vivo.
+_CFG_PARAMS = ('stop_dist', 'stop_hyst', 'vx_max', 'wz_cap', 'wz_kp',
+               'face_deadband_deg', 'drive_align_deg', 'acquire_cone_deg',
+               'acquire_range', 'assoc_gate', 'lost_grace', 'lost_timeout')
+
+
+def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
+    import rclpy
+    from rcl_interfaces.msg import SetParametersResult
+    from rclpy.node import Node
+    from rclpy.qos import (QoSDurabilityPolicy, QoSProfile, ReliabilityPolicy,
+                           qos_profile_sensor_data)
+    from geometry_msgs.msg import Twist
+    from nav_msgs.msg import Odometry
+    from std_msgs.msg import Float32MultiArray, String
+
+    from .utils import quat_to_yaw, spin_node
+
+    latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                         durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+
+    class PersonFollowerNode(Node):
+        def __init__(self):
+            super().__init__('person_follower')
+            self.declare_parameter('follow_enabled', False)
+            self.enabled = self.get_parameter('follow_enabled').value
+            cfg = FollowConfig()
+            for name in _CFG_PARAMS:
+                self.declare_parameter(name, getattr(cfg, name))
+                setattr(cfg, name, self.get_parameter(name).value)
+            self.pf = PersonFollower(cfg)
+            self.add_on_set_parameters_callback(self._on_set_params)
+            self.face = FollowFaceFile()
+
+            self._targets = []
+            self._pose = (0.0, 0.0, 0.0)
+            self.pub = self.create_publisher(Twist, 'follow_person_vel', 10)
+            self.pub_state = self.create_publisher(
+                String, 'follow_person_state', latched)
+            self.create_subscription(Float32MultiArray, 'follow_person_targets',
+                                     self._on_targets, 10)
+            self.create_subscription(String, 'follow_cmd', self._on_cmd, 10)
+            self.create_subscription(Odometry, 'odom', self._on_odom,
+                                     qos_profile_sensor_data)
+            self.create_timer(0.1, self._tick)     # 10 Hz
+            self._publish_state()
+
+        def _on_set_params(self, params):
+            for p in params:
+                if p.name == 'follow_enabled':
+                    self.enabled = bool(p.value)
+                elif p.name in _CFG_PARAMS:
+                    setattr(self.pf.cfg, p.name, p.value)
+            return SetParametersResult(successful=True)
+
+        def _on_targets(self, msg):
+            d = list(msg.data)
+            self._targets = [(d[i], d[i + 1]) for i in range(0, len(d) - 1, 2)]
+
+        def _on_cmd(self, msg):
+            if not self.enabled:
+                return
+            if msg.data == 'START':
+                self.pf.start()
+            elif msg.data == 'STOP':
+                self.pf.stop()
+
+        def _on_odom(self, msg):
+            p = msg.pose.pose.position
+            q = msg.pose.pose.orientation
+            yaw = quat_to_yaw(q.x, q.y, q.z, q.w)
+            self._pose = (p.x, p.y, yaw)
+
+        def _tick(self):
+            t = self.get_clock().now().nanoseconds * 1e-9
+            vx, wz = self.pf.tick(t, self._targets, self._pose)
+            if self.pf.state == 'following':
+                m = Twist()
+                m.linear.x = float(vx)
+                m.angular.z = float(wz)
+                self.pub.publish(m)
+            speak = self.pf.just_spoke
+            self.pf.just_spoke = None
+            if self.pf.target is not None:
+                _, bearing = _rel(self.pf.target.cx, self.pf.target.cy, self._pose)
+            else:
+                bearing = None
+            self.face.update(t, self.pf.state, speak=speak, bearing_deg=bearing)
+            self._publish_state()
+            if self.pf.state == 'ending':
+                self.pf.reset()
+
+        def _publish_state(self):
+            self.pub_state.publish(String(data=self.pf.state))
+
+    rclpy.init(args=args)
+    node = PersonFollowerNode()
+    try:
+        spin_node(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == '__main__':
+    main()
