@@ -513,6 +513,22 @@ def handle_stop_waypoints():
         camera_service.stop_recording('parar na GUI')
 
 
+@socketio.on('follow')
+def handle_follow(data):
+    """Liga/desliga o SEGUIR PESSOA. data={'action':'start'|'stop'}."""
+    if map_bridge is None:
+        emit('follow_ack', {'ok': False, 'error': 'indisponível neste modo'})
+        return
+    action = (data or {}).get('action')
+    if action == 'start':
+        result = map_bridge.follow_start()
+    elif action == 'stop':
+        result = map_bridge.follow_stop()
+    else:
+        result = {'ok': False, 'error': 'action inválida'}
+    emit('follow_ack', result)
+
+
 @socketio.on('save_route')
 def handle_save_route(data):
     if map_bridge is None:

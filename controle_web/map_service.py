@@ -353,6 +353,15 @@ class MapBridge:
         self._node.create_subscription(String, '/door_zone',
                                        self._on_door_zone, doors_qos)
 
+        # Seguir pessoa (2026-07-22): a GUI liga/desliga via /follow_cmd; o
+        # person_follower publica /follow_person_state (latched). Ao ligar,
+        # PAUSA a rota (guarda índice) e retoma quando o seguir acaba.
+        self._follow_cmd_pub = self._node.create_publisher(String, '/follow_cmd', 10)
+        self._follow_saved = None          # {'waypoints','loop','index'} ou None
+        self._follow_prev_state = 'idle'
+        self._node.create_subscription(String, '/follow_person_state',
+                                       self._on_follow_state, doors_qos)
+
         # Correção manual de DIREÇÃO no SLAM (robô sem IMU): o slam_toolbox em
         # mapeamento não relocaliza por /initialpose, e mexer no pose-graph
         # deforma o mapa. Em vez disso, publicamos um delta de yaw em
@@ -903,6 +912,50 @@ class MapBridge:
             self._wp_active = False
         self._sock.emit('waypoint_status', {'active': False, 'index': 0, 'total': 0})
         return {'ok': True}
+
+    def follow_start(self) -> dict:
+        """Liga o modo SEGUIR PESSOA. Se havia rota rodando, guarda os
+        waypoints restantes + índice e PAUSA (retoma quando o seguir acabar)."""
+        with self._wp_lock:
+            if self._wp_active and self._wp_list:
+                self._follow_saved = {
+                    'waypoints': list(self._wp_list),
+                    'loop': self._wp_loop,
+                    'index': self._wp_current_idx,
+                }
+            else:
+                self._follow_saved = None
+        if self._follow_saved is not None:
+            self.stop_waypoints()          # pausa a rota (cancela goal ativo)
+            log.info(f"[MapBridge] SEGUIR ligado — rota pausada no wp "
+                     f"{self._follow_saved['index']}/{len(self._follow_saved['waypoints'])}")
+        else:
+            log.info("[MapBridge] SEGUIR ligado (sem rota ativa)")
+        self._follow_cmd_pub.publish(String(data='START'))
+        return {'ok': True}
+
+    def follow_stop(self) -> dict:
+        """Desliga o modo SEGUIR (a retoma da rota acontece no _on_follow_state
+        quando o person_follower confirma que saiu de following/lost)."""
+        self._follow_cmd_pub.publish(String(data='STOP'))
+        log.info("[MapBridge] SEGUIR desligado (comando)")
+        return {'ok': True}
+
+    def _on_follow_state(self, msg):
+        """Reemite o estado do seguir pra UI e RETOMA a rota pausada quando o
+        person_follower sai de following/lost (fim do seguir)."""
+        s = msg.data
+        self._sock.emit('follow_state', {'state': s})
+        was_following = self._follow_prev_state in ('following', 'lost')
+        self._follow_prev_state = s
+        if was_following and s in ('idle', 'ending') and self._follow_saved is not None:
+            saved = self._follow_saved
+            self._follow_saved = None
+            rest = saved['waypoints'][saved['index']:]
+            if rest:
+                log.info(f"[MapBridge] SEGUIR acabou — retomando rota de "
+                         f"{saved['index']} ({len(rest)} wps restantes)")
+                self.start_waypoints(rest, saved['loop'])
 
     @staticmethod
     def _safe_name(name) -> str:

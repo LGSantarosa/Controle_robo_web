@@ -203,6 +203,30 @@
   if (btnPovAuto) btnPovAuto.addEventListener('click', () => {
     socket.emit('camera_auto', { on: !povAuto });
   });
+
+  // 🚶 Seguir pessoa: toggle START/STOP. O rótulo/estado vêm do follow_state
+  // (person_follower -> map_bridge -> aqui). Ligar pausa a rota; ao parar (ou
+  // perder a pessoa por tempo) a rota retoma sozinha no backend.
+  const btnFollow = document.getElementById('btn-follow');
+  let followState = 'idle';
+  function renderFollow() {
+    if (!btnFollow) return;
+    const active = (followState === 'following' || followState === 'lost');
+    btnFollow.textContent = active ? '🚶 Parar de seguir' : '🚶 Seguir';
+    btnFollow.classList.toggle('active', active);
+    btnFollow.title = active ? ('seguindo (' + followState + ')')
+                             : 'robô segue a pessoa à frente';
+  }
+  if (btnFollow) btnFollow.addEventListener('click', () => {
+    const active = (followState === 'following' || followState === 'lost');
+    socket.emit('follow', { action: active ? 'stop' : 'start' });
+  });
+  socket.on('follow_state', (d) => {
+    followState = (d && d.state) || 'idle';
+    renderFollow();
+  });
+  renderFollow();
+
   socket.on('camera_status', (st) => {
     if (!st || !povCard) return;
     povCard.style.display = '';
