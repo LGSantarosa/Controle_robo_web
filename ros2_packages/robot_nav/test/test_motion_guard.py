@@ -834,3 +834,15 @@ def test_person_ignores_plan_detour():
         g.observe(tl + k * 0.1, WALL + PERSON_FRONT, POSE, 0.0)
         g.observe_plan(tl + k * 0.1, _plan(math.pi / 2))   # plano desvia +y
     assert g.filter(tl + 2.0, 0.30, 0.0)[2] == 'blocked'
+
+
+def test_person_centroids_devolve_movel_em_odom():
+    # person_follower consome estes centróides (odom, já filtrados de parede)
+    g = _guard()
+    t = _feed_static(g)
+    obj = [(1.0, 0.8), (1.0, 0.9), (1.1, 0.8), (1.1, 0.9)]   # móvel a ~1.05,0.85
+    g.observe(t, WALL + obj, POSE, 0.0)
+    cs = g.person_centroids()
+    assert len(cs) == 1
+    cx, cy = cs[0]
+    assert abs(cx - 1.05) < 0.1 and abs(cy - 0.85) < 0.1

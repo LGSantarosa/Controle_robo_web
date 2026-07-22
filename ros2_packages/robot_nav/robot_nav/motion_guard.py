@@ -605,6 +605,17 @@ class MotionGuard:
         ys = [p[1] for p in cl]
         return math.hypot(max(xs) - min(xs), max(ys) - min(ys))
 
+    def person_centroids(self) -> List[Pt]:
+        """Centróides (odom) dos clusters móveis atuais — candidatos a pessoa
+        pro person_follower (seguir pessoa). Já vêm filtrados de fantasma-de-
+        parede. Limitação v1: só quem se MOVE aparece; pessoa 100% parada
+        some (o follower recupera quando ela se mexe de novo)."""
+        out: List[Pt] = []
+        for cl in self.moving_clusters:
+            n = len(cl)
+            out.append((sum(p[0] for p in cl) / n, sum(p[1] for p in cl) / n))
+        return out
+
 
 class FaceStateFile:
     """Rumo da pessoa pro face_web (cara fase 2): JSON minúsculo em tmpfs.
@@ -663,7 +674,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
     from geometry_msgs.msg import Twist
     from nav_msgs.msg import OccupancyGrid, Odometry, Path
     from sensor_msgs.msg import LaserScan
-    from std_msgs.msg import String
+    from std_msgs.msg import Float32MultiArray, String
     from tf2_ros import Buffer, TransformListener, TransformException
 
     from .utils import quat_to_yaw, spin_node
@@ -705,6 +716,15 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self._last_state = None
             self._last_cmd_t = -math.inf
             self._face = FaceStateFile()
+
+            # aditivo pro person_follower (seguir pessoa): publica os
+            # centróides dos clusters-pessoa. Atrás de param -> default OFF
+            # nem cria o publisher (0 impacto no guard).
+            self.declare_parameter('publish_follow_targets', False)
+            self._follow_pub = None
+            if self.get_parameter('publish_follow_targets').value:
+                self._follow_pub = self.create_publisher(
+                    Float32MultiArray, 'follow_person_targets', 10)
 
             self.pub = self.create_publisher(Twist, 'auto_vel_raw', 10)
             self.pub_state = self.create_publisher(
@@ -846,6 +866,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
                                    polar=polar)
                 self._last_pose = pose
                 self._face_tick()
+                self._follow_targets_tick()
                 return
             c, s = math.cos(yaw), math.sin(yaw)
             xl, yl = r[ok] * np.cos(a[ok]), r[ok] * np.sin(a[ok])
@@ -854,6 +875,15 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim
             self.guard.observe(self._now(), pts, pose, self._wz, polar=polar)
             self._last_pose = pose
             self._face_tick()
+            self._follow_targets_tick()
+
+        def _follow_targets_tick(self):
+            if self._follow_pub is None:
+                return
+            data = []
+            for cx, cy in self.guard.person_centroids():
+                data.extend((float(cx), float(cy)))
+            self._follow_pub.publish(Float32MultiArray(data=data))
 
         def _person_centroid(self):
             """(cx, cy, cbear_deg) do cluster móvel mais PRÓXIMO (o que
