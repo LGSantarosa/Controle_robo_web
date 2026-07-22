@@ -26,8 +26,10 @@ class FollowConfig:
     rot_k: float = 3.0           # rad/s por rad de erro
     rot_min: float = 2.4         # rad/s — piso (2.0 = rastejo na zona-morta 1.7)
     rot_max: float = 4.5         # rad/s — teto
-    face_deadband_deg: float = 8.0
-    drive_align_deg: float = 20.0
+    # POINT-TURN (skid-steer não faz arco): gira NO LUGAR acima de turn_enter,
+    # só volta a andar RETO abaixo de turn_exit (histerese, igual path_follower).
+    turn_enter_deg: float = 16.0
+    turn_exit_deg: float = 4.0
     acquire_cone_deg: float = 60.0
     acquire_range: float = 3.0
     assoc_gate: float = 0.6
@@ -55,6 +57,7 @@ class PersonFollower:
         self.state = 'idle'
         self.target = None
         self._driving = False
+        self._turning = False       # point-turn: True = girando no lugar
         self.just_spoke = None      # 'start'|'lost'|None — evento de fala (consumido pelo nó)
         self.no_target = False      # start pedido mas ninguém no cone
         self._last_seen = 0.0
@@ -92,28 +95,29 @@ class PersonFollower:
         return best
 
     def control(self, dist, bearing_deg):
-        """(vx, wz) desejados pra encarar e manter stop_dist. vx >= 0 (não recua)."""
+        """(vx, wz) desejados. POINT-TURN: gira NO LUGAR (vx=0) OU anda RETO
+        (wz=0) — NUNCA arco (skid-steer não arqueia). vx >= 0 (não recua)."""
         cfg = self.cfg
-        # --- giro: encara o alvo (piso rot_min fura a zona-morta do skid) ---
-        if abs(bearing_deg) < cfg.face_deadband_deg:
-            wz = 0.0
-        else:
-            mag = cfg.rot_k * abs(math.radians(bearing_deg))
+        ab = abs(bearing_deg)
+        # histerese do giro: entra girando >turn_enter, só sai <turn_exit
+        if self._turning:
+            if ab <= cfg.turn_exit_deg:
+                self._turning = False
+        elif ab >= cfg.turn_enter_deg:
+            self._turning = True
+        # --- girando: só wz, com piso rot_min (fura a zona-morta ~1.7 do skid) ---
+        if self._turning:
+            mag = cfg.rot_k * math.radians(ab)
             mag = min(cfg.rot_max, max(cfg.rot_min, mag))
-            wz = math.copysign(mag, bearing_deg)
-        # --- avanço: mantém stop_dist, com histerese p/ não pulsar ---
+            return 0.0, math.copysign(mag, bearing_deg)
+        # --- alinhado: anda RETO (wz=0), mantém stop_dist com histerese ---
         if self._driving:
             if dist <= cfg.stop_dist:
                 self._driving = False
-        else:
-            if dist > cfg.stop_dist + cfg.stop_hyst:
-                self._driving = True
-        aligned = abs(bearing_deg) < cfg.drive_align_deg
-        if self._driving and aligned:
-            vx = min(cfg.vx_max, max(0.0, dist - cfg.stop_dist))
-        else:
-            vx = 0.0
-        return vx, wz
+        elif dist > cfg.stop_dist + cfg.stop_hyst:
+            self._driving = True
+        vx = min(cfg.vx_max, max(0.0, dist - cfg.stop_dist)) if self._driving else 0.0
+        return vx, 0.0
 
     # --- máquina de estados ---
     def start(self):
@@ -219,7 +223,7 @@ class FollowFaceFile:
 # ref de cfg que o tick lê -> `ros2 param set /person_follower <x> <v>` pega
 # no tick seguinte. Exceção: lost_grace/lost_timeout também são lidos ao vivo.
 _CFG_PARAMS = ('stop_dist', 'stop_hyst', 'vx_max', 'rot_k', 'rot_min', 'rot_max',
-               'face_deadband_deg', 'drive_align_deg', 'acquire_cone_deg',
+               'turn_enter_deg', 'turn_exit_deg', 'acquire_cone_deg',
                'acquire_range', 'assoc_gate', 'lost_grace', 'lost_timeout')
 
 

@@ -71,15 +71,30 @@ def test_control_encara_sem_andar_se_desalinhado():
     assert vx == 0.0 and wz > 0.0                     # gira p/ esquerda, não anda
 
 
-def test_control_wz_piso_e_teto_fura_zona_morta_skid():
-    # skid-steer: giro < ~1.7 não move a roda -> PISO rot_min garante que sempre
-    # que precisa girar, gira de verdade (lição do path_follower validado no real)
-    pf = _pf(face_deadband_deg=8.0, rot_min=2.4, rot_max=4.5, rot_k=3.0)
-    assert pf.control(3.0, 5.0)[1] == 0.0             # zona morta -> não gira
-    # bearing pequeno acima da deadband: 12°=0.21rad*3=0.63 -> sobe pro PISO 2.4
-    assert abs(pf.control(3.0, 12.0)[1] - 2.4) < 1e-6
-    assert pf.control(3.0, 179.0)[1] == 4.5           # grande -> TETO 4.5 (esq)
-    assert pf.control(3.0, -179.0)[1] == -4.5         # TETO (dir)
+def test_control_point_turn_sem_arco():
+    # skid-steer: gira NO LUGAR (vx=0) OU anda RETO (wz=0), NUNCA arco.
+    pf = _pf(turn_enter_deg=16.0, turn_exit_deg=4.0, rot_min=2.4, rot_max=4.5,
+             rot_k=3.0, stop_dist=1.5, stop_hyst=0.2, vx_max=0.5)
+    # desalinhado -> gira no lugar (vx=0), com piso rot_min (fura zona-morta)
+    vx, wz = pf.control(3.0, 30.0)
+    assert vx == 0.0 and abs(wz) >= 2.4
+    assert pf.control(3.0, 179.0) == (0.0, 4.5)       # grande -> teto, vx=0
+    assert pf.control(3.0, -179.0) == (0.0, -4.5)
+    # alinhado -> anda RETO (wz=0), nunca gira junto
+    pf._turning = False
+    vx, wz = pf.control(3.0, 3.0)
+    assert wz == 0.0 and vx > 0.0
+
+
+def test_control_histerese_do_giro():
+    # entra a girar >16°, só volta a andar quando alinha <4° (não fica trocando)
+    pf = _pf(turn_enter_deg=16.0, turn_exit_deg=4.0)
+    pf.control(3.0, 20.0)                              # >enter -> girando
+    assert pf._turning is True
+    pf.control(3.0, 10.0)                              # entre exit e enter -> segue girando
+    assert pf._turning is True
+    pf.control(3.0, 2.0)                               # <exit -> para de girar
+    assert pf._turning is False
 
 
 def test_control_anda_alinhado_e_para_em_1_5m():
