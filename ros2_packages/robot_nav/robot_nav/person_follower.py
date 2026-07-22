@@ -20,7 +20,7 @@ Target = namedtuple('Target', 'cx cy')
 class FollowConfig:
     stop_dist: float = 1.5
     stop_hyst: float = 0.2
-    vx_max: float = 0.25
+    vx_max: float = 0.4          # 0.25 era lento demais p/ acompanhar (sim 07-22)
     wz_cap: float = 2.4
     wz_kp: float = 2.0            # ganho do giro (rad/s por rad de erro), antes do cap
     face_deadband_deg: float = 8.0
