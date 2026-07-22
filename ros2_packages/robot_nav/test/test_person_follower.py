@@ -31,3 +31,17 @@ def test_acquire_none_se_fora_do_alcance_ou_cone():
     assert pf.acquire([(4.0, 0.0)], POSE) is None          # longe
     assert pf.acquire([(1.0, 3.0)], POSE) is None          # fora do cone (~72°)
     assert pf.acquire([], POSE) is None                    # vazio
+
+
+def test_associate_segue_salto_pequeno():
+    pf = _pf(assoc_gate=0.6)
+    pf.target = Target(2.0, 0.0)
+    t = pf.associate([(2.3, 0.1), (5.0, 5.0)])   # 0.32m de salto < gate
+    assert t == Target(2.3, 0.1) and pf.target == Target(2.3, 0.1)
+
+
+def test_associate_none_se_salto_grande():
+    pf = _pf(assoc_gate=0.6)
+    pf.target = Target(2.0, 0.0)
+    assert pf.associate([(3.0, 0.0)]) is None    # 1.0m > gate
+    assert pf.associate([]) is None

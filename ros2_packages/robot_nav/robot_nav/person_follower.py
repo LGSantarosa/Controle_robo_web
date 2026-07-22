@@ -59,3 +59,17 @@ class PersonFollower:
             if d <= cfg.acquire_range and abs(b) <= cfg.acquire_cone_deg / 2 and d < best_d:
                 best, best_d = Target(cx, cy), d
         return best
+
+    def associate(self, clusters):
+        """Casa self.target com o cluster mais próximo dentro do gate (odom)."""
+        if self.target is None:
+            return None
+        tx, ty = self.target
+        best, best_d = None, self.cfg.assoc_gate
+        for cx, cy in clusters:
+            d = math.hypot(cx - tx, cy - ty)
+            if d <= best_d:
+                best, best_d = Target(cx, cy), d
+        if best is not None:
+            self.target = best
+        return best
