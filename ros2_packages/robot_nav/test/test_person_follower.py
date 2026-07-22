@@ -99,6 +99,16 @@ def test_tick_start_sem_ninguem_fica_idle():
     assert pf.state == 'idle' and pf.no_target is True
 
 
+def test_tick_following_mantem_rumo_no_gap_curto():
+    # alvo pisca (guard só vê movimento): dentro do grace, segue indo pro
+    # último alvo conhecido em vez de congelar -> seguimento liso, sem flap
+    pf = _pf(lost_grace=2.0, stop_dist=1.5, stop_hyst=0.2, vx_max=0.25)
+    pf.start(); pf.tick(0.0, _clusters_at(3.0), POSE)   # trava a 3m
+    assert pf.state == 'following'
+    vx, wz = pf.tick(0.5, [], POSE)                      # sumiu, dentro do grace
+    assert pf.state == 'following' and vx > 0.0          # continua indo pro alvo
+
+
 def test_tick_perde_alvo_vira_lost_e_fala():
     pf = _pf(lost_grace=1.0)
     pf.start(); pf.tick(0.0, _clusters_at(2.5), POSE)

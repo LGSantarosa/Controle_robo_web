@@ -28,7 +28,7 @@ class FollowConfig:
     acquire_cone_deg: float = 60.0
     acquire_range: float = 3.0
     assoc_gate: float = 0.6
-    lost_grace: float = 1.0
+    lost_grace: float = 2.0        # tolera piscada do alvo (guard só vê movimento)
     lost_timeout: float = 12.0
 
 
@@ -144,10 +144,17 @@ class PersonFollower:
                 self._last_seen = t
                 dist, bearing = _rel(m.cx, m.cy, pose)
                 return self.control(dist, bearing)
+            # sem match: o alvo pisca (guard só vê movimento). Dentro do grace,
+            # MANTÉM o rumo pro último alvo conhecido (posição fixa no odom) em
+            # vez de congelar — seguimento liso, sem flap following<->lost.
             if t - self._last_seen > self.cfg.lost_grace:
                 self.state = 'lost'
                 self._lost_since = t
                 self.just_spoke = 'lost'
+                return 0.0, 0.0
+            if self.target is not None:
+                dist, bearing = _rel(self.target.cx, self.target.cy, pose)
+                return self.control(dist, bearing)
             return 0.0, 0.0
 
         if self.state == 'lost':
