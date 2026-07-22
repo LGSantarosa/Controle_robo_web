@@ -1,7 +1,86 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-21**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-22**.
+
+---
+
+## 🚶 2026-07-22 — SEGUIR PESSOA: brainstorm → spec → plano → T1-T10 IMPLEMENTADAS + 2 fixes (branch `seguir-pessoa`, NÃO na main)
+
+> **Feature nova pedida pelo dono:** toca na cara do iPad → botão **🚶 Seguir** →
+> o robô **anda atrás da pessoa mantendo ~1,5m** (só lidar). Dia inteiro nisso.
+> **TUDO na branch `seguir-pessoa`** (NÃO mergeado, Pi nunca ligada hoje). Docs:
+> `docs/superpowers/specs/2026-07-22-seguir-pessoa-design.md` +
+> `docs/superpowers/plans/2026-07-22-seguir-pessoa.md`.
+
+### Arquitetura (o pedido do dono: "mesmo medo do nav2, só muda o alvo final")
+Nó novo **`person_follower`** (robot_nav) calcula só a velocidade DESEJADA rumo
+à pessoa e publica em **`follow_person_vel`** → entra no `twist_mux_auto` (prio
+17, mesma porta do `path_follower`). Tudo a jusante (motion_guard blocked/slowing
+→ collision_monitor → unstuck → E-stop) processa IGUAL à navegação por pontos.
+O `motion_guard` publica `follow_person_targets`; o `app.py`/`map_service`
+orquestra start/stop + **pausa/retoma da rota**; a cara lê `person_follow_face.json`.
+
+### O que foi feito (12 tasks, TDD no núcleo — commits `b2d4654`..`e3365bf`)
+- **T1-5 núcleo puro** (aquisição no cone/alcance, associação por gate, lei de
+  controle, máquina de estados `tick`, `FollowFaceFile`).
+- **T6-8 cola ROS**: nó `person_follower` + `motion_guard` publica targets +
+  wiring `twist_mux_auto`/launch.
+- **T9 GUI** (`12b0881`): botão **🚶 Seguir** + `map_service.follow_start/stop`
+  com **pausa/retoma da rota** (guarda `_wp_current_idx`) + handler `follow` no `app.py`.
+- **T10 cara** (`02ecbbc`): fala **"Irei te seguir"** ao travar e **"não estou te
+  vendo"** ao perder (mp3 gTTS gerados com o `.venv` do controle_web). Botões na
+  própria cara do iPad = **pendência** (ES5+cross-origin, e o dono controla pela GUI).
+
+### Validado no SIM 07-22 (dono dirigindo o boneco de 2 pernas)
+- ✅ **SEGUE de verdade**: trava, dirige atrás, mantém ~1,5m, guard `blocked`
+  quando a pessoa cola (<1,2m) = segurança certa (não empurra).
+- 🐛 **3 bugs achados e CORRIGIDOS na hora** (cada um foi um "não funciona"):
+  1. **Só-movimento piscava** → o alvo sumia quando a pessoa parava → travava e
+     perdia em ~2s. Fix `60fdc2c`: targets viram **`(cx,cy,movendo)`**; o follower
+     **trava só em `movendo`=1** (parede não anda) e **rastreia qualquer um** pelo
+     gate 0,6m (pessoa parada segue sendo alvo). Matou a piscada (seguiu 18s sem cair).
+  2. **"Viu as pernas mas não saiu do lugar"** = **ZONA-MORTA do skid**. O giro
+     nascia fraco (~0,6) e 0,6·(cmd−1,7)<0 → roda não move (medido: wz=0,6→rodas 0;
+     wz=3,0→0,78). Fix `b08b365`: **piso `rot_min`=2,4** (copiou o path_follower).
+  3. **"Nada acontece ao clicar Seguir"** = o clique CHEGAVA (log provou), mas o
+     follower exigia alvo móvel NO INSTANTE do clique. Pedido do dono: **clicar deve
+     ARMAR e ESPERAR** o movimento. Fix `3bd7b1d`: estado **`armed`** (botão vira
+     "🚶 Aguardando…"); trava quando um móvel aparece no cone.
+
+### 🔧 2 pontos que o dono pediu no fim (FEITOS, ⏳ validar no sim amanhã)
+- **Q1 — arcos** (`56ef641`): o follower fazia **arco leve** (andava+girava <20°
+  juntos). Trocado por **POINT-TURN puro** (gira NO LUGAR OU anda RETO, nunca os
+  dois) com histerese `turn_enter 16°`/`turn_exit 4°` — igual nav2/path_follower.
+- **Q2 — travava em obstáculo mapeado sem unstuck** (`e3365bf`): o `unstuck` "só
+  age com goal ativo" e no seguir NÃO há goal nav2 → travava em parede pra sempre.
+  Fix: o unstuck agora trata **`following` = autonomia ativa** (assina
+  `/follow_person_state` + `/follow_person_vel`). O gate `guard_blocked` mantém o
+  unstuck **QUIETO perto de PESSOA** (só age em parede) — exatamente o desejado.
+
+### Knobs afináveis ao vivo (`ros2 param set /person_follower ...`)
+`stop_dist` 1,5 · `vx_max` 0,5 · `rot_min` 2,4 / `rot_max` 4,5 / `rot_k` 3,0 ·
+`turn_enter_deg` 16 / `turn_exit_deg` 4 · `acquire_cone_deg` 60 / `acquire_range`
+3,0 · `assoc_gate` 0,6 · `lost_grace` 2,0 · `lost_timeout` 12.
+
+### ⏳ Pendente (retomar amanhã)
+1. **Validar Q1 (point-turn) e Q2 (unstuck no seguir) no sim** — dono roda, eu leio.
+2. **Botões na cara do iPad** (ligar/desligar pela própria tela) — pendência.
+3. **`person_follower` não grava CSV próprio** — se quiser eu ler o detalhe fino
+   (dist/giro/estado por tick), adicionar `follow.csv` no padrão do motion_guard.csv.
+4. **Deploy na Pi + merge `seguir-pessoa`→`main`** quando validar no real.
+5. Limitações v1 assumidas: sem câmera, se outro corpo cruza colado pode trocar de
+   alvo (por isso o "aproxime-se"); follower reativo NÃO planeja rota (bate na
+   parede entre ele e a pessoa; o unstuck agora tira, mas pode dar thrash).
+
+### Como testar (fluxo do dono: ele roda, eu leio)
+Relança o sim (`./launch.sh --sim --nav2 --world=worlds/sala_grande.sdf
+--map=maps/sala_grande.yaml`) → reinicia o controle_web + **F5 forte** no
+navegador → `bin/teleop-pernas` → clica **🚶 Seguir** (vira "Aguardando") →
+mexe o boneco na frente → trava e segue. **Gotchas do sim:** o `person_follower`
+sobe no launch mas NÃO respawna (se matar, `ros2 run robot_nav person_follower`);
+o bridge do boneco (`/model/pessoa/cmd_vel`) só existe com o `teleop-pernas` no ar;
+o sim às vezes trava (motion_guard.csv congela) → relançar limpo.
 
 ---
 
