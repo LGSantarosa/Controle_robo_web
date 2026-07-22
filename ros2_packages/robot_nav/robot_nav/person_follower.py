@@ -7,7 +7,9 @@ bearing/dist relativo usando a pose. A velocidade de saída é DESEJO — a
 segurança (guard/collision/unstuck/E-stop) é aplicada a JUSANTE no pipeline
 (follow_person_vel -> twist_mux_auto -> motion_guard -> collision_monitor).
 """
+import json
 import math
+import os
 from collections import namedtuple
 from dataclasses import dataclass
 
@@ -161,3 +163,31 @@ class PersonFollower:
 
         # ending
         return 0.0, 0.0
+
+
+class FollowFaceFile:
+    """Estado do seguir pro face_web (iPad). JSON minúsculo em tmpfs, atômico
+    (tmp + os.replace), ≤5Hz p/ o estado periódico; a fala (speak) grava na
+    hora. I/O NUNCA propaga (a cara é decorativa; o follower não cai por ela)."""
+
+    def __init__(self, path: str = '/tmp/person_follow_face.json',
+                 min_period: float = 0.2):
+        self.path = path
+        self.min_period = min_period
+        self.last_error = None
+        self._last_write_t = -math.inf
+
+    def update(self, t, state, speak=None, bearing_deg=None) -> bool:
+        if speak is None and t - self._last_write_t < self.min_period:
+            return False
+        try:
+            tmp = self.path + '.tmp'
+            with open(tmp, 'w') as f:
+                json.dump({'ts': round(t, 3), 'follow_state': state,
+                           'speak': speak, 'cbear_deg': bearing_deg}, f)
+            os.replace(tmp, self.path)
+        except OSError as e:
+            self.last_error = str(e)
+            return False
+        self._last_write_t = t
+        return True

@@ -1,7 +1,9 @@
 """Testes da lógica pura do person_follower (sem ROS)."""
+import json
 import math
 
-from robot_nav.person_follower import FollowConfig, PersonFollower, Target, _rel
+from robot_nav.person_follower import (FollowConfig, FollowFaceFile,
+                                        PersonFollower, Target, _rel)
 
 POSE = (0.0, 0.0, 0.0)   # robô na origem olhando +x (frame odom)
 
@@ -126,3 +128,16 @@ def test_stop_de_following_vai_ending_e_reset_volta_idle():
     pf.start(); pf.tick(0.0, _clusters_at(2.5), POSE)
     pf.stop(); assert pf.state == 'ending'
     pf.reset(); assert pf.state == 'idle' and pf.target is None
+
+
+def test_followfacefile_grava_estado_e_fala(tmp_path):
+    p = str(tmp_path / 'ff.json')
+    ff = FollowFaceFile(path=p, min_period=0.0)
+    assert ff.update(1.0, 'following', speak='start', bearing_deg=12) is True
+    d = json.load(open(p))
+    assert d['follow_state'] == 'following' and d['speak'] == 'start' and d['cbear_deg'] == 12
+
+
+def test_followfacefile_io_error_nao_propaga():
+    ff = FollowFaceFile(path='/proc/nao_pode/x.json', min_period=0.0)
+    assert ff.update(1.0, 'following') is False and ff.last_error is not None
