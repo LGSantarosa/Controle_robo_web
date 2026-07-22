@@ -71,11 +71,15 @@ def test_control_encara_sem_andar_se_desalinhado():
     assert vx == 0.0 and wz > 0.0                     # gira p/ esquerda, não anda
 
 
-def test_control_wz_zero_na_zona_morta_e_cap():
-    pf = _pf(face_deadband_deg=8.0, wz_cap=2.4)
-    assert pf.control(3.0, 5.0)[1] == 0.0             # dentro da zona morta
-    assert pf.control(3.0, 179.0)[1] == 2.4           # satura no cap (esq)
-    assert pf.control(3.0, -179.0)[1] == -2.4         # satura no cap (dir)
+def test_control_wz_piso_e_teto_fura_zona_morta_skid():
+    # skid-steer: giro < ~1.7 não move a roda -> PISO rot_min garante que sempre
+    # que precisa girar, gira de verdade (lição do path_follower validado no real)
+    pf = _pf(face_deadband_deg=8.0, rot_min=2.4, rot_max=4.5, rot_k=3.0)
+    assert pf.control(3.0, 5.0)[1] == 0.0             # zona morta -> não gira
+    # bearing pequeno acima da deadband: 12°=0.21rad*3=0.63 -> sobe pro PISO 2.4
+    assert abs(pf.control(3.0, 12.0)[1] - 2.4) < 1e-6
+    assert pf.control(3.0, 179.0)[1] == 4.5           # grande -> TETO 4.5 (esq)
+    assert pf.control(3.0, -179.0)[1] == -4.5         # TETO (dir)
 
 
 def test_control_anda_alinhado_e_para_em_1_5m():

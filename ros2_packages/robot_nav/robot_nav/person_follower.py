@@ -21,8 +21,11 @@ class FollowConfig:
     stop_dist: float = 1.5
     stop_hyst: float = 0.2
     vx_max: float = 0.4          # 0.25 era lento demais p/ acompanhar (sim 07-22)
-    wz_cap: float = 2.4
-    wz_kp: float = 2.0            # ganho do giro (rad/s por rad de erro), antes do cap
+    # giro do skid-steer: PISO rot_min fura a zona-morta ~1.7 (senão rasteja e
+    # NÃO gira), teto rot_max, ganho P rot_k — mesmos do path_follower validado.
+    rot_k: float = 3.0           # rad/s por rad de erro
+    rot_min: float = 2.4         # rad/s — piso (2.0 = rastejo na zona-morta 1.7)
+    rot_max: float = 4.5         # rad/s — teto
     face_deadband_deg: float = 8.0
     drive_align_deg: float = 20.0
     acquire_cone_deg: float = 60.0
@@ -92,12 +95,13 @@ class PersonFollower:
     def control(self, dist, bearing_deg):
         """(vx, wz) desejados pra encarar e manter stop_dist. vx >= 0 (não recua)."""
         cfg = self.cfg
-        # --- giro: encara o alvo ---
+        # --- giro: encara o alvo (piso rot_min fura a zona-morta do skid) ---
         if abs(bearing_deg) < cfg.face_deadband_deg:
             wz = 0.0
         else:
-            wz = math.radians(bearing_deg) * cfg.wz_kp
-            wz = max(-cfg.wz_cap, min(cfg.wz_cap, wz))
+            mag = cfg.rot_k * abs(math.radians(bearing_deg))
+            mag = min(cfg.rot_max, max(cfg.rot_min, mag))
+            wz = math.copysign(mag, bearing_deg)
         # --- avanço: mantém stop_dist, com histerese p/ não pulsar ---
         if self._driving:
             if dist <= cfg.stop_dist:
@@ -210,7 +214,7 @@ class FollowFaceFile:
 # knobs afináveis ao vivo (mesma disciplina do motion_guard): mutam a MESMA
 # ref de cfg que o tick lê -> `ros2 param set /person_follower <x> <v>` pega
 # no tick seguinte. Exceção: lost_grace/lost_timeout também são lidos ao vivo.
-_CFG_PARAMS = ('stop_dist', 'stop_hyst', 'vx_max', 'wz_cap', 'wz_kp',
+_CFG_PARAMS = ('stop_dist', 'stop_hyst', 'vx_max', 'rot_k', 'rot_min', 'rot_max',
                'face_deadband_deg', 'drive_align_deg', 'acquire_cone_deg',
                'acquire_range', 'assoc_gate', 'lost_grace', 'lost_timeout')
 
