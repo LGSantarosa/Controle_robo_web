@@ -50,6 +50,11 @@ class PersonFollower:
         self.state = 'idle'
         self.target = None
         self._driving = False
+        self._start_req = False
+        self.just_spoke = None      # 'start'|'lost'|None — evento de fala (consumido pelo nó)
+        self.no_target = False      # start pedido mas ninguém no cone
+        self._last_seen = 0.0
+        self._lost_since = 0.0
 
     def acquire(self, clusters, pose):
         """Trava o cluster mais PRÓXIMO dentro do alcance e do cone frontal."""
@@ -97,3 +102,62 @@ class PersonFollower:
         else:
             vx = 0.0
         return vx, wz
+
+    # --- máquina de estados ---
+    def start(self):
+        self._start_req = True
+        self.no_target = False
+
+    def stop(self):
+        if self.state in ('following', 'lost'):
+            self.state = 'ending'
+
+    def reset(self):
+        self.state = 'idle'
+        self.target = None
+        self._start_req = False
+        self._driving = False
+        self.just_spoke = None
+        self.no_target = False
+
+    def tick(self, t, clusters, pose):
+        """Avança a máquina UMA vez com o relógio `t` (s, travado na fonte).
+        Retorna (vx, wz) — não-zero só em following com alvo casado."""
+        if self.state == 'idle':
+            if self._start_req:
+                self._start_req = False
+                tgt = self.acquire(clusters, pose)
+                if tgt is not None:
+                    self.target = tgt
+                    self.state = 'following'
+                    self.just_spoke = 'start'
+                    self._last_seen = t
+                else:
+                    self.no_target = True
+            return 0.0, 0.0
+
+        if self.state == 'following':
+            m = self.associate(clusters)
+            if m is not None:
+                self._last_seen = t
+                dist, bearing = _rel(m.cx, m.cy, pose)
+                return self.control(dist, bearing)
+            if t - self._last_seen > self.cfg.lost_grace:
+                self.state = 'lost'
+                self._lost_since = t
+                self.just_spoke = 'lost'
+            return 0.0, 0.0
+
+        if self.state == 'lost':
+            m = self.associate(clusters)
+            if m is not None:
+                self.state = 'following'
+                self._last_seen = t
+                dist, bearing = _rel(m.cx, m.cy, pose)
+                return self.control(dist, bearing)
+            if t - self._lost_since > self.cfg.lost_timeout:
+                self.state = 'ending'
+            return 0.0, 0.0
+
+        # ending
+        return 0.0, 0.0

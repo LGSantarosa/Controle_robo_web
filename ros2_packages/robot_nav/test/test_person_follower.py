@@ -74,3 +74,55 @@ def test_control_histerese_nao_pulsa_em_1_5m():
     pf._driving = False
     assert pf.control(1.6, 0.0)[0] == 0.0             # dentro de stop+hyst, parado segue parado
     assert pf.control(1.8, 0.0)[0] > 0.0              # acima de stop+hyst -> anda
+
+
+def _clusters_at(dist, bearing_deg=0.0, pose=POSE):
+    """cluster odom a (dist, bearing) do robô em `pose`."""
+    rx, ry, ryaw = pose
+    a = ryaw + math.radians(bearing_deg)
+    return [(rx + dist * math.cos(a), ry + dist * math.sin(a))]
+
+
+def test_tick_start_trava_e_fala():
+    pf = _pf()
+    pf.start()
+    pf.tick(0.0, _clusters_at(2.5), POSE)
+    assert pf.state == 'following' and pf.just_spoke == 'start' and pf.target is not None
+
+
+def test_tick_start_sem_ninguem_fica_idle():
+    pf = _pf()
+    pf.start()
+    pf.tick(0.0, [], POSE)
+    assert pf.state == 'idle' and pf.no_target is True
+
+
+def test_tick_perde_alvo_vira_lost_e_fala():
+    pf = _pf(lost_grace=1.0)
+    pf.start(); pf.tick(0.0, _clusters_at(2.5), POSE)
+    pf.tick(0.5, [], POSE)                      # sumiu, mas dentro do grace
+    assert pf.state == 'following'
+    pf.tick(1.6, [], POSE)                      # >lost_grace sem match
+    assert pf.state == 'lost' and pf.just_spoke == 'lost'
+
+
+def test_tick_lost_reaparece_volta_following():
+    pf = _pf(lost_grace=1.0)
+    pf.start(); pf.tick(0.0, _clusters_at(2.5), POSE); pf.tick(1.6, [], POSE)
+    assert pf.state == 'lost'
+    pf.tick(2.0, _clusters_at(2.4), POSE)       # reaparece perto do último
+    assert pf.state == 'following'
+
+
+def test_tick_lost_timeout_vira_ending():
+    pf = _pf(lost_grace=1.0, lost_timeout=12.0)
+    pf.start(); pf.tick(0.0, _clusters_at(2.5), POSE); pf.tick(1.6, [], POSE)
+    pf.tick(1.6 + 12.1, [], POSE)
+    assert pf.state == 'ending'
+
+
+def test_stop_de_following_vai_ending_e_reset_volta_idle():
+    pf = _pf()
+    pf.start(); pf.tick(0.0, _clusters_at(2.5), POSE)
+    pf.stop(); assert pf.state == 'ending'
+    pf.reset(); assert pf.state == 'idle' and pf.target is None
