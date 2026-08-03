@@ -4,6 +4,13 @@ Interface web para controlar um robô **skid-steer de 4 rodas** com duas placas 
 
 > **Estado do hardware (2026-07-01):** o optical flow **PMW3901 foi removido** do robô (level shifter marginal, deu problema demais) — hoje o robô navega **só com LiDAR + rodas + IMU**. A IMU voltou a ser um **MPU6050** (o "MPU9250"/MPU6500 foi devolvido). As seções abaixo que citam o PMW3901 estão marcadas como **inativas hoje** (o código/fusão do flow continua no repo, caso o sensor volte). Ver `ESTADO_PROJETO.md` para o histórico.
 
+> **Cobertura deste README (revisado 2026-08-03):** o caminho de **instalação** (pré-requisitos → `setup_pi.sh` → `setup_udev.sh` → `launch.sh`) está conferido e vale. O que ele **não** cobre, porque vive fora da `main`:
+>
+> - **Seguir pessoa** (`person_follower`, tap-to-track no LiDAR) → branch `seguir-pessoa`
+> - **motion_guard vigília-por-movimento** + faxina de órfãos do `launch.sh` + "com licença" da cara → branch `motion-guard-release-corredor`
+>
+> Um `git clone` puro traz a `main`, que **não tem** nenhum dos dois. Decida o que vai pra máquina antes de clonar. O estado vivo do projeto (BOs abertos, o que está deployado na Pi) fica no **`ESTADO_PROJETO.md`**, não aqui — este README descreve como montar e rodar, não o que está quebrado hoje.
+
 ## Sumário
 
 - [Guia rápido — do zero ao click-to-go](#guia-rápido--do-zero-ao-click-to-go)
@@ -17,6 +24,8 @@ Interface web para controlar um robô **skid-steer de 4 rodas** com duas placas 
   - [3. Firmware da Arduino MEGA](#3-firmware-da-arduino-mega)
   - [4. Dependências Python](#4-dependências-python)
   - [5. Raspberry Pi — setup enxuto](#5-raspberry-pi--setup-enxuto)
+  - [6. Cara do robô (face_web) — processo SEPARADO](#6-cara-do-robô-face_web--processo-separado)
+  - [7. Câmera POV (opcional)](#7-câmera-pov-opcional--cuidado-com-o-espaço-em-disco)
 - [Como rodar](#como-rodar)
   - [Modo TELEOP (padrão)](#modo-teleop-padrão)
   - [Modo SLAM — mapear a sala](#modo-slam--mapear-a-sala)
@@ -56,6 +65,8 @@ ros2 --help   # deve listar os comandos
 ```bash
 git clone <url-do-repo> ~/Workspace/Controle_robo_web
 ```
+
+> **Atenção ao caminho, ele difere entre as máquinas:** no **PC dev** o repo mora em `~/Workspace` (W maiúsculo) — é o caminho usado nos exemplos deste README. Na **Raspberry Pi** ele mora em `~/workspace` (**w minúsculo**), e é isso que o `face_web/face_web.service` espera. Os scripts (`setup.sh`, `setup_pi.sh`, `launch.sh`) descobrem o próprio caminho com `pwd` e funcionam nos dois; só os comandos deste README com caminho absoluto é que precisam do ajuste. Clonando numa Pi nova, use minúsculo pra ficar igual à Pi atual.
 
 ### 3. Rodar o setup automatizado
 
@@ -486,6 +497,34 @@ sudo ./setup_udev.sh           # depois — fixa /dev/mega e /dev/lidar
 ```
 
 O `launch.sh` **detecta arm64 automaticamente** e passa `--pi`, que troca o tuning do Nav2 por `nav2_params_pi.yaml` (perfil leve — AMCL com 200–800 partículas, `ObstacleLayer` no lugar do `VoxelLayer`, menos amostras DWB). Force o perfil de notebook com `--no-pi` se precisar comparar.
+
+### 6. Cara do robô (`face_web`) — processo SEPARADO
+
+A cara que aparece no iPad pendurado no tripé **não sobe com o `launch.sh`**. É um servidor Flask próprio, na **porta 7000**, que não toca em ROS — assim ela fica de pé mesmo com a stack de navegação parada.
+
+```bash
+python3 face_web/face_app.py        # roda na mão, escuta em 0.0.0.0:7000
+```
+
+Na Pi ela roda como **serviço systemd de usuário** (`face_web/face_web.service`, que usa o venv do `controle_web`). Instalação, uma vez só:
+
+```bash
+mkdir -p ~/.config/systemd/user
+ln -sf ~/workspace/Controle_robo_web/face_web/face_web.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now face_web
+loginctl enable-linger robo          # sobe no boot sem precisar de login
+```
+
+> **No deploy, lembre de reiniciar a cara** — `systemctl --user restart face_web`. Como ela é um processo separado, um `git pull` + relaunch da navegação **não** atualiza a cara, e você fica rodando a versão velha sem perceber. No iPad, recarregue a página; o som só destrava depois do primeiro toque na tela.
+
+### 7. Câmera POV (opcional) — cuidado com o espaço em disco
+
+O `controle_web/camera_service.py` grava o ponto de vista do robô durante a navegação (`CameraService`, iniciado pelo `app.py`; se a câmera não abrir, o app segue sem POV). Ver ao vivo em `http://<ip>:5000/camera`; os arquivos vão pra `controle_web/logs/pov/`.
+
+Ela grava um `.mjpeg` cru e, ao fechar, faz um remux em background pra `.mkv` e **apaga o cru**. Se você encontrar o par `.mjpeg` + `.mkv` do mesmo horário, o remux daquela run falhou.
+
+> **Uma run de POV custa ~1,3 GB.** Em cartão pequeno isso enche o SD em poucas runs e derruba tudo. Se o `/` tem menos de ~5 GB livres, faça faxina de `controle_web/logs/pov/` como rotina — ou deixe a câmera desconectada.
 
 ---
 
