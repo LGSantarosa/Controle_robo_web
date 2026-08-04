@@ -1,123 +1,212 @@
-# HANDOFF — montar um SD de 16 GB para a Raspberry Pi do robô 1
+# HANDOFF — instalar o projeto do ZERO num SD de 16 GB (Raspberry Pi do robô 1)
 
 **Data:** 2026-08-04
-**Para:** o Claude que estiver rodando no **outro PC**, com o cartão de 16 GB plugado lá.
-**Status:** tarefa **não começada**. Este arquivo é o briefing.
+**Para:** o Claude que estiver no **outro PC**, com o cartão de 16 GB.
+**Status:** não começado.
 
 ---
 
-## O que o dono quer
+## O que o dono quer (escopo, exatamente isso)
 
-O robô 1 **perdeu o SD card**. Ele quer deixar um **microSD de 16 GB** funcionando na Raspberry Pi
-exatamente como o robô era antes: Ubuntu 24.04 arm64 + ROS 2 **Jazzy** + este repositório
-(`Controle_robo_web`) + os mapas + o `launch.sh` subindo tudo.
+> "Quero criar um novo SD card, só que com 16 GB, fazer todos os passos de instalação nele até rodar
+> o projeto. Só isso."
 
-O cartão de 16 GB **estará no outro PC** — não neste. Por isso este briefing está no repo (git), e não
-na memória local do Claude do PC de desenvolvimento.
+Ou seja: **instalação limpa**, do zero, seguindo os passos do `README.md` deste repo, até o
+`./launch.sh` subir. O robô 1 perdeu o SD antigo — este é o substituto.
 
----
-
-## ⚠️ O obstáculo #1 — leia antes de propor qualquer coisa
-
-Existe um **backup bit-a-bit** do SD antigo, feito em **2026-07-24**, mas ele mora **só no PC de
-desenvolvimento do Luiz** (usuário `rbe-luis`), em:
-
-```
-/home/rbe-luis/backups/pi_robo/pi_robo_2026-07-24.img       ~29,7 GiB (31.902.400.512 bytes, dono root)
-/home/rbe-luis/backups/pi_robo/pi_robo_2026-07-24.img.zst   ~14 GB (comprimido)
-```
-
-Duas consequências:
-
-1. **A imagem não cabe num cartão de 16 GB por `dd` direto.** São ~29,7 GiB de imagem
-   (partições: FAT32 512 M + ext4 29,2 G). Tem que **encolher antes**.
-2. **A imagem não está no PC onde o cartão vai estar.** Ou se transfere o `.zst` de ~14 GB (pendrive/rede),
-   ou se escolhe um caminho que não precisa dela.
+**NÃO é restaurar backup.** Existe uma imagem do SD antigo (2026-07-24, ~29,7 GiB) no PC de
+desenvolvimento do Luiz, mas (a) ela não cabe num cartão de 16 GB sem encolher e (b) não é o que ele
+pediu. Ela serve só como **consulta**, se faltar algum arquivo de configuração no fim — ver o
+apêndice.
 
 ---
 
-## Os três caminhos possíveis
+## Antes de começar — 2 perguntas para o dono
 
-### A) Encolher a imagem e gravar (preserva TUDO — recomendado se o "usado" couber)
+1. **Qual Ubuntu?** A Pi rodava **Ubuntu 24.04 arm64 + ROS 2 Jazzy**. Num cartão de 16 GB o
+   **Server** é o recomendado (o Desktop come ~6 GB só de sistema, e a operação é headless por SSH
+   de qualquer jeito). Confirmar antes de gravar.
+2. **Qual branch vai pra Pi?** A `main` não tem tudo: em 2026-08-04 existem `seguir-pessoa`
+   (seguir pessoa v2) e `motion-guard-release-corredor` (vigília-por-movimento + faxina do launch)
+   com trabalho validado e não mergeado.
 
-Preserva usuário `robo`, serviços, workspace `colcon` já compilado, udev, rede/hotspot, calibrações —
-inclusive coisas que ninguém documentou.
+E o aviso honesto: **16 GB é apertado, mas cabe.** Contas na seção "Espaço" no fim — a folga some se
+a Pi ficar gravando log e vídeo POV.
 
-Primeiro passo, barato, **antes de mover 14 GB de arquivo**: medir quanto está **realmente ocupado**
-dentro da imagem (rodar no PC que tem o `.img`):
+---
+
+## Passo 0 — Gravar o sistema no cartão
+
+Raspberry Pi Imager, **Ubuntu Server 24.04 LTS (64-bit)**. Na engrenagem de configuração, **antes**
+de gravar, já deixar pronto (evita precisar de monitor/teclado):
+
+- **hostname:** `robo-desktop` — é o que o resto do projeto assume (`ssh robo@robo-desktop.local`);
+- **usuário:** `robo` (mesmo nome de antes, os caminhos e o serviço do `face_web` contam com ele);
+- **SSH habilitado** com senha ou a chave pública do PC;
+- **WiFi** da casa/hotspot configurado.
+
+Boota a Pi, e do outro PC:
 
 ```bash
-LOOP=$(sudo losetup --find --show --read-only --offset $((1050624*512)) \
-       /home/rbe-luis/backups/pi_robo/pi_robo_2026-07-24.img)
-sudo dumpe2fs -h "$LOOP" | grep -Ei 'block count|free blocks|block size'
-sudo losetup -d "$LOOP"
+ssh robo@robo-desktop.local          # se não resolver, procurar o IP no roteador
+sudo apt update && sudo apt full-upgrade -y && sudo reboot
 ```
 
-Usado = (Block count − Free blocks) × Block size. Se der abaixo de ~13 GB, cabe folgado num 16 GB
-(descontando os 512 M de boot e a margem do resize2fs).
+> Se não conectar: quase sempre é bateria do robô desligada **ou** o PC noutro WiFi. Não é crash.
 
-Depois: `PiShrink` ou na mão — `e2fsck -f` → `resize2fs` para o mínimo → reduzir a partição
-(`parted`/`sfdisk`) → truncar o `.img` → `dd` no cartão. Um `dd` bruto leva tabela de partição,
-bootloader e PARTUUID, então boota direto na Pi.
+## Passo 1 — ROS 2 Jazzy
 
-### B) Instalação limpa (plano B, bem suportado pelo repo)
-
-Se o "usado" não couber em 16 GB, instalar do zero. O `README.md` deste repo tem o caminho conferido:
-
-- ROS 2 Jazzy em Ubuntu 24.04 arm64 (README §1 "Instalar o ROS2 Jazzy");
-- `./setup_pi.sh` (README §5 "Raspberry Pi — setup enxuto") — pula Gazebo, instala Nav2 +
-  slam_toolbox, clona `wheel_msgs` e o driver do LiDAR com o patch de `pthread.h`, builda com
-  `--parallel-workers 2` pra não estourar a RAM;
-- `sudo ./setup_udev.sh` — fixa `/dev/mega` e `/dev/lidar` (**obrigatório**);
-- os **mapas vêm no próprio repo** (`maps/` — `sala` é o golden, mais o `hotmilk`), então não se perdem;
-- o firmware da MEGA também está no repo (`firmware/`), flasheável por USB.
-
-O que a instalação limpa **não** traz de graça e precisa ser refeito/copiado de dentro da imagem
-montada: configuração de rede (hotspot + IP fixo), hostname `robo-desktop.local`, usuário `robo`,
-qualquer serviço systemd, e o `face_web` (que roda como processo **separado** do `launch.sh`).
-
-### C) Gravar o cartão no PC do backup
-
-Se for possível levar o cartão + leitor USB até o PC de desenvolvimento, esse é o caminho de menor
-atrito: a imagem já está lá, e foi assim (cartão FORA da Pi, em leitor USB) que o backup foi feito.
-Vale perguntar ao dono antes de organizar transferência de 14 GB.
-
-**Recomendação:** medir o "usado" primeiro (comando acima) → se couber, caminho **A** (ou **C**, se o
-cartão puder vir até a imagem). Só cair no **B** se não couber.
-
----
-
-## Detalhes que vão morder
-
-- **Cartão "16 GB" tem menos de 16 GB reais**, e varia por marca. Conferir com `lsblk -b` **antes** de
-  dimensionar o `resize2fs`.
-- **Quem roda comando com `sudo` é o dono**, não o Claude: `sudo` aqui exige senha em terminal.
-  O fluxo de trabalho combinado é: eu preparo o script/comandos → ele executa → me manda a saída.
-  Nada de "roda aí e me diz o que apareceu" no meio de uma gravação de cartão; script pronto,
-  com `status=progress`, e checagem do device (`lsblk`) **antes** de qualquer `of=/dev/sdX`.
-- **Conferir o device de destino duas vezes.** `dd` no disco errado apaga o PC.
-- **Caminho do repo na Pi é `~/workspace/Controle_robo_web`** (w minúsculo), diferente do
-  `~/Workspace/...` que aparece no README (esse é o do PC dev).
-- **Deploy na Pi nunca é `scp`**: edita no dev → commit → push → na Pi `git fetch && git reset --hard
-  origin/main` + `colcon build`.
-- ⚠️ **Nem tudo está na `main`.** Em 2026-08-04 existem branches com trabalho validado mas não
-  mergeado: `seguir-pessoa` (seguir pessoa v2 goal-based) e `motion-guard-release-corredor`
-  (vigília-por-movimento + faxina do launch). Se o cartão for montado do zero e for rodar no robô,
-  perguntar ao dono qual branch ele quer na Pi.
-- Bootar de microSD é o modo suportado, mas o `setup_pi.sh` avisa que **SSD USB3 é o recomendado** —
-  e com 16 GB o espaço vai ficar curto pra logs/gravações. Vale avisar o dono.
-
----
-
-## Estado de referência (o que "funcionando" significa)
-
-Depois de bootar, o mínimo que precisa estar de pé:
+Guia oficial (~10 min, arm64 tem pacote deb):
+<https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html>
 
 ```bash
-ssh robo@robo-desktop.local          # se não conectar: bateria do robô OU PC em WiFi diferente
+source /opt/ros/jazzy/setup.bash
+echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+ros2 --help          # tem que listar os comandos
+```
+
+## Passo 2 — Clonar o repo
+
+Na Pi o caminho é **`~/workspace/`** (w **minúsculo**) — diferente do `~/Workspace/` do PC dev:
+
+```bash
+git clone git@github.com:LGSantarosa/Controle_robo_web.git ~/workspace/Controle_robo_web
 cd ~/workspace/Controle_robo_web
-./launch.sh --nav2                   # detecta arm64 e usa nav2_params_pi.yaml
+git checkout <branch combinada com o dono>
 ```
 
-E `/dev/mega` + `/dev/lidar` existindo (udev), MEGA flasheada, `maps/sala.*` presentes.
-O `face_web` (cara no iPad) sobe **separado** — lembrar de reiniciar ele no deploy.
+O clone é pequeno (~3 MB de objetos, 334 arquivos): os 1,5 GB que aparecem no PC dev são `log/`,
+`build/`, `install/` e os `.mkv` de POV — todos no `.gitignore`. **Os mapas vêm no repo**
+(`maps/sala.*`, o golden `mapa_golden_2026-06-10.*`, `hotmilk*`), então não se perdem.
+
+Se preferir HTTPS (sem chave SSH configurada na Pi):
+`https://github.com/LGSantarosa/Controle_robo_web.git`.
+
+## Passo 3 — `./setup_pi.sh` (o passo longo)
+
+```bash
+cd ~/workspace/Controle_robo_web
+./setup_pi.sh
+```
+
+É a versão enxuta do setup, feita pra Pi. O que ele faz (ler `setup_pi.sh`, é comentado):
+
+- **apt:** `git`, `python3-venv/pip/serial`, `python3-colcon-common-extensions`, `xacro`,
+  `robot-state-publisher`, `tf2-ros`, `tf2-tools`, `slam-toolbox`, `nav2-bringup`, `nav2-costmap-2d`,
+  `nav2-core`, `nav2-util`, `nav2-map-server`, `nav2-amcl`, `dwb-critics`, `nav-2d-utils`, `joy`,
+  `teleop-twist-joy`, `teleop-twist-keyboard`, `twist-mux`. **Não** instala `ros-gz*` (Pi não roda
+  Gazebo). Nav2 + slam_toolbox são obrigatórios até pra buildar (`costmap_converter` e
+  `teb_local_planner` dependem de `nav2_costmap_2d` em tempo de build).
+- **`scripts/setup_headless.sh`:** `openssh-server`, `avahi-daemon` (mDNS `<hostname>.local`),
+  `libnss-mdns`, `tmux`, `bluez`, `rfkill`, `joystick`, e os atalhos `robot-up`/`robot-connect`/
+  `robot-pair-ps4` no PATH.
+- **Clona o driver do LiDAR** `ldlidar_stl_ros2` em `ros2_packages/` e aplica o patch
+  `#include <pthread.h>` no `log_module.cpp` — **sem esse patch o build quebra no ARM**.
+- **`colcon build`** com `--executor sequential --parallel-workers` ajustado à RAM e `MAKEFLAGS=-j`
+  igual — sem isso a Pi 4 de 4 GB estoura RAM e trava.
+- `pip install --user platformio` (pro firmware) e `usermod -aG dialout,input`.
+
+**Expectativas honestas:** o próprio script avisa que rodar de microSD deixa o `colcon build` em
+**20+ min** e que abaixo de ~1,5 GB de RAM livre ele pode morrer de OOM. Se cair OOM, criar swap
+(`sudo fallocate -l 2G /swapfile` → `chmod 600` → `mkswap` → `swapon`) e rodar de novo — **mas isso
+come 2 GB dos 16**; melhor apagar o swapfile depois do build.
+
+Depois de `usermod`, **deslogar e logar de novo** (ou `newgrp dialout`) pra valer o grupo.
+
+## Passo 4 — Fixar as portas USB (obrigatório no hardware real)
+
+```bash
+sudo ~/workspace/Controle_robo_web/setup_udev.sh
+ls -l /dev/mega /dev/lidar     # têm que existir com a MEGA e o LiDAR plugados
+```
+
+## Passo 5 — Firmware da Arduino MEGA
+
+Só se a MEGA ainda não estiver flasheada com a versão atual do repo (o firmware fica na MEGA, não no
+SD — provavelmente já está certo, mas conferir vale):
+
+```bash
+cd ~/workspace/Controle_robo_web/firmware/mega_bridge
+pio run -t upload                       # se 'pio' não achar: export PATH="$HOME/.local/bin:$PATH"
+python3 tools/test_mega.py --front-only  # testa o protocolo 0xAA 0x55 e o feedback STATE
+```
+
+## Passo 6 — Subir o projeto
+
+O venv Python do servidor web (`flask`, `flask-socketio`, `simple-websocket`, `pyyaml`, `numpy`,
+`Pillow`) é criado **automaticamente** pelo `launch.sh`, com cache por hash do `requirements.txt`.
+
+```bash
+cd ~/workspace/Controle_robo_web
+./launch.sh --trekking      # ou --slam / --nav2
+```
+
+O `launch.sh` **detecta arm64 sozinho** e usa o perfil leve `nav2_params_pi.yaml` (AMCL 200–800
+partículas, `ObstacleLayer` no lugar do `VoxelLayer`, menos amostras DWB). Depois abrir
+`http://robo-desktop.local:5000` (ou o IP) no navegador.
+
+A **cara do iPad** (`face_web/face_app.py`) roda como processo **separado** do `launch.sh` — tem um
+`face_web/face_web.service` no repo pra instalar como systemd, se o dono quiser igual antes.
+
+---
+
+## Como saber que acabou (critério de pronto)
+
+1. `ssh robo@robo-desktop.local` funciona por mDNS;
+2. `ros2 --help` e `ros2 topic list` respondem;
+3. `/dev/mega` e `/dev/lidar` existem;
+4. `./launch.sh --nav2` sobe sem erro e a UI abre em `:5000`;
+5. o mapa (`maps/sala.yaml` ou `hotmilk`) carrega na UI e o LiDAR aparece;
+6. teleop move as rodas de verdade.
+
+Reportar cada item com a saída real do comando — nada de "deve estar funcionando".
+
+---
+
+## Espaço em 16 GB — a conta
+
+Cartão "16 GB" costuma ter ~14,8 GiB reais (e **varia por marca** — conferir com `lsblk -b` antes de
+prometer qualquer coisa). Estimativa de ocupação:
+
+| Item | Aprox. |
+|---|---|
+| Ubuntu Server 24.04 arm64 (após upgrade) | 3–4 GB |
+| ROS 2 Jazzy + Nav2 + slam_toolbox | 3–4 GB |
+| `build/` + `install/` do colcon | ~1 GB |
+| Repo + venv Python | ~0,3 GB |
+| **Total** | **~8–9 GB** |
+
+Sobra folga, mas ela evapora com: `log/` (no PC dev está com **860 MB** de CSVs) e as gravações
+**POV** (`.mkv` de 300–375 MB cada). Recomendação pro dono: **não gravar vídeo POV na Pi com esse
+cartão**, e limpar `log/` periodicamente. Se for Ubuntu **Desktop** em vez de Server, somar ~4 GB e
+a coisa fica realmente apertada.
+
+---
+
+## Regras da casa (valem durante toda a tarefa)
+
+- **Quem roda comando é o dono**, principalmente `sudo` (pede senha em terminal) e qualquer coisa que
+  toque em `/dev/sdX`. O Claude prepara o comando/script pronto; ele executa e manda a saída.
+- **Antes de qualquer `dd`/gravação, conferir o device duas vezes** (`lsblk`): device errado apaga o PC.
+- **Uma mudança por vez**, e avisar quando a Pi/robô precisa estar **ligado** (flash, udev, teste) vs
+  **desligado** (só instalar/compilar).
+- **Deploy depois do setup nunca é `scp`:** edita no PC dev → commit → push → na Pi
+  `git fetch && git reset --hard origin/<branch>` + `colcon build`.
+
+---
+
+## Apêndice — a imagem de backup (só consulta)
+
+`/home/rbe-luis/backups/pi_robo/pi_robo_2026-07-24.img` (~29,7 GiB) e `.img.zst` (~14 GB), **só no PC
+de desenvolvimento do Luiz**. Se no fim faltar alguma config que não está no repo — rede/hotspot com
+IP fixo, unidades systemd, ajuste de sistema não documentado — dá pra montar a imagem **read-only**
+lá e pescar o arquivo:
+
+```bash
+LOOP=$(sudo losetup --find --show --read-only --offset $((1050624*512)) <img>)
+sudo mount -o ro "$LOOP" /mnt   # ...copiar o que faltou...
+sudo umount /mnt && sudo losetup -d "$LOOP"
+```
+
+Gravar a imagem inteira no cartão de 16 GB **não é opção** sem encolher antes (`e2fsck -f` →
+`resize2fs` → reduzir partição → truncar), e não é o que o dono pediu.
