@@ -12,6 +12,9 @@ Para quem nunca mexeu no sistema. Assume que o robô **já está instalado e con
 3. Espere **~1 minuto** — a Pi boota e entra sozinha no WiFi. Não precisa de monitor
    nem teclado nela.
 
+> Vai usar o robô **noutro lugar**, fora do WiFi de sempre? A rede tem que estar
+> cadastrada na Pi **antes** de sair — veja **[6. WiFi](#6-wifi--as-redes-que-a-pi-tenta-no-boot)**.
+
 ## 2. Conectar do seu PC
 
 No terminal do **seu PC** (na mesma rede WiFi do robô):
@@ -26,8 +29,9 @@ Sem argumento = modo **teleop** (dirigir na mão, sem mapa).
 Outros modos:
 
 ```bash
-robot-connect slam                        # mapear a sala
-robot-connect nav2 --map=maps/sala.yaml   # navegação autônoma (click-to-go)
+robot-connect slam                          # mapear a sala
+robot-connect nav2                          # navegação autônoma (click-to-go)
+robot-connect nav2 --map=maps/sala.yaml     # ...com outro mapa
 ```
 
 Deu certo quando o terminal para de rolar log e fica vivo mostrando os nós.
@@ -72,6 +76,102 @@ subir com `--web-teleop`.
 | Voltar para a sessão que ficou rodando | `robot-connect` de novo (reanexa) |
 | **Parar tudo** | `Ctrl+C` dentro da sessão |
 | Desligar a Pi direito | `ssh robo@robo-desktop.local "sudo poweroff"`, espere 20 s, corte a energia |
+
+## 6. WiFi — as redes que a Pi tenta no boot
+
+A Pi roda **Ubuntu 24.04 com NetworkManager**. No boot ela tenta **todas as redes
+salvas**, sozinha: a que estiver ao alcance, ela entra. Não existe "rede principal"
+que precise ser ligada primeiro — se duas estiverem ao alcance, ganha a de
+**prioridade maior**.
+
+Ou seja: **para levar o robô pra outro lugar, basta cadastrar a rede de lá antes de
+sair.** Se não cadastrar, a Pi boota sem rede e não tem como acessá-la sem monitor
+e teclado.
+
+### Redes já cadastradas
+
+| Rede (SSID) | Prioridade | Observação |
+|-------------|-----------:|------------|
+| `Trafico de banana` | 100 | hotspot/rede do Luiz — ganha de todas quando está no ar |
+| `Edu Criativa ` | 0 | IP **fixo** (`ipv4.method manual`) — ⚠️ ver avisos abaixo |
+| `netplan-eth0` | — | cabo de rede, se alguém plugar |
+
+Conferir a lista a qualquer momento, na Pi:
+
+```bash
+nmcli -f NAME,TYPE,AUTOCONNECT,AUTOCONNECT-PRIORITY connection show
+nmcli -t -f NAME,DEVICE connection show --active   # em qual ela está agora
+```
+
+### Cadastrar uma rede nova (o caso das outras pessoas)
+
+Faça isso **com a Pi ainda acessível** (SSH aqui, ou monitor + teclado nela). Não
+precisa estar ao alcance da rede nova — dá pra cadastrar "no escuro":
+
+```bash
+ssh robo@robo-desktop.local
+
+sudo nmcli connection add type wifi ifname wlan0 \
+  con-name "NOME_DA_REDE" ssid "NOME_DA_REDE" \
+  wifi-sec.key-mgmt wpa-psk wifi-sec.psk "SENHA_DA_REDE" \
+  connection.autoconnect yes \
+  connection.autoconnect-priority 50 \
+  ipv4.method auto
+```
+
+Troque `NOME_DA_REDE` e `SENHA_DA_REDE`. O SSID tem que ser **idêntico** ao da rede
+(maiúsculas, acentos e espaços contam).
+
+Variações:
+
+```bash
+# Rede oculta (não aparece na lista de redes):
+sudo nmcli connection modify "NOME_DA_REDE" 802-11-wireless.hidden yes
+
+# Rede ao alcance agora, jeito curto:
+sudo nmcli device wifi connect "NOME_DA_REDE" password "SENHA"
+
+# Mudar prioridade / apagar:
+sudo nmcli connection modify "NOME_DA_REDE" connection.autoconnect-priority 60
+sudo nmcli connection delete "NOME_DA_REDE"
+```
+
+**Prioridade — como escolher:** número maior ganha quando mais de uma rede está ao
+alcance. Redes de outros lugares podem ficar em `50` sem problema: elas só perdem
+para o `Trafico de banana` (100), que não existe lá longe mesmo.
+
+### Rede de resgate (recomendado)
+
+Cadastre também o **hotspot do celular** de quem vai levar o robô, com prioridade
+baixa (ex.: `10`). Se a rede do local falhar, essa pessoa liga o hotspot do celular
+e a Pi entra nele sozinha — sem isso, robô sem rede = precisa de monitor e teclado.
+
+### Avisos
+
+- 🔑 **Não coloque as senhas neste arquivo.** Ele vai pro GitHub. A senha entra no
+  comando `nmcli`, uma vez, direto na Pi.
+- ⚠️ **`Edu Criativa ` tem um espaço no fim do SSID.** Se o nome real da rede for
+  `Edu Criativa` (sem espaço), esse perfil **nunca vai conectar**. Confira no local
+  e, se for o caso, corrija:
+  ```bash
+  sudo nmcli connection modify "Edu Criativa " 802-11-wireless.ssid "Edu Criativa"
+  sudo nmcli connection modify "Edu Criativa " connection.id "Edu Criativa"
+  ```
+- ⚠️ Esse mesmo perfil usa **IP fixo**. IP fixo só funciona se o roteador de lá
+  usar exatamente aquela faixa. Em rede desconhecida, prefira
+  `sudo nmcli connection modify "<rede>" ipv4.method auto`.
+- Cadastrou e quer testar antes de viajar? Ligue o hotspot com o mesmo nome e senha
+  da rede de destino e reinicie a Pi — se ela entrar, o perfil está certo.
+
+### Achar o robô na rede nova
+
+`robo-desktop.local` funciona em qualquer rede (mDNS). Se não resolver:
+
+```bash
+ROBOT_HOST=<ip-do-robô> robot-connect      # IP no painel do roteador do local
+```
+
+E lembre: quem for falar ROS com o robô precisa de `export ROS_DOMAIN_ID=42`.
 
 ---
 
