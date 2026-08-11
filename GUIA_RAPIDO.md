@@ -93,7 +93,8 @@ e teclado.
 | Rede (SSID) | Prioridade | Observação |
 |-------------|-----------:|------------|
 | `Trafico de banana` | 100 | hotspot/rede do Luiz — ganha de todas quando está no ar |
-| `Padmé` | 50 | DHCP, WPA2 — cadastrada em 2026-08-11, **ainda não testada no local** |
+| `Padm3` | 50 | DHCP, WPA2 — cadastrada em 2026-08-11, **ainda não testada no local** |
+| `isa` | 50 | DHCP, WPA2 — cadastrada em 2026-08-11, **ainda não testada no local** |
 | `Edu Criativa ` | 0 | IP **fixo** (`ipv4.method manual`) — ⚠️ ver avisos abaixo |
 | `netplan-eth0` | — | cabo de rede, se alguém plugar |
 
