@@ -1,0 +1,33 @@
+# Mapa do controle Xbox Series X|S → teleop_twist_joy.
+# Irmão do teleop_ps4.yaml; os SCALES são idênticos (mesmo chassi), só os
+# números de botão mudam.
+#
+# Medido em 2026-08-11 na Pi, via ioctl JSIOCGBTNMAP em /dev/input/js0 com o
+# controle conectado por Bluetooth (HID over GATT, sem xpadneo):
+#   eixo 0 = analógico esq. X (giro)   eixo 1 = analógico esq. Y (frente/ré)
+#   LB = botão 6 (dead-man)            RB = botão 7 (turbo)
+#
+# ⚠️ NÃO copie os 4/5 do PS4: neste controle o índice 4 é o X e o 5 é um botão
+# que o driver nem nomeia. Dead-man errado = robô que não anda (ou pior, que
+# não para). Se trocar o controle, remeça com:
+#   ./scripts/js_mapping.py /dev/input/js0
+teleop_twist_joy_node:
+  ros__parameters:
+    axis_linear:
+      x: 1
+    scale_linear:
+      x: 0.30          # m/s — alinhado com BASE_LINEAR_SPEED do projeto
+    scale_linear_turbo:
+      x: 0.50
+    axis_angular:
+      yaw: 0
+    # Angular = 6.0 rad/s pelo mesmo motivo do PS4: o chassi de 4 rodas patina
+    # e comando angular baixo NÃO gira o robô. Ver teleop_ps4.yaml.
+    scale_angular:
+      yaw: 6.0
+    scale_angular_turbo:
+      yaw: 6.0
+    enable_button: 6        # LB = dead-man (só anda enquanto segurado)
+    enable_turbo_button: 7  # RB = turbo
+    require_enable_button: true
+    publish_stamped_twist: false

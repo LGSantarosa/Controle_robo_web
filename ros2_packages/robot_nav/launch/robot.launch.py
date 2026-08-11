@@ -8,8 +8,8 @@ Sobe:
   3. pose_estimator       (funde 4 RPMs + IMU + flow → /odom + TF odom→base_link,
                            com degradação graciosa; também publica /trekking/*)
   4. cmd_vel_to_wheels    (/cmd_vel → /wheel_vel_setpoints)
-  5. joy_node            (PS4 em /dev/input/js0 → /joy)
-  6. teleop_twist_joy    (/joy → joy_vel, com dead-man no L1)
+  5. joy_node            (PS4 ou Xbox em /dev/input/jsN → /joy; ver detect_joystick)
+  6. teleop_twist_joy    (/joy → joy_vel, com dead-man no L1/LB)
   7. twist_mux           (joy_vel > key_vel > web_vel > nav_vel → /cmd_vel)
 
 Publishers do twist_mux que NÃO sobem aqui (rodam à parte):
@@ -29,6 +29,55 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+
+def detect_joystick():
+    """Descobre QUAL controle está plugado e devolve (device_id, arquivo de config).
+
+    Por que auto-detecção em vez de uma flag: o PS4 e o Xbox Series têm números
+    de botão diferentes (L1=4/R1=5 contra LB=6/RB=7 — medido em 2026-08-11), e
+    o teleop_twist_joy só aceita um `enable_button`. Config errado = dead-man no
+    botão errado = robô que não anda. Como quem sobe a stack no dia a dia não
+    passa flag nenhuma (`robot-connect` e pronto), a escolha tem que ser
+    automática.
+
+    Lê o nome que o driver publica em /dev/input/jsN (ioctl JSIOCGNAME) e casa
+    por substring. Sem controle conectado, cai no PS4 em js0 — comportamento
+    idêntico ao de antes desta função existir.
+
+    Override manual, se algum dia a heurística errar:
+        ROBOT_JOY_CONFIG=teleop_xbox.yaml ROBOT_JOY_DEVICE=1 ./launch.sh
+    """
+    import fcntl
+    import glob
+
+    forced_cfg = os.environ.get('ROBOT_JOY_CONFIG')
+    forced_dev = os.environ.get('ROBOT_JOY_DEVICE')
+    if forced_cfg or forced_dev:
+        cfg = forced_cfg or 'teleop_ps4.yaml'
+        dev = int(forced_dev or 0)
+        print(f'[robot.launch] joystick forçado por env: {cfg} em js{dev}')
+        return dev, cfg
+
+    JSIOCGNAME_128 = 0x80806A13  # _IOR('j', 0x13, char[128])
+
+    for path in sorted(glob.glob('/dev/input/js*')):
+        try:
+            with open(path, 'rb') as fh:
+                raw = fcntl.ioctl(fh, JSIOCGNAME_128, bytes(128))
+            name = raw.rstrip(b'\0').decode('utf-8', 'replace')
+        except OSError:
+            continue  # device sumiu no meio, ou sem permissão — tenta o próximo
+
+        dev_id = int(path.rsplit('js', 1)[1])
+        if 'xbox' in name.lower():
+            print(f'[robot.launch] controle Xbox em {path} ({name}) → teleop_xbox.yaml')
+            return dev_id, 'teleop_xbox.yaml'
+        print(f'[robot.launch] controle em {path} ({name}) → teleop_ps4.yaml')
+        return dev_id, 'teleop_ps4.yaml'
+
+    print('[robot.launch] nenhum /dev/input/js* — assumindo PS4 em js0')
+    return 0, 'teleop_ps4.yaml'
 
 
 def generate_launch_description():
@@ -155,10 +204,11 @@ def generate_launch_description():
         }],
     )
 
-    teleop_ps4_cfg = os.path.join(pkg, 'config', 'teleop_ps4.yaml')
+    joy_device_id, joy_cfg_name = detect_joystick()
+    teleop_joy_cfg = os.path.join(pkg, 'config', joy_cfg_name)
     twist_mux_cfg = os.path.join(pkg, 'config', 'twist_mux.yaml')
 
-    # joy_node — lê o PS4 em /dev/input/js0 e publica /joy.
+    # joy_node — lê o controle e publica /joy.
     # Se o controle não estiver conectado, o nó fica tentando abrir o device
     # (loga aviso); manda o stderr pro log file pra não poluir o terminal
     # principal a cada ~1 s.
@@ -168,7 +218,7 @@ def generate_launch_description():
         name='joy_node',
         output={'stdout': 'screen', 'stderr': 'log'},
         parameters=[{
-            'device_id': 0,
+            'device_id': joy_device_id,
             'deadzone': 0.05,
             'autorepeat_rate': 20.0,
         }],
@@ -182,7 +232,7 @@ def generate_launch_description():
         executable='teleop_node',
         name='teleop_twist_joy_node',
         output='screen',
-        parameters=[teleop_ps4_cfg],
+        parameters=[teleop_joy_cfg],
         remappings=[('cmd_vel', 'joy_vel')],
     )
 

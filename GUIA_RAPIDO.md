@@ -38,11 +38,20 @@ Deu certo quando o terminal para de rolar log e fica vivo mostrando os nós.
 
 ## 3. Dirigir
 
-**Controle PS4 (jeito padrão):**
-1. Aperte o botão **PS** para ligar/parear.
-2. **Segure o L1** e mexa o analógico esquerdo. Soltou o L1, o robô para —
+**Controle Xbox Series X|S (o do dia a dia desde 2026-08-11):**
+1. Ligue no botão **Xbox**. Se já foi pareado, ele reconecta sozinho.
+2. **Segure o LB** e mexa o analógico esquerdo. Soltou o LB, o robô para —
    isso é o dead-man, é de propósito.
+3. **RB** = turbo.
+
+**Controle PS4:**
+1. Aperte o botão **PS** para ligar/parear.
+2. **Segure o L1** (mesmo papel do LB) e mexa o analógico esquerdo.
 3. **R1** = turbo.
+
+> A stack detecta sozinha qual dos dois está conectado e carrega o mapa de
+> botões certo — os números são diferentes (LB=6/RB=7 contra L1=4/R1=5), e é
+> por isso que existe um arquivo pra cada. Não precisa passar flag nenhuma.
 
 **Teclado (alternativa):** noutro terminal do seu PC:
 
@@ -51,6 +60,26 @@ robot-connect        # (numa aba já aberta)  — ou:
 ssh robo@robo-desktop.local
 robot-key            # WASD; espaço freia. Para sozinho ~0,6 s após soltar a tecla.
 ```
+
+### Parear o controle de novo (quando ele "some")
+
+Do **seu PC**, com o controle em modo pareamento:
+
+```bash
+robot-pair-xbox      # Xbox: ligue no botão Xbox, depois segure PAIR (aresta de
+                     #       cima, ao lado do USB-C) 3-5s até piscar RÁPIDO
+robot-pair-ps4       # PS4:  PS 10s pra apagar, depois SHARE+PS 5s pra piscar rápido
+```
+
+O script cuida de tudo (BlueZ, driver, bonding) e só declara sucesso quando o
+`/dev/input/jsN` aparece de verdade. Se o controle nunca foi pareado nesta Pi,
+é este mesmo comando.
+
+⚠️ **Xbox e PS4 brigam por uma config do BlueZ.** O Xbox Series é Bluetooth LE
+e exige `ControllerMode = dual`; o PS4 pedia `bredr`. Hoje a Pi está em `dual`
+(que é o default do BlueZ). Se alguém rodar `pair-ps4.sh`, ele volta pra
+`bredr` e **o Xbox para de conectar** — nesse caso, rode `robot-pair-xbox` de
+novo, que ele conserta.
 
 ## 4. Ver o mapa / clicar destino
 
