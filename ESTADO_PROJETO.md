@@ -1,7 +1,57 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-20**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-08-11**.
+
+---
+
+## 🎮 2026-08-11 — robô sai de casa: Xbox no lugar do PS4, WiFi das outras redes, guia rápido
+
+Sessão de operação, não de algoritmo. O robô passa a ser usado **por outras
+pessoas, longe da rede e da supervisão do dono** — o que virou três frentes:
+
+**1. Controle Xbox Series X|S (`ecd6e70`) — ✅ VALIDADO NO REAL, o robô andou.**
+`pair-xbox.sh` + `bin/robot-pair-xbox`, irmãos dos do PS4. Duas pegadinhas
+próprias, medidas na Pi (as 6 do PS4 continuam valendo):
+- o Series é **BLE (HID over GATT)** e **não aparece no scan** com o
+  `ControllerMode = bredr` que o fluxo do PS4 força → `_bluez_fixes.sh` ganhou
+  `BLUEZ_CONTROLLER_MODE` (default segue `bredr`), o Xbox usa `dual`;
+- o agent tem que ser **NoInputNoOutput**; com `KeyboardDisplay` (que o PS4
+  exige) dá `auth failed with status 0x05`. E o agent precisa **sobreviver ao
+  pair** — com pipe simples o bluetoothd loga `No agent available for request
+  type 2`. FIFO, igual ao PS4.
+
+Os **botões não são os do PS4**: medido por ioctl `JSIOCGBTNMAP`, **LB=6 e RB=7**
+contra L1=4/R1=5. Com o `teleop_ps4.yaml` o dead-man cairia no botão errado e o
+robô não andaria. Daí `config/teleop_xbox.yaml` + `detect_joystick()` na
+`robot.launch.py`, que lê o nome em `/dev/input/jsN` e escolhe o config sozinha
+(quem opera não passa flag nenhuma). Sem controle, cai no PS4/js0 como antes.
+`scripts/js_mapping.py` remede o mapa em qualquer controle novo.
+
+> ⚠️ **Xbox e PS4 brigam pelo `ControllerMode`.** A Pi está em `dual`. Rodar
+> `pair-ps4.sh` volta pra `bredr` e o Xbox para de conectar; `robot-pair-xbox`
+> conserta. Só o Xbox foi testado com o robô andando.
+
+**2. WiFi pra rodar fora de casa (`a4f4bc2`).** A Pi tenta **todas** as redes
+salvas no boot; ganha a de maior prioridade que estiver ao alcance. Cadastradas:
+`Trafico de banana` (100), `Padm3` (50), `isa` (50), `Edu Criativa ` (0).
+**Nenhuma das duas novas foi testada no local** — só a config foi conferida.
+BOs no perfil antigo `Edu Criativa `: **espaço no fim do SSID** (se a rede real
+não tiver, nunca conecta) e **`ipv4.method manual`** (IP fixo só vale naquela
+faixa).
+
+**3. `GUIA_RAPIDO.md` (`9bd05a4`).** Uma página pra quem nunca mexeu no sistema:
+ligar → `robot-connect` → dirigir → mapa → encerrar, mais WiFi e troubleshooting.
+O README continua sendo a referência completa (80 KB); isto é o extrato operacional.
+
+### Pendências abertas desta sessão
+- 🟡 **Hotspot de resgate não cadastrado.** Sem rede, a Pi só volta com monitor
+  e teclado. Recomendado: celular de quem levar o robô, prioridade 10.
+- 🟡 **`Edu Criativa `**: decidir entre corrigir (SSID + `ipv4.method auto`) ou
+  apagar o perfil.
+- 🟡 **Checkout da Pi divergente**: os arquivos do Xbox foram pra lá por `scp`,
+  não por `git pull`, e ela está na branch `seguir-pessoa` com alterações não
+  commitadas. Alinhar antes do próximo `git pull` lá.
 
 ---
 
