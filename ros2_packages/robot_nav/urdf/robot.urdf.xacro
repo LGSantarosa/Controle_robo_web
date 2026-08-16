@@ -27,7 +27,7 @@
   <xacro:property name="lidar_x"          value="0.0"/>
   <xacro:property name="lidar_z"          value="0.12"/>
 
-  <!-- IMU (BNO055) e PMW3901 (optical flow) — montados no centro do chassi.
+  <!-- IMUs (MPU6050 + BNO055) e PMW3901 (optical flow) — no centro do chassi.
        flow_z é o offset do flow_link em relação ao base_link (CoM do corpo).
        Combinado com base_link a (wheel_radius + body_height/2) = 0.215 m do
        chão, e flow_z = -0.095, o sensor fica a 0.12 m do chão — mesmo valor
@@ -133,7 +133,7 @@
     </inertial>
   </link>
 
-  <!-- ======= IMU (BNO055) ======= -->
+  <!-- ======= IMU #1 (MPU6050 — gyro/accel, sem mag) ======= -->
   <joint name="imu_joint" type="fixed">
     <parent link="base_link"/>
     <child link="imu_link"/>
@@ -146,6 +146,34 @@
       </geometry>
       <material name="red">
         <color rgba="0.8 0.1 0.1 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.01"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+    </inertial>
+  </link>
+
+  <!-- ======= IMU #2 (BNO055 — 9 eixos, heading absoluto) =======
+       Ao LADO da #1, no mesmo I²C da MEGA. O deslocamento em x/y é irrelevante
+       pro que consumimos dela (giro e orientação não dependem de onde o sensor
+       está no corpo rígido); o link existe pro frame_id de /imu2/data e
+       /imu2/mag resolver no TF e pro RViz mostrar onde a peça está.
+       ATENÇÃO: se a BNO055 for montada GIRADA em relação ao chassi, o lugar de
+       corrigir NÃO é o rpy daqui — é o `imu2_yaw_sign` do pose_estimator (o nó
+       lê os dados no frame BRUTO do sensor, sem passar pelo TF). -->
+  <joint name="imu2_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu2_link"/>
+    <origin xyz="0.03 0 ${imu_z}" rpy="0 0 0"/>
+  </joint>
+  <link name="imu2_link">
+    <visual>
+      <geometry>
+        <box size="0.02 0.02 0.005"/>
+      </geometry>
+      <material name="orange">
+        <color rgba="0.9 0.5 0.1 1.0"/>
       </material>
     </visual>
     <inertial>

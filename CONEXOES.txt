@@ -5,13 +5,78 @@ ARDUINO MEGA
   Serial1 (TX18, RX19)   -> hoverboard FRENTE (FL+FR) 115200 baud
   Serial2 (TX16, RX17)   -> hoverboard TRÁS  (RL+RR)  115200 baud
   Serial3 (TX14, RX15)   -> reserva/debug
-  I²C (SDA20, SCL21)     -> MPU9250 (IMU; MESMOS 4 fios do 6050; mag AK8963 interno, sem fio novo)
+  I²C (SDA20, SCL21)     -> MPU9250 (IMU #1; MESMOS 4 fios do 6050; mag AK8963 interno, sem fio novo)
+                         -> BNO055  (IMU #2, 9 eixos; MESMO par SDA/SCL, em PARALELO
+                                     — fiação detalhada na seção BNO055 abaixo)
   SPI (MISO50, MOSI51, SCK52) + CS10 -> PMW3901 (flow, via shifter 5V/3.3V)
   pino 5                 -> fita LED status
   pino 7                 -> relé da luz
   pino 8                 -> LED do marco
   pino 9 (pull-up)       -> botão de partida
   Vin / GND              -> 12 V bateria
+
+=============================================================================
+BNO055 — IMU #2 (9 eixos + magnetômetro; dá o heading ABSOLUTO)
+=============================================================================
+
+São 4 fios, e eles vão NOS MESMOS PINOS da IMU que já existe. I²C é BARRAMENTO:
+os dois sensores convivem no mesmo par SDA/SCL porque têm endereços diferentes
+(MPU = 0x68, BNO055 = 0x28). Não existe "segundo I²C" pra ligar aqui.
+
+  BNO055            vai em                       observação
+  ---------------------------------------------------------------------------
+  VIN (ou VCC)  ->  5 V da MEGA                  ver o AVISO DE 3,3 V abaixo
+  GND           ->  GND da MEGA                  obrigatório, o MESMO GND
+  SDA           ->  pino 20 (SDA)                junto com o fio da IMU #1
+  SCL           ->  pino 21 (SCL)                junto com o fio da IMU #1
+  ADR           ->  deixe SOLTO                  solto/GND = 0x28 (o normal)
+                                                 em VCC    = 0x29
+                                                 o firmware tenta os dois
+  PS0, PS1      ->  deixe SOLTOS                 é o modo I²C, default de fábrica
+  RST, INT      ->  deixe SOLTOS                 não usamos
+
+Como ligar DOIS sensores em um pino só (a parte prática):
+  Os pinos 20/21 da MEGA já estão ocupados pelo fio da IMU #1. Escolha um:
+    (a) barra de bornes / protoboard: leve 5V, GND, SDA e SCL da MEGA pra uma
+        barrinha e saia dela pros dois sensores  <- mais limpo, recomendado
+    (b) emendar: solde os dois fios de SDA num só terminal (idem SCL/5V/GND)
+    (c) alguns breakouts têm furos duplicados que servem de passagem
+  Não precisa de resistor de pull-up: cada breakout já traz os seus, e dois
+  pares em paralelo no barramento é normal.
+
+  MEGA (pinos 20/21) ──┬── SDA/SCL ──> IMU #1 (MPU, 0x68)
+                       └── SDA/SCL ──> IMU #2 (BNO055, 0x28)
+
+>> AVISO DE 3,3 V — leia antes de energizar:
+   A BNO055 NÃO é 5 V tolerante. Ligar VIN em 5 V só vale se o seu breakout
+   tiver regulador + level shifter (é o caso do da Adafruit e dos clones que
+   copiam o layout dela). Em placa "pelada" (o chip e mais nada), 5 V nos pinos
+   queima o sensor: nesse caso alimente pelo 3V3 da MEGA e use um conversor de
+   nível nos SDA/SCL — os pull-ups da MEGA levam essas linhas a 5 V.
+   Na dúvida, olhe a placa: se ela tem um CI regulador e um shifter perto do
+   conector, é 5 V-safe; se só tem o quadradinho do BNO055, é 3,3 V.
+
+>> ONDE MONTAR (isto importa mais que o resto):
+   - Chip PLANO (deitado), preso firme no chassi — se balançar, o heading balança.
+   - O MAIS LONGE possível dos motores das rodas e dos cabos grossos de 12 V.
+     É um magnetômetro: ímã de motor e corrente alta puxam o "norte" dele.
+     Alto e no centro é melhor que baixo e perto da roda.
+   - Longe de qualquer peça de ferro/aço do chassi e de alto-falante.
+   - Não precisa ficar no centro geométrico do robô: giro e orientação não
+     dependem de onde o sensor está no corpo rígido.
+
+>> DEPOIS DE MONTAR (bancada, na ordem):
+   1. pio run -t upload                      (firmware novo na MEGA)
+   2. ros2 topic hz /imu2/data               (tem que dar ~50 Hz)
+   3. python3 ros2_packages/robot_nav/tools/imu2_check.py
+      - girando o robô PRA ESQUERDA, gz1 e gz2 têm que ter o MESMO sinal.
+        Saíram opostos? suba com imu2_yaw_sign:=-1.0 (não é preciso reflashear).
+      - girando 90° reais, yaw_abs anda ~90°.
+   4. Calibrar o mag: mova o robô em ∞ (oito) NO AR uns 20 s, até calib mag = 3.
+   5. Ligue os motores e veja se o mag se segura. Se despencar, é EMI daquele
+      ambiente: use_imu2_heading:=false (mantém a 2ª taxa de giro).
+   Se a BNO055 não estiver montada, nada disso é necessário — o sistema roda
+   igual a antes, sem reclamar.
 
 CABO HOVERBOARD (cores deste robô)
   verde (RX placa)  -> TX MEGA (18 frente / 16 trás)

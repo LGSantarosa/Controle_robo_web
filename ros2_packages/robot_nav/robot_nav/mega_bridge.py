@@ -6,6 +6,8 @@ Substitui o `ros2-hoverboard-driver` antigo (que falava direto com uma única
 placa). Agora a MEGA agrega:
   - 2 placas de hoverboard (frontal Serial1, traseira Serial2)
   - MPU6050 IMU (I²C, 6 eixos: giro + accel; sem yaw absoluto)
+  - BNO055 IMU #2 (I²C 0x28/0x29, 9 eixos: giro + accel + MAG, com quaternion
+    de orientação ABSOLUTA fundido no chip)
   - PMW3901 optical flow (SPI)
   - relé da luz, LED de marco
   - (anel WS2812 comentado no firmware — ver AUDITORIA_2026-05-29 A1)
@@ -15,6 +17,9 @@ Protocolo (frames) — ver firmware/mega_bridge/include/protocol.h.
 Tópicos publicados:
   /hoverboard/wheel_velocities             (std_msgs/Float64MultiArray, RPM — ordem [FL,FR,RL,RR])
   /imu/data                                (sensor_msgs/Imu)
+  /imu2/data                               (sensor_msgs/Imu — BNO055, COM orientation)
+  /imu2/mag                                (sensor_msgs/MagneticField — BNO055, tesla)
+  /imu2/calib                              (std_msgs/String, JSON — só quando muda)
   /optical_flow                            (geometry_msgs/Vector3Stamped, x=dx, y=dy, z=quality)
   /battery/{front,rear}                    (sensor_msgs/BatteryState, V)
   /system/health                           (std_msgs/String, JSON)
@@ -37,7 +42,7 @@ import serial
 from geometry_msgs.msg import Vector3Stamped
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
-from sensor_msgs.msg import BatteryState, Imu
+from sensor_msgs.msg import BatteryState, Imu, MagneticField
 from std_msgs.msg import Bool, ColorRGBA, Float64MultiArray, String
 from wheel_msgs.msg import WheelSpeeds
 
@@ -52,6 +57,12 @@ FT_RELAY     = 0x03
 FT_STATE     = 0x81
 FT_IMU       = 0x82
 FT_FLOW      = 0x83
+FT_IMU2      = 0x85   # BNO055: quat + gyro + accel + mag + calib (ver protocol.h)
+
+# Escalas do FT_IMU2 (casam com o firmware, firmware/mega_bridge/src/main.cpp).
+QUAT_LSB     = 1.0 / 16384.0   # quaternion do BNO055 é fixo em 2^14
+MILLI        = 1.0 / 1000.0    # gyro (rad/s) e accel (m/s²)
+DECI_UT_TO_T = 1.0e-7          # deci-µT → tesla (÷10 → µT, ×1e-6 → T)
 
 
 def _xor8(data: bytes) -> int:
@@ -133,6 +144,7 @@ class MegaBridge(Node):
         self.declare_parameter('port', '/dev/mega')
         self.declare_parameter('baud', 230400)
         self.declare_parameter('imu_frame', 'imu_link')
+        self.declare_parameter('imu2_frame', 'imu2_link')
         self.declare_parameter('flow_frame', 'flow_link')
         # Reescala wheel_msgs.WheelSpeeds (unidades do hoverboard) caso
         # cmd_vel_to_wheels ainda esteja saindo nas unidades originais.
@@ -169,6 +181,7 @@ class MegaBridge(Node):
         self._port = self.get_parameter('port').value
         self._baud = int(self.get_parameter('baud').value)
         self._imu_frame = self.get_parameter('imu_frame').value
+        self._imu2_frame = self.get_parameter('imu2_frame').value
         self._flow_frame = self.get_parameter('flow_frame').value
         self._wheel_scale = float(self.get_parameter('wheel_scale').value)
         self._rear_speed_sign = -1 if bool(self.get_parameter('rear_invert_speed').value) else 1
@@ -210,12 +223,26 @@ class MegaBridge(Node):
         self._pub_wheels = self.create_publisher(
             Float64MultiArray, 'hoverboard/wheel_velocities', qos_profile_sensor_data)
         self._pub_imu = self.create_publisher(Imu, 'imu/data', qos_profile_sensor_data)
+        # IMU #2 (BNO055): mesmo QoS sensor_data do resto do stream de sensor.
+        # Assinar com o default RELIABLE = incompatível = silêncio (foi o bug
+        # "robô sem IMU" de 2026-06-05; vale igual pra esta).
+        self._pub_imu2 = self.create_publisher(Imu, 'imu2/data', qos_profile_sensor_data)
+        self._pub_mag = self.create_publisher(MagneticField, 'imu2/mag', qos_profile_sensor_data)
         self._pub_flow = self.create_publisher(Vector3Stamped, 'optical_flow', qos_profile_sensor_data)
         self._pub_bat_front = self.create_publisher(BatteryState, 'battery/front', qos_cmd)
         self._pub_bat_rear = self.create_publisher(BatteryState, 'battery/rear', qos_cmd)
         self._pub_health = self.create_publisher(String, 'system/health', qos_cmd)
+        # Calibração da BNO055 (sys/gyro/accel/mag, 0..3 cada). Muda MUITO devagar
+        # (só quando o chip re-avalia a calibração), então vai em RELIABLE e só
+        # quando o valor muda — a 50 Hz seria puro desperdício. É latched via
+        # TRANSIENT_LOCAL? Não: quem sobe depois pega a próxima mudança, e o
+        # pose_estimator já trata "nunca chegou" como não-calibrado (seguro).
+        self._pub_calib = self.create_publisher(String, 'imu2/calib', qos_cmd)
         # Cache do último health para evitar reemitir JSON idêntico a 50 Hz.
         self._last_health_json: str = ''
+        self._last_calib_json: str = ''
+        # Último byte de calibração da BNO055 recebido (entra no /system/health).
+        self._imu2_calib = None
 
         # Contador de frames STATE para throttle da bateria. A tensão muda
         # devagar → não faz sentido republicar a 50 Hz. Emite 1 a cada
@@ -373,6 +400,8 @@ class MegaBridge(Node):
                     self._handle_state(payload)
                 elif ft == FT_IMU:
                     self._handle_imu(payload)
+                elif ft == FT_IMU2:
+                    self._handle_imu2(payload)
                 elif ft == FT_FLOW:
                     self._handle_flow(payload)
             except Exception as e:
@@ -423,6 +452,12 @@ class MegaBridge(Node):
             'rear_stale':  bool(faultR & 0x01),
             'imu_ok':      bool(sensor_flags & 0x01),
             'flow_ok':     bool(sensor_flags & 0x02),
+            # BNO055 (IMU #2): detectada no I²C da MEGA. imu2_mag_calib é o
+            # campo do mag (0..3) do último FT_IMU2 — é o que decide se o
+            # heading absoluto vale; None = nenhum frame chegou ainda.
+            'imu2_ok':     bool(sensor_flags & 0x04),
+            'imu2_mag_calib': (None if self._imu2_calib is None
+                               else self._imu2_calib & 0x03),
         }
         as_json = json.dumps(health, sort_keys=True)
         if as_json != self._last_health_json:
@@ -453,6 +488,82 @@ class MegaBridge(Node):
         msg.angular_velocity_covariance = [0.0025, 0.0, 0.0, 0.0, 0.0025, 0.0, 0.0, 0.0, 0.0025]
         msg.linear_acceleration_covariance = [0.05, 0.0, 0.0, 0.0, 0.05, 0.0, 0.0, 0.0, 0.05]
         self._pub_imu.publish(msg)
+
+    def _handle_imu2(self, p: bytes):
+        # 27 bytes (BNO055) — ver protocol.h / txImu2():
+        #   quat w,x,y,z (×16384) | gyro x,y,z (rad/s ×1000)
+        #   accel x,y,z (m/s² ×1000, COM gravidade) | mag x,y,z (µT ×10) | calib
+        if len(p) != 27:
+            return
+        (qw, qx, qy, qz,
+         gx, gy, gz,
+         ax, ay, az,
+         mx, my, mz) = struct.unpack('<13h', p[:26])
+        calib = p[26]
+        # Campos de calibração do chip, 0..3 cada (3 = totalmente calibrado).
+        cal = {
+            'sys':   (calib >> 6) & 0x03,
+            'gyro':  (calib >> 4) & 0x03,
+            'accel': (calib >> 2) & 0x03,
+            'mag':    calib       & 0x03,
+        }
+        self._imu2_calib = calib
+
+        stamp = self.get_clock().now().to_msg()
+
+        msg = Imu()
+        msg.header.stamp = stamp
+        msg.header.frame_id = self._imu2_frame
+        # DIFERENÇA pro /imu/data: aqui HÁ orientação absoluta (fusão NDOF no
+        # chip, ancorada no norte magnético). É o que permite ao pose_estimator
+        # corrigir a deriva do yaw integrado em percurso longo.
+        msg.orientation.w = qw * QUAT_LSB
+        msg.orientation.x = qx * QUAT_LSB
+        msg.orientation.y = qy * QUAT_LSB
+        msg.orientation.z = qz * QUAT_LSB
+        msg.angular_velocity.x = gx * MILLI
+        msg.angular_velocity.y = gy * MILLI
+        msg.angular_velocity.z = gz * MILLI
+        msg.linear_acceleration.x = ax * MILLI
+        msg.linear_acceleration.y = ay * MILLI
+        msg.linear_acceleration.z = az * MILLI
+        # Covariância da orientação em função da calibração do MAG: com o mag
+        # descalibrado a BNO055 continua entregando um quaternion, mas o heading
+        # dele aponta pra um norte inventado — publicar isso com variância
+        # pequena convidaria qualquer consumidor (EKF externo, futuro) a
+        # acreditar. Escala: mag=3 → σ≈3°, mag=0 → σ≈57° (praticamente inútil).
+        # roll/pitch NÃO dependem do mag (vêm de accel+gyro) → variância fixa e
+        # pequena. O pose_estimator usa este mesmo critério via /imu2/calib.
+        yaw_var = (0.0025, 0.01, 0.09, 1.0)[3 - cal['mag']]
+        msg.orientation_covariance = [
+            0.0025, 0.0, 0.0,
+            0.0, 0.0025, 0.0,
+            0.0, 0.0, yaw_var,
+        ]
+        # BNO055 é bem menos ruidosa que o MPU6050 no giro (giroscópio melhor +
+        # filtragem do próprio chip) — metade da diagonal usada em /imu/data.
+        msg.angular_velocity_covariance = [0.0012, 0.0, 0.0, 0.0, 0.0012, 0.0, 0.0, 0.0, 0.0012]
+        msg.linear_acceleration_covariance = [0.02, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.02]
+        self._pub_imu2.publish(msg)
+
+        # Campo magnético em TESLA (unidade do sensor_msgs/MagneticField); o
+        # firmware manda deci-µT. Útil pra diagnosticar EMI dos motores: se o
+        # módulo saltar longe de ~50 µT com o robô andando, o heading absoluto
+        # não é confiável naquele trecho.
+        mag = MagneticField()
+        mag.header.stamp = stamp
+        mag.header.frame_id = self._imu2_frame
+        mag.magnetic_field.x = mx * DECI_UT_TO_T
+        mag.magnetic_field.y = my * DECI_UT_TO_T
+        mag.magnetic_field.z = mz * DECI_UT_TO_T
+        self._pub_mag.publish(mag)
+
+        # Calibração só quando MUDA (chega a 50 Hz, muda algumas vezes por hora).
+        as_json = json.dumps(cal, sort_keys=True)
+        if as_json != self._last_calib_json:
+            self._last_calib_json = as_json
+            self._pub_calib.publish(String(data=as_json))
+            self.get_logger().info(f'BNO055 calib: {as_json}')
 
     def _handle_flow(self, p: bytes):
         # 5 bytes: dx, dy, quality

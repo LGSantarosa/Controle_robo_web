@@ -2,9 +2,15 @@
 """
 Estimador de pose pro modo TREKKING.
 
-Funde 3 fontes em (x, y, yaw) no frame `odom`:
-  - MPU6050 (/imu/data)       → taxa de yaw (giro); yaw INTEGRADO (sem mag —
-                                yaw absoluto viria de um BNO055/ICM-20948 futuro)
+Funde 4 fontes em (x, y, yaw) no frame `odom`:
+  - MPU6050 (/imu/data)       → taxa de yaw (giro); yaw INTEGRADO (sem mag)
+  - BNO055  (/imu2/data)      → 2ª taxa de yaw (entra na média com a #1) E o
+                                heading ABSOLUTO (9 eixos, fusão no chip): âncora
+                                magnética que tira a deriva do yaw integrado,
+                                aplicada devagar e com teto. Gateada pela
+                                calibração do mag (/imu2/calib) — mag cru mente
+                                com confiança. Principal ganho no TREKKING, onde
+                                o percurso é longo e não há LiDAR pra reancorar.
   - PMW3901 (/optical_flow)   → velocidade no chão em (vx, vy) corpo. DORMENTE:
                                 o sensor foi removido do robô em 2026-07-01
                                 (0 Hz é o normal); o caminho fica pronto pra um
@@ -48,7 +54,7 @@ from sensor_msgs.msg import Imu
 from std_msgs.msg import Float32, Float64, Float64MultiArray, String
 
 
-from .utils import quat_to_yaw as _quat_to_yaw  # noqa: F401
+from .utils import quat_to_yaw as _quat_to_yaw   # heading absoluto da BNO055
 from .utils import spin_node, wrap_pi
 from .cone_pose_fix import apply_pose_fix
 
@@ -153,6 +159,39 @@ class PoseEstimator(Node):
         # sinal (não precisa reflashear a MEGA). Ver project_imu_mpu9250.
         self.declare_parameter('imu_yaw_sign', -1.0)
 
+        # --- IMU #2: BNO055 (9 eixos, /imu2/data) ---
+        # Entra como TERCEIRA fonte de giro e de direção, ao lado do MPU e das
+        # rodas. Dois caminhos independentes, ligáveis/desligáveis à parte:
+        #   (a) TAXA de yaw   → média ponderada com o MPU (imu2_rate_weight)
+        #   (b) yaw ABSOLUTO  → âncora magnética que remove a deriva integrada
+        # use_imu2=False corta os dois e a pose volta a ser EXATAMENTE a de antes.
+        self.declare_parameter('use_imu2', True)
+        # Sinal da taxa de yaw da BNO055 (gyro Z + heading), pra casar a
+        # montagem — mesma ideia do imu_yaw_sign. Confira na bancada com
+        # tools/imu2_check.py: girando pra ESQUERDA, gz das duas IMUs tem que
+        # ter o MESMO sinal. Se saírem opostos, inverta ESTE parâmetro.
+        self.declare_parameter('imu2_yaw_sign', 1.0)
+        self.declare_parameter('imu2_timeout', 0.3)   # s — BNO055 a 50 Hz
+        # Peso da BNO055 na taxa fundida quando as DUAS IMUs estão frescas.
+        # 0.5 = média simples: duas medidas independentes do mesmo ω, o ruído
+        # cai ~30% e um chip que morra sozinho não leva o yaw junto. O gate de
+        # discordância (blend_yaw_rate) protege contra sinal invertido.
+        self.declare_parameter('imu2_rate_weight', 0.5)
+        # --- âncora de heading absoluto ---
+        self.declare_parameter('use_imu2_heading', True)
+        # Ganho da correção (1/s). 0.2 → constante de tempo ~5 s: tira 1° de
+        # deriva em ~5 s, invisível pro controlador e pro scan-matcher.
+        self.declare_parameter('heading_gain', 0.2)
+        # Teto da correção (rad/s). 0.15 rad/s ≈ 8,6°/s: mesmo um erro de 180°
+        # (mag maluco por EMI) vira um giro lento e visível, nunca um salto.
+        self.declare_parameter('heading_max_rate', 0.15)
+        # Calibração MÍNIMA do magnetômetro (campo 'mag' de /imu2/calib, 0..3)
+        # pra aceitar o heading. 2 = "razoável" pela Bosch; com 0/1 a BNO055
+        # ainda entrega quaternion, só que apontando pra um norte inventado —
+        # aceitar isso arrastaria o robô pro lado errado devagar, que é bem
+        # pior de diagnosticar do que não ter correção nenhuma.
+        self.declare_parameter('mag_calib_min', 2)
+
         self.wheel_radius   = float(self.get_parameter('wheel_radius').value)
         self.wheel_base     = float(self.get_parameter('wheel_base').value)
         self.rpm_to_rads    = float(self.get_parameter('rpm_to_rads').value)
@@ -182,6 +221,14 @@ class PoseEstimator(Node):
         self.imu_timeout    = float(self.get_parameter('imu_timeout').value)
         self.wheel_timeout  = float(self.get_parameter('wheel_timeout').value)
         self.imu_yaw_sign   = float(self.get_parameter('imu_yaw_sign').value)
+        self.use_imu2       = bool(self.get_parameter('use_imu2').value)
+        self.imu2_yaw_sign  = float(self.get_parameter('imu2_yaw_sign').value)
+        self.imu2_timeout   = float(self.get_parameter('imu2_timeout').value)
+        self.imu2_rate_weight = float(self.get_parameter('imu2_rate_weight').value)
+        self.use_imu2_heading = bool(self.get_parameter('use_imu2_heading').value)
+        self.heading_gain   = float(self.get_parameter('heading_gain').value)
+        self.heading_max_rate = float(self.get_parameter('heading_max_rate').value)
+        self.mag_calib_min  = int(self.get_parameter('mag_calib_min').value)
 
         # --- Estado ---
         self._lock = threading.Lock()
@@ -194,6 +241,20 @@ class PoseEstimator(Node):
         # rclpy.time.Time via rcl em todo callback custava ~200 objetos/s
         # (P3 da AUDITORIA_2026-06-11). Stamps PUBLICADOS seguem no clock ROS.
         self._last_imu_wall = None    # time.monotonic()
+
+        # --- IMU #2 (BNO055) ---
+        self._imu2_yaw_rate = 0.0     # rad/s, já com imu2_yaw_sign
+        self._imu2_abs_yaw = None     # rad — heading do quaternion, com o sinal
+        self._last_imu2_wall = None   # time.monotonic()
+        self._imu2_mag_calib = 0      # 0..3; 0 até /imu2/calib chegar (seguro)
+        # Alinhamento entre o "norte" da BNO055 e a origem de yaw do frame odom
+        # (que é arbitrária — é onde o robô estava quando o nó subiu). Latcheado
+        # na PRIMEIRA amostra aceita e depois só muda em yaw_fix. Sem este
+        # offset, a primeira correção giraria o robô inteiro pro norte magnético
+        # — teleporte de heading no mapa, exatamente o que não queremos.
+        self._mag_yaw_offset = None
+        self._imu2_was_stale = False
+        self._disagree_logged = False
 
         # Velocidades nas rodas (m/s, lado)
         self.v_fl = 0.0; self.v_fr = 0.0
@@ -230,6 +291,12 @@ class PoseEstimator(Node):
         # (qos_profile_sensor_data). Assinar com QoS default (RELIABLE) é
         # INCOMPATÍVEL → nenhuma mensagem chega. Casar o profile sensor_data.
         self.create_subscription(Imu, 'imu/data', self._on_imu, qos_profile_sensor_data)
+        # IMU #2 (BNO055) — mesmo QoS BEST_EFFORT do resto do stream de sensor.
+        # A calibração vai num tópico à parte porque muda raramente (RELIABLE,
+        # ~0 tráfego) e porque precisa ser explícita: é ela que autoriza a
+        # correção de heading.
+        self.create_subscription(Imu, 'imu2/data', self._on_imu2, qos_profile_sensor_data)
+        self.create_subscription(String, 'imu2/calib', self._on_imu2_calib, 10)
         self.create_subscription(Vector3Stamped, 'optical_flow', self._on_flow, qos_profile_sensor_data)
         self.create_subscription(Vector3Stamped, 'trekking/pose_fix', self._on_pose_fix, 10)
         # Correção manual de DIREÇÃO (yaw). data = delta em rad a aplicar no
@@ -256,9 +323,17 @@ class PoseEstimator(Node):
 
         self.create_timer(1.0 / rate, self._tick)
 
+        if not self.use_imu2:
+            imu2_desc = 'BNO055 DESLIGADA (use_imu2:=false)'
+        else:
+            imu2_desc = (f'BNO055 peso_giro={self.imu2_rate_weight:.2f} '
+                         f'sinal={self.imu2_yaw_sign:+.0f} heading='
+                         + (f'ganho {self.heading_gain:.2f}/s, teto '
+                            f'{self.heading_max_rate:.2f} rad/s, mag>={self.mag_calib_min}'
+                            if self.use_imu2_heading else 'OFF'))
         self.get_logger().info(
             f'pose_estimator: m/contagem flow = {self.m_per_count*1000:.2f} mm '
-            f'(h={self.flow_height:.3f} m), rate={rate:.0f} Hz'
+            f'(h={self.flow_height:.3f} m), rate={rate:.0f} Hz | {imu2_desc}'
         )
 
     # ------------------------------------------------------------------
@@ -270,6 +345,40 @@ class PoseEstimator(Node):
             # Ver project_imu_mpu9250.
             self._imu_yaw_rate = msg.angular_velocity.z * self.imu_yaw_sign
             self._last_imu_wall = time.monotonic()
+
+    def _on_imu2(self, msg: Imu):
+        # BNO055 (9 eixos): taxa de yaw COMO a #1, mais o heading ABSOLUTO que
+        # vem do quaternion fundido no chip. O imu2_yaw_sign casa a montagem —
+        # aplicado nos dois (giro e heading), porque uma montagem espelhada
+        # inverte o sentido de rotação nas duas leituras.
+        yaw_abs = _quat_to_yaw(msg.orientation.x, msg.orientation.y,
+                               msg.orientation.z, msg.orientation.w)
+        with self._lock:
+            self._imu2_yaw_rate = msg.angular_velocity.z * self.imu2_yaw_sign
+            self._imu2_abs_yaw = wrap_pi(yaw_abs * self.imu2_yaw_sign)
+            self._last_imu2_wall = time.monotonic()
+
+    def _on_imu2_calib(self, msg: String):
+        # {"sys":0..3,"gyro":0..3,"accel":0..3,"mag":0..3} — publicado pelo
+        # mega_bridge só quando muda. Guardamos só o campo do mag: é o único que
+        # decide se o heading absoluto vale (gyro/accel afetam roll/pitch, que
+        # não usamos neste robô plano).
+        try:
+            cal = json.loads(msg.data)
+            mag = int(cal.get('mag', 0))
+        except (ValueError, TypeError):
+            return
+        with self._lock:
+            prev = self._imu2_mag_calib
+            self._imu2_mag_calib = mag
+        if (prev >= self.mag_calib_min) != (mag >= self.mag_calib_min):
+            if mag >= self.mag_calib_min:
+                self.get_logger().info(
+                    f'BNO055: mag calibrado ({mag}/3) — heading absoluto ATIVO')
+            else:
+                self.get_logger().warn(
+                    f'BNO055: mag caiu pra {mag}/3 (< {self.mag_calib_min}) — '
+                    f'heading absoluto SUSPENSO, yaw volta a ser só integrado')
 
     def _on_flow(self, msg: Vector3Stamped):
         # dx, dy são contagens acumuladas desde a última mensagem. Convertemos em
@@ -325,6 +434,12 @@ class PoseEstimator(Node):
         with self._lock:
             self._fused.yaw = wrap_pi(self._fused.yaw + delta)
             new_yaw = self._fused.yaw
+            # O offset do heading absoluto anda JUNTO. Sem isto, a âncora
+            # magnética passaria os próximos segundos desfazendo a correção que
+            # o operador acabou de fazer na web — o robô "voltaria sozinho" pro
+            # ponteiro errado, e a UI pareceria quebrada.
+            if self._mag_yaw_offset is not None:
+                self._mag_yaw_offset = wrap_pi(self._mag_yaw_offset + delta)
         self.get_logger().info(
             f'yaw_fix: ponteiro girado {delta:+.3f} rad → yaw(odom)={new_yaw:+.3f}'
         )
@@ -367,6 +482,33 @@ class PoseEstimator(Node):
                 imu_age = mono - self._last_imu_wall
             imu_fresh = imu_age <= self.imu_timeout
 
+            # Freshness da IMU #2 (BNO055) — mesma lógica; use_imu2=False a
+            # trata como permanentemente ausente (fusão idêntica à de antes).
+            if self._last_imu2_wall is None:
+                imu2_age = float('inf')
+            else:
+                imu2_age = mono - self._last_imu2_wall
+            imu2_fresh = self.use_imu2 and imu2_age <= self.imu2_timeout
+
+            # Heading absoluto: só entra com IMU #2 fresca, correção ligada e
+            # magnetômetro calibrado o bastante. Qualquer um faltando → None, e
+            # o yaw fica sendo o integrado puro (comportamento de sempre).
+            abs_yaw = None
+            mag_ok = self._imu2_mag_calib >= self.mag_calib_min
+            if (imu2_fresh and self.use_imu2_heading and mag_ok
+                    and self._imu2_abs_yaw is not None):
+                if self._mag_yaw_offset is None:
+                    # Latch: alinha o norte da BNO055 com o yaw que a odometria
+                    # já tem AGORA. A correção nasce, portanto, valendo zero —
+                    # daí em diante ela só combate a DERIVA, sem nunca girar o
+                    # robô pro norte magnético de verdade.
+                    self._mag_yaw_offset = wrap_pi(
+                        self._fused.yaw - self._imu2_abs_yaw)
+                    self.get_logger().info(
+                        f'BNO055: heading absoluto ancorado '
+                        f'(offset={self._mag_yaw_offset:+.3f} rad, mag={self._imu2_mag_calib}/3)')
+                abs_yaw = wrap_pi(self._imu2_abs_yaw + self._mag_yaw_offset)
+
             # Freshness das rodas: se a MEGA parou de mandar frames, v_fl..v_rr
             # estão CONGELADAS. wheel_fresh=False faz o FusedOdom zerar a
             # contribuição das rodas (anti-giro-fantasma) — ver project_mega_i2c_hang.
@@ -387,7 +529,13 @@ class PoseEstimator(Node):
                 alpha = 0.0
             # Gate por giro: em rotação rápida o flow vê o chão girando (dx/dy
             # espúrio) + derrapagem do spin → corta o peso com o ω limpo da IMU.
-            alpha *= flow_yaw_gate(self._imu_yaw_rate,
+            # ω pro gate: a IMU #1 se estiver fresca, senão a #2. Antes das duas
+            # IMUs isto era sempre _imu_yaw_rate — que, com o MPU mudo, ficava
+            # CONGELADO no último valor e o gate julgava o flow por um giro que
+            # já tinha acabado.
+            gate_rate = self._imu_yaw_rate if imu_fresh else (
+                self._imu2_yaw_rate if imu2_fresh else 0.0)
+            alpha *= flow_yaw_gate(gate_rate,
                                    self.flow_yaw_gate_lo, self.flow_yaw_gate_hi)
             # Deslocamento acumulado desde o último tick → velocidade pela janela
             # do TICK (não pelo intervalo de chegada). Drena o acumulador.
@@ -419,6 +567,12 @@ class PoseEstimator(Node):
                 imu_fresh, self._imu_yaw_rate,
                 flow_vx, flow_vy, alpha,
                 wheel_fresh=wheel_fresh,
+                imu2_fresh=imu2_fresh,
+                imu2_yaw_rate=self._imu2_yaw_rate,
+                imu2_rate_weight=self.imu2_rate_weight,
+                abs_yaw=abs_yaw,
+                heading_gain=self.heading_gain,
+                heading_max_rate=self.heading_max_rate,
             )
 
             # Cache pra slip / twist
@@ -445,6 +599,9 @@ class PoseEstimator(Node):
             vy_out = res.vy_body
             slip_out = slip
             quality_out = self.flow_quality
+            heading_corr = res.heading_corr
+            rate_disagree = res.rate_disagree
+            mag_calib_out = self._imu2_mag_calib
 
         # ----- diagnóstico do flow -----
         if flow_stale and not self._flow_was_stale:
@@ -456,6 +613,40 @@ class PoseEstimator(Node):
         elif not flow_stale and self._flow_was_stale:
             self.get_logger().info('flow voltou')
         self._flow_was_stale = flow_stale
+
+        # ----- diagnóstico da IMU #2 (BNO055) -----
+        # Só reclama se ela chegou a funcionar: robô montado sem BNO055 não
+        # merece warn nenhum (o sensor é opcional por projeto).
+        imu2_stale = self.use_imu2 and imu2_age > self.imu2_timeout
+        if self._last_imu2_wall is not None:
+            if imu2_stale and not self._imu2_was_stale:
+                self.get_logger().warn(
+                    f'BNO055 stale (age={imu2_age:.2f} s > {self.imu2_timeout:.2f} s) — '
+                    f'yaw volta pro MPU sozinho (e sem âncora magnética)',
+                    throttle_duration_sec=30.0,
+                )
+            elif not imu2_stale and self._imu2_was_stale:
+                self.get_logger().info('BNO055 voltou')
+        self._imu2_was_stale = imu2_stale
+
+        # Discordância de SINAL entre as duas IMUs: quase sempre imu2_yaw_sign
+        # errado (BNO055 montada girada). O núcleo já ignorou a #2 neste tick;
+        # aqui a gente grita, porque o sintoma no campo (yaw meio certo) é sutil
+        # demais pra alguém desconfiar do parâmetro sozinho.
+        if rate_disagree:
+            self.get_logger().error(
+                'IMUs DISCORDAM no sinal do giro — BNO055 ignorada. '
+                'Provável imu2_yaw_sign invertido: rode tools/imu2_check.py e, '
+                'girando pra esquerda, confira se os dois gz têm o mesmo sinal.',
+                throttle_duration_sec=10.0,
+            )
+            self._disagree_logged = True
+        elif self._disagree_logged and abs(yaw_rate) > 0.15:
+            # "Sem discordância" também é o que se vê com o robô PARADO (o gate
+            # ignora |ω| pequeno), então só declaramos reconciliação com giro
+            # real acontecendo — senão cada trecho em linha reta logaria isto.
+            self.get_logger().info('IMUs voltaram a concordar no sinal do giro')
+            self._disagree_logged = False
 
         # ----- diagnóstico do stream das rodas (MEGA viva?) -----
         # Rodas stale = a MEGA parou de mandar frames (provável I2C lockup do
@@ -499,8 +690,16 @@ class PoseEstimator(Node):
                              x, y, qz, qw, vx_out, vy_out, yaw_rate)
         od_std.pose.covariance[0] = 0.05    # var(x)
         od_std.pose.covariance[7] = 0.05    # var(y)
-        # yaw menos confiável no fallback de roda → AMCL/Nav confiam menos
-        od_std.pose.covariance[35] = 0.10 if yaw_source == 'imu' else 0.5
+        # Confiança no yaw, do melhor pro pior caso (AMCL/Nav2 pesam com isto):
+        #   0.05 — giro de IMU + âncora magnética: a deriva não cresce com o tempo
+        #   0.10 — giro de IMU integrado: bom, mas deriva devagar
+        #   0.50 — fallback de roda: derrapagem do skid-steer, o pior heading
+        if yaw_source == 'wheel':
+            od_std.pose.covariance[35] = 0.5
+        elif abs_yaw is not None:
+            od_std.pose.covariance[35] = 0.05
+        else:
+            od_std.pose.covariance[35] = 0.10
         od_std.twist.covariance[0] = 0.01   # var(vx)
         od_std.twist.covariance[7] = 0.05   # var(vy) — flow publica vy não-nulo
         od_std.twist.covariance[35] = 0.05  # var(vyaw)
@@ -548,6 +747,15 @@ class PoseEstimator(Node):
                 'alpha':      round(alpha, 3),
                 'quality':    int(quality_out),
                 'yaw_source': yaw_source,
+                # IMU #2 (BNO055): dá pra ver da web/CLI se ela está entrando na
+                # fusão e se a âncora magnética está de fato corrigindo algo.
+                'imu2_stale':   bool(imu2_stale),
+                'imu2_age':     round(imu2_age, 3) if imu2_age != float('inf') else None,
+                'mag_calib':    int(mag_calib_out),
+                'heading_anchored': abs_yaw is not None,
+                # rad aplicados NESTE tick (µrad na prática); o sinal diz pra que
+                # lado a deriva estava indo.
+                'heading_corr': round(heading_corr, 6),
             }
             self.pub_health.publish(String(data=json.dumps(health, sort_keys=True)))
 

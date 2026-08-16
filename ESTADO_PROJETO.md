@@ -1,7 +1,88 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-22**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-08-16**.
+
+---
+
+## 🧭 2026-08-16 — segunda IMU: BNO055 entra ao lado da MPU (9 eixos + heading absoluto)
+
+**Status: implementado e testado em bancada de software. NADA foi validado com
+o sensor físico ainda** — a BNO055 ainda não estava montada quando isto foi
+escrito. O que existe é o caminho completo, ligado por default, com guardas.
+
+**O buraco que ela fecha.** Toda direção do robô hoje é yaw **integrado**: a
+MPU6050 dá TAXA de giro, e a integral acumula erro sem limite. No SLAM/Nav2 o
+LiDAR reancorava e ninguém sentia; no **trekking** (percurso longo, sem mapa
+casando scan) a deriva é justamente o que estraga o final da rota. A BNO055 é 9
+eixos com **fusão no próprio chip** (modo NDOF): entrega um quaternion ancorado
+no **norte magnético**, então a deriva para de crescer.
+
+**Como ela entra — dois caminhos independentes, os dois desligáveis:**
+
+| caminho | parâmetro | default | o que faz |
+|---|---|---|---|
+| 2ª taxa de yaw | `imu2_rate_weight` | `0.5` | média com o gyro da MPU (menos ruído; um chip morrer não leva o yaw junto) |
+| heading absoluto | `heading_gain` / `heading_max_rate` | `0.2` / `0.15` | come a deriva do yaw integrado, devagar (τ≈5 s) e com teto (8,6°/s) |
+
+`use_imu2:=false` corta os dois e a pose volta a ser **exatamente** a de antes
+(tem teste garantindo isso). `use_imu2_heading:=false` mantém só a taxa — é o
+knob pra ambiente com muito ferro/EMI.
+
+**Três decisões que valem lembrar:**
+
+1. **Nunca `yaw = yaw_do_mag`.** A correção é complementar e saturada. Um ímã no
+   chão viraria salto de heading, e no Nav2 salto de heading vira **manobra real
+   do robô**. Com teto, o pior caso é um giro lento e visível.
+2. **Offset latcheado.** O `odom` tem origem de yaw arbitrária (onde o robô
+   estava no boot). O nó latcheia o alinhamento norte↔odom na 1ª amostra aceita,
+   então a correção **nasce valendo zero** e só combate deriva. O `yaw_fix` da
+   web arrasta o offset junto — correção manual não é desfeita pela âncora
+   (isto era exatamente o que a BNO055 ANTIGA fazia de errado, ver o comentário
+   histórico no `_on_yaw_fix`).
+3. **Gate de discordância de sinal.** Se as duas IMUs lerem giro real com sinais
+   opostos (BNO055 montada girada → `imu2_yaw_sign` errado), a média daria
+   **ZERO**: robô gira no chão e não gira no mapa, falha silenciosa e cara. O
+   núcleo descarta a #2 e o nó loga `error` apontando o parâmetro. O firmware
+   não precisa ser reflasheado pra corrigir montagem.
+
+**Gate de calibração:** o heading só vale com o campo `mag` de `/imu2/calib` ≥ 2
+(0..3). Mag descalibrado ainda entrega quaternion — apontando pra um norte
+inventado, que é pior que não ter correção. Calibra movendo o robô em ∞ no ar
+por ~20 s.
+
+**Firmware.** Driver próprio `sensors_bno055.*` (registrador direto, sem
+Adafruit — mesma razão do MPU: respeitar o `Wire.setWireTimeout()` anti-hang).
+Frame novo `FT_IMU2` (0x85, 27 bytes: quat + gyro + accel + mag + calib) a
+50 Hz, defasado 10 ms do `FT_IMU`. `sensor_flags` ganhou o bit 2 (`imu2_ok`).
+Detalhe que quase virou BO: o **reset por software da BNO055 bloqueia ~700 ms**;
+em runtime isso estouraria o `SETPOINT_TIMEOUT_MS` (500 ms) do hoverboard e o
+robô daria um solavanco a cada tentativa de recovery — por isso o reset só
+acontece no **boot**, e o recovery em runtime é a reconfiguração barata.
+Compila limpo (`-Wall -Wextra`): RAM 12,8%, flash 5,8%.
+
+**O que a BNO055 NÃO faz:** não entra na translação. Integrar o accel dela duas
+vezes diverge em metros por minuto. O ganho dela na POSIÇÃO é indireto (e maior):
+a direção pra onde a velocidade de roda/flow é projetada passa a não ter deriva.
+
+**Validado só em software** (sem hardware): os 303 testes do `robot_nav` passam
+— 10 deles novos no núcleo puro (`test_fused_odom.py`) — mais um smoke test do
+nó real com BNO055 sintética — âncora derrubou a deriva de 20 s de bias 0,02 rad/s de
+**+22,9° pra +5,6°** (regime permanente teórico +5,7°), `yaw_fix` sobreviveu
+(+30,01° → +30,00° em 10 s) e o gate de sinal manteve o giro em +45,86° em vez
+de zerar.
+
+### ⏭️ Falta fazer (bancada, com o sensor na mão)
+1. Montar a BNO055 **longe dos motores** e conferir a fiação (`CONEXOES.txt`).
+2. `pio run -t upload` na MEGA e `ros2 topic hz /imu2/data` (~50 Hz).
+3. **Sinal:** `tools/imu2_check.py`, girar pra esquerda, ver se `gz1`/`gz2` têm o
+   mesmo sinal. Se não: `imu2_yaw_sign:=-1.0`.
+4. **Magnitude:** girar 90° reais e ver `yaw_abs` andar ~90°.
+5. Calibrar o mag (∞ no ar) até `mag=3` e confirmar `heading_anchored=true`.
+6. Com **motores ligados**, ver se `mag` e `|B|` se seguram — se caírem, é EMI e
+   o veredito é `use_imu2_heading:=false` naquele ambiente.
+7. Só depois: uma rota de trekking longa comparando a deriva final com e sem
+   âncora (é a métrica que justifica o sensor).
 
 ---
 

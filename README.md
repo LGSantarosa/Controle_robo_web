@@ -23,7 +23,7 @@ Interface web para controlar um robô **skid-steer de 4 rodas** com duas placas 
   - [Modo NAV2 — navegação autônoma](#modo-nav2--navegação-autônoma)
 - [Operação headless](#operação-headless)
 - [Controles](#controles)
-- [Sensores embarcados (IMU MPU6050 + optical flow)](#sensores-embarcados-imu-mpu6050--optical-flow)
+- [Sensores embarcados (IMU MPU6050 + BNO055 + optical flow)](#sensores-embarcados-imu-mpu6050--bno055--optical-flow)
 - [Sinalização do robô (LEDs, relé, botão)](#sinalização-do-robô-leds-relé-botão)
 - [Navegação por waypoints](#navegação-por-waypoints)
 - [Camada de segurança e manobra (NAV2)](#camada-de-segurança-e-manobra-nav2)
@@ -172,13 +172,17 @@ Navegador (WASD / Gamepad / Clique / Waypoints / Marcar porta)
   Arduino MEGA 2560 (firmware C++, Wire timeout + watchdog WDTO_2S)
         │  Serial1 ───► placa hoverboard FRENTE  (FL + FR)
         │  Serial2 ───► placa hoverboard TRÁS    (RL + RR)
-        │  I²C    ───► MPU6050  (IMU — gyro + accel; yaw integrado do gyro Z)
+        │  I²C    ───► MPU6050  (IMU #1 — gyro + accel; yaw integrado do gyro Z)
+        │         ───► BNO055   (IMU #2 — gyro + accel + MAG, quaternion absoluto)
         │  SPI    ───► [PMW3901 optical flow — REMOVIDO 2026-07-01]
         │  pinos  ───► relé / LED de marco / botão / fita de 3 LEDs na 12 V
 
   Sensores publicados pela MEGA via mega_bridge:
     /hoverboard/wheel_velocities  (Float64MultiArray, RPM por roda [FL,FR,RL,RR])
     /imu/data           (sensor_msgs/Imu — gyro/accel, QoS BEST_EFFORT)
+    /imu2/data          (sensor_msgs/Imu — BNO055, COM orientation absoluta)
+    /imu2/mag           (sensor_msgs/MagneticField — campo em tesla)
+    /imu2/calib         (String JSON — sys/gyro/accel/mag 0..3, só quando muda)
     /optical_flow       (Vector3Stamped — 0 Hz hoje: sensor removido)
     /battery/{front,rear}  (→ power_monitor: CSV 10 Hz + chip de tensão na UI)
 
@@ -399,7 +403,7 @@ ls -la /dev/mega /dev/lidar
 O firmware C++ fica em `firmware/mega_bridge/` (projeto PlatformIO). Ele:
 - recebe comandos do PC pela USB (frames `0xAA 0x55 [tipo] [len] [payload] [xor]`, 230400 baud);
 - envia `SerialCommand` (0xABCD) para as duas placas pelos `Serial1` (frente) e `Serial2` (trás) a 50 Hz, com **watchdog de 500 ms** (zera os motores se o PC parar de falar);
-- agrega os `SerialFeedback` das duas placas e os dados da IMU MPU6050 (e do PMW3901, quando presente) num único stream para o PC;
+- agrega os `SerialFeedback` das duas placas e os dados das IMUs (MPU6050 e BNO055; mais o PMW3901, quando presente) num único stream para o PC;
 - protege o barramento I²C com `Wire.setWireTimeout` + watchdog de hardware `WDTO_2S` (EMI dos motores travava a TWI e congelava o firmware — fix 2026-06-09, validado em campo).
 
 **Pinagem fixa:**
@@ -410,7 +414,7 @@ O firmware C++ fica em `firmware/mega_bridge/` (projeto PlatformIO). Ele:
 | Serial1 | 18 (TX), 19 (RX) | Placa hoverboard **FRENTE** |
 | Serial2 | 16 (TX), 17 (RX) | Placa hoverboard **TRÁS** |
 | Serial3 | 14 (TX), 15 (RX) | Reserva / debug |
-| I²C | 20 (SDA), 21 (SCL) | MPU6050 (IMU 6 eixos, endereço `0x68`) |
+| I²C | 20 (SDA), 21 (SCL) | MPU6050 (IMU #1, 6 eixos, `0x68`) **+** BNO055 (IMU #2, 9 eixos, `0x28`/`0x29`) — mesmo par de fios, em paralelo |
 | SPI | 50 (MISO), 51 (MOSI), 52 (SCK) | PMW3901 (via conversor 5↔3.3 V) — **removido 2026-07-01** |
 | CS do PMW3901 | 10 | PMW3901 — removido |
 | Fita de LEDs | relé/12 V | Fita de 3 LEDs na 12 V (o anel WS2812 foi **abandonado** — curto no DIN; driver fora do build) |
@@ -563,7 +567,7 @@ O que sobe a mais (3 nós Python leves, ~10% CPU total):
 
 | Nó | Tópico produzido | Função |
 |----|------------------|--------|
-| `pose_estimator` | `/trekking/pose`, `/trekking/odom`, `/trekking/slip` (+ `/odom` e o TF, em todos os modos) | Funde **MPU6050 (yaw do gyro, validado ~99%)** + **4 RPMs** (+ **PMW3901 flow**, quando presente — hoje removido). Corrige slip das rodas. |
+| `pose_estimator` | `/trekking/pose`, `/trekking/odom`, `/trekking/slip` (+ `/odom` e o TF, em todos os modos) | Funde **MPU6050 (yaw do gyro, validado ~99%)** + **BNO055 (2ª taxa de giro + heading absoluto do mag)** + **4 RPMs** (+ **PMW3901 flow**, quando presente — hoje removido). Corrige slip das rodas. |
 | `cone_detector`  | `/trekking/cones` | Clusteriza `/scan` por gap, filtra por largura (5–40 cm) e publica candidatos a cone em frame `odom`. |
 | `trekking_runner`| `/cmd_vel`, `/leds/color`, `/trekking/state`, `/trekking/target` | Máquina IDLE/RECORD/PLAY com PID heading + `v = v_max·cos²(err)·brake`, snap-to-cone re-âncora o alvo a cada waypoint. |
 
@@ -876,16 +880,28 @@ Ao soltar o botão, o multiplicador volta ao valor anterior do slider. A UI tamb
 
 ---
 
-## Sensores embarcados (IMU MPU6050 + optical flow)
+## Sensores embarcados (IMU MPU6050 + BNO055 + optical flow)
 
-A Arduino MEGA lê a IMU e entrega os dados no ROS via `mega_bridge`, **fundidos pelo `pose_estimator`** (que publica `/odom` e o TF `odom→base_link` em todos os modos):
+A Arduino MEGA lê as IMUs e entrega os dados no ROS via `mega_bridge`, **fundidos pelo `pose_estimator`** (que publica `/odom` e o TF `odom→base_link` em todos os modos):
 
-**MPU6050 — IMU 6 eixos** (I²C `0x68`; gyro+accel; sem magnetômetro):
+**MPU6050 — IMU #1, 6 eixos** (I²C `0x68`; gyro+accel; sem magnetômetro):
 - Tópico: `/imu/data` (`sensor_msgs/Imu`, QoS `BEST_EFFORT` — o subscriber precisa casar, senão a IMU "some").
 - 6 eixos **sem yaw absoluto**: o yaw é **integrado do gyro Z** pelo `pose_estimator`. Validado na bancada: escala ~+2% em 360°, suficiente sem correção.
 - Montada de ponta-cabeça (Z pra baixo) → `imu_yaw_sign=-1.0` no launch.
 - **Uso atual: FUNDIDA.** O yaw do gyro corrige a odometria de roda no giro (skid-steer patina, a roda superestima yaw) — resolveu o "pose erra no giro" do SLAM/Nav2 (validação ~99% em campo, 2026-06-08).
 - **Histórico (2026-07-01):** o dono chegou a trocar por um MPU6500/"9250" e depois voltou pro MPU6050. O firmware (driver direto por registrador) tinha uma whitelist de WHO_AM_I que **não incluía o `0x68` do 6050** → a IMU ficava a 0 Hz sem ninguém perceber (o LiDAR/AMCL mascarava). Corrigido: a whitelist aceita `0x68` (6050) e `0x70/0x71/0x73` (6500/9250/9255).
+
+**BNO055 — IMU #2, 9 eixos** (I²C `0x28`/`0x29`; gyro+accel+**magnetômetro**, com fusão embarcada no chip):
+- Tópicos: `/imu2/data` (`sensor_msgs/Imu` — **com `orientation`**, ao contrário do `/imu/data`), `/imu2/mag` (`sensor_msgs/MagneticField`, tesla) e `/imu2/calib` (JSON `sys/gyro/accel/mag`, 0..3, publicado só quando muda). QoS `BEST_EFFORT` nos dois primeiros.
+- **Entra ao LADO da #1, não no lugar dela.** São duas contribuições independentes:
+  1. **taxa de yaw** — média ponderada com a do MPU (`imu2_rate_weight`, default 0.5). Duas medidas do mesmo ω: menos ruído, e um chip que morra sozinho não leva o yaw junto.
+  2. **heading ABSOLUTO** — o quaternion do modo NDOF está ancorado no norte magnético, então a **deriva do yaw integrado para de crescer**. É o principal ganho no **trekking**, onde o percurso é longo e não há LiDAR/AMCL pra reancorar a pose.
+- A correção de heading é **lenta e limitada** por projeto: `heading_gain=0.2` (τ≈5 s) e teto `heading_max_rate=0.15 rad/s`. Nunca "yaw = yaw do mag": um ímã no chão ou EMI de motor viraria um salto de heading, e no Nav2 salto de heading vira manobra real do robô.
+- **Gate de calibração:** o heading só é usado com o campo `mag` de `/imu2/calib` ≥ `mag_calib_min` (default 2). Com o mag descalibrado a BNO055 continua entregando quaternion — apontando pra um norte inventado. Pra calibrar: mova o robô em ∞ (oito) no ar por ~20 s e veja `mag` subir pra 3.
+- **Offset de ancoragem:** o frame `odom` tem origem de yaw arbitrária (onde o robô estava no boot), então o nó *latcheia* o alinhamento norte↔odom na primeira amostra aceita. A correção nasce valendo zero e só combate **deriva** — nunca gira o robô pro norte de verdade. O `yaw_fix` da web arrasta esse offset junto, então uma correção manual **não é desfeita** pela âncora.
+- **Gate de discordância (anti-montagem-invertida):** se as duas IMUs lerem giro real com **sinais opostos**, a #2 é descartada no tick e o `pose_estimator` loga `error`. Sem isso, a média de `+ω` com `-ω` daria **zero** — o robô giraria no chão sem girar no mapa, a pior falha possível (silenciosa). O conserto é `imu2_yaw_sign:=-1.0` no launch, não reflashear a MEGA.
+- **Bancada:** `python3 ros2_packages/robot_nav/tools/imu2_check.py` mostra `gz` das duas IMUs lado a lado, o yaw absoluto, `|B|` em µT, a calibração e o que a âncora está corrigindo.
+- **Desligar:** `use_imu2:=false` (corta os dois caminhos — a pose volta a ser exatamente a de antes) ou `use_imu2_heading:=false` (mantém a 2ª taxa de giro, desliga só a âncora magnética — para ambientes com muito ferro/EMI).
 
 **PMW3901 — sensor de fluxo óptico** (SPI, CS pino 10) — ⚠️ **REMOVIDO DO ROBÔ (2026-07-01):**
 - **Não está montado hoje.** `/optical_flow` fica a 0 Hz e a fusão roda só com rodas + IMU. `flow_stale=true` no `/trekking/health` é NORMAL agora — não é bug.
@@ -893,7 +909,7 @@ A Arduino MEGA lê a IMU e entrega os dados no ROS via `mega_bridge`, **fundidos
 - Plano futuro (não urgente): breakout da **Pimoroni** (regulador + level-shift onboard, 5 V direto) que mata o shifter marginal. O código da fusão do flow segue no repo pronto pra religar.
 - Quando montado: tópico `/optical_flow` (`geometry_msgs/Vector3Stamped`: `x=dx`, `y=dy`, `z=SQUAL` real do registrador `0x07`); entra na fusão com `use_flow=on`, escala calibrada em campo, gates `flow_yaw_gate`/`flow_plausible` contra lixo de EMI.
 
-Quem orquestra ambos no firmware: `firmware/mega_bridge/src/main.cpp` (loop principal), `firmware/mega_bridge/include/sensors_imu.h` e `sensors_flow.h`.
+Quem orquestra os três no firmware: `firmware/mega_bridge/src/main.cpp` (loop principal), `firmware/mega_bridge/include/sensors_imu.h`, `sensors_bno055.h` e `sensors_flow.h`. Os três drivers falam I²C/SPI **direto por registrador** (sem lib da Adafruit) pra respeitarem o `Wire.setWireTimeout()` anti-hang do `setup()`.
 
 **Robustez do stream (fixes 2026-06-09, validados):** se a MEGA travar ou o stream de rodas morrer, o `pose_estimator` **congela a pose** (`wheel_fresh`) em vez de re-integrar valores velhos (era a causa do "robô gira no mapa parado"); no firmware, `Wire.setWireTimeout` + watchdog `WDTO_2S` impedem o I²C de travar o loop pra sempre.
 
@@ -1037,6 +1053,9 @@ Tópicos consumidos:
 | `/wheel_vel_setpoints` | `wheel_msgs/WheelSpeeds` | `cmd_vel_to_wheels` | `mega_bridge` (envia pras 2 placas) | sempre |
 | `/hoverboard/wheel_velocities` | `std_msgs/Float64MultiArray` (RPM, ordem [FL,FR,RL,RR]) | `mega_bridge` | `pose_estimator` | sempre |
 | `/imu/data` | `sensor_msgs/Imu` (QoS `BEST_EFFORT`) | `mega_bridge` | `pose_estimator` (yaw fundido) / `unstuck_supervisor` (giro fechado) | sempre |
+| `/imu2/data` | `sensor_msgs/Imu` (QoS `BEST_EFFORT`, **com `orientation`**) | `mega_bridge` | `pose_estimator` (2ª taxa de yaw + âncora de heading) | quando a BNO055 está montada |
+| `/imu2/mag` | `sensor_msgs/MagneticField` (QoS `BEST_EFFORT`) | `mega_bridge` | diagnóstico (`tools/imu2_check.py`) | idem |
+| `/imu2/calib` | `std_msgs/String` (JSON, só quando muda) | `mega_bridge` | `pose_estimator` (gate do heading absoluto) | idem |
 | `/optical_flow` | `geometry_msgs/Vector3Stamped` | `mega_bridge` | `pose_estimator` (vx fundido) | sensor **removido** — 0 Hz hoje |
 | `/battery/front` `/battery/rear` | `sensor_msgs/BatteryState` | `mega_bridge` | `power_monitor` (CSV + chip UI) | sempre |
 | `/leds/color` | `std_msgs/ColorRGBA` | `trekking_runner` (no-op) | `mega_bridge` → MEGA | sempre (anel abandonado) |
@@ -1058,7 +1077,7 @@ Tópicos consumidos:
 
 **TFs publicadas:**
 - `base_link → base_laser, imu_link, flow_link, 4 rodas` — static (URDF via `robot_state_publisher`). **Todos os sensores estão no CENTRO do chassi** (o offset de 0,10 m do LiDAR era falso e foi removido em 2026-06-11).
-- `odom → base_link` — dinâmica (`pose_estimator`, fusão rodas + IMU; flow removido; o antigo `odom_publisher` foi deletado)
+- `odom → base_link` — dinâmica (`pose_estimator`, fusão rodas + IMU #1 + IMU #2/BNO055; flow removido; o antigo `odom_publisher` foi deletado)
 - `map → odom` — dinâmica, em SLAM pelo `slam_toolbox`, em NAV2 pelo `amcl`
 
 ### Cinemática
@@ -1130,7 +1149,8 @@ Controle_robo_web/
 │       ├── include/
 │       │   ├── protocol.h             # Frames 0xAA 0x55 [tipo] [len] [payload] [xor]
 │       │   ├── hoverboard.h           # SerialCommand 0xABCD + parser de SerialFeedback
-│       │   ├── sensors_imu.h          # Driver da IMU (registrador direto; MPU6050 0x68 / 6500 / 9250)
+│       │   ├── sensors_imu.h          # Driver da IMU #1 (registrador direto; MPU6050 0x68 / 6500 / 9250)
+│       │   ├── sensors_bno055.h       # Driver da IMU #2 (BNO055 0x28/0x29; quaternion absoluto + mag)
 │       │   ├── sensors_flow.h         # Wrapper do PMW3901 (fork c/ SQUAL real) — sensor removido do robô
 │       │   ├── leds.h                 # Anel WS2812 — ABANDONADO, fora do build
 │       │   └── io_signals.h           # Relé, LED, botão
@@ -1170,7 +1190,7 @@ Controle_robo_web/
 │       └── robot_nav/                 # Nós Python (EventsExecutor via utils.spin_node)
 │           ├── mega_bridge.py         # Ponte USB ↔ MEGA ↔ 2 hoverboards + sensores
 │           ├── cmd_vel_to_wheels.py   # /cmd_vel → /wheel_vel_setpoints
-│           ├── pose_estimator.py      # Fusão rodas+IMU+flow → /odom + TF (todos os modos)
+│           ├── pose_estimator.py      # Fusão rodas+IMU+BNO055+flow → /odom + TF (todos os modos)
 │           ├── fused_odom.py          # Lógica pura da fusão (testável sem ROS)
 │           ├── path_follower.py        # Segue o /plan em retas + giro no lugar (prio 15)
 │           ├── scan_sanitizer.py      # /scan → /scan_safe (fantasmas <15 cm do LD06)
@@ -1351,6 +1371,35 @@ A fiação real deste robô tem particularidades já **normalizadas no código**
 
 # 3) Fios SDA/SCL bons? A IMU é montada de ponta-cabeça — o sinal do yaw
 #    é corrigido por imu_yaw_sign=-1.0 no launch (não mexer sem re-validar).
+```
+
+### BNO055 (IMU #2) não aparece, ou o robô gira torto depois de instalá-la
+
+```bash
+# 0) Ela é OPCIONAL: sem a BNO055 montada, tudo funciona como antes (nenhum
+#    warn, /imu2/* simplesmente não existe). Nada aqui é urgente.
+
+# 1) A MEGA achou o chip? /system/health traz imu2_ok e imu2_mag_calib:
+ros2 topic echo /system/health --once
+#    imu2_ok=false → chip mudo no I²C. Confira VIN/GND/SDA/SCL e o endereço
+#    (ADR solto = 0x28; em VCC = 0x29 — o firmware tenta os dois).
+
+# 2) Frames chegando?
+ros2 topic hz /imu2/data          # ~50 Hz
+python3 ros2_packages/robot_nav/tools/imu2_check.py
+
+# 3) "IMUs DISCORDAM no sinal do giro" no log do pose_estimator:
+#    a BNO055 está montada com outra orientação. O nó já ignorou a #2 (a pose
+#    NÃO está corrompida) — suba com imu2_yaw_sign:=-1.0 e o erro some.
+#    Girando pra ESQUERDA, gz1 e gz2 têm que ter o MESMO sinal.
+
+# 4) heading_anchored=false no /trekking/health: é o gate de calibração.
+#    Veja `mag` em /imu2/calib — precisa ser >= 2. Calibra movendo o robô em
+#    ∞ (oito) no ar por ~20 s. Enquanto isso o yaw fica só integrado (normal).
+
+# 5) mag despenca pra 0/1 com os motores ligados = EMI/ferro no local.
+#    Afaste a BNO055 dos cabos de potência; se persistir naquele ambiente,
+#    use_imu2_heading:=false (mantém a 2ª taxa de giro, desliga a âncora).
 ```
 
 ### LiDAR não publica `/scan`
