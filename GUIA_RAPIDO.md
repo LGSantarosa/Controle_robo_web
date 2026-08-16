@@ -226,6 +226,8 @@ E lembre: quem for falar ROS com o robô precisa de `export ROS_DOMAIN_ID=42`.
 | Robô não anda | Confira `/dev/mega`: `ls -l /dev/mega` no robô. Sumiu → replugue o USB da MEGA. |
 | Sem `/scan` (LiDAR) | `ls -l /dev/lidar`. Cheque a fiação do LD06 (vermelho→5V, preto→GND, amarelo→RXD, **PWM→3,3 V**). |
 | `robot-connect` diz "sessão viva mas launch.sh não está rodando" | No robô: `tmux kill-session -t robo` e rode `robot-connect` de novo. |
+| Log dizendo **"IMUs DISCORDAM no sinal do giro"** | A 2ª IMU (BNO055) está montada girada. O robô **continua andando certo** (o sistema ignora ela sozinho). Quem sobe a stack: `./launch.sh` com `imu2_yaw_sign:=-1.0`. Detalhes no `README.md`. |
+| **"heading absoluto SUSPENSO"** ou a direção derivando no trekking | O magnetômetro perdeu a calibração. Com o robô no colo, faça um **∞ (oito) no ar** por ~20 s até parar de aparecer. Não é obrigatório pra dirigir. |
 
 ---
 

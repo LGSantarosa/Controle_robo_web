@@ -5,6 +5,8 @@
 //   Serial1 ↔ placa hoverboard FRENTE  (controla FL+FR, SerialCommand 0xABCD)
 //   Serial2 ↔ placa hoverboard TRÁS    (controla RL+RR, SerialCommand 0xABCD)
 //   I2C ↔ MPU9250 IMU (giro + accel; mag AK8963 p/ yaw absoluto é TODO)
+//   I2C ↔ BNO055 IMU #2 (9 eixos: giro + accel + mag, com quaternion ABSOLUTO
+//         fundido no chip — mesmo par SDA/SCL, endereço 0x28/0x29)
 //   SPI ↔ PMW3901 optical flow (CS = pino 10)
 //   (anel WS2812 COMENTADO — ver AUDITORIA_2026-05-29 A1. O driver vive em
 //    leds.cpp/leds.h mas está FORA do build via build_src_filter no
@@ -23,6 +25,7 @@
 #include "protocol.h"
 #include "hoverboard.h"
 #include "sensors_imu.h"
+#include "sensors_bno055.h"
 #include "sensors_flow.h"
 // #include "leds.h"   // anel WS2812 comentado — ver AUDITORIA_2026-05-29 A1
 #include "io_signals.h"
@@ -33,6 +36,11 @@ constexpr uint8_t  PMW_CS                = 10;
 constexpr uint32_t TX_HOVERBOARD_PERIOD  = 20;     // 50 Hz comandos pras placas
 constexpr uint32_t TX_STATE_PERIOD       = 20;     // 50 Hz STATE pro PC
 constexpr uint32_t TX_IMU_PERIOD         = 20;     // 50 Hz IMU pro PC
+// 50 Hz também pra BNO055 — a fusão dela roda a 100 Hz internamente, mas o
+// pose_estimator fecha o tick a 50 Hz, então mandar mais só gastaria serial.
+// DEFASADO 10 ms do FT_IMU (ver txImu2): as duas leituras I²C caem em ticks
+// diferentes do loop, em vez de empilharem no mesmo.
+constexpr uint32_t TX_IMU2_PERIOD        = 20;     // 50 Hz IMU #2 (BNO055) pro PC
 constexpr uint32_t TX_FLOW_PERIOD        = 10;     // 100 Hz FLOW pro PC
 constexpr uint32_t SETPOINT_TIMEOUT_MS   = 500;    // watchdog: se PC sumir, zera motores
 
@@ -40,8 +48,9 @@ protocol::Decoder         pc_decoder;
 hoverboard::FeedbackParser fb_front;
 hoverboard::FeedbackParser fb_rear;
 
-sensors::Imu   imu_dev;
-sensors::Flow  flow_dev{PMW_CS};
+sensors::Imu    imu_dev;
+sensors::Bno055 imu2_dev;
+sensors::Flow   flow_dev{PMW_CS};
 // leds::Ring     ring;   // anel WS2812 comentado — ver AUDITORIA_2026-05-29 A1
 
 struct Setpoint { int16_t steer; int16_t speed; };
@@ -52,6 +61,7 @@ static uint32_t last_setpoint = 0;
 static uint32_t last_tx_hover = 0;
 static uint32_t last_tx_state = 0;
 static uint32_t last_tx_imu   = 0;
+static uint32_t last_tx_imu2  = 0;
 static uint32_t last_tx_flow  = 0;
 
 static void handlePcFrame(uint8_t type, uint8_t len, const uint8_t* p) {
@@ -150,10 +160,12 @@ static void txState() {
     // Outros bits reservados para próximos diagnósticos (over-temp, brownout, etc.).
     uint8_t faultF = front_stale ? 0x01 : 0;
     uint8_t faultR = rear_stale  ? 0x01 : 0;
-    // sensor_flags: bit 0 = imu_ok, bit 1 = flow_ok. Lido no bridge para
-    // publicar /system/health (JSON) sem polling I²C/SPI do lado do PC.
-    uint8_t sensor_flags = (uint8_t)((imu_dev.ok() ? 0x01 : 0) |
-                                     (flow_dev.ok() ? 0x02 : 0));
+    // sensor_flags: bit 0 = imu_ok, bit 1 = flow_ok, bit 2 = imu2_ok (BNO055).
+    // Lido no bridge para publicar /system/health (JSON) sem polling I²C/SPI do
+    // lado do PC.
+    uint8_t sensor_flags = (uint8_t)((imu_dev.ok()  ? 0x01 : 0) |
+                                     (flow_dev.ok() ? 0x02 : 0) |
+                                     (imu2_dev.ok() ? 0x04 : 0));
 
     uint8_t buf[16];
     memcpy(buf + 0,  &rpm_FL, 2);
@@ -216,6 +228,54 @@ static void txImu() {
         memcpy(mbuf + 4, &mz, 2);
         protocol::writeFrame(Serial, protocol::FT_MAG, mbuf, sizeof(mbuf));
     }
+}
+
+static void txImu2() {
+    const uint32_t now = millis();
+    if (now - last_tx_imu2 < TX_IMU2_PERIOD) return;
+    last_tx_imu2 = now;
+    // read() cuida do recovery sozinho quando o barramento cai (mesma política
+    // do MPU); aqui só não publicamos amostra velha/inválida.
+    if (!imu2_dev.read()) return;
+
+    // BNO055: além de giro+accel (redundância do MPU), traz o QUATERNION de
+    // orientação ABSOLUTA fundido no chip — é ele que ancora o yaw no norte
+    // magnético e mata a deriva do trekking. O byte de calibração vai junto
+    // porque o PC PRECISA dele: heading da BNO055 com mag descalibrado é lixo
+    // confiante, e o pose_estimator só aceita a correção com calib do mag ≥ 2.
+    const int16_t qw = (int16_t)lround(imu2_dev.qw() * 16384.0f);
+    const int16_t qx = (int16_t)lround(imu2_dev.qx() * 16384.0f);
+    const int16_t qy = (int16_t)lround(imu2_dev.qy() * 16384.0f);
+    const int16_t qz = (int16_t)lround(imu2_dev.qz() * 16384.0f);
+    const int16_t gx = f_to_milli(imu2_dev.gx());
+    const int16_t gy = f_to_milli(imu2_dev.gy());
+    const int16_t gz = f_to_milli(imu2_dev.gz());
+    const int16_t ax = f_to_milli(imu2_dev.ax());
+    const int16_t ay = f_to_milli(imu2_dev.ay());
+    const int16_t az = f_to_milli(imu2_dev.az());
+    // DECI-µT (×10), mesma escala do FT_MAG: 0,1 µT de resolução cobre o campo
+    // da Terra (~50 µT) com folga de sobra dentro do int16.
+    const int16_t mx = (int16_t)lround(imu2_dev.mx() * 10.0f);
+    const int16_t my = (int16_t)lround(imu2_dev.my() * 10.0f);
+    const int16_t mz = (int16_t)lround(imu2_dev.mz() * 10.0f);
+
+    uint8_t buf[27];
+    memcpy(buf + 0,  &qw, 2);
+    memcpy(buf + 2,  &qx, 2);
+    memcpy(buf + 4,  &qy, 2);
+    memcpy(buf + 6,  &qz, 2);
+    memcpy(buf + 8,  &gx, 2);
+    memcpy(buf + 10, &gy, 2);
+    memcpy(buf + 12, &gz, 2);
+    memcpy(buf + 14, &ax, 2);
+    memcpy(buf + 16, &ay, 2);
+    memcpy(buf + 18, &az, 2);
+    memcpy(buf + 20, &mx, 2);
+    memcpy(buf + 22, &my, 2);
+    memcpy(buf + 24, &mz, 2);
+    buf[26] = imu2_dev.calib();
+
+    protocol::writeFrame(Serial, protocol::FT_IMU2, buf, sizeof(buf));
 }
 
 static void txFlow() {
@@ -284,6 +344,16 @@ void setup() {
     // existente (sensors_imu.cpp: re-init a cada 2 s) finalmente dispara.
     Wire.setWireTimeout(25000 /* us */, true /* reset_with_timeout */);
     imu_dev.begin();
+    // BNO055 DEPOIS do MPU de propósito: ela precisa de ~700 ms de boot depois
+    // do power-on, e a calibração de bias do giro do MPU (bloqueante, ~600 ms)
+    // acabou de gastar quase todo esse tempo — então a espera sai de graça.
+    // Se a BNO055 não estiver montada, begin() falha rápido (NACK nos dois
+    // endereços) e o resto do firmware segue igual: sensor opcional.
+    imu2_dev.begin();
+    // Defasa o FT_IMU2 em 10 ms do FT_IMU: as duas transações I²C caem em ticks
+    // diferentes do loop em vez de somarem no mesmo, mantendo o pior caso de
+    // tempo de loop baixo (o WDT de 2 s e o setpoint de 50 Hz agradecem).
+    last_tx_imu2 = millis() - (TX_IMU2_PERIOD / 2);
 
     SPI.begin();
     flow_dev.begin();
@@ -315,6 +385,8 @@ void loop() {
     pumpPcSerial();
     txState();
     txImu();
+    pumpPcSerial();
+    txImu2();
     pumpPcSerial();
     txFlow();
 }

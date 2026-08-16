@@ -4,11 +4,13 @@ import pytest
 
 from robot_nav.fused_odom import (
     FusedOdom,
+    blend_yaw_rate,
     flow_alpha,
     flow_plausible,
     flow_tick_velocity,
     flow_yaw_gate,
     fuse_translation,
+    heading_correction,
     wheel_twist,
 )
 
@@ -206,6 +208,132 @@ def test_stale_wheels_fresh_imu_uses_imu_yaw_no_wheel_translation():
     assert r.yaw == pytest.approx(0.3 * 0.1)   # yaw da IMU
     assert fo.x == pytest.approx(0.0)          # rodas congeladas NAO movem a pose
     assert fo.y == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# IMU #2 (BNO055): taxa de yaw redundante + heading absoluto do magnetometro
+# ---------------------------------------------------------------------------
+
+
+def test_blend_yaw_rate_media_das_duas_imus():
+    rate, source, disagree = blend_yaw_rate(
+        imu_fresh=True, imu_rate=0.40,
+        imu2_fresh=True, imu2_rate=0.50, imu2_weight=0.5)
+    assert rate == pytest.approx(0.45)
+    assert source == 'imu+imu2'
+    assert disagree is False
+
+
+def test_blend_yaw_rate_peso_zero_e_a_imu1_pura():
+    # use_imu2 ligado mas peso 0: a #2 nao move a taxa (so o heading dela conta)
+    rate, source, _ = blend_yaw_rate(True, 0.40, True, 0.20, imu2_weight=0.0)
+    assert rate == pytest.approx(0.40)
+    assert source == 'imu+imu2'
+
+
+def test_blend_yaw_rate_cai_pra_imu_viva():
+    assert blend_yaw_rate(True, 0.3, False, 9.9, 0.5)[:2] == (0.3, 'imu')
+    assert blend_yaw_rate(False, 9.9, True, 0.3, 0.5)[:2] == (0.3, 'imu2')
+    # nenhuma fresca -> None (o chamador cai pro diferencial de roda)
+    assert blend_yaw_rate(False, 9.9, False, 9.9, 0.5)[:2] == (None, 'wheel')
+
+
+def test_blend_yaw_rate_sinal_oposto_descarta_a_segunda():
+    # MODO DE FALHA que este gate existe pra pegar: BNO055 montada girada ->
+    # imu2_yaw_sign errado -> as duas leem o MESMO giro com sinais opostos. A
+    # media ingenua daria ZERO (robo gira no chao e nao gira no mapa).
+    rate, source, disagree = blend_yaw_rate(True, 0.80, True, -0.80, 0.5)
+    assert rate == pytest.approx(0.80)   # NAO e' 0.0
+    assert source == 'imu'               # a #2 saiu da conta
+    assert disagree is True
+
+
+def test_blend_yaw_rate_ruido_parado_nao_dispara_o_gate():
+    # Parado as duas leem ~0 com ruido de sinal aleatorio; isso NAO e'
+    # discordancia (|w| abaixo de disagree_min) — senao o log viveria gritando.
+    rate, source, disagree = blend_yaw_rate(True, 0.01, True, -0.01, 0.5)
+    assert disagree is False
+    assert source == 'imu+imu2'
+    assert rate == pytest.approx(0.0)
+
+
+def test_heading_correction_puxa_pro_ref_e_satura():
+    # erro pequeno: corr = ganho * erro * dt, sem bater no teto
+    corr = heading_correction(yaw=0.0, yaw_ref=0.10, gain=0.2, dt=0.02, max_rate=0.15)
+    assert corr == pytest.approx(0.2 * 0.10 * 0.02)
+    # erro GIGANTE (mag maluco por EMI): satura no teto max_rate*dt — nunca um
+    # salto de heading, so um giro lento e visivel
+    corr = heading_correction(0.0, math.pi, gain=0.2, dt=0.02, max_rate=0.15)
+    assert corr == pytest.approx(0.15 * 0.02)
+    # sinal segue o lado mais curto do circulo (wrap): ref logo ATRAS de -pi
+    corr = heading_correction(yaw=3.10, yaw_ref=-3.10, gain=0.2, dt=0.02, max_rate=10.0)
+    assert corr > 0.0   # gira PRA FRENTE cruzando +-pi, nao 6.2 rad pra tras
+    # ganho 0 = desligado
+    assert heading_correction(0.0, 1.0, gain=0.0, dt=0.02, max_rate=0.15) == 0.0
+
+
+def test_step_sem_imu2_e_identico_ao_comportamento_antigo():
+    # CONTRATO da compatibilidade: os argumentos da BNO055 sao opcionais e, sem
+    # eles, o passo tem que dar exatamente o mesmo resultado de antes dela.
+    a = FusedOdom(wheel_base=0.5)
+    b = FusedOdom(wheel_base=0.5)
+    for _ in range(10):
+        ra = a.step(dt=0.02, v_fl=0.4, v_fr=0.6, v_rl=0.4, v_rr=0.6,
+                    imu_fresh=True, imu_yaw_rate=0.25,
+                    flow_vx=0.0, flow_vy=0.0, alpha=0.0)
+        rb = b.step(dt=0.02, v_fl=0.4, v_fr=0.6, v_rl=0.4, v_rr=0.6,
+                    imu_fresh=True, imu_yaw_rate=0.25,
+                    flow_vx=0.0, flow_vy=0.0, alpha=0.0,
+                    imu2_fresh=False, abs_yaw=None)
+    assert (ra.x, ra.y, ra.yaw) == (rb.x, rb.y, rb.yaw)
+    assert ra.yaw_source == 'imu'
+    assert ra.heading_corr == 0.0
+
+
+def test_step_ancora_magnetica_remove_a_deriva_do_yaw():
+    # Robo PARADO com a IMU acusando um bias de giro (deriva classica do yaw
+    # integrado): sem ancora o yaw foge; com a ancora ele fica preso no heading
+    # absoluto. 20 s a 50 Hz.
+    drift_rate = 0.02          # rad/s de bias
+    sem = FusedOdom(wheel_base=0.5)
+    com = FusedOdom(wheel_base=0.5)
+    for _ in range(1000):
+        sem.step(dt=0.02, v_fl=0.0, v_fr=0.0, v_rl=0.0, v_rr=0.0,
+                 imu_fresh=True, imu_yaw_rate=drift_rate,
+                 flow_vx=0.0, flow_vy=0.0, alpha=0.0)
+        com.step(dt=0.02, v_fl=0.0, v_fr=0.0, v_rl=0.0, v_rr=0.0,
+                 imu_fresh=True, imu_yaw_rate=drift_rate,
+                 flow_vx=0.0, flow_vy=0.0, alpha=0.0,
+                 abs_yaw=0.0, heading_gain=0.2, heading_max_rate=0.15)
+    assert sem.yaw == pytest.approx(drift_rate * 20.0, abs=1e-6)   # ~0.40 rad = 23 graus
+    # Regime permanente da malha: erro ≈ taxa_de_deriva / ganho = 0.02/0.2 = 0.1 rad
+    assert abs(com.yaw) < 0.12
+    assert abs(com.yaw) < abs(sem.yaw) / 3.0
+
+
+def test_step_ancora_nao_contamina_o_yaw_rate_publicado():
+    # A correcao de deriva mexe na POSE, nao na velocidade angular medida: se
+    # vazasse pro twist, o controlador veria um giro que nao existe.
+    fo = FusedOdom(wheel_base=0.5)
+    r = fo.step(dt=0.02, v_fl=0.0, v_fr=0.0, v_rl=0.0, v_rr=0.0,
+                imu_fresh=True, imu_yaw_rate=0.0,
+                flow_vx=0.0, flow_vy=0.0, alpha=0.0,
+                abs_yaw=1.0, heading_gain=0.2, heading_max_rate=0.15)
+    assert r.yaw_rate == 0.0          # nenhum giro medido
+    assert r.heading_corr > 0.0       # mas a pose foi corrigida
+    assert r.yaw == pytest.approx(r.heading_corr)
+
+
+def test_step_imu2_sozinha_segura_o_yaw_se_o_mpu_morrer():
+    # Redundancia real: MPU mudo, BNO055 viva -> o yaw continua vindo de giro,
+    # nao do diferencial de roda (que derrapa).
+    fo = FusedOdom(wheel_base=0.5)
+    r = fo.step(dt=0.1, v_fl=-0.5, v_fr=0.5, v_rl=-0.5, v_rr=0.5,
+                imu_fresh=False, imu_yaw_rate=0.0,
+                flow_vx=0.0, flow_vy=0.0, alpha=0.0,
+                imu2_fresh=True, imu2_yaw_rate=0.3, imu2_rate_weight=0.5)
+    assert r.yaw_source == 'imu2'
+    assert r.yaw == pytest.approx(0.03)
 
 
 def test_degenerate_matches_wheel_only_odom():

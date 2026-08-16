@@ -5,8 +5,10 @@ Robot base launch.
 Sobe:
   1. robot_state_publisher (URDF/TF)
   2. mega_bridge          (USB ↔ Arduino MEGA ↔ 2 hoverboards + sensores)
-  3. pose_estimator       (funde 4 RPMs + IMU + flow → /odom + TF odom→base_link,
-                           com degradação graciosa; também publica /trekking/*)
+  3. pose_estimator       (funde 4 RPMs + IMU (MPU) + IMU #2 (BNO055, com
+                           heading absoluto do mag) + flow → /odom + TF
+                           odom→base_link, com degradação graciosa; também
+                           publica /trekking/*)
   4. cmd_vel_to_wheels    (/cmd_vel → /wheel_vel_setpoints)
   5. joy_node            (PS4 ou Xbox em /dev/input/jsN → /joy; ver detect_joystick)
   6. teleop_twist_joy    (/joy → joy_vel, com dead-man no L1/LB)
@@ -111,6 +113,29 @@ def generate_launch_description():
                     '+1.0 com o 6500 montado plano.) Confirmar na bancada: girando '
                     'p/ esquerda o yaw do /odom tem que SUBIR; se descer, +1.0.'
     )
+    imu2_yaw_sign_arg = DeclareLaunchArgument(
+        'imu2_yaw_sign', default_value='1.0',
+        description='Sinal da taxa de yaw E do heading da BNO055 (IMU #2), pra '
+                    'casar a montagem dela. Valide na bancada com '
+                    'tools/imu2_check.py: girando p/ ESQUERDA, o gz das DUAS '
+                    'IMUs tem que ter o MESMO sinal. Se sairem opostos, use '
+                    'imu2_yaw_sign:=-1.0 (o pose_estimator ignora a #2 e loga '
+                    'erro enquanto discordarem, entao o robo nao anda torto).'
+    )
+    use_imu2_arg = DeclareLaunchArgument(
+        'use_imu2', default_value='true',
+        description='Funde a BNO055 (2a taxa de giro + heading absoluto do '
+                    'magnetometro). use_imu2:=false volta a pose a ser '
+                    'exatamente a de antes dela (so MPU + rodas).'
+    )
+    use_imu2_heading_arg = DeclareLaunchArgument(
+        'use_imu2_heading', default_value='true',
+        description='Ancora o yaw no norte magnetico (corrige a deriva do yaw '
+                    'integrado, devagar e com teto). Desligue com '
+                    'use_imu2_heading:=false se o local tiver ferro/ima demais '
+                    '(galpao com estrutura metalica, por exemplo) — a BNO055 '
+                    'continua entrando como 2a taxa de giro.'
+    )
     use_flow_arg = DeclareLaunchArgument(
         'use_flow', default_value='true',
         description='Funde o optical flow (PMW3901) na translacao. ON por padrao '
@@ -179,6 +204,18 @@ def generate_launch_description():
             # Sinal do yaw da MPU9250 (montagem PLANA, Z pra cima → +1.0). Override
             # de bancada via `imu_yaw_sign:=-1.0` se o giro vier invertido.
             'imu_yaw_sign': LaunchConfiguration('imu_yaw_sign'),
+            # IMU #2 (BNO055, 9 eixos). Entra em dois caminhos: metade do peso
+            # na taxa de yaw (média com o MPU) e a âncora de heading magnético
+            # que tira a deriva do yaw integrado — o que mais pesa no trekking.
+            # Os defaults do nó já são estes; ficam explícitos aqui porque são
+            # os knobs que se mexe na bancada.
+            'use_imu2': LaunchConfiguration('use_imu2'),
+            'imu2_yaw_sign': LaunchConfiguration('imu2_yaw_sign'),
+            'imu2_rate_weight': 0.5,
+            'use_imu2_heading': LaunchConfiguration('use_imu2_heading'),
+            'heading_gain': 0.2,
+            'heading_max_rate': 0.15,
+            'mag_calib_min': 2,
             # Flow OFF por padrão (EMI do PMW3901 infla a pose ao dirigir).
             'use_flow': LaunchConfiguration('use_flow'),
             # Calibração do PMW3901 → body frame (movida do trekking.launch.py:
@@ -253,6 +290,9 @@ def generate_launch_description():
         left_wheel_sign_arg,
         right_wheel_sign_arg,
         imu_yaw_sign_arg,
+        imu2_yaw_sign_arg,
+        use_imu2_arg,
+        use_imu2_heading_arg,
         use_flow_arg,
         mega_port_arg,
         mega_baud_arg,

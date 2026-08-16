@@ -5,14 +5,25 @@ Sem dependência de rclpy — testável isoladamente (estilo cone_pose_fix.py). 
 `pose_estimator` alimenta este núcleo com velocidades de roda, taxa/freshness da IMU,
 velocidade do flow + peso α, e dt; e publica o resultado (/odom + TF + /trekking/*).
 
-Seleção da TAXA de yaw (degradação graciosa):
-  - IMU = MPU6050 (6 eixos): NÃO há yaw absoluto, só taxa do giro. O yaw é
-    sempre INTEGRADO (ponto-médio); a IMU só troca a FONTE da taxa:
-      - IMU fresca  → taxa do giro (vence a derrapagem do skid-steer no giro).
-      - IMU ausente → taxa do diferencial de roda, igual ao odom_publisher
-                      antigo. É o caso degenerado.
+Seleção da TAXA de yaw (degradação graciosa), com DUAS IMUs:
+  - IMU #1 = MPU6050 (6 eixos): só taxa do giro, sem yaw absoluto.
+  - IMU #2 = BNO055 (9 eixos): taxa do giro + orientação ABSOLUTA (mag).
+  O yaw é sempre INTEGRADO (ponto-médio); as IMUs trocam a FONTE da taxa:
+      - as duas frescas → média ponderada das duas taxas (ver blend_yaw_rate),
+                          com gate de discordância pra pegar montagem invertida.
+      - só uma fresca   → a taxa dela.
+      - nenhuma         → taxa do diferencial de roda (caso degenerado, igual ao
+                          odom_publisher antigo).
+E, POR CIMA da integração, a BNO055 ainda ancora o yaw no norte magnético:
+uma correção LENTA e LIMITADA (heading_correction) tira a deriva acumulada sem
+dar solavanco no heading.
+
 Translação:
   - vx_body = α·vx_flow + (1-α)·vx_roda ; vy_body = α·vy_flow (roda cega à lateral).
+  A BNO055 NÃO entra na translação: integrar accel duas vezes diverge em metros
+  por minuto (o accel dela mede gravidade + vibração do chassi, não deslocamento
+  útil). O ganho dela na POSIÇÃO é indireto e vale muito mais — a direção pra
+  onde a velocidade das rodas/flow é projetada passa a ser um yaw sem deriva.
 """
 import math
 from dataclasses import dataclass
@@ -99,6 +110,65 @@ def flow_tick_velocity(accum_dx, accum_dy, dt):
     return accum_dx / dt, accum_dy / dt
 
 
+def blend_yaw_rate(imu_fresh, imu_rate, imu2_fresh, imu2_rate,
+                   imu2_weight, disagree_min=0.15):
+    """Combina as taxas de yaw das DUAS IMUs. Devolve (rate, source, disagree).
+
+    `rate` é None quando nenhuma IMU está fresca (o chamador cai pra roda).
+    `imu2_weight` ∈ [0,1] é o peso da BNO055 quando as duas estão frescas.
+
+    GATE DE DISCORDÂNCIA (o motivo de esta função existir em vez de uma média
+    solta): se a BNO055 for montada com outra orientação — girada, de lado, de
+    ponta-cabeça — a taxa dela chega com o SINAL trocado, e uma média ingênua
+    de +ω com -ω dá ZERO: o robô giraria no chão sem girar no mapa, o pior modo
+    de falha possível (a pose mente em silêncio e o SLAM só desmonta minutos
+    depois). Então: quando as duas leem giro REAL (|ω| > disagree_min, acima do
+    ruído/bias parado) e os sinais DIVERGEM, a #2 é descartada no tick e a #1
+    manda sozinha — comportamento idêntico ao de antes da BNO055 existir. O
+    chamador recebe disagree=True pra gritar no log; o conserto é o parâmetro
+    imu2_yaw_sign, não uma reflashada da MEGA.
+    """
+    if imu_fresh and imu2_fresh:
+        disagree = (abs(imu_rate) > disagree_min and abs(imu2_rate) > disagree_min
+                    and (imu_rate > 0.0) != (imu2_rate > 0.0))
+        if disagree:
+            return imu_rate, 'imu', True
+        w = min(1.0, max(0.0, imu2_weight))
+        return (1.0 - w) * imu_rate + w * imu2_rate, 'imu+imu2', False
+    if imu_fresh:
+        return imu_rate, 'imu', False
+    if imu2_fresh:
+        return imu2_rate, 'imu2', False
+    return None, 'wheel', False
+
+
+def heading_correction(yaw, yaw_ref, gain, dt, max_rate):
+    """Quanto girar o yaw NESTE tick pra puxá-lo até o heading absoluto (rad).
+
+    Complementar de 1ª ordem: corr = gain·erro·dt, saturado em max_rate·dt.
+    Nunca substitui o yaw pelo valor absoluto de uma vez, por dois motivos:
+
+    1. O magnetômetro tem ruído e sofre EMI dos motores (o robô carrega duas
+       placas de hoverboard chaveando corrente alta). Um "yaw = yaw_mag" a 50 Hz
+       transformaria cada distúrbio magnético num salto de heading — e no Nav2
+       um salto de heading vira uma manobra de correção real, com o robô
+       jogando o corpo pro lado por causa de um ímã no chão.
+    2. Com gate lento (gain ~0.2 → τ≈5 s) e teto (max_rate), o giro fica
+       DEVAGAR e monotônico: o SLAM/AMCL reconvergem sem perder o casamento do
+       scan, e uma correção manual (yaw_fix) não é apagada no tick seguinte.
+
+    gain em 1/s (0 desliga), max_rate em rad/s.
+    """
+    if gain <= 0.0 or dt <= 0.0:
+        return 0.0
+    err = wrap_pi(yaw_ref - yaw)
+    corr = gain * err * dt
+    cap = abs(max_rate) * dt
+    if cap > 0.0:
+        corr = max(-cap, min(cap, corr))
+    return corr
+
+
 def fuse_translation(vx_wheel, flow_vx, flow_vy, alpha):
     """vx/vy no body frame: funde flow (peso α) e roda (vx); roda contribui 0 em vy."""
     vx_body = alpha * flow_vx + (1.0 - alpha) * vx_wheel
@@ -114,7 +184,13 @@ class StepResult:
     yaw_rate: float
     vx_body: float
     vy_body: float
-    yaw_source: str   # 'imu' | 'wheel'
+    yaw_source: str          # 'imu' | 'imu2' | 'imu+imu2' | 'wheel'
+    # Correção de heading absoluto (BNO055) aplicada NESTE tick, em rad. 0.0 =
+    # nenhuma (sem IMU #2, mag descalibrado ou correção desligada).
+    heading_corr: float = 0.0
+    # True quando as duas IMUs leram giro real com SINAIS opostos — quase sempre
+    # imu2_yaw_sign errado. A #2 foi ignorada neste tick; ver blend_yaw_rate.
+    rate_disagree: bool = False
 
 
 class FusedOdom:
@@ -129,7 +205,16 @@ class FusedOdom:
     def step(self, dt, v_fl, v_fr, v_rl, v_rr,
              imu_fresh, imu_yaw_rate,
              flow_vx, flow_vy, alpha,
-             wheel_fresh=True):
+             wheel_fresh=True,
+             imu2_fresh=False, imu2_yaw_rate=0.0, imu2_rate_weight=0.0,
+             abs_yaw=None, heading_gain=0.0, heading_max_rate=0.0):
+        """Um passo de fusão. Os argumentos da IMU #2 (BNO055) são OPCIONAIS:
+        omitidos, o resultado é bit a bit o de antes dela existir.
+
+        abs_yaw = heading ABSOLUTO já trazido pro frame odom (rad), ou None
+        quando não há um confiável neste tick (BNO055 ausente/velha, mag
+        descalibrado, correção desligada). Quem decide isso é o pose_estimator.
+        """
         vx_wheel, wheel_angular = wheel_twist(v_fl, v_fr, v_rl, v_rr, self.wheel_base)
 
         # --- guarda de freshness das rodas (anti-giro-fantasma) ---
@@ -145,19 +230,31 @@ class FusedOdom:
             wheel_angular = 0.0
 
         # --- seleção da TAXA de yaw com degradação graciosa ---
-        # MPU6050 não dá yaw absoluto: integramos sempre a partir do yaw atual
-        # (ponto-médio, igual ao odom_publisher). A IMU só troca a fonte da taxa
-        # (giro × derrapagem da roda); como é sempre integração relativa, uma
-        # correção manual de direção (yaw_fix) agora persiste mesmo com IMU.
-        if imu_fresh:
-            yaw_rate = imu_yaw_rate
-            yaw_source = 'imu'
-        else:
+        # Nenhuma das duas IMUs impõe yaw absoluto AQUI: a integração é sempre
+        # relativa (ponto-médio, igual ao odom_publisher), as IMUs só trocam a
+        # fonte da TAXA (giro × derrapagem da roda). Por isso uma correção manual
+        # de direção (yaw_fix) persiste. O heading absoluto da BNO055 entra
+        # depois, como empurrão suave — nunca como atribuição.
+        yaw_rate, yaw_source, rate_disagree = blend_yaw_rate(
+            imu_fresh, imu_yaw_rate, imu2_fresh, imu2_yaw_rate, imu2_rate_weight)
+        if yaw_rate is None:
             yaw_rate = wheel_angular
             yaw_source = 'wheel'
 
         integ_yaw = wrap_pi(self.yaw + 0.5 * yaw_rate * dt)
         self.yaw = wrap_pi(self.yaw + yaw_rate * dt)
+
+        # --- âncora de heading absoluto (BNO055 + magnetômetro) ---
+        # Aplicada DEPOIS de integrar e FORA do yaw_rate publicado: o twist do
+        # /odom tem que continuar sendo a velocidade angular MEDIDA, não a
+        # medida + a correção de deriva (senão o controlador enxerga um giro que
+        # não existe). Sobre a pose ela age como a lima que tira o acúmulo.
+        heading_corr = 0.0
+        if abs_yaw is not None:
+            heading_corr = heading_correction(
+                self.yaw, abs_yaw, heading_gain, dt, heading_max_rate)
+            if heading_corr:
+                self.yaw = wrap_pi(self.yaw + heading_corr)
 
         # --- translação fundida ---
         vx_body, vy_body = fuse_translation(vx_wheel, flow_vx, flow_vy, alpha)
@@ -169,4 +266,5 @@ class FusedOdom:
         self.y += (vx_body * sy + vy_body * cy) * dt
 
         return StepResult(self.x, self.y, self.yaw, yaw_rate,
-                          vx_body, vy_body, yaw_source)
+                          vx_body, vy_body, yaw_source,
+                          heading_corr, rate_disagree)
