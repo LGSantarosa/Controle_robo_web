@@ -22,12 +22,24 @@ no **norte magnético**, então a deriva para de crescer.
 
 | caminho | parâmetro | default | o que faz |
 |---|---|---|---|
-| 2ª taxa de yaw | `imu2_rate_weight` | `0.5` | média com o gyro da MPU (menos ruído; um chip morrer não leva o yaw junto) |
+| 2ª taxa de yaw | `imu2_rate_weight` | `0.8` | média PESADA na BNO055; o MPU fica como cross-check e fallback quente |
 | heading absoluto | `heading_gain` / `heading_max_rate` | `0.2` / `0.15` | come a deriva do yaw integrado, devagar (τ≈5 s) e com teto (8,6°/s) |
 
 `use_imu2:=false` corta os dois e a pose volta a ser **exatamente** a de antes
 (tem teste garantindo isso). `use_imu2_heading:=false` mantém só a taxa — é o
 knob pra ambiente com muito ferro/EMI.
+
+**Por que 0.8 e não média simples** (revisado no mesmo dia, a pedido do dono): a
+deriva do yaw vem de **bias**, não de ruído branco, e média 50/50 **importa
+metade do bias do MPU** — cujo bias é estimado UMA VEZ no boot (`calibrateGyro_`)
+e passeia com a temperatura, enquanto a BNO055 recalibra o dela continuamente
+(campo `gyro` do calib). Sujar o sinal bom pra depois a âncora limpar é trabalho
+inventado. Pelas covariâncias que o `mega_bridge` declara (0.0025 do MPU contra
+0.0012 da BNO055), o peso ótimo por inverso da variância já daria ~0.68; 0.8 fica
+um degrau acima, coerente com a vantagem de bias que a variância não captura.
+Não vai a 1.0 porque é o MPU na conta que mantém vivo o gate de discordância e a
+troca de fonte instantânea. E o peso cai sozinho pra 0.5 enquanto
+`calib.gyro < 2` (janela de boot: ali a BNO055 ainda não é superior).
 
 **Três decisões que valem lembrar:**
 

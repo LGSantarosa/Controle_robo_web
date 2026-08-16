@@ -204,14 +204,19 @@ def generate_launch_description():
             # Sinal do yaw da MPU9250 (montagem PLANA, Z pra cima → +1.0). Override
             # de bancada via `imu_yaw_sign:=-1.0` se o giro vier invertido.
             'imu_yaw_sign': LaunchConfiguration('imu_yaw_sign'),
-            # IMU #2 (BNO055, 9 eixos). Entra em dois caminhos: metade do peso
-            # na taxa de yaw (média com o MPU) e a âncora de heading magnético
+            # IMU #2 (BNO055, 9 eixos). Entra em dois caminhos: a MAIOR PARTE
+            # do peso na taxa de yaw (ela recalibra o próprio bias do giro, o
+            # MPU só calibra uma vez no boot) e a âncora de heading magnético
             # que tira a deriva do yaw integrado — o que mais pesa no trekking.
             # Os defaults do nó já são estes; ficam explícitos aqui porque são
             # os knobs que se mexe na bancada.
             'use_imu2': LaunchConfiguration('use_imu2'),
             'imu2_yaw_sign': LaunchConfiguration('imu2_yaw_sign'),
-            'imu2_rate_weight': 0.5,
+            # 0.8: o MPU segue na conta só como cross-check e fallback quente,
+            # não como metade da verdade. Cai sozinho pra 0.5 enquanto o giro da
+            # BNO055 não estiver calibrado (janela de boot).
+            'imu2_rate_weight': 0.8,
+            'imu2_gyro_calib_min': 2,
             'use_imu2_heading': LaunchConfiguration('use_imu2_heading'),
             'heading_gain': 0.2,
             'heading_max_rate': 0.15,

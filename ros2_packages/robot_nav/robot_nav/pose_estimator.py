@@ -173,10 +173,26 @@ class PoseEstimator(Node):
         self.declare_parameter('imu2_yaw_sign', 1.0)
         self.declare_parameter('imu2_timeout', 0.3)   # s — BNO055 a 50 Hz
         # Peso da BNO055 na taxa fundida quando as DUAS IMUs estão frescas.
-        # 0.5 = média simples: duas medidas independentes do mesmo ω, o ruído
-        # cai ~30% e um chip que morra sozinho não leva o yaw junto. O gate de
-        # discordância (blend_yaw_rate) protege contra sinal invertido.
-        self.declare_parameter('imu2_rate_weight', 0.5)
+        # 0.8, e NÃO 0.5 (média simples), porque as duas não são equivalentes:
+        #  - o que faz o yaw derivar é BIAS, não ruído branco. O bias do MPU é
+        #    estimado UMA VEZ no boot (calibrateGyro_) e depois passeia com a
+        #    temperatura; a BNO055 recalibra o dela continuamente (é o campo
+        #    'gyro' do calib). Média 50/50 IMPORTA metade do bias do MPU pro
+        #    yaw — sujar o sinal bom pra depois a âncora magnética limpar é
+        #    trabalho inventado.
+        #  - pelas covariâncias que o mega_bridge declara (0.0025 do MPU contra
+        #    0.0012 da BNO055), o peso ótimo por inverso da variância já daria
+        #    ~0.68. 0.8 fica um degrau acima disso, coerente com a vantagem de
+        #    bias que a variância sozinha não captura.
+        # Não vai a 1.0 de propósito: o MPU seguir na conta é o que mantém o
+        # cross-check vivo (gate de discordância) e a troca de fonte instantânea
+        # se a BNO055 cair no meio de uma manobra.
+        self.declare_parameter('imu2_rate_weight', 0.8)
+        # Piso de calibração do GIRO da BNO055 (0..3) pra ela valer o peso
+        # cheio. Abaixo disso o chip ainda está estimando o próprio bias (a
+        # janela dos primeiros segundos depois do boot, tipicamente) — aí a
+        # vantagem que justifica o 0.8 não existe ainda e o peso cai pra 0.5.
+        self.declare_parameter('imu2_gyro_calib_min', 2)
         # --- âncora de heading absoluto ---
         self.declare_parameter('use_imu2_heading', True)
         # Ganho da correção (1/s). 0.2 → constante de tempo ~5 s: tira 1° de
@@ -225,6 +241,7 @@ class PoseEstimator(Node):
         self.imu2_yaw_sign  = float(self.get_parameter('imu2_yaw_sign').value)
         self.imu2_timeout   = float(self.get_parameter('imu2_timeout').value)
         self.imu2_rate_weight = float(self.get_parameter('imu2_rate_weight').value)
+        self.imu2_gyro_calib_min = int(self.get_parameter('imu2_gyro_calib_min').value)
         self.use_imu2_heading = bool(self.get_parameter('use_imu2_heading').value)
         self.heading_gain   = float(self.get_parameter('heading_gain').value)
         self.heading_max_rate = float(self.get_parameter('heading_max_rate').value)
@@ -247,6 +264,7 @@ class PoseEstimator(Node):
         self._imu2_abs_yaw = None     # rad — heading do quaternion, com o sinal
         self._last_imu2_wall = None   # time.monotonic()
         self._imu2_mag_calib = 0      # 0..3; 0 até /imu2/calib chegar (seguro)
+        self._imu2_gyro_calib = 0     # 0..3; idem — segura o peso em 0.5 até saber
         # Alinhamento entre o "norte" da BNO055 e a origem de yaw do frame odom
         # (que é arbitrária — é onde o robô estava quando o nó subiu). Latcheado
         # na PRIMEIRA amostra aceita e depois só muda em yaw_fix. Sem este
@@ -327,6 +345,7 @@ class PoseEstimator(Node):
             imu2_desc = 'BNO055 DESLIGADA (use_imu2:=false)'
         else:
             imu2_desc = (f'BNO055 peso_giro={self.imu2_rate_weight:.2f} '
+                         f'(0.50 até calib gyro>={self.imu2_gyro_calib_min}) '
                          f'sinal={self.imu2_yaw_sign:+.0f} heading='
                          + (f'ganho {self.heading_gain:.2f}/s, teto '
                             f'{self.heading_max_rate:.2f} rad/s, mag>={self.mag_calib_min}'
@@ -360,17 +379,21 @@ class PoseEstimator(Node):
 
     def _on_imu2_calib(self, msg: String):
         # {"sys":0..3,"gyro":0..3,"accel":0..3,"mag":0..3} — publicado pelo
-        # mega_bridge só quando muda. Guardamos só o campo do mag: é o único que
-        # decide se o heading absoluto vale (gyro/accel afetam roll/pitch, que
-        # não usamos neste robô plano).
+        # mega_bridge só quando muda. Usamos dois campos: 'mag' decide se o
+        # heading absoluto vale, 'gyro' decide se a BNO055 merece o peso cheio
+        # na taxa. ('accel' só afetaria roll/pitch, que este robô plano ignora.)
         try:
             cal = json.loads(msg.data)
             mag = int(cal.get('mag', 0))
+            gyro = int(cal.get('gyro', 0))
         except (ValueError, TypeError):
             return
         with self._lock:
             prev = self._imu2_mag_calib
             self._imu2_mag_calib = mag
+            # 'gyro' modula o PESO da taxa (não o heading): enquanto o chip não
+            # tiver o próprio bias estimado, ela não é melhor que o MPU.
+            self._imu2_gyro_calib = gyro
         if (prev >= self.mag_calib_min) != (mag >= self.mag_calib_min):
             if mag >= self.mag_calib_min:
                 self.get_logger().info(
@@ -490,6 +513,13 @@ class PoseEstimator(Node):
                 imu2_age = mono - self._last_imu2_wall
             imu2_fresh = self.use_imu2 and imu2_age <= self.imu2_timeout
 
+            # Peso da BNO055 na taxa: cheio só com o giro dela calibrado. Na
+            # janela de boot (chip ainda estimando o próprio bias) ela não é
+            # superior ao MPU, então cai pra média simples em vez de mandar.
+            rate_weight = self.imu2_rate_weight
+            if self._imu2_gyro_calib < self.imu2_gyro_calib_min:
+                rate_weight = min(rate_weight, 0.5)
+
             # Heading absoluto: só entra com IMU #2 fresca, correção ligada e
             # magnetômetro calibrado o bastante. Qualquer um faltando → None, e
             # o yaw fica sendo o integrado puro (comportamento de sempre).
@@ -569,7 +599,7 @@ class PoseEstimator(Node):
                 wheel_fresh=wheel_fresh,
                 imu2_fresh=imu2_fresh,
                 imu2_yaw_rate=self._imu2_yaw_rate,
-                imu2_rate_weight=self.imu2_rate_weight,
+                imu2_rate_weight=rate_weight,
                 abs_yaw=abs_yaw,
                 heading_gain=self.heading_gain,
                 heading_max_rate=self.heading_max_rate,
@@ -602,6 +632,7 @@ class PoseEstimator(Node):
             heading_corr = res.heading_corr
             rate_disagree = res.rate_disagree
             mag_calib_out = self._imu2_mag_calib
+            rate_weight_out = rate_weight
 
         # ----- diagnóstico do flow -----
         if flow_stale and not self._flow_was_stale:
@@ -752,6 +783,9 @@ class PoseEstimator(Node):
                 'imu2_stale':   bool(imu2_stale),
                 'imu2_age':     round(imu2_age, 3) if imu2_age != float('inf') else None,
                 'mag_calib':    int(mag_calib_out),
+                # peso EFETIVO da BNO055 na taxa neste tick (cai pra 0.5 na
+                # janela de boot, quando o giro dela ainda não se calibrou)
+                'imu2_weight':  round(rate_weight_out, 2),
                 'heading_anchored': abs_yaw is not None,
                 # rad aplicados NESTE tick (µrad na prática); o sinal diz pra que
                 # lado a deriva estava indo.

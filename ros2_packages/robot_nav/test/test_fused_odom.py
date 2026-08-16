@@ -231,6 +231,21 @@ def test_blend_yaw_rate_peso_zero_e_a_imu1_pura():
     assert source == 'imu+imu2'
 
 
+def test_blend_yaw_rate_peso_alto_rejeita_o_bias_do_mpu():
+    # POR QUE o default e' 0.8 e nao 0.5: o que faz o yaw derivar e' BIAS, e
+    # media herda o bias do pior sensor na proporcao do peso. Cenario: robo
+    # PARADO, MPU com 0.02 rad/s de bias (calibracao de boot ruim), BNO055
+    # limpa (recalibra o proprio bias continuamente).
+    bias = 0.02
+    meia, _, _ = blend_yaw_rate(True, bias, True, 0.0, imu2_weight=0.5)
+    pesada, _, _ = blend_yaw_rate(True, bias, True, 0.0, imu2_weight=0.8)
+    assert meia == pytest.approx(0.010)     # metade do bias vaza pro yaw
+    assert pesada == pytest.approx(0.004)   # 20% dele
+    # em 60 s parado isso e' a diferenca entre ~34 graus e ~14 graus de deriva
+    assert math.degrees(meia * 60) == pytest.approx(34.4, abs=0.5)
+    assert math.degrees(pesada * 60) == pytest.approx(13.8, abs=0.5)
+
+
 def test_blend_yaw_rate_cai_pra_imu_viva():
     assert blend_yaw_rate(True, 0.3, False, 9.9, 0.5)[:2] == (0.3, 'imu')
     assert blend_yaw_rate(False, 9.9, True, 0.3, 0.5)[:2] == (0.3, 'imu2')
