@@ -1,38 +1,44 @@
 <?xml version="1.0"?>
 <!--
-  Mundo do TREKKING — pista limpa pra o robô ter CERTEZA dos cones.
+  PISTA DE TREKKING — cones como ALVO, obstáculos NO CAMINHO.
 
-  POR QUE ESTE MUNDO EXISTE: rodando o trekking no `sala_grande.sdf` o detector
-  enxergava "cone" por todo lado, principalmente nas laterais. Causa medida: o
-  LiDAR do sim tem 455 amostras em 360° (0,79°/feixe) e o `cone_detector` fecha
-  cluster com gap de 8 cm. Em incidência RASANTE — que é como o robô vê as
-  paredes dos lados — o espaçamento entre feixes vizinhos ao longo da parede
-  estoura os 8 cm e a parede se quebra em dezenas de mini-clusters. Cada
-  fragmento de 2 pontos com 4–45 cm de extensão passa no filtro e vira um cone
-  fantasma.
+  Desenhada pra responder duas perguntas: ele acerta o ponto? e ele vai direito?
+  O robô nasce em (2.0, 2.5) olhando pra +x. A rota é gravada dirigindo: em cada
+  estação você para de frente pro cone e aperta "+ Ponto". Entre uma estação e
+  outra tem um obstáculo EM CIMA da linha reta, então a rota gravada
+  obrigatoriamente contorna — e o Play tem que repetir o mesmo contorno.
 
-  REGRA DE DESENHO DESTA PISTA: nada que não seja cone pode cair na janela de
-  aceitação do detector (largura 4–45 cm, alcance 0,15–5 m).
+  ┌──────────────────────────────────────────────────────────────┐
+  │  y                                                            │
+  │ 11        [B5]         C4                                     │
+  │ 10                          [B4]                              │
+  │  9   C5                              C3                       │
+  │  8                                                            │
+  │  7  [B6]                  [B3]                                │
+  │  6                                                            │
+  │  5        C6                    C2                            │
+  │  4                                                            │
+  │  3              [B2]                                          │
+  │  2   R ..>[B1]..> C1                                          │
+  │      2    4    6    8   10   12   14                       x  │
+  └──────────────────────────────────────────────────────────────┘
 
-    - CONES: cilindro r=0,11 m -> 22 cm de largura aparente, bem no meio da
-      janela. Altura 0,45 m (o LiDAR está a 0,10 m do chão, então precisa ser
-      mais alto que isso pra ser visto).
-    - OBSTÁCULOS: caixas de 0,90 m. MUITO acima do teto de 45 cm -> o detector
-      rejeita por largura. Servem pra dirigir em volta, não pra confundir.
-    - PAREDES: a 8+ m da pista, FORA do `range_max` de 5 m do detector. Só
-      contêm o robô; nunca geram candidato a cone enquanto ele corre a pista.
+  ORDEM: R > C1 > C2 > C3 > C4 > C5 > C6 (volta perto do início)
 
-  Layout (visto de cima; robô spawna em 2.0, 2.5 olhando pra +x):
+  CONES (o alvo): cilindro r=0,11 -> 22 cm de largura aparente, altura 0,45 m
+    (o LiDAR do sim está a 0,10 m do chão). Medido: detectado com 0,20-0,22 m.
 
-      y
-     8.5      (c4)                       c = cone (22 cm)
-     7.0 (c5)       (c3)                 B = caixa 0,90 m (obstáculo)
-     5.5  [B3]  [B1]      [B2]
-     4.0  (c6)      (c2)
-     2.5   R  ->        (c1)
-          x=0   2    4.5  7   8.8
+  OBSTÁCULOS (o caminho): caixas de 1,2 m e barreiras de 2,0 m. GRANDES DE
+    PROPÓSITO. O `cone_detector` aceita cluster ISOLADO de 4-45 cm — ele não
+    tem como distinguir um cone de qualquer outro objeto isolado desse tamanho.
+    Um barril de ~50 cm visto de longe cai com folga na janela e vira ALVO
+    FALSO. Por isso nada aqui tem tamanho ambíguo: ou é cone, ou é grande.
 
-  Paredes externas: x = -8 e +18, y = -7,5 e +18,5.
+  DISTÂNCIAS conferidas: todo obstáculo fica a >= 1,7 m do cone mais próximo
+  (não funde cluster nem oculta o alvo) e os cones ficam a >= 3 m entre si.
+
+  PAREDES: a 8+ m da pista, fora do range_max de 5 m do detector. Só contêm o
+  robô; nunca geram candidato a cone enquanto ele corre a pista.
 -->
 <sdf version="1.9">
   <world name="trekking">
@@ -70,66 +76,62 @@
         <visual name="visual">
           <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
           <material>
-            <ambient>0.8 0.8 0.8 1</ambient>
-            <diffuse>0.8 0.8 0.8 1</diffuse>
+            <ambient>0.75 0.75 0.72 1</ambient>
+            <diffuse>0.75 0.75 0.72 1</diffuse>
           </material>
         </visual>
       </link>
     </model>
 
-    <!-- ============ CONES (r=0.11 -> 22 cm; altura 0.45 > lidar 0.10) ============ -->
+    <!-- ==================== CONES = AS ESTAÇÕES DA PISTA ==================== -->
+    <!-- C1 (6.0, 2.5)  reto a 4 m do start, com a barreira B1 no meio -->
     <model name="cone_1">
-      <static>true</static>
-      <pose>4.5 2.5 0.225 0 0 0</pose>
+      <static>true</static><pose>6.0 2.5 0.225 0 0 0</pose>
       <link name="link">
         <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
         <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
           <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>0.9 0.35 0.05 1</diffuse></material></visual>
       </link>
     </model>
+    <!-- C2 (10.0, 5.0) -->
     <model name="cone_2">
-      <static>true</static>
-      <pose>7.0 4.0 0.225 0 0 0</pose>
+      <static>true</static><pose>10.0 5.0 0.225 0 0 0</pose>
       <link name="link">
         <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
         <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
           <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>0.9 0.35 0.05 1</diffuse></material></visual>
       </link>
     </model>
+    <!-- C3 (13.0, 9.0) -->
     <model name="cone_3">
-      <static>true</static>
-      <pose>7.0 7.0 0.225 0 0 0</pose>
+      <static>true</static><pose>13.0 9.0 0.225 0 0 0</pose>
       <link name="link">
         <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
         <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
           <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>0.9 0.35 0.05 1</diffuse></material></visual>
       </link>
     </model>
+    <!-- C4 (8.0, 11.0) -->
     <model name="cone_4">
-      <static>true</static>
-      <pose>4.5 8.5 0.225 0 0 0</pose>
+      <static>true</static><pose>8.0 11.0 0.225 0 0 0</pose>
       <link name="link">
         <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
         <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
           <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>0.9 0.35 0.05 1</diffuse></material></visual>
       </link>
     </model>
-    <!-- x=1.0 e nao 2.0 DE PROPOSITO: em (2.0, 7.0) este cone ficava no mesmo
-         rumo do cone_6 visto do spawn (ambos a 90 graus) e era totalmente
-         ocultado por ele. Medido no /scan: os feixes do "cone_5" eram os do
-         cone_6. Deslocado pra dar ~1 m de separacao lateral a 4,5 m. -->
+    <!-- C5 (3.0, 9.0) -->
     <model name="cone_5">
-      <static>true</static>
-      <pose>1.0 7.0 0.225 0 0 0</pose>
+      <static>true</static><pose>3.0 9.0 0.225 0 0 0</pose>
       <link name="link">
         <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
         <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
           <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>0.9 0.35 0.05 1</diffuse></material></visual>
       </link>
     </model>
+    <!-- C6 (2.5, 5.5)  volta pra perto do start -->
     <model name="cone_6">
-      <static>true</static>
-      <pose>2.0 4.0 0.225 0 0 0</pose>
+      <static>true</static><pose>2.5 5.5 0.225 0 0 0</pose>
       <link name="link">
         <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
         <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
@@ -137,69 +139,92 @@
       </link>
     </model>
 
-    <!-- ====== OBSTÁCULOS 0,90 m — largos demais pro filtro de 45 cm ====== -->
-    <model name="box_1">
-      <static>true</static>
-      <pose>5.0 5.5 0.3 0 0 0</pose>
+    <!-- ============ OBSTÁCULOS: um EM CIMA de cada perna da rota ============ -->
+    <!-- B1 (4.0, 2.5) barreira 2 m atravessada entre o start e C1 -->
+    <model name="obst_1">
+      <static>true</static><pose>4.0 2.5 0.35 0 0 0</pose>
       <link name="link">
-        <collision name="col"><geometry><box><size>0.9 0.9 0.6</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.9 0.9 0.6</size></box></geometry>
+        <collision name="col"><geometry><box><size>0.4 2.0 0.7</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.4 2.0 0.7</size></box></geometry>
+          <material><diffuse>0.35 0.38 0.45 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- B2 (8.0, 3.7) no meio de C1 p/ C2 -->
+    <model name="obst_2">
+      <static>true</static><pose>8.0 3.7 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>1.2 1.2 0.6</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>1.2 1.2 0.6</size></box></geometry>
           <material><diffuse>0.45 0.45 0.5 1</diffuse></material></visual>
       </link>
     </model>
-    <model name="box_2">
-      <static>true</static>
-      <pose>8.8 5.5 0.3 0 0 0</pose>
+    <!-- B3 (11.5, 7.0) no meio de C2 p/ C3 -->
+    <model name="obst_3">
+      <static>true</static><pose>11.5 7.0 0.3 0 0 0</pose>
       <link name="link">
-        <collision name="col"><geometry><box><size>0.9 0.9 0.6</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.9 0.9 0.6</size></box></geometry>
+        <collision name="col"><geometry><box><size>1.2 1.2 0.6</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>1.2 1.2 0.6</size></box></geometry>
           <material><diffuse>0.45 0.45 0.5 1</diffuse></material></visual>
       </link>
     </model>
-    <model name="box_3">
-      <static>true</static>
-      <pose>0.3 5.5 0.3 0 0 0</pose>
+    <!-- B4 (10.5, 10.0) no meio de C3 p/ C4 -->
+    <model name="obst_4">
+      <static>true</static><pose>10.5 10.0 0.35 0 0 0</pose>
       <link name="link">
-        <collision name="col"><geometry><box><size>0.9 0.9 0.6</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.9 0.9 0.6</size></box></geometry>
+        <collision name="col"><geometry><box><size>2.0 0.4 0.7</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>2.0 0.4 0.7</size></box></geometry>
+          <material><diffuse>0.35 0.38 0.45 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- B5 (5.5, 10.0) no meio de C4 p/ C5 -->
+    <model name="obst_5">
+      <static>true</static><pose>5.5 10.0 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>1.2 1.2 0.6</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>1.2 1.2 0.6</size></box></geometry>
+          <material><diffuse>0.45 0.45 0.5 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- B6 (2.75, 7.25) no meio de C5 p/ C6 -->
+    <model name="obst_6">
+      <static>true</static><pose>2.75 7.25 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>1.2 1.2 0.6</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>1.2 1.2 0.6</size></box></geometry>
           <material><diffuse>0.45 0.45 0.5 1</diffuse></material></visual>
       </link>
     </model>
 
-    <!-- ====== PAREDES: longe (8+ m), fora do range_max de 5 m do detector ====== -->
+    <!-- ============ PAREDES: longe, fora do alcance do detector ============ -->
     <model name="wall_west">
-      <static>true</static>
-      <pose>-8 5.5 0.5 0 0 0</pose>
+      <static>true</static><pose>-6 7 0.5 0 0 0</pose>
       <link name="link">
-        <collision name="col"><geometry><box><size>0.2 26 1</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.2 26 1</size></box></geometry>
+        <collision name="col"><geometry><box><size>0.2 30 1</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.2 30 1</size></box></geometry>
           <material><diffuse>0.6 0.6 0.7 1</diffuse></material></visual>
       </link>
     </model>
     <model name="wall_east">
-      <static>true</static>
-      <pose>18 5.5 0.5 0 0 0</pose>
+      <static>true</static><pose>22 7 0.5 0 0 0</pose>
       <link name="link">
-        <collision name="col"><geometry><box><size>0.2 26 1</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.2 26 1</size></box></geometry>
+        <collision name="col"><geometry><box><size>0.2 30 1</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.2 30 1</size></box></geometry>
           <material><diffuse>0.6 0.6 0.7 1</diffuse></material></visual>
       </link>
     </model>
     <model name="wall_south">
-      <static>true</static>
-      <pose>5 -7.5 0.5 0 0 0</pose>
+      <static>true</static><pose>8 -6 0.5 0 0 0</pose>
       <link name="link">
-        <collision name="col"><geometry><box><size>26 0.2 1</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>26 0.2 1</size></box></geometry>
+        <collision name="col"><geometry><box><size>30 0.2 1</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>30 0.2 1</size></box></geometry>
           <material><diffuse>0.6 0.6 0.7 1</diffuse></material></visual>
       </link>
     </model>
     <model name="wall_north">
-      <static>true</static>
-      <pose>5 18.5 0.5 0 0 0</pose>
+      <static>true</static><pose>8 20 0.5 0 0 0</pose>
       <link name="link">
-        <collision name="col"><geometry><box><size>26 0.2 1</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>26 0.2 1</size></box></geometry>
+        <collision name="col"><geometry><box><size>30 0.2 1</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>30 0.2 1</size></box></geometry>
           <material><diffuse>0.6 0.6 0.7 1</diffuse></material></visual>
       </link>
     </model>
