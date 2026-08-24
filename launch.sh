@@ -554,7 +554,7 @@ case "$MODE" in
     trekking)
         echo "[3/4] Modo TREKKING — subindo cone_detector + trekking_runner (pose_estimator já vem do robot.launch)..."
         NAV2_LOG="$LOG_DIR/trekking.log"
-        ros2 launch robot_nav trekking.launch.py > "$NAV2_LOG" 2>&1 &
+        ros2 launch robot_nav trekking.launch.py $SIM_TIME_ARG > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
         wait_for_topic /trekking/pose 15 || echo "  AVISO: trekking_runner ainda não publicou /trekking/pose — seguindo."

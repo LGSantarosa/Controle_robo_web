@@ -32,6 +32,12 @@ def generate_launch_description():
         'enable_cone_pose_fix', default_value='true',
         description='Liga a correção persistente de pose por cone-âncora (A/B em campo)'
     )
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time', default_value='false',
+        description='Relógio do /clock (Gazebo). O launch.sh passa true em --sim; '
+                    'sem isto os nós do trekking rodavam no relógio de PAREDE '
+                    'enquanto o resto do sim estava no tempo simulado.'
+    )
 
     cone_detector = Node(
         package='robot_nav',
@@ -40,6 +46,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'lidar_offset_x': LaunchConfiguration('lidar_offset_x'),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
     )
 
@@ -51,6 +58,7 @@ def generate_launch_description():
         parameters=[{
             'v_max': LaunchConfiguration('v_max'),
             'enable_cone_pose_fix': LaunchConfiguration('enable_cone_pose_fix'),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
         # Saída do PID vai pra nav_vel (entrada de menor prioridade do twist_mux
         # em robot.launch.py) — assim o PS4 pode assumir por cima do autônomo.
@@ -61,6 +69,7 @@ def generate_launch_description():
         v_max_arg,
         lidar_offset_x_arg,
         enable_cone_pose_fix_arg,
+        use_sim_time_arg,
         cone_detector,
         trekking_runner,
     ])
