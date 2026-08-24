@@ -14,6 +14,7 @@ cmd_vel_to_wheels, e o LiDAR está publicando /scan. O trekking consome
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -31,6 +32,12 @@ def generate_launch_description():
     enable_cone_pose_fix_arg = DeclareLaunchArgument(
         'enable_cone_pose_fix', default_value='true',
         description='Liga a correção persistente de pose por cone-âncora (A/B em campo)'
+    )
+    sim_pose_arg = DeclareLaunchArgument(
+        'sim_pose_from_odom', default_value='false',
+        description='SÓ SIM: publica /trekking/pose a partir da /odom do Gazebo. '
+                    'No real quem publica é o pose_estimator (robot.launch.py), '
+                    'que o --sim não sobe. Ver sim_trekking_pose.py.'
     )
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time', default_value='false',
@@ -65,11 +72,22 @@ def generate_launch_description():
         remappings=[('cmd_vel', 'nav_vel')],
     )
 
+    sim_trekking_pose = Node(
+        package='robot_nav',
+        executable='sim_trekking_pose',
+        name='sim_trekking_pose',
+        output='screen',
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
+        condition=IfCondition(LaunchConfiguration('sim_pose_from_odom')),
+    )
+
     return LaunchDescription([
         v_max_arg,
         lidar_offset_x_arg,
         enable_cone_pose_fix_arg,
+        sim_pose_arg,
         use_sim_time_arg,
+        sim_trekking_pose,
         cone_detector,
         trekking_runner,
     ])
