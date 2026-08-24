@@ -40,7 +40,19 @@
   }
 
   // ----------------- transformação mundo → canvas -----------------
-  // Auto-fit: enquadra robô + waypoints + cones + 1 m de margem.
+  // Auto-fit ESTÁVEL: enquadra robô + waypoints + cones GRAVADOS.
+  //
+  // Os cones AO VIVO ficam DE FORA de propósito. Eles entram e saem de alcance
+  // a cada scan (10 Hz); incluí-los na caixa fazia a escala e o centro mudarem
+  // 10x por segundo e a tela inteira "pulava" — não eram os cones se mexendo,
+  // era a câmera. Waypoints e cones gravados são estáticos, então enquadrar por
+  // eles dá uma vista parada.
+  //
+  // Além disso a vista é PEGAJOSA (viewCache): só re-enquadra quando o conteúdo
+  // realmente sai da moldura ou muda de tamanho de forma significativa. Sem
+  // isso o robô andando reescalava a vista continuamente.
+  let viewCache = null;
+
   function computeView() {
     const w = canvas.width, h = canvas.height;
     let pts = [];
@@ -50,7 +62,6 @@
         pts.push([wp.x, wp.y]);
         if (wp.has_cone) pts.push([wp.cone_x, wp.cone_y]);
       });
-      (state.cones || []).forEach(c => pts.push([c[0], c[1]]));
     }
     if (pts.length === 0) pts = [[0,0]];
 
@@ -61,8 +72,23 @@
     }
     // mantém aspect 1:1 com margem
     let dx = xmax-xmin, dy = ymax-ymin;
-    const span = Math.max(dx, dy, 2.0) + 2.0;
-    const cx = (xmax+xmin)/2, cy = (ymax+ymin)/2;
+    let span = Math.max(dx, dy, 2.0) + 2.0;
+    let cx = (xmax+xmin)/2, cy = (ymax+ymin)/2;
+
+    // Vista pegajosa: reaproveita o enquadramento anterior enquanto ele ainda
+    // serve. Só troca se o conteúdo saiu da moldura, se ela ficou folgada
+    // demais (>1.6x) ou apertada, ou se o canvas mudou de tamanho.
+    if (viewCache && viewCache.w === w && viewCache.h === h) {
+      const c = viewCache;
+      const meio = c.span / 2;
+      const dentro = xmin >= c.cx - meio && xmax <= c.cx + meio &&
+                     ymin >= c.cy - meio && ymax <= c.cy + meio;
+      if (dentro && span > c.span / 1.6) {
+        cx = c.cx; cy = c.cy; span = c.span;
+      }
+    }
+    viewCache = { cx, cy, span, w, h };
+
     const scale = Math.min(w, h) / span;   // px por metro
     return {
       scale,
