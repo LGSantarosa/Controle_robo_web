@@ -341,13 +341,17 @@
     window.robotSocket.emit('trekking_save_route', {name});
   });
   btnLoad.addEventListener('click', () => {
-    // Toggle: se já tem select aberto e item selecionado, dispara load.
-    if (routeSelect.style.display !== 'none' && routeSelect.value) {
-      window.robotSocket.emit('trekking_load_route', {name: routeSelect.value});
-      routeSelect.style.display = 'none';
-    } else {
-      window.robotSocket.emit('trekking_list_routes');
-    }
+    // Abre a lista. O carregamento acontece no 'change' do select abaixo —
+    // antes exigia clicar em Carregar DE NOVO depois de escolher, e escolher a
+    // rota simplesmente não fazia nada (o Play seguia travado, porque ele só
+    // libera com total>0). Ninguém adivinha isso.
+    window.robotSocket.emit('trekking_list_routes');
+  });
+
+  routeSelect.addEventListener('change', () => {
+    if (!routeSelect.value) return;
+    window.robotSocket.emit('trekking_load_route', {name: routeSelect.value});
+    routeSelect.style.display = 'none';
   });
 
   // ----------------- socket -----------------
@@ -397,13 +401,19 @@
         statusEl.textContent = 'nenhuma rota salva';
         return;
       }
+      // Placeholder de valor vazio EM PRIMEIRO: sem ele o browser já deixa a
+      // 1a rota selecionada e escolher justamente ela não dispara 'change'.
+      const ph = document.createElement('option');
+      ph.value = ''; ph.textContent = '— escolha a rota —';
+      routeSelect.appendChild(ph);
       routes.forEach(r => {
         const opt = document.createElement('option');
         opt.value = r; opt.textContent = r;
         routeSelect.appendChild(opt);
       });
+      routeSelect.value = '';
       routeSelect.style.display = '';
-      statusEl.textContent = 'escolha uma rota e clique em Carregar de novo';
+      statusEl.textContent = 'escolha a rota na lista';
     });
   });
 
