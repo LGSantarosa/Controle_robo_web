@@ -192,7 +192,9 @@ class TrekkingRunner(Node):
         # Gravar rota dirigindo e ter que largar o controle pra clicar "+ Ponto"
         # na web e ruim: o robo anda no meio do caminho. Botao no PS4 resolve.
         # PS4 (driver joy): 0=X, 1=O, 2=triangulo, 3=quadrado, 4=L1, 5=R1.
-        self.declare_parameter('save_point_button', 0)   # X
+        # TRIANGULO (2), nao o X: no gamepad.js da web o ✕ e a TRAVA DE
+        # EMERGENCIA e o quadrado e boost. Triangulo e circulo estao livres.
+        self.declare_parameter('save_point_button', 2)   # triangulo
         self.declare_parameter('joy_enabled', True)
 
         # --- Loop ---

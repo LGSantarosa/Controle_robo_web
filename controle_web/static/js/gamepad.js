@@ -49,7 +49,10 @@
   const DEADZONE = 0.10;
 
   // Taxa de envio (ms) — não enviar mais rápido que isso
-  const SEND_INTERVAL = 50; // 20 Hz
+  const SEND_INTERVAL = 50;
+  // ms — reenvio do eixo mesmo sem mudança (ver KEEPALIVE acima).
+  // Tem que ser MENOR que ROS2Controller.GAMEPAD_TIMEOUT (0.6 s).
+  const KEEPALIVE_INTERVAL = 200; // 20 Hz
   let lastSendTime = 0;
 
   // Mapeamento de botões do gamepad padrão (Standard Gamepad)
@@ -224,11 +227,20 @@
     // Trava ativa — não envia eixos, mantém tudo zerado
     if (emergencyActive) return;
 
-    // Envia eixos com rate limiting
+    // Envia eixos com rate limiting.
+    //
+    // KEEPALIVE: reenvia mesmo SEM mudança enquanto o stick estiver fora do
+    // zero. O servidor descarta eixo velho (ROS2Controller.GAMEPAD_TIMEOUT) —
+    // sem este reenvio, segurar o stick parado seria lido como "cliente sumiu"
+    // e o robô pararia sozinho. Com ele, uma aba CONGELADA (o navegador para o
+    // requestAnimationFrame quando perde o foco) deixa de reenviar e o servidor
+    // solta o comando, em vez de repetir o último eixo a 50 Hz pra sempre.
     const now = Date.now();
     const changed = Math.abs(linear - lastLinear) > 0.02 || Math.abs(angular - lastAngular) > 0.02;
+    const parado = Math.abs(linear) <= 0.01 && Math.abs(angular) <= 0.01;
+    const keepalive = !parado && (now - lastSendTime) >= KEEPALIVE_INTERVAL;
 
-    if (changed && (now - lastSendTime) >= SEND_INTERVAL) {
+    if ((changed || keepalive) && (now - lastSendTime) >= SEND_INTERVAL) {
       lastLinear = linear;
       lastAngular = angular;
       lastSendTime = now;

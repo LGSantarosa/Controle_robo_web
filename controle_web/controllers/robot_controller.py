@@ -103,6 +103,26 @@ class EchoController(RobotController):
         return None
 
 
+def gamepad_expirou(idade, timeout):
+    """O último eixo recebido do browser ainda vale?
+
+    O `gamepad.js` do browser roda em `requestAnimationFrame`, que o navegador
+    CONGELA quando a aba perde o foco (ex: o dono foi olhar a janela do Gazebo).
+    Como o republicador manda o último eixo a 50 Hz enquanto for != 0, um toque
+    no analógico ficava aplicado PARA SEMPRE: o robô saía girando sozinho.
+    Medido no sim 2026-08-24 (BO "dou um toque no joystick e ele desliza tudo
+    pra direita").
+
+    Nem o timeout do twist_mux nem o watchdog do sim_actuator_model salvam:
+    os dois só agem quando o tópico SECA, e aqui ele segue a 50 Hz.
+
+    Par obrigatório: o browser reenvia o eixo periodicamente (keepalive), e
+    aqui o servidor descarta eixo velho. Sem o keepalive isto mataria o stick
+    segurado parado; sem o prazo, a aba congelada trava o robô.
+    """
+    return timeout > 0.0 and idade > timeout
+
+
 class ROS2Controller(RobotController):
     """
     Controlador real que publica em /web_vel via ROS2 para integração com Nav2.
@@ -139,6 +159,9 @@ class ROS2Controller(RobotController):
     # suspensão. Não confundir os dois ao mexer aqui.
     BASE_LINEAR_SPEED: float = 0.3   # m/s
     BASE_ANGULAR_SPEED: float = 6.0  # rad/s
+    # s — eixo do browser mais velho que isso é descartado. Tem que ser MAIOR
+    # que o keepalive do gamepad.js (200 ms), senão mata o stick segurado.
+    GAMEPAD_TIMEOUT: float = 0.6
 
     # Limites do multiplicador de velocidade.
     # MIN bate com o `min` do slider em index.html (0.5) e permite que o
@@ -173,6 +196,8 @@ class ROS2Controller(RobotController):
         self._speed_multiplier: float = 1.0
         self._last_gamepad_linear: float = 0.0
         self._last_gamepad_angular: float = 0.0
+        # Prazo do eixo do browser. Ver gamepad_expirou.
+        self._last_gamepad_rx: float = 0.0
         self._last_printed: tuple = (None, None)
         self._rclpy = rclpy
         self._time = time
@@ -268,9 +293,16 @@ class ROS2Controller(RobotController):
                 linear, angular = self._compute_cmd_vel()
                 self._publish(linear, angular)
             elif abs(self._last_gamepad_linear) > 0.01 or abs(self._last_gamepad_angular) > 0.01:
-                linear = self._last_gamepad_linear * self.linear_speed
-                angular = -self._last_gamepad_angular * self.angular_speed
-                self._publish(linear, angular)
+                if gamepad_expirou(self._time.time() - self._last_gamepad_rx,
+                                   self.GAMEPAD_TIMEOUT):
+                    # aba congelada / cliente sumiu: solta o comando
+                    self._last_gamepad_linear = 0.0
+                    self._last_gamepad_angular = 0.0
+                    self._publish(0.0, 0.0)
+                else:
+                    linear = self._last_gamepad_linear * self.linear_speed
+                    angular = -self._last_gamepad_angular * self.angular_speed
+                    self._publish(linear, angular)
             # else: nada ativo — deixa o watchdog do firmware zerar.
             self._time.sleep(PERIOD)
 
@@ -391,6 +423,7 @@ class ROS2Controller(RobotController):
             # Salva para republicação instantânea ao mudar velocidade
             self._last_gamepad_linear = gp_linear
             self._last_gamepad_angular = gp_angular
+            self._last_gamepad_rx = self._time.time()
 
             # Converte joystick para m/s e rad/s (angular: direita positiva no gamepad = negativo no ROS)
             linear = gp_linear * self.linear_speed
