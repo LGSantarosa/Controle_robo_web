@@ -1,0 +1,204 @@
+<?xml version="1.0"?>
+<!--
+  Mundo do TREKKING — pista limpa pra o robô ter CERTEZA dos cones.
+
+  POR QUE ESTE MUNDO EXISTE: rodando o trekking no `sala_grande.sdf` o detector
+  enxergava "cone" por todo lado, principalmente nas laterais. Causa medida: o
+  LiDAR do sim tem 455 amostras em 360° (0,79°/feixe) e o `cone_detector` fecha
+  cluster com gap de 8 cm. Em incidência RASANTE — que é como o robô vê as
+  paredes dos lados — o espaçamento entre feixes vizinhos ao longo da parede
+  estoura os 8 cm e a parede se quebra em dezenas de mini-clusters. Cada
+  fragmento de 2 pontos com 4–45 cm de extensão passa no filtro e vira um cone
+  fantasma.
+
+  REGRA DE DESENHO DESTA PISTA: nada que não seja cone pode cair na janela de
+  aceitação do detector (largura 4–45 cm, alcance 0,15–5 m).
+
+    - CONES: cilindro r=0,11 m -> 22 cm de largura aparente, bem no meio da
+      janela. Altura 0,45 m (o LiDAR está a 0,10 m do chão, então precisa ser
+      mais alto que isso pra ser visto).
+    - OBSTÁCULOS: caixas de 0,90 m. MUITO acima do teto de 45 cm -> o detector
+      rejeita por largura. Servem pra dirigir em volta, não pra confundir.
+    - PAREDES: a 8+ m da pista, FORA do `range_max` de 5 m do detector. Só
+      contêm o robô; nunca geram candidato a cone enquanto ele corre a pista.
+
+  Layout (visto de cima; robô spawna em 2.0, 2.5 olhando pra +x):
+
+      y
+     8.5      (c4)                       c = cone (22 cm)
+     7.0  (c5)      (c3)                 B = caixa 0,90 m (obstáculo)
+     5.5  [B3]  [B1]      [B2]
+     4.0  (c6)      (c2)
+     2.5   R  ->        (c1)
+          x=0   2    4.5  7   8.8
+
+  Paredes externas: x = -8 e +18, y = -7,5 e +18,5.
+-->
+<sdf version="1.9">
+  <world name="trekking">
+
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system"
+            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material>
+            <ambient>0.8 0.8 0.8 1</ambient>
+            <diffuse>0.8 0.8 0.8 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============ CONES (r=0.11 -> 22 cm; altura 0.45 > lidar 0.10) ============ -->
+    <model name="cone_1">
+      <static>true</static>
+      <pose>4.5 2.5 0.225 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
+        <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
+          <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>0.9 0.35 0.05 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="cone_2">
+      <static>true</static>
+      <pose>7.0 4.0 0.225 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
+        <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
+          <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>0.9 0.35 0.05 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="cone_3">
+      <static>true</static>
+      <pose>7.0 7.0 0.225 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
+        <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
+          <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>0.9 0.35 0.05 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="cone_4">
+      <static>true</static>
+      <pose>4.5 8.5 0.225 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
+        <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
+          <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>0.9 0.35 0.05 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="cone_5">
+      <static>true</static>
+      <pose>2.0 7.0 0.225 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
+        <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
+          <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>0.9 0.35 0.05 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="cone_6">
+      <static>true</static>
+      <pose>2.0 4.0 0.225 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
+        <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
+          <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>0.9 0.35 0.05 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- ====== OBSTÁCULOS 0,90 m — largos demais pro filtro de 45 cm ====== -->
+    <model name="box_1">
+      <static>true</static>
+      <pose>5.0 5.5 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.9 0.9 0.6</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.9 0.9 0.6</size></box></geometry>
+          <material><diffuse>0.45 0.45 0.5 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="box_2">
+      <static>true</static>
+      <pose>8.8 5.5 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.9 0.9 0.6</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.9 0.9 0.6</size></box></geometry>
+          <material><diffuse>0.45 0.45 0.5 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="box_3">
+      <static>true</static>
+      <pose>0.3 5.5 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.9 0.9 0.6</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.9 0.9 0.6</size></box></geometry>
+          <material><diffuse>0.45 0.45 0.5 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- ====== PAREDES: longe (8+ m), fora do range_max de 5 m do detector ====== -->
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-8 5.5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.2 26 1</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.2 26 1</size></box></geometry>
+          <material><diffuse>0.6 0.6 0.7 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="wall_east">
+      <static>true</static>
+      <pose>18 5.5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.2 26 1</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.2 26 1</size></box></geometry>
+          <material><diffuse>0.6 0.6 0.7 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="wall_south">
+      <static>true</static>
+      <pose>5 -7.5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>26 0.2 1</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>26 0.2 1</size></box></geometry>
+          <material><diffuse>0.6 0.6 0.7 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="wall_north">
+      <static>true</static>
+      <pose>5 18.5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>26 0.2 1</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>26 0.2 1</size></box></geometry>
+          <material><diffuse>0.6 0.6 0.7 1</diffuse></material></visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>
