@@ -206,13 +206,15 @@
       <child_frame_id>base_link</child_frame_id>
       <tf_topic>/tf</tf_topic>
       <max_linear_acceleration>1.5</max_linear_acceleration>
-      <max_angular_acceleration>3.0</max_angular_acceleration>
-      <!-- CAP angular (sim-only): o teleop manda 6.0 rad/s porque o robô REAL
-           patina e precisa disso pra girar; o sim gira eficiente e viraria um
-           peão. Capa no 2.5 rad/s = SATURAÇÃO real medida (spin_calib). NÃO
-           mexer no BASE_ANGULAR_SPEED do robot_controller (quebra o real). -->
-      <max_angular_velocity>2.5</max_angular_velocity>
-      <min_angular_velocity>-2.5</min_angular_velocity>
+      <!-- REMOVIDOS os limitadores angulares (2026-08-24). Eles freavam de
+           forma ASSIMETRICA: medido nas rodas, ao zerar o comando a ESQUERDA
+           cortava seco (0.00 rad/s em 0.6 s) e a DIREITA continuava a 1.72
+           rad/s, decaindo pela rampa de max_angular_acceleration=3.0 — o robo
+           girava mais 60 graus e escorregava 17 cm sozinho. Era o BO do dono
+           ("pra direita ele desliza totalmente"), que NAO acontece no real.
+           Sao redundantes: o sim_actuator_model ja aplica zona-morta 1.7,
+           ganho 0.6 e SATURACAO em 2.5 (spin_calib), simetrico, ANTES do
+           plugin. NAO mexer no BASE_ANGULAR_SPEED do robot_controller. -->
     </plugin>
 
     <plugin filename="gz-sim-joint-state-publisher-system"
