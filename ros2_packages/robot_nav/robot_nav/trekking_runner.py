@@ -95,6 +95,33 @@ class DriveConfig:
     d_brake: float = 0.6            # m — começa a frear no ÚLTIMO waypoint
 
 
+def pick_cone(cones, x, y, yaw, radius):
+    """Cone-âncora do waypoint: o MAIS PRÓXIMO em QUALQUER direção, dentro de
+    `radius`. Devolve (cx, cy, bearing_relativo_ao_yaw) ou None.
+
+    Era só o semicírculo FRONTAL (±90°). BO medido no sim 2026-08-24: o dono
+    gravou 4 pontos e só 2 saíram com cone — nos outros dois o cone real estava
+    perto (1,44 m e 2,47 m) mas com bearing +170° e +134°, ou seja ATRÁS, porque
+    ele já tinha passado ao lado do cone quando apertou o botão. Gravar assim é
+    o natural; a regra é que estava errada.
+
+    O `bearing` devolvido é RELATIVO ao yaw da gravação — é o que o PLAY usa
+    depois pra conferir que casou com o cone certo.
+    """
+    best = None
+    best_d = float('inf')
+    for cx, cy, _w in cones:
+        dx = cx - x
+        dy = cy - y
+        d = math.hypot(dx, dy)
+        if d < 0.05 or d > radius:      # <5 cm = ruído em cima do robô
+            continue
+        if d < best_d:
+            best_d = d
+            best = (cx, cy, _wrap_pi(math.atan2(dy, dx) - yaw))
+    return best
+
+
 def drive_cmd(h_err, dist, is_last, turning, cfg):
     """(vx, wz, turning) — RETO ou GIRO NO LUGAR, nunca os dois.
 
@@ -147,6 +174,9 @@ class TrekkingRunner(Node):
         self.declare_parameter('cone_search_radius', 1.5)    # m — começa a procurar
         self.declare_parameter('cone_match_radius',  0.6)    # m — distância máx do esperado
         self.declare_parameter('cone_bearing_tol_deg', 60.0) # ° — janela angular relativa
+        # Raio de captura do cone na GRAVAÇÃO, em qualquer direção (o ±90° da
+        # frente saiu — ver pick_cone). Mantém o alcance efetivo de antes.
+        self.declare_parameter('cone_capture_radius', 3.0)   # m
 
         # --- Correção persistente de pose por cone-âncora (aditiva ao snap) ---
         self.declare_parameter('enable_cone_pose_fix', True)
@@ -185,6 +215,7 @@ class TrekkingRunner(Node):
         self.r_search= float(self.get_parameter('cone_search_radius').value)
         self.r_match = float(self.get_parameter('cone_match_radius').value)
         self.bear_tol= math.radians(float(self.get_parameter('cone_bearing_tol_deg').value))
+        self.r_capture = float(self.get_parameter('cone_capture_radius').value)
         self.led_ms  = int(self.get_parameter('led_arrival_ms').value)
         self.state_dt= 1.0 / float(self.get_parameter('publish_state_hz').value)
         self.ctrl_dt = 1.0 / float(self.get_parameter('control_hz').value)
@@ -428,9 +459,8 @@ class TrekkingRunner(Node):
             self.last_msg = 'sem pose — pose_estimator parado?'
             return
 
-        # Procura cone mais próximo no semicírculo frontal do robô (±90°)
-        # com leve preferência pelo mais próximo.
-        cone = self._nearest_front_cone(x, y, yaw, cones)
+        # Cone mais próximo em QUALQUER direção, dentro do raio de captura.
+        cone = pick_cone(cones, x, y, yaw, self.r_capture)
         wp = {
             'x': x,
             'y': y,
@@ -449,24 +479,6 @@ class TrekkingRunner(Node):
         else:
             self._flash_led(1.0, 0.7, 0.0, mode=1)   # amarelo pisca → sem cone
             self.last_msg = f'wp{idx}: ({x:.2f}, {y:.2f}) — cone não visto'
-
-    def _nearest_front_cone(self, x: float, y: float, yaw: float, cones):
-        # Retorna (cone_x, cone_y, bearing_relativo) do cone mais próximo
-        # cujo bearing relativo ao yaw atual esteja em [-90°, +90°].
-        best = None
-        best_d = float('inf')
-        for cx, cy, _w in cones:
-            dx = cx - x; dy = cy - y
-            d = math.hypot(dx, dy)
-            if d < 0.05 or d > self.r_search * 2:
-                continue
-            bearing = _wrap_pi(math.atan2(dy, dx) - yaw)
-            if abs(bearing) > math.pi / 2.0:
-                continue
-            if d < best_d:
-                best_d = d
-                best = (cx, cy, bearing)
-        return best
 
     def _start_play(self):
         if not self.waypoints:

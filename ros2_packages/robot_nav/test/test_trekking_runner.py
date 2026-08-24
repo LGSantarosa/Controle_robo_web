@@ -100,3 +100,59 @@ def test_waypoint_intermediario_nao_freia():
     """Só o último ponto freia — nos intermediários passa voado."""
     vx, _, _ = _turn(0, dist=0.3, is_last=False)
     assert vx == pytest.approx(CFG.v_max)
+
+
+# ---------------------------------------------------------------------------
+# Captura do cone na gravação (BO do dono, sim 2026-08-24)
+#
+# Ele gravou 4 pontos e só 2 saíram com cone. Medido na rota salva: nos wp1 e
+# wp2 o cone real estava a 1,44 m e 2,47 m — perto — mas com bearing +170° e
+# +134°, ou seja ATRÁS. A regra antiga só olhava o semicírculo frontal (±90°),
+# então ele perdia todo cone que ficasse ao lado ou já tivesse passado.
+#
+# Pedido: valer pra TODOS OS LADOS, validando só por PROXIMIDADE.
+# ---------------------------------------------------------------------------
+from robot_nav.trekking_runner import pick_cone
+
+
+def test_cone_ao_lado_esquerdo_vale():
+    # robô na origem olhando +x; cone a 1,5 m na esquerda (+90°)
+    c = pick_cone([(0.0, 1.5, 0.22)], 0.0, 0.0, 0.0, 3.0)
+    assert c is not None
+    assert c[0] == pytest.approx(0.0) and c[1] == pytest.approx(1.5)
+    assert math.degrees(c[2]) == pytest.approx(90.0)
+
+
+def test_cone_ao_lado_direito_vale():
+    c = pick_cone([(0.0, -1.5, 0.22)], 0.0, 0.0, 0.0, 3.0)
+    assert c is not None
+    assert math.degrees(c[2]) == pytest.approx(-90.0)
+
+
+def test_cone_ATRAS_vale_agora():
+    """Era o BO: bearing 180° era descartado mesmo estando a 1,4 m."""
+    c = pick_cone([(-1.44, 0.0, 0.22)], 0.0, 0.0, 0.0, 3.0)
+    assert c is not None
+    assert abs(math.degrees(c[2])) == pytest.approx(180.0)
+
+
+def test_longe_demais_nao_vale():
+    assert pick_cone([(0.0, 3.5, 0.22)], 0.0, 0.0, 0.0, 3.0) is None
+
+
+def test_colado_demais_e_ruido():
+    assert pick_cone([(0.02, 0.0, 0.22)], 0.0, 0.0, 0.0, 3.0) is None
+
+
+def test_escolhe_o_MAIS_PROXIMO_em_qualquer_direcao():
+    cones = [(2.5, 0.0, 0.22),      # frente, longe
+             (0.0, -0.9, 0.22)]     # direita, perto
+    c = pick_cone(cones, 0.0, 0.0, 0.0, 3.0)
+    assert c[1] == pytest.approx(-0.9)
+
+
+def test_bearing_e_relativo_ao_yaw_gravado():
+    """O bearing gravado é o que o PLAY usa pra conferir o cone — tem que ser
+    relativo ao yaw do robô na hora da gravação, não absoluto."""
+    c = pick_cone([(0.0, 1.5, 0.22)], 0.0, 0.0, math.radians(90.0), 3.0)
+    assert math.degrees(c[2]) == pytest.approx(0.0)   # está bem à frente

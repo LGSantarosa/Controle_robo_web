@@ -63,6 +63,10 @@
         if (wp.has_cone) pts.push([wp.cone_x, wp.cone_y]);
       });
     }
+    // A TRILHA entra no enquadramento: o mapa vai se expandindo conforme ele
+    // anda, igual SLAM/nav2. Como a trilha só cresce, a caixa nunca encolhe
+    // sozinha — não volta a jitterar.
+    for (let i = 0; i < trail.length; i++) pts.push(trail[i]);
     if (pts.length === 0) pts = [[0,0]];
 
     let xmin=Infinity, xmax=-Infinity, ymin=Infinity, ymax=-Infinity;
@@ -134,18 +138,21 @@
   function drawCones(view) {
     if (!state) return;
     // Cones ao vivo (vermelho hollow)
+    // Raio do cone em METROS (~0.15), com piso de 3 px pra não sumir quando a
+    // vista abre numa pista grande.
+    const rCone = Math.max(3, 0.15 * view.scale);
     ctx.strokeStyle = '#ef4444';
     ctx.lineWidth = 1.5;
     (state.cones || []).forEach(c => {
       const px = view.tx(c[0]), py = view.ty(c[1]);
-      ctx.beginPath(); ctx.arc(px, py, 5, 0, 2*Math.PI); ctx.stroke();
+      ctx.beginPath(); ctx.arc(px, py, rCone, 0, 2*Math.PI); ctx.stroke();
     });
     // Cones gravados (laranja filled)
     ctx.fillStyle = '#fdba74';
     (state.waypoints || []).forEach(wp => {
       if (!wp.has_cone) return;
       const px = view.tx(wp.cone_x), py = view.ty(wp.cone_y);
-      ctx.beginPath(); ctx.arc(px, py, 4, 0, 2*Math.PI); ctx.fill();
+      ctx.beginPath(); ctx.arc(px, py, rCone, 0, 2*Math.PI); ctx.fill();
     });
     // Cone trancado (snap atual) — anel amarelo
     if (state.locked_cone) {
@@ -216,19 +223,30 @@
     });
   }
 
+  // Lado do footprint, mesmo valor do mapa do nav2 (map.js).
+  const ROBOT_SIZE_M = 0.5;
+
   function drawRobot(view) {
     if (!state || !state.have_pose) return;
+    // QUADRADO no tamanho real, na escala do mapa — igual ao nav2. Antes era um
+    // círculo de 6 px FIXOS: não encolhia quando a vista abria, então o robô
+    // parecia gigante numa pista de 28 m e a noção de distância sumia.
     const px = view.tx(state.x), py = view.ty(state.y);
-    const yaw = state.yaw;
-    // corpo
-    ctx.fillStyle = '#f97316';
-    ctx.beginPath(); ctx.arc(px, py, 6, 0, 2*Math.PI); ctx.fill();
-    // seta de heading (15 px na direção do yaw; canvas y invertido)
-    const tx = px + 18 * Math.cos(yaw);
-    const ty = py - 18 * Math.sin(yaw);
-    ctx.strokeStyle = '#fb923c';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(tx, ty); ctx.stroke();
+    const half = (ROBOT_SIZE_M * view.scale) / 2;
+    ctx.save();
+    ctx.translate(px, py);
+    // canvas tem y pra baixo, então yaw (CCW positivo) é negativo visualmente
+    ctx.rotate(-state.yaw);
+    ctx.fillStyle = 'rgba(255,153,0,0.35)';
+    ctx.fillRect(-half, -half, half*2, half*2);
+    ctx.strokeStyle = '#f90';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-half, -half, half*2, half*2);
+    // risco de direção: centro até a frente (+x do robô)
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(half, 0); ctx.stroke();
+    ctx.restore();
   }
 
   function render() {
