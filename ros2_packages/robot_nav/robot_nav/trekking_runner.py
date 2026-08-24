@@ -21,6 +21,7 @@ Saídas:
   /trekking/state      String (JSON)     estado completo p/ a UI (~10 Hz)
   /trekking/waypoints  PoseArray         lista de waypoints (visualização)
   /trekking/target     PoseStamped       alvo corrente do PID (post-snap)
+  controle_web/logs/trekking.csv        telemetria do PLAY (1 linha por tick)
 
 Filosofia:
   - Sair voado: PID heading + v = v_max * cos²(err) * clamp(dist/d_brake, 0, 1).
@@ -30,8 +31,10 @@ Filosofia:
   - Sem TF — só /trekking/pose. Trekking não acorda se o pose_estimator
     não estiver publicando.
 """
+import csv as _csv
 import json
 import math
+import os as _os
 import threading
 import time
 from dataclasses import dataclass
@@ -225,6 +228,24 @@ class TrekkingRunner(Node):
         self.pub_wps    = self.create_publisher(PoseArray, 'trekking/waypoints', 10)
         self.pub_target = self.create_publisher(PoseStamped, 'trekking/target', 10)
         self.pub_pose_fix = self.create_publisher(Vector3Stamped, 'trekking/pose_fix', 10)
+
+        # --- Telemetria do PLAY (padrão dos outros nós: motion_guard/freeze_capture) ---
+        # O trekking era o ÚNICO modo autônomo sem CSV nenhum — rodava cego, e
+        # por isso o "testei uma vez e não deu boa" nunca virou diagnóstico.
+        # Uma linha por tick de controle (~30 Hz) só no PLAY; IDLE/RECORD não
+        # escrevem nada.
+        self._t0 = time.time()
+        d = 'controle_web/logs'
+        _os.makedirs(d, exist_ok=True)
+        self._csv_f = open(_os.path.join(d, 'trekking.csv'), 'w', newline='')
+        self._csv = _csv.writer(self._csv_f)
+        self._csv.writerow([
+            't', 'idx', 'n_wps', 'state', 'dist', 'h_err_deg', 'vx', 'wz',
+            'x', 'y', 'yaw_deg', 'tx', 'ty', 'snap', 'snap_dx', 'snap_dy',
+            'event'])
+        # flush em timer, não por linha (8ª auditoria A5: flush a 30 Hz
+        # castiga o SD da Pi). Perde <=2 s no pior caso.
+        self.create_timer(2.0, self._csv_f.flush)
 
         self.create_timer(self.ctrl_dt, self._control_tick)
         self.create_timer(self.state_dt, self._state_tick)
@@ -500,6 +521,8 @@ class TrekkingRunner(Node):
         dx = target_x - x
         dy = target_y - y
         dist = math.hypot(dx, dy)
+        desired_heading = math.atan2(dy, dx)
+        h_err = _wrap_pi(desired_heading - yaw)
 
         # 2) Detecção de chegada
         arrived = dist < self.arr_tol
@@ -510,6 +533,8 @@ class TrekkingRunner(Node):
         self.last_to_target = (dx, dy)
 
         if arrived or passed_by:
+            self._log_csv(x, y, yaw, target_x, target_y, dist, h_err, 0.0, 0.0,
+                          'passby' if passed_by else 'arrive')
             self._on_arrival(self.current_idx)
             self.current_idx += 1
             self.locked_cone = None
@@ -520,8 +545,6 @@ class TrekkingRunner(Node):
 
         # 3) RETO ou GIRO NO LUGAR — o robô não arqueia (arc_calib 06-25).
         # Freia só no último waypoint; nos intermediários passa voado.
-        desired_heading = math.atan2(dy, dx)
-        h_err = _wrap_pi(desired_heading - yaw)
         is_last = self.current_idx == len(self.waypoints) - 1
         v, omega, self._turning = drive_cmd(
             h_err, dist, is_last, self._turning, self.drive_cfg)
@@ -530,6 +553,7 @@ class TrekkingRunner(Node):
         tw.linear.x = float(v)
         tw.angular.z = float(omega)
         self.pub_cmd.publish(tw)
+        self._log_csv(x, y, yaw, target_x, target_y, dist, h_err, v, omega, '')
 
         # publica alvo corrente pra visualização
         ts = PoseStamped()
@@ -541,6 +565,24 @@ class TrekkingRunner(Node):
         ts.pose.orientation.z = qz
         ts.pose.orientation.w = qw
         self.pub_target.publish(ts)
+
+    def _log_csv(self, x, y, yaw, tx, ty, dist, h_err, vx, wz, event):
+        """Uma linha do PLAY. `snap_dx/dy` = o quanto o cone-âncora deslocou o
+        alvo em relação ao waypoint gravado, ou seja, o DRIFT que ele corrigiu
+        naquele ponto — é a métrica de precisão da rota."""
+        snap_dx = snap_dy = ''
+        if 0 <= self.current_idx < len(self.waypoints):
+            wp = self.waypoints[self.current_idx]
+            snap_dx = round(tx - wp['x'], 3)
+            snap_dy = round(ty - wp['y'], 3)
+        self._csv.writerow([
+            round(time.time() - self._t0, 3), self.current_idx,
+            len(self.waypoints), 'turn' if self._turning else 'drive',
+            round(dist, 3), round(math.degrees(h_err), 1),
+            round(vx, 3), round(wz, 3),
+            round(x, 3), round(y, 3), round(math.degrees(yaw), 1),
+            round(tx, 3), round(ty, 3),
+            int(self.locked_cone is not None), snap_dx, snap_dy, event])
 
     def _find_matching_cone(self, wp: dict, x: float, y: float, yaw: float, cones):
         expected_x = wp['cone_x']
@@ -698,6 +740,10 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        try:
+            node._csv_f.close()
+        except Exception:
+            pass
         node.destroy_node()
         rclpy.try_shutdown()
 
