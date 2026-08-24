@@ -14,6 +14,7 @@ Entradas:
   /trekking/pose       PoseStamped       posição/yaw fundidos
   /trekking/cones      PoseArray         cones detectados em odom (com width na orientation.x)
   /trekking/cmd        String (JSON)     comandos vindos da UI
+  /joy                 Joy               PS4: um botao grava waypoint (save_point)
 
 Saídas:
   /cmd_vel             Twist
@@ -42,6 +43,7 @@ from dataclasses import dataclass
 import rclpy
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped, Twist, Vector3Stamped
 from rclpy.node import Node
+from sensor_msgs.msg import Joy
 from std_msgs.msg import ColorRGBA, String
 
 
@@ -156,6 +158,13 @@ class TrekkingRunner(Node):
         self.declare_parameter('led_arrival_ms', 600)
         self.declare_parameter('publish_state_hz', 10.0)
 
+        # --- Gravar ponto pelo CONTROLE ---
+        # Gravar rota dirigindo e ter que largar o controle pra clicar "+ Ponto"
+        # na web e ruim: o robo anda no meio do caminho. Botao no PS4 resolve.
+        # PS4 (driver joy): 0=X, 1=O, 2=triangulo, 3=quadrado, 4=L1, 5=R1.
+        self.declare_parameter('save_point_button', 0)   # X
+        self.declare_parameter('joy_enabled', True)
+
         # --- Loop ---
         self.declare_parameter('control_hz', 30.0)
 
@@ -179,6 +188,9 @@ class TrekkingRunner(Node):
         self.led_ms  = int(self.get_parameter('led_arrival_ms').value)
         self.state_dt= 1.0 / float(self.get_parameter('publish_state_hz').value)
         self.ctrl_dt = 1.0 / float(self.get_parameter('control_hz').value)
+        self.save_btn = int(self.get_parameter('save_point_button').value)
+        self.joy_enabled = bool(self.get_parameter('joy_enabled').value)
+        self._joy_prev = 0     # estado anterior do botao (borda de subida)
         self.enable_cone_pose_fix = bool(self.get_parameter('enable_cone_pose_fix').value)
         self.cone_confirm_frames  = int(self.get_parameter('cone_confirm_frames').value)
         self.cone_stable_eps      = float(self.get_parameter('cone_stable_eps').value)
@@ -228,6 +240,8 @@ class TrekkingRunner(Node):
         self.pub_wps    = self.create_publisher(PoseArray, 'trekking/waypoints', 10)
         self.pub_target = self.create_publisher(PoseStamped, 'trekking/target', 10)
         self.pub_pose_fix = self.create_publisher(Vector3Stamped, 'trekking/pose_fix', 10)
+        if self.joy_enabled:
+            self.create_subscription(Joy, 'joy', self._on_joy, 10)
 
         # --- Telemetria do PLAY (padrão dos outros nós: motion_guard/freeze_capture) ---
         # O trekking era o ÚNICO modo autônomo sem CSV nenhum — rodava cego, e
@@ -565,6 +579,23 @@ class TrekkingRunner(Node):
         ts.pose.orientation.z = qz
         ts.pose.orientation.w = qw
         self.pub_target.publish(ts)
+
+    def _on_joy(self, msg):
+        """Botao do PS4 grava waypoint. So na BORDA DE SUBIDA — o joy_node
+        repete a mensagem a 20 Hz (autorepeat), sem isso um toque viraria
+        dezenas de waypoints. Bloqueado no PLAY, igual a web faz com o botao.
+        """
+        if self.save_btn >= len(msg.buttons):
+            return
+        agora = int(msg.buttons[self.save_btn])
+        subiu = agora and not self._joy_prev
+        self._joy_prev = agora
+        if not subiu:
+            return
+        if self.mode == MODE_PLAY:
+            self.last_msg = 'no PLAY nao grava ponto'
+            return
+        self._save_point()
 
     def _log_csv(self, x, y, yaw, tx, ty, dist, h_err, vx, wz, event):
         """Uma linha do PLAY. `snap_dx/dy` = o quanto o cone-âncora deslocou o

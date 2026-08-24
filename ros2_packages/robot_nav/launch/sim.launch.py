@@ -115,8 +115,7 @@ def generate_launch_description():
 
     # --- twist_mux: arbitra web_vel + nav_vel → /cmd_vel (consumido pelo bridge GZ).
     # Sem isso, web e Nav2 publicariam direto em /cmd_vel competindo. No SIM o
-    # mux fica com 2 entradas (joy_vel/key_vel não têm publisher), o que é OK —
-    # twist_mux tolera topics sem publisher.
+    # mux tolera topics sem publisher (key_vel não tem, no sim).
     twist_mux_cfg = os.path.join(pkg_robot_nav, 'config', 'twist_mux.yaml')
     twist_mux = Node(
         package='twist_mux',
@@ -140,6 +139,37 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}],
     )
 
+    # --- PS4 no SIM (joy_vel, prio 100 no mux) ---
+    # Antes o controle simplesmente não existia no sim: joy_node/teleop_twist_joy
+    # só sobem no robot.launch.py, que o --sim não usa. Dirigir a gravação da
+    # rota pelo teclado da web é ruim de dosar; o PS4 dá movimento bem melhor.
+    #
+    # device_name em vez de device_id: nesta máquina o PS4 enumera em
+    # /dev/input/js1 porque o js0 é um mouse falso ("mouce-library-fake-mouse").
+    # Procurar pelo NOME acha o controle em qualquer índice, aqui e no robô.
+    joy_node = Node(
+        package='joy',
+        executable='joy_node',
+        name='joy_node',
+        output={'stdout': 'screen', 'stderr': 'log'},
+        parameters=[{
+            'device_name': 'Wireless Controller',
+            'deadzone': 0.05,
+            'autorepeat_rate': 20.0,
+            'use_sim_time': True,
+        }],
+    )
+
+    teleop_ps4_cfg = os.path.join(pkg_robot_nav, 'config', 'teleop_ps4.yaml')
+    teleop_twist_joy = Node(
+        package='teleop_twist_joy',
+        executable='teleop_node',
+        name='teleop_twist_joy_node',
+        output={'stdout': 'screen', 'stderr': 'log'},
+        parameters=[teleop_ps4_cfg, {'use_sim_time': True}],
+        remappings=[('cmd_vel', 'joy_vel')],
+    )
+
     return LaunchDescription([
         world_arg,
         robot_sdf_arg,
@@ -152,4 +182,6 @@ def generate_launch_description():
         rsp,
         twist_mux,
         sim_actuator_model,
+        joy_node,
+        teleop_twist_joy,
     ])
