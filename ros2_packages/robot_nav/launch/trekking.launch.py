@@ -67,9 +67,20 @@ def generate_launch_description():
             'enable_cone_pose_fix': LaunchConfiguration('enable_cone_pose_fix'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
-        # Saída do PID vai pra nav_vel (entrada de menor prioridade do twist_mux
-        # em robot.launch.py) — assim o PS4 pode assumir por cima do autônomo.
-        remappings=[('cmd_vel', 'nav_vel')],
+        # Saída vai pra auto_vel = a entrada de AUTONOMIA do twist_mux (prio 10),
+        # abaixo de PS4/teclado/web — o dono sempre assume por cima.
+        #
+        # Era `nav_vel` e estava MORTO: na refatoração de 2 muxes (06-26) o mux
+        # final passou a escutar `auto_vel` (saída do collision_monitor) e
+        # ninguém mais consome `nav_vel` — quem fazia essa ponte é o
+        # `twist_mux_auto`, que só sobe no nav2.launch.py. O trekking, congelado
+        # em 06-12, seguiu publicando no vazio: medido com o robô em `play`,
+        # `/nav_vel` tinha 1 publisher e 0 subscribers, e o robô não saía do
+        # lugar (no real também).
+        #
+        # auto_vel entra DEPOIS do collision_monitor de propósito: o trekking
+        # não tem reflexo de colisão por desenho — ele não liga se for bater.
+        remappings=[('cmd_vel', 'auto_vel')],
     )
 
     sim_trekking_pose = Node(
