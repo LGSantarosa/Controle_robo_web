@@ -604,7 +604,7 @@ O que sobe a mais (3 nós Python leves, ~10% CPU total):
 |----|------------------|--------|
 | `pose_estimator` | `/trekking/pose`, `/trekking/odom`, `/trekking/slip` (+ `/odom` e o TF, em todos os modos) | Funde **MPU6050 (yaw do gyro, validado ~99%)** + **4 RPMs** (+ **PMW3901 flow**, quando presente — hoje removido). Corrige slip das rodas. |
 | `cone_detector`  | `/trekking/cones` | Clusteriza `/scan` por gap, filtra por largura (5–40 cm) e publica candidatos a cone em frame `odom`. |
-| `trekking_runner`| `/cmd_vel`, `/leds/color`, `/trekking/state`, `/trekking/target` | Máquina IDLE/RECORD/PLAY com PID heading + `v = v_max·cos²(err)·brake`, snap-to-cone re-âncora o alvo a cada waypoint. |
+| `trekking_runner`| `/cmd_vel`, `/leds/color`, `/trekking/state`, `/trekking/target` | Máquina IDLE/RECORD/PLAY. Dirige em **reto OU giro no lugar** (o robô não arqueia — `arc_calib` 06-25), com histerese `turn_enter`/`turn_exit` e piso `rot_min` furando a zona-morta. Snap-to-cone re-âncora o alvo a cada waypoint. |
 
 **Fluxo de uso pela UI web:**
 
@@ -639,7 +639,10 @@ O que sobe a mais (3 nós Python leves, ~10% CPU total):
 | `flow_height` | `pose_estimator` | `0.12` m | Altura do PMW3901 ao chão. Crítico — m/contagem = `h · tan(rad/pix)`. |
 | `flow_x_sign`, `flow_y_sign`, `flow_swap_xy` | `pose_estimator` | `1, 1, false` (node) — **`trekking.launch.py` aplica `-1, 1, True`** | Calibrado no robô 2026-05-29: frente = `dy` negativo do sensor, então `swap_xy=True` + `x_sign=-1`. Ver "Calibração e diagnóstico do flow" abaixo. |
 | `lidar_offset_x` | `cone_detector` | `0.10` m | Conforme o URDF (`base_link → base_laser`). |
-| `v_max` | `trekking_runner` | `0.35` m/s | Subir gradualmente até o limite seguro do ambiente. |
+| `v_max` | `trekking_runner` | `0.35` m/s | Cruzeiro da reta. Subir gradualmente até o limite seguro do ambiente — no trekking a velocidade vem das RETAS, não das curvas. |
+| `min_speed` | `trekking_runner` | `0.22` m/s | Avanço mínimo. **Não baixar**: em campo `0.11` trava e `0.25` anda — abaixo disso o robô congela sem finalizar o ponto. |
+| `rot_min` / `rot_max` / `rot_k` | `trekking_runner` | `2.4` / `4.5` / `3.0` | Giro no lugar. `rot_min` é o **piso que fura a zona-morta de 1,7 rad/s** (`spin_calib` 06-19); abaixo disso a roda não vira e o comando é morto. |
+| `turn_enter_deg` / `turn_exit_deg` | `trekking_runner` | `20°` / `6°` | Histerese do point-turn: acima de `turn_enter` para e gira; só volta a andar abaixo de `turn_exit`. |
 | `arrival_tolerance` | `trekking_runner` | `0.25` m | Quão perto do ponto conta como chegada. |
 | `cone_search_radius` / `cone_match_radius` / `cone_bearing_tol_deg` | `trekking_runner` | `1.5 m / 0.6 m / 60°` | Filtro do snap-to-cone. |
 

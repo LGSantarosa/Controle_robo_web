@@ -34,6 +34,7 @@ import json
 import math
 import threading
 import time
+from dataclasses import dataclass
 
 import rclpy
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped, Twist, Vector3Stamped
@@ -54,22 +55,83 @@ def _yaw_to_quat(yaw):
     return (0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0))
 
 
+@dataclass
+class DriveConfig:
+    """Autoridade de atuador do skid-steer — MEDIDA, não chutada.
+
+    O `trekking_runner` congelou em 2026-06-12, uma semana antes das duas
+    medições que mudaram todo o resto da stack:
+
+      - `spin_calib` (06-19, fitas nas rodas): abaixo de ~1.7 rad/s comandados a
+        roda simplesmente NÃO gira. Resposta real ~0.6*(cmd-1.7), satura ~1.7
+        rad/s reais. Mandar wz fraco é comando MORTO (mesma lição do
+        motion_guard: nunca escalar wz parcialmente).
+      - `arc_calib` (06-25, no robô real): andando, o wz comandado rende 2-3%
+        até 1.2 e no MÁXIMO 19% a 2.5. Veredito registrado: o robô não arqueia,
+        é FÍSICO (o diferencial pequeno não vence a patinagem lateral do
+        skid-steer), não é tuning.
+
+    Consequência: existem só DOIS primitivos — RETO e GIRO NO LUGAR. O PID
+    antigo tinha `omega_max=1.2`, ou seja, saturava todo giro DENTRO da
+    zona-morta: no PLAY o robô nunca girou de verdade, só andava reto
+    acumulando desvio. Estes números vêm do `path_follower`, validado em campo.
+    """
+    rot_deadzone: float = 1.7       # rad/s — abaixo disso a roda não vira (spin_calib)
+    rot_k: float = 3.0              # ganho P do giro (rad/s por rad)
+    rot_min: float = 2.4            # piso do giro (2.0 = rastejo ~10°/s reais)
+    rot_max: float = 4.5            # teto do giro
+    turn_enter: float = math.radians(20.0)  # entra em point-turn
+    turn_exit: float = math.radians(6.0)    # e só solta aqui (histerese)
+    v_max: float = 0.35             # m/s — cruzeiro da reta
+    # path_follower 06-26, medido em campo: "0.11 trava, 0.25 anda" -> a
+    # zona-morta linear está no meio; 0.22 fica bem acima. O freio do último
+    # ponto NUNCA pode descer abaixo disso ou o robô congela sem finalizar.
+    min_speed: float = 0.22         # m/s — avanço mínimo
+    d_brake: float = 0.6            # m — começa a frear no ÚLTIMO waypoint
+
+
+def drive_cmd(h_err, dist, is_last, turning, cfg):
+    """(vx, wz, turning) — RETO ou GIRO NO LUGAR, nunca os dois.
+
+    `turning` entra e sai por histerese pra não ficar liga-desliga na fronteira.
+    Nenhum comando abaixo da zona-morta é emitido: ou gira de verdade, ou manda
+    zero e anda reto.
+    """
+    if turning:
+        turning = abs(h_err) > cfg.turn_exit
+    else:
+        turning = abs(h_err) >= cfg.turn_enter
+
+    if turning:
+        mag = min(cfg.rot_max, max(cfg.rot_min, abs(h_err) * cfg.rot_k))
+        return 0.0, math.copysign(mag, h_err), True
+
+    # Reto. O erro residual (< turn_enter) NÃO vira wz fraco: seria comando
+    # morto e ainda cobraria autoridade do mux. A geometria do próximo
+    # waypoint reabre o erro e o point-turn corrige de uma vez.
+    v = cfg.v_max
+    if is_last:
+        v = min(v, cfg.v_max * min(dist / cfg.d_brake, 1.0))
+    return max(v, cfg.min_speed), 0.0, False
+
+
 class TrekkingRunner(Node):
 
     def __init__(self):
         super().__init__('trekking_runner')
 
-        # --- PID heading ---
-        self.declare_parameter('kp_heading', 1.6)
-        self.declare_parameter('kd_heading', 0.20)
-        self.declare_parameter('omega_max', 1.2)        # rad/s
+        # --- Giro: reto OU point-turn (ver DriveConfig; o robô não arqueia) ---
+        _d = DriveConfig()
+        self.declare_parameter('rot_k', _d.rot_k)
+        self.declare_parameter('rot_min', _d.rot_min)          # piso: fura a zona-morta 1.7
+        self.declare_parameter('rot_max', _d.rot_max)
+        self.declare_parameter('turn_enter_deg', math.degrees(_d.turn_enter))
+        self.declare_parameter('turn_exit_deg', math.degrees(_d.turn_exit))
 
         # --- Velocidade ---
-        self.declare_parameter('v_max', 0.35)           # m/s — começamos devagar
-        self.declare_parameter('v_min', 0.05)
-        self.declare_parameter('d_brake', 0.6)          # m — freia ao último ponto a partir daqui
-        # Power do cosseno: cos^n; n alto pune mais o erro de heading.
-        self.declare_parameter('heading_cos_power', 2.0)
+        self.declare_parameter('v_max', _d.v_max)              # m/s — cruzeiro da reta
+        self.declare_parameter('min_speed', _d.min_speed)      # m/s — acima da zona-morta linear
+        self.declare_parameter('d_brake', _d.d_brake)          # m — freia ao último ponto a partir daqui
 
         # --- Avanço de waypoint ---
         self.declare_parameter('arrival_tolerance', 0.25)    # m
@@ -94,13 +156,18 @@ class TrekkingRunner(Node):
         # --- Loop ---
         self.declare_parameter('control_hz', 30.0)
 
-        self.kp_h    = float(self.get_parameter('kp_heading').value)
-        self.kd_h    = float(self.get_parameter('kd_heading').value)
-        self.w_max   = float(self.get_parameter('omega_max').value)
         self.v_max   = float(self.get_parameter('v_max').value)
-        self.v_min   = float(self.get_parameter('v_min').value)
         self.d_brake = float(self.get_parameter('d_brake').value)
-        self.cos_n   = float(self.get_parameter('heading_cos_power').value)
+        self.drive_cfg = DriveConfig(
+            rot_k=float(self.get_parameter('rot_k').value),
+            rot_min=float(self.get_parameter('rot_min').value),
+            rot_max=float(self.get_parameter('rot_max').value),
+            turn_enter=math.radians(float(self.get_parameter('turn_enter_deg').value)),
+            turn_exit=math.radians(float(self.get_parameter('turn_exit_deg').value)),
+            v_max=self.v_max,
+            min_speed=float(self.get_parameter('min_speed').value),
+            d_brake=self.d_brake,
+        )
         self.arr_tol = float(self.get_parameter('arrival_tolerance').value)
         self.passby  = bool(self.get_parameter('passby_detection').value)
         self.r_search= float(self.get_parameter('cone_search_radius').value)
@@ -141,7 +208,7 @@ class TrekkingRunner(Node):
         self._anchor_clutter = []      # [(x,y), ...] candidatos descartados perto do esperado
         self._anchor_confirm = 0       # progresso do confirmador
         self.last_to_target = None # vetor (dx, dy) último → detecção de pass-by
-        self.prev_heading_err = 0.0
+        self._turning = False
         self.led_until = 0.0       # walltime até quando manter LED de chegada
         self._last_led = None      # última cor publicada (dedup do _led_tick 1 Hz)
         self.last_msg = ''
@@ -167,7 +234,8 @@ class TrekkingRunner(Node):
 
         self.get_logger().info(
             f'trekking_runner: v_max={self.v_max:.2f} m/s, '
-            f'kp_h={self.kp_h:.2f}, arrival={self.arr_tol*100:.0f} cm'
+            f'rot_min={self.drive_cfg.rot_min:.1f} rad/s (zona-morta '
+            f'{self.drive_cfg.rot_deadzone:.1f}), arrival={self.arr_tol*100:.0f} cm'
         )
 
     # ------------------------------------------------------------------
@@ -378,7 +446,7 @@ class TrekkingRunner(Node):
         self.locked_cone = None
         self._reset_cone_fix()
         self.last_to_target = None
-        self.prev_heading_err = 0.0
+        self._turning = False
         self.last_msg = f'PLAY {len(self.waypoints)} waypoints'
 
     def _reset_cone_fix(self):
@@ -447,26 +515,16 @@ class TrekkingRunner(Node):
             self.locked_cone = None
             self._reset_cone_fix()
             self.last_to_target = None
-            self.prev_heading_err = 0.0
+            self._turning = False
             return
 
-        # 3) PID de heading + velocidade adaptativa
+        # 3) RETO ou GIRO NO LUGAR — o robô não arqueia (arc_calib 06-25).
+        # Freia só no último waypoint; nos intermediários passa voado.
         desired_heading = math.atan2(dy, dx)
         h_err = _wrap_pi(desired_heading - yaw)
-        d_err = (h_err - self.prev_heading_err) / max(self.ctrl_dt, 1e-3)
-        self.prev_heading_err = h_err
-
-        omega = self.kp_h * h_err + self.kd_h * d_err
-        omega = max(-self.w_max, min(self.w_max, omega))
-
-        # cos^n cai rápido quando errando de lado → quase só gira até alinhar
-        align = max(0.0, math.cos(h_err)) ** self.cos_n
-        # Freia só no último waypoint (não interessa parar nos intermediários)
         is_last = self.current_idx == len(self.waypoints) - 1
-        brake = min(dist / self.d_brake, 1.0) if is_last else 1.0
-        v = self.v_max * align * brake
-        if 0.0 < v < self.v_min:
-            v = self.v_min
+        v, omega, self._turning = drive_cmd(
+            h_err, dist, is_last, self._turning, self.drive_cfg)
 
         tw = Twist()
         tw.linear.x = float(v)
