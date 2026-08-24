@@ -29,6 +29,37 @@ from sensor_msgs.msg import LaserScan
 from .utils import quat_to_yaw as _quat_to_yaw, spin_node
 
 
+def cluster_isolated(ranges, i0, i1, iso_step):
+    """O cluster [i0, i1) tem VAZIO dos dois lados?
+
+    Um cone solto tem descontinuidade em volta: o feixe imediatamente antes e o
+    imediatamente depois batem no fundo (range bem diferente) ou nem voltam.
+    Um pedaço de superfície contínua (parede, face de caixa) tem vizinho na
+    MESMA distância logo ali.
+
+    Isto existe porque LARGURA NÃO DISTINGUE. Medido no sim 2026-08-24
+    (worlds/trekking.sdf, robô parado no spawn): 10 cones por scan, 2 reais e 8
+    fantasmas, 100% dos fantasmas pedaços da MESMA caixa de 0,90 m. Numa face
+    oblíqua o espaçamento entre feixes vizinhos estoura o gap_threshold e a
+    face se parte em mini-clusters de 6–16 cm, todos dentro da janela 4–45 cm.
+
+    Cluster encostado na borda da janela válida conta como isolado (não há
+    vizinho daquele lado). `iso_step <= 0` desliga o critério (A/B em campo).
+
+    CAVEAT: um cone ENCOSTADO numa parede é rejeitado. Em pista de trekking o
+    cone fica solto no chão; se algum dia precisar de cone rente a parede, é
+    aqui que se mexe.
+    """
+    if iso_step <= 0.0:
+        return True
+    n = len(ranges)
+    if i0 > 0 and abs(float(ranges[i0 - 1]) - float(ranges[i0])) < iso_step:
+        return False
+    if i1 < n and abs(float(ranges[i1]) - float(ranges[i1 - 1])) < iso_step:
+        return False
+    return True
+
+
 class ConeDetector(Node):
 
     def __init__(self):
@@ -43,6 +74,9 @@ class ConeDetector(Node):
         self.declare_parameter('min_cluster_points', 2)
         self.declare_parameter('min_cluster_width', 0.04)    # m
         self.declare_parameter('max_cluster_width', 0.45)    # m (cone + margem)
+        # Degrau de range que separa "cone solto" de "pedaço de superfície".
+        # 0 desliga o critério (comportamento pré-08-24). Ver cluster_isolated.
+        self.declare_parameter('iso_step', 0.25)             # m
         # Janela de range — fora disso descarta
         self.declare_parameter('range_min', 0.15)
         self.declare_parameter('range_max', 5.0)
@@ -57,6 +91,7 @@ class ConeDetector(Node):
         self.off_x          = float(self.get_parameter('lidar_offset_x').value)
         self.off_y          = float(self.get_parameter('lidar_offset_y').value)
         self.gap_thr        = float(self.get_parameter('gap_threshold').value)
+        self.iso_step       = float(self.get_parameter('iso_step').value)
         self.min_pts        = int(self.get_parameter('min_cluster_points').value)
         self.min_w          = float(self.get_parameter('min_cluster_width').value)
         self.max_w          = float(self.get_parameter('max_cluster_width').value)
@@ -83,6 +118,7 @@ class ConeDetector(Node):
 
         self.get_logger().info(
             f'cone_detector: gap={self.gap_thr*100:.1f} cm | '
+            f'iso_step={self.iso_step*100:.0f} cm | '
             f'largura {self.min_w*100:.0f}–{self.max_w*100:.0f} cm | '
             f'range {self.r_min:.2f}–{self.r_max:.2f} m'
         )
@@ -140,22 +176,27 @@ class ConeDetector(Node):
         breaks = np.where(gap_too_big)[0] + 1
         # Pontos do LD20 vêm ordenados em ângulo. O wrap em ±π pode partir um
         # cone em dois clusters; a perda é desprezível e o snap-to-cone tolera.
-        clusters = []
+        bounds = []
         prev = 0
         for b in breaks.tolist():
-            clusters.append((xs[prev:b], ys[prev:b]))
+            bounds.append((prev, b))
             prev = b
-        clusters.append((xs[prev:], ys[prev:]))
+        bounds.append((prev, xs.size))
 
         # 3) Filtra por número de pontos e por largura (extensão geométrica
         # entre primeiro e último ponto do cluster — barato e suficiente
         # pra cones, que são pequenos e convexos).
         cones_laser = []     # (cx, cy, width)
-        for cxs, cys in clusters:
+        for i0, i1 in bounds:
+            cxs = xs[i0:i1]
+            cys = ys[i0:i1]
             if cxs.size < self.min_pts:
                 continue
             width = float(math.hypot(cxs[-1] - cxs[0], cys[-1] - cys[0]))
             if width < self.min_w or width > self.max_w:
+                continue
+            # Largura não distingue cone de pedaço de parede — isolamento sim.
+            if not cluster_isolated(rs, i0, i1, self.iso_step):
                 continue
             cones_laser.append((float(cxs.mean()), float(cys.mean()), width))
 

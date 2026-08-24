@@ -26,7 +26,7 @@
 
       y
      8.5      (c4)                       c = cone (22 cm)
-     7.0  (c5)      (c3)                 B = caixa 0,90 m (obstáculo)
+     7.0 (c5)       (c3)                 B = caixa 0,90 m (obstáculo)
      5.5  [B3]  [B1]      [B2]
      4.0  (c6)      (c2)
      2.5   R  ->        (c1)
@@ -114,9 +114,13 @@
           <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>0.9 0.35 0.05 1</diffuse></material></visual>
       </link>
     </model>
+    <!-- x=1.0 e nao 2.0 DE PROPOSITO: em (2.0, 7.0) este cone ficava no mesmo
+         rumo do cone_6 visto do spawn (ambos a 90 graus) e era totalmente
+         ocultado por ele. Medido no /scan: os feixes do "cone_5" eram os do
+         cone_6. Deslocado pra dar ~1 m de separacao lateral a 4,5 m. -->
     <model name="cone_5">
       <static>true</static>
-      <pose>2.0 7.0 0.225 0 0 0</pose>
+      <pose>1.0 7.0 0.225 0 0 0</pose>
       <link name="link">
         <collision name="col"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry></collision>
         <visual name="vis"><geometry><cylinder><radius>0.11</radius><length>0.45</length></cylinder></geometry>
