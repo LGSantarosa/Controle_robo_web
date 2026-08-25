@@ -31,7 +31,10 @@ ideal no linear também, por isso o modelo mora aqui:
 
 Convenção: angular.z > 0 = girar à ESQUERDA (CCW); < 0 = DIREITA.
 """
+import time
+
 import rclpy
+from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 
@@ -59,24 +62,50 @@ def model_linear(v, deadzone):
     return v
 
 
-def watchdog_deve_parar(idade, timeout, ultimo_foi_zero):
-    """Precisa mandar um zero agora?
+def entrada_secou(idade_sim, timeout_sim, idade_wall, timeout_wall):
+    """A entrada secou? Dois relogios, e QUALQUER um dos dois basta.
 
     O DiffDrive do Gazebo NAO tem timeout: ele mantem a ultima velocidade de
     roda indefinidamente. Quando todas as entradas do twist_mux expiram, o mux
     simplesmente PARA de publicar — e o robo continua andando/girando sozinho.
     Medido em 2026-08-24: /cmd_vel sem nenhuma mensagem e o robo a +58,8 graus/s,
     1,5 s depois de soltar o comando. Era o BO "ele gira do nada" do dono.
-
     O robo real para quando o comando cessa (watchdog do firmware), entao este
     zero explicito tambem e FIDELIDADE sim=real.
 
-    `ultimo_foi_zero` evita martelar zero no barramento a 20 Hz depois de parado.
-    `timeout <= 0` desliga.
+    POR QUE DOIS RELOGIOS (2026-08-25): o relogio de SIMULACAO e o
+    semanticamente certo — com RTF 0.3 o publicador tambem fica 3x mais lento, e
+    um prazo de parede dispararia sozinho no meio do movimento, inventando uma
+    parada que ninguem pediu. Mas ele tem um ponto cego fatal: se o /clock
+    EMPACA (o BO do orfao de parameter_bridge, duas fontes de /clock), a idade
+    nunca cresce e o watchdog nunca dispara — justamente quando mais precisa.
+    Dai o segundo relogio, de PAREDE, com prazo folgado: ele nao opina no caso
+    normal, so pega o caso em que o tempo do sim parou de andar.
+
+    `timeout <= 0` desliga aquele relogio.
     """
-    if timeout <= 0.0:
-        return False
-    return idade > timeout and not ultimo_foi_zero
+    if timeout_sim > 0.0 and idade_sim > timeout_sim:
+        return True
+    if timeout_wall > 0.0 and idade_wall > timeout_wall:
+        return True
+    return False
+
+
+def deve_mandar_zero(secou, ja_enviados, rajada):
+    """Publicar mais um zero agora?
+
+    Era UM zero so, e a parada do robo inteira ficava pendurada nesse unico
+    pacote: se ele se perdesse (bridge reconectando, congestionamento, o proprio
+    DDS), o DiffDrive segurava a ultima velocidade PARA SEMPRE e nada no sistema
+    tentava de novo — robo girando constante, travado, que foi o BO relatado
+    pelo dono em 2026-08-25 ("girando devagarzinho e travado pra direita,
+    constante, depois de ter parado").
+
+    Agora e uma RAJADA curta. A razao original de nao repetir continua valendo e
+    esta respeitada: nao martelar zero a 20 Hz no barramento pra sempre depois
+    de parado — a rajada acaba.
+    """
+    return secou and ja_enviados < rajada
 
 
 class SimActuatorModel(Node):
@@ -98,15 +127,27 @@ class SimActuatorModel(Node):
         # ("parte do repouso a 0.11 e trava", atrito estático) fica no limiar.
         self.lin_deadzone = self.declare_parameter('linear_deadzone', 0.10).value
         # Watchdog: o DiffDrive do Gazebo trava o ultimo comando. Ver
-        # watchdog_deve_parar. 0 desliga.
+        # entrada_secou / deve_mandar_zero. 0 desliga cada relogio.
         self.input_timeout = self.declare_parameter('input_timeout', 0.3).value
+        # Prazo de PAREDE, folgado: so pega /clock empacado (ver entrada_secou).
+        self.input_timeout_wall = self.declare_parameter(
+            'input_timeout_wall', 2.0).value
+        # Rajada de zeros. 10 a 20 Hz = 0,5 s insistindo que e pra parar.
+        self.stop_burst = self.declare_parameter('stop_burst', 10).value
 
         self.pub = self.create_publisher(Twist, 'cmd_vel', 10)
         self.create_subscription(Twist, 'cmd_vel_raw', self._on_cmd, 10)
         self._last_rx = self._agora()
-        self._ultimo_zero = True
-        if self.input_timeout > 0.0:
-            self.create_timer(0.05, self._watchdog)
+        self._last_rx_wall = time.monotonic()
+        # Comeca "ja parado": no boot ninguem mandou nada, nao ha o que zerar.
+        self._zeros = self.stop_burst
+        if self.input_timeout > 0.0 or self.input_timeout_wall > 0.0:
+            # Relogio FIRME de proposito: o timer padrao segue o relogio do no,
+            # que com use_sim_time e o /clock. Se o /clock empaca, o timer nem
+            # dispara — e a checagem de parede aqui dentro nunca rodaria. O
+            # vigia nao pode depender do relogio que ele esta vigiando.
+            self.create_timer(0.05, self._watchdog,
+                              clock=Clock(clock_type=ClockType.STEADY_TIME))
         self.get_logger().info(
             f'sim_actuator_model: giro deadzone={self.deadzone} gain={self.gain} '
             f'sat={self.sat} (R={self.right_factor} L={self.left_factor}); '
@@ -117,15 +158,18 @@ class SimActuatorModel(Node):
         return self.get_clock().now().nanoseconds * 1e-9
 
     def _watchdog(self):
-        if not watchdog_deve_parar(self._agora() - self._last_rx,
-                                   self.input_timeout, self._ultimo_zero):
+        secou = entrada_secou(self._agora() - self._last_rx, self.input_timeout,
+                              time.monotonic() - self._last_rx_wall,
+                              self.input_timeout_wall)
+        if not deve_mandar_zero(secou, self._zeros, self.stop_burst):
             return
         self.pub.publish(Twist())
-        self._ultimo_zero = True
-        self.get_logger().info(
-            'entrada secou (%.2fs) -> zero explicito; sem isto o DiffDrive '
-            'seguraria a ultima velocidade pra sempre' % self.input_timeout,
-            throttle_duration_sec=10.0)
+        self._zeros += 1
+        if self._zeros == 1:
+            self.get_logger().info(
+                'entrada secou -> rajada de %d zeros; sem isto o DiffDrive '
+                'seguraria a ultima velocidade pra sempre' % self.stop_burst,
+                throttle_duration_sec=10.0)
 
     def _on_cmd(self, msg):
         out = Twist()
@@ -136,8 +180,12 @@ class SimActuatorModel(Node):
             self.right_factor, self.left_factor)
         self.pub.publish(out)
         self._last_rx = self._agora()
-        self._ultimo_zero = (out.linear.x == 0.0 and out.angular.z == 0.0
-                             and out.linear.y == 0.0)
+        self._last_rx_wall = time.monotonic()
+        parado = (out.linear.x == 0.0 and out.angular.z == 0.0
+                  and out.linear.y == 0.0)
+        # Comando com movimento REARMA a rajada: e o que garante que a proxima
+        # secagem seja insistida de novo, e nao uma vez so na vida do no.
+        self._zeros = self.stop_burst if parado else 0
 
 
 def main():

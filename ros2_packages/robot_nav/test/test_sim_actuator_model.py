@@ -60,22 +60,53 @@ def test_linear_deadzone_zero_passa_tudo():
 #
 # O robo real para quando o comando cessa (watchdog do firmware), entao isto
 # tambem e fidelidade sim=real.
-from robot_nav.sim_actuator_model import watchdog_deve_parar
+from robot_nav.sim_actuator_model import deve_mandar_zero, entrada_secou
+
+RAJADA = 10
+
+
+def _secou(idade_sim, timeout_sim=0.3, idade_wall=0.0, timeout_wall=2.0):
+    return entrada_secou(idade_sim, timeout_sim, idade_wall, timeout_wall)
 
 
 def test_watchdog_para_quando_a_entrada_seca():
-    assert watchdog_deve_parar(0.4, 0.3, ultimo_foi_zero=False) is True
+    assert _secou(0.4) is True
+    assert deve_mandar_zero(True, 0, RAJADA) is True
 
 
 def test_watchdog_calado_enquanto_chega_comando():
-    assert watchdog_deve_parar(0.1, 0.3, ultimo_foi_zero=False) is False
+    assert _secou(0.1) is False
+    assert deve_mandar_zero(False, 0, RAJADA) is False
 
 
-def test_watchdog_nao_repete_zero():
-    """Ja parado = nao fica martelando zero a 20 Hz no barramento."""
-    assert watchdog_deve_parar(5.0, 0.3, ultimo_foi_zero=True) is False
+def test_a_parada_NAO_depende_de_um_pacote_so():
+    """O BO de 2026-08-25: era UM zero, e se ele se perdesse o DiffDrive
+    segurava a velocidade pra sempre — robo girando constante, travado, sem
+    nada no sistema tentando de novo."""
+    enviados = 0
+    while deve_mandar_zero(True, enviados, RAJADA):
+        enviados += 1
+    assert enviados == RAJADA, 'a rajada tem que insistir, nao mandar 1 e desistir'
+
+
+def test_a_rajada_ACABA_e_nao_martela_o_barramento():
+    """A razao original de nao repetir continua valendo: parado e parado."""
+    assert deve_mandar_zero(True, RAJADA, RAJADA) is False
+    assert deve_mandar_zero(True, RAJADA + 5, RAJADA) is False
+
+
+def test_relogio_de_PAREDE_pega_clock_empacado():
+    """/clock empacado (orfao de parameter_bridge) congela a idade de simulacao.
+    Sem o segundo relogio o watchdog nunca dispararia — justo quando precisa."""
+    assert _secou(0.0, idade_wall=5.0) is True
+
+
+def test_parede_NAO_dispara_sozinha_com_RTF_baixo():
+    """Sim lento nao pode virar parada fantasma: com RTF baixo o publicador
+    tambem fica lento, e o prazo de parede e folgado de proposito."""
+    assert _secou(0.1, idade_wall=1.0) is False
 
 
 def test_watchdog_desligavel():
-    """timeout <= 0 volta ao comportamento antigo (A/B)."""
-    assert watchdog_deve_parar(99.0, 0.0, ultimo_foi_zero=False) is False
+    """timeout <= 0 volta ao comportamento antigo (A/B), nos dois relogios."""
+    assert entrada_secou(99.0, 0.0, 99.0, 0.0) is False
