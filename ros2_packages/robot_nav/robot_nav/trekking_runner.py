@@ -126,6 +126,30 @@ def trail_step(last, x, y, yaw, t, ds_min, dyaw_min):
             'wz': round(dyaw / dt, 3) if dt > 1e-3 else 0.0}
 
 
+def atualiza_trava_do_cone(travado, candidato, raio_de_troca):
+    """Qual deteccao o PLAY usa como ancora agora.
+
+    Antes a trava era DEFINITIVA: `if self.locked_cone is None` — a primeira
+    deteccao que aparecesse virava a ancora pro resto do waypoint. Isso era
+    tolerável enquanto o snap so engatava a 1,5 m do cone (perto = medida boa).
+    Engatando CEDO (a 3,5 m) a primeira medida e a PIOR de todas: cone longe tem
+    poucos pontos no scan e a posicao balanca. Congelar essa seria trocar
+    "tarde e violento" por "cedo e errado".
+
+    Agora a trava REFINA: enquanto a nova deteccao estiver perto da travada, ela
+    substitui — e o mesmo cone, medido melhor de perto. Longe demais e OUTRO
+    cone e nao troca (senao um cone vizinho roubaria a ancora no meio da
+    aproximacao). Sem deteccao no tick, segura a ultima: piscada do detector nao
+    pode largar a ancora.
+    """
+    if candidato is None:
+        return travado
+    if travado is None:
+        return candidato
+    d = math.hypot(candidato[0] - travado[0], candidato[1] - travado[1])
+    return candidato if d <= raio_de_troca else travado
+
+
 def trail_progress(trail, p, x, y, window=25):
     """Avanca o marcador de progresso na trilha. NUNCA anda pra tras.
 
@@ -243,12 +267,26 @@ class TrekkingRunner(Node):
         self.declare_parameter('passby_detection', True)
 
         # --- Snap-to-cone ---
-        self.declare_parameter('cone_search_radius', 1.5)    # m — começa a procurar
+        # 1.5 -> 3.5 (2026-08-25). O gatilho media do robo ao CONE, entao ele
+        # dependia de quao perto do cone o waypoint tinha sido gravado:
+        # gravando colado (0,41 m) o snap engatava EM CIMA do waypoint e o alvo
+        # pulava 28 cm de lado a 32 cm do ponto — point-turn de 48° ao lado do
+        # cone, medido no tick-a-tick, que e o "foi de cara no cone". Gravando a
+        # 1,5 m (o que o dono quer, pra nao atropelar) ele NUNCA engatava antes
+        # de chegar. 3,5 m cobre o raio de captura da gravacao (3,0): o que deu
+        # pra gravar da pra casar. O ponto-chave: a correcao lateral vira
+        # point-turn de qualquer jeito (o drive_cmd proibe reto+giro, o robo nao
+        # arqueia) — engatar cedo nao remove o giro, ele MUDA DE LUGAR, pra
+        # longe do cone, onde girar e seguro.
+        self.declare_parameter('cone_search_radius', 3.5)    # m — começa a procurar
         self.declare_parameter('cone_match_radius',  0.6)    # m — distância máx do esperado
         self.declare_parameter('cone_bearing_tol_deg', 60.0) # ° — janela angular relativa
         # Raio de captura do cone na GRAVAÇÃO, em qualquer direção (o ±90° da
         # frente saiu — ver pick_cone). Mantém o alcance efetivo de antes.
         self.declare_parameter('cone_capture_radius', 3.0)   # m
+        # Raio em que uma deteccao nova ainda e "o mesmo cone" e refina a trava.
+        # Ver atualiza_trava_do_cone.
+        self.declare_parameter('cone_lock_track_radius', 0.4)  # m
 
         # --- Correção persistente de pose por cone-âncora (aditiva ao snap) ---
         self.declare_parameter('enable_cone_pose_fix', True)
@@ -314,6 +352,7 @@ class TrekkingRunner(Node):
         self.r_search= float(self.get_parameter('cone_search_radius').value)
         self.r_match = float(self.get_parameter('cone_match_radius').value)
         self.bear_tol= math.radians(float(self.get_parameter('cone_bearing_tol_deg').value))
+        self.r_lock_track = float(self.get_parameter('cone_lock_track_radius').value)
         self.r_capture = float(self.get_parameter('cone_capture_radius').value)
         self.led_ms  = int(self.get_parameter('led_arrival_ms').value)
         self.state_dt= 1.0 / float(self.get_parameter('publish_state_hz').value)
@@ -707,13 +746,18 @@ class TrekkingRunner(Node):
         # o que o cone mede é a MENTIRA DA ODOMETRIA, não um destino diferente.
         sx = sy = 0.0
         if wp['has_cone']:
-            dist_to_cone_expected = math.hypot(
-                wp['cone_x'] - x, wp['cone_y'] - y
-            )
-            if self.locked_cone is None and dist_to_cone_expected < self.r_search:
-                snap = self._find_matching_cone(wp, x, y, yaw, cones)
-                if snap is not None:
-                    self.locked_cone = snap
+            # Gatilho pelo que estiver mais perto: o CONE esperado ou o
+            # WAYPOINT. Só pelo cone, quem grava longe dele nunca engata antes
+            # de chegar; só pelo waypoint, quem grava colado engata tarde. O par
+            # cobre os dois jeitos de gravar.
+            perto = min(math.hypot(wp['cone_x'] - x, wp['cone_y'] - y),
+                        math.hypot(wp['x'] - x, wp['y'] - y))
+            if perto < self.r_search:
+                # Roda TODO tick, não só na aquisição: a trava refina conforme
+                # chega perto (ver atualiza_trava_do_cone).
+                self.locked_cone = atualiza_trava_do_cone(
+                    self.locked_cone, self._find_matching_cone(wp, x, y, yaw, cones),
+                    self.r_lock_track)
             if self.locked_cone is not None:
                 sx = self.locked_cone[0] - wp['cone_x']
                 sy = self.locked_cone[1] - wp['cone_y']

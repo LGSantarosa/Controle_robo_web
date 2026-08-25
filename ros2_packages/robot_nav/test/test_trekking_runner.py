@@ -277,3 +277,37 @@ def test_mira_segue_a_CURVA_e_nao_corta():
     tx, ty, _ = trail_lookahead(curva, 9, 0.6)
     assert ty > 0.4          # subiu na perna vertical
     assert tx == pytest.approx(1.0)
+
+
+# --- trava do cone: engatar cedo sem congelar medida ruim (2026-08-25) --------
+
+from robot_nav.trekking_runner import atualiza_trava_do_cone
+
+R_TRACK = 0.4
+
+
+def test_primeira_deteccao_vira_ancora():
+    assert atualiza_trava_do_cone(None, (1.0, 2.0), R_TRACK) == (1.0, 2.0)
+
+
+def test_trava_REFINA_quando_chega_perto():
+    """Engatando a 3,5 m a primeira medida e a pior (cone longe = poucos pontos
+    no scan). Congelar ela seria trocar 'tarde e violento' por 'cedo e errado'."""
+    travado = (1.0, 2.0)
+    assert atualiza_trava_do_cone(travado, (1.12, 2.05), R_TRACK) == (1.12, 2.05)
+
+
+def test_cone_VIZINHO_nao_rouba_a_ancora():
+    travado = (1.0, 2.0)
+    assert atualiza_trava_do_cone(travado, (2.5, 2.0), R_TRACK) == travado
+
+
+def test_piscada_do_detector_nao_larga_a_ancora():
+    """Sem deteccao no tick segura a ultima — senao a ancora sumiria e voltaria
+    a cada scan ruim, e o alvo ficaria pulando."""
+    travado = (1.0, 2.0)
+    assert atualiza_trava_do_cone(travado, None, R_TRACK) == travado
+
+
+def test_sem_trava_e_sem_deteccao_continua_sem_nada():
+    assert atualiza_trava_do_cone(None, None, R_TRACK) is None
