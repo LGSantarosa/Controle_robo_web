@@ -126,6 +126,47 @@ def trail_step(last, x, y, yaw, t, ds_min, dyaw_min):
             'wz': round(dyaw / dt, 3) if dt > 1e-3 else 0.0}
 
 
+def trail_progress(trail, p, x, y, window=25):
+    """Avanca o marcador de progresso na trilha. NUNCA anda pra tras.
+
+    Procura a migalha mais proxima do robo numa JANELA a frente de `p`, e nao
+    na trilha inteira, por dois motivos: (1) rota que passa duas vezes perto do
+    mesmo lugar (ou volta pelo mesmo corredor) faria o robo "pular" pro trecho
+    errado e cortar caminho; (2) custo — varrer 2000 migalhas a 30 Hz e desperdicio.
+    Monotonico pela mesma razao: retroceder o progresso e como esquecer o que ja
+    andou, e o robo fica em looping num trecho.
+    """
+    if not trail:
+        return p
+    melhor, melhor_d = p, float('inf')
+    for i in range(p, min(p + window, len(trail))):
+        d = math.hypot(trail[i]['x'] - x, trail[i]['y'] - y)
+        if d < melhor_d:
+            melhor_d, melhor = d, i
+    return melhor
+
+
+def trail_lookahead(trail, p, dist):
+    """Ponto de mira: caminha `dist` metros a frente de `p` SOBRE a trilha.
+
+    Devolve (x, y, is_last). `is_last` avisa que a mira bateu no fim da trilha —
+    e o que faz o robo frear no final em vez de chegar voado.
+
+    Mirar a frente (e nao na migalha mais proxima) e o que faz o seguidor
+    convergir suave pro caminho em vez de serpentear: perseguir o ponto colado
+    vira correcao violenta a cada tick.
+    """
+    if not trail:
+        return None
+    i = min(p, len(trail) - 1)
+    acc = 0.0
+    while i + 1 < len(trail) and acc < dist:
+        acc += math.hypot(trail[i + 1]['x'] - trail[i]['x'],
+                          trail[i + 1]['y'] - trail[i]['y'])
+        i += 1
+    return trail[i]['x'], trail[i]['y'], i >= len(trail) - 1
+
+
 def pick_cone(cones, x, y, yaw, radius):
     """Cone-âncora do waypoint: o MAIS PRÓXIMO em QUALQUER direção, dentro de
     `radius`. Devolve (cx, cy, bearing_relativo_ao_yaw) ou None.
@@ -215,6 +256,14 @@ class TrekkingRunner(Node):
         self.declare_parameter('cone_stable_eps', 0.10)      # m — "mesma posição" entre ciclos
         self.declare_parameter('cone_unique_radius', 0.50)   # m — se >1 candidato aqui → ambíguo
 
+        # --- Seguir a trilha no PLAY ---
+        # Com trilha gravada, o alvo deixa de ser o waypoint e passa a ser um
+        # ponto de MIRA que corre sobre a trilha. Rota sem trilha (as antigas)
+        # cai no caminho de sempre — nada muda pra elas.
+        self.declare_parameter('follow_trail', True)
+        self.declare_parameter('lookahead', 0.6)      # m — distância da mira
+        self.declare_parameter('trail_window', 25)    # migalhas varridas por tick
+
         # --- Trilha densa (teach-and-repeat) ---
         # O RECORD so guardava os waypoints que voce apertou no botao: entre um
         # e outro, o PLAY inventa uma RETA. Se voce contornou alguma coisa, a
@@ -255,6 +304,9 @@ class TrekkingRunner(Node):
             d_brake=self.d_brake,
         )
         self.arr_tol = float(self.get_parameter('arrival_tolerance').value)
+        self.follow_trail = bool(self.get_parameter('follow_trail').value)
+        self.lookahead = float(self.get_parameter('lookahead').value)
+        self.trail_window = int(self.get_parameter('trail_window').value)
         self.trail_ds = float(self.get_parameter('trail_ds').value)
         self.trail_dyaw = math.radians(float(self.get_parameter('trail_dyaw_deg').value))
         self.trail_max = int(self.get_parameter('trail_max').value)
@@ -295,6 +347,7 @@ class TrekkingRunner(Node):
         # trilha: [{x, y, yaw, t, v, wz}, ...] — por onde o robo passou no RECORD
         self.trail = []
         self._trail_cheia = False   # avisa 1x só quando bate o teto
+        self.trail_p = 0            # progresso na trilha (monotônico) no PLAY
         self.locked_cone = None    # (x, y) — cone "trancado" pra esse waypoint, ou None
         # Correção de pose: confirmador + trava 1x-por-cone + telemetria read-only.
         self._confirmer = ConeFixConfirmer(self.cone_confirm_frames, self.cone_stable_eps)
@@ -436,6 +489,7 @@ class TrekkingRunner(Node):
                     self.get_logger().warn(f'waypoint inválido descartado: {e}')
             self.waypoints = sane
             self.trail = self._sanitize_trail(data.get('trail') or [])
+            self.trail_p = 0
             self.current_idx = 0
             if errors:
                 self.last_msg = f'{len(sane)} waypoints carregados ({errors} ignorados)'
@@ -445,6 +499,7 @@ class TrekkingRunner(Node):
             self.waypoints = []
             self.trail = []
             self._trail_cheia = False
+            self.trail_p = 0
             self.current_idx = 0
             self._publish_trail()
             self.last_msg = 'lista limpa'
@@ -609,6 +664,7 @@ class TrekkingRunner(Node):
             return
         self.mode = MODE_PLAY
         self.current_idx = 0
+        self.trail_p = 0
         self.locked_cone = None
         self._reset_cone_fix()
         self.last_to_target = None
@@ -644,8 +700,12 @@ class TrekkingRunner(Node):
 
         wp = self.waypoints[self.current_idx]
 
-        # 1) Re-âncora pelo cone se já estivermos perto da posição esperada
-        target_x, target_y = wp['x'], wp['y']
+        # 1) Re-âncora pelo cone. O snap vira um OFFSET DE DERIVA (cone visto −
+        # cone gravado) em vez de um alvo novo. Matematicamente é o mesmo que
+        # antes pro waypoint (cone_obs + (wp − cone_grav) == wp + (cone_obs −
+        # cone_grav)), mas escrito assim ele também se aplica à trilha inteira:
+        # o que o cone mede é a MENTIRA DA ODOMETRIA, não um destino diferente.
+        sx = sy = 0.0
         if wp['has_cone']:
             dist_to_cone_expected = math.hypot(
                 wp['cone_x'] - x, wp['cone_y'] - y
@@ -655,16 +715,25 @@ class TrekkingRunner(Node):
                 if snap is not None:
                     self.locked_cone = snap
             if self.locked_cone is not None:
-                # alvo corrigido: cone_observado + offset gravado
-                ox = wp['x'] - wp['cone_x']
-                oy = wp['y'] - wp['cone_y']
-                target_x = self.locked_cone[0] + ox
-                target_y = self.locked_cone[1] + oy
+                sx = self.locked_cone[0] - wp['cone_x']
+                sy = self.locked_cone[1] - wp['cone_y']
 
         # 1b) Correção PERSISTENTE de pose por cone-âncora (aditiva: não mexe no
         # alvo acima). Gates conservadores no _confirmer; na dúvida não corrige.
         if self.enable_cone_pose_fix and wp['has_cone'] and not self._cone_fix_done:
             self._maybe_publish_pose_fix(wp, x, y, yaw, cones)
+
+        # 2) Alvo: mira na trilha, ou o próprio waypoint (rota sem trilha).
+        seguindo_trilha = bool(self.follow_trail and self.trail)
+        if seguindo_trilha:
+            self.trail_p = trail_progress(self.trail, self.trail_p, x - sx,
+                                          y - sy, self.trail_window)
+            mira = trail_lookahead(self.trail, self.trail_p, self.lookahead)
+            target_x, target_y = mira[0] + sx, mira[1] + sy
+            fim_da_trilha = mira[2]
+        else:
+            target_x, target_y = wp['x'] + sx, wp['y'] + sy
+            fim_da_trilha = False
 
         dx = target_x - x
         dy = target_y - y
@@ -672,16 +741,25 @@ class TrekkingRunner(Node):
         desired_heading = math.atan2(dy, dx)
         h_err = _wrap_pi(desired_heading - yaw)
 
-        # 2) Detecção de chegada
-        arrived = dist < self.arr_tol
+        # 3) Detecção de chegada no WAYPOINT (o alvo pode ser a mira, mas quem
+        # marca progresso da rota continua sendo o waypoint — é ele que carrega
+        # o cone e é nele que o LED pisca).
+        d_wp = math.hypot(wp['x'] + sx - x, wp['y'] + sy - y)
         passed_by = False
-        if self.passby and self.last_to_target is not None:
-            dot = dx * self.last_to_target[0] + dy * self.last_to_target[1]
-            passed_by = dot < 0.0 and dist < 2.0 * self.arr_tol
-        self.last_to_target = (dx, dy)
+        if seguindo_trilha and wp.get('trail_i', -1) >= 0:
+            # Chegou quando o PROGRESSO passou da migalha do waypoint. Distância
+            # não serve aqui: a mira vai 0,6 m à frente, então o robô nunca fica
+            # a <25 cm do alvo e a chegada por distância jamais dispararia.
+            arrived = self.trail_p >= wp['trail_i']
+        else:
+            arrived = d_wp < self.arr_tol
+            if self.passby and self.last_to_target is not None:
+                dot = dx * self.last_to_target[0] + dy * self.last_to_target[1]
+                passed_by = dot < 0.0 and dist < 2.0 * self.arr_tol
+            self.last_to_target = (dx, dy)
 
         if arrived or passed_by:
-            self._log_csv(x, y, yaw, target_x, target_y, dist, h_err, 0.0, 0.0,
+            self._log_csv(x, y, yaw, target_x, target_y, d_wp, h_err, 0.0, 0.0,
                           'passby' if passed_by else 'arrive')
             self._on_arrival(self.current_idx)
             self.current_idx += 1
@@ -691,9 +769,14 @@ class TrekkingRunner(Node):
             self._turning = False
             return
 
-        # 3) RETO ou GIRO NO LUGAR — o robô não arqueia (arc_calib 06-25).
-        # Freia só no último waypoint; nos intermediários passa voado.
+        # 4) RETO ou GIRO NO LUGAR — o robô não arqueia (arc_calib 06-25).
+        # Freia só no fim; nos pontos intermediários passa voado.
         is_last = self.current_idx == len(self.waypoints) - 1
+        if seguindo_trilha:
+            # Com mira, `dist` é sempre ~lookahead e nunca frearia. Quem manda
+            # na freada é a distância que falta até o WAYPOINT final.
+            is_last = is_last and fim_da_trilha
+            dist = d_wp
         v, omega, self._turning = drive_cmd(
             h_err, dist, is_last, self._turning, self.drive_cfg)
 
@@ -843,6 +926,7 @@ class TrekkingRunner(Node):
             'anchor_confirm': [self._anchor_confirm, self.cone_confirm_frames],
             # so a contagem: a trilha inteira vai no /trekking/trail (latched)
             'trail_n': len(self.trail),
+            'trail_p': self.trail_p,
             'msg': self.last_msg,
             'ts': time.time(),
         }

@@ -222,3 +222,58 @@ def test_dt_zero_nao_divide_por_zero():
     last = _step(None, 0.0, 0.0, t=1.0)
     p = _step(last, 1.0, 0.0, t=1.0)
     assert p is not None and p['v'] == 0.0 and p['wz'] == 0.0
+
+
+# --- PLAY seguindo a trilha (2026-08-25) -------------------------------------
+
+from robot_nav.trekking_runner import trail_lookahead, trail_progress
+
+RETA = [{'x': i * 0.1, 'y': 0.0, 'yaw': 0.0} for i in range(50)]   # 4,9 m em +x
+
+
+def test_progresso_acompanha_o_robo():
+    assert trail_progress(RETA, 0, 0.0, 0.0) == 0
+    assert trail_progress(RETA, 0, 1.0, 0.0) == 10
+    assert trail_progress(RETA, 10, 2.0, 0.0) == 20
+
+
+def test_progresso_NUNCA_volta():
+    """Retroceder e esquecer o que ja andou — o robo fica em looping no trecho."""
+    p = trail_progress(RETA, 20, 2.0, 0.0)
+    assert trail_progress(RETA, p, 0.5, 0.0) == p
+
+
+def test_progresso_so_olha_a_janela_a_frente():
+    """Rota que volta pelo mesmo corredor nao pode teleportar o progresso."""
+    volta = RETA + [{'x': 4.9 - i * 0.1, 'y': 0.02, 'yaw': math.pi}
+                    for i in range(50)]
+    # robo no comeco geometricamente, mas ja no trecho de volta (indice 60)
+    assert trail_progress(volta, 60, 3.0, 0.0, window=25) >= 60
+
+
+def test_mira_vai_a_frente_do_progresso():
+    tx, ty, is_last = trail_lookahead(RETA, 10, 0.6)
+    assert tx == pytest.approx(1.6, abs=0.11)
+    assert ty == 0.0 and is_last is False
+
+
+def test_mira_satura_no_fim_e_avisa():
+    """`is_last` e o que faz frear no final em vez de chegar voado."""
+    tx, ty, is_last = trail_lookahead(RETA, 47, 0.6)
+    assert is_last is True
+    assert tx == pytest.approx(4.9)
+
+
+def test_trilha_vazia_nao_quebra():
+    assert trail_lookahead([], 0, 0.6) is None
+    assert trail_progress([], 3, 1.0, 1.0) == 3
+
+
+def test_mira_segue_a_CURVA_e_nao_corta():
+    """O motivo da trilha existir: entre dois waypoints o PLAY antigo fazia
+    reta. Aqui a mira tem que sair da linha reta junto com o caminho."""
+    curva = [{'x': 0.1 * i, 'y': 0.0, 'yaw': 0.0} for i in range(10)] + \
+            [{'x': 1.0, 'y': 0.1 * i, 'yaw': math.pi / 2} for i in range(1, 15)]
+    tx, ty, _ = trail_lookahead(curva, 9, 0.6)
+    assert ty > 0.4          # subiu na perna vertical
+    assert tx == pytest.approx(1.0)
