@@ -91,10 +91,10 @@ class DriveConfig:
     # giravam identicas, no minimo da autoridade. Pelo modelo do atuador
     # (spin_calib) 2.4 rende 0.44 rad/s = 25°/s; 3.4 rende 1.02 = 61°/s.
     # Medido: tempo PARADO girando caiu de 5.0 s para 2.3 s na mesma rota.
-    rot_min: float = 3.4            # piso do giro (2.0 = rastejo ~10°/s reais)
+    rot_min: float = 4.0            # piso do giro (2.0 = rastejo ~10°/s reais)
     rot_max: float = 4.5            # teto do giro
     turn_enter: float = math.radians(20.0)  # entra em point-turn
-    turn_exit: float = math.radians(2.0)    # e só solta aqui (histerese)
+    turn_exit: float = math.radians(4.0)    # e só solta aqui (histerese)
     v_max: float = 0.35             # m/s — cruzeiro da reta
     # path_follower 06-26, medido em campo: "0.11 trava, 0.25 anda" -> a
     # zona-morta linear está no meio; 0.22 fica bem acima. O freio do último
