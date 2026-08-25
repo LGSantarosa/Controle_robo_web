@@ -311,3 +311,79 @@ def test_piscada_do_detector_nao_larga_a_ancora():
 
 def test_sem_trava_e_sem_deteccao_continua_sem_nada():
     assert atualiza_trava_do_cone(None, None, R_TRACK) is None
+
+
+# --- cantos: um giro por canto, reta pura entre eles (2026-08-25) -------------
+#
+# Pedido do dono: "quero ele seco, giro diretao, sem curvinhas". Perseguindo a
+# mira, a curva gera erro de rumo o tempo todo e o robo pica a correcao em
+# varios giros pequenos (medido: 5 episodios, 23% do percurso parado).
+
+from robot_nav.trekking_runner import cantos_da_trilha
+
+
+def _t(pts):
+    return [{'x': x, 'y': y, 'yaw': 0.0} for x, y in pts]
+
+
+def test_reta_pura_vira_dois_cantos_so():
+    """Nada no meio de uma reta merece virar canto."""
+    reta = _t([(i * 0.1, 0.0) for i in range(30)])
+    assert cantos_da_trilha(reta, 0.20) == [0, 29]
+
+
+def test_tremido_dentro_da_tolerancia_nao_vira_canto():
+    """A mao do dono treme; isso nao pode custar um giro."""
+    ruido = _t([(i * 0.1, 0.03 * (-1) ** i) for i in range(30)])
+    assert cantos_da_trilha(ruido, 0.20) == [0, 29]
+
+
+def test_canto_de_verdade_sobrevive():
+    L = _t([(i * 0.1, 0.0) for i in range(11)] +
+           [(1.0, i * 0.1) for i in range(1, 11)])
+    c = cantos_da_trilha(L, 0.20)
+    assert len(c) == 3, f'esperava inicio, canto e fim; veio {c}'
+    assert c[1] == 10, 'o canto tem que cair na quina'
+
+
+def test_tolerancia_e_um_TETO_de_desvio():
+    """A polilinha devolvida nao pode se afastar mais que eps da trilha."""
+    import math as _m
+    arco = _t([(_m.cos(a * 0.05) * 3, _m.sin(a * 0.05) * 3) for a in range(40)])
+    for eps in (0.05, 0.20, 0.50):
+        c = cantos_da_trilha(arco, eps)
+        pior = 0.0
+        for a, b in zip(c, c[1:]):
+            ax, ay = arco[a]['x'], arco[a]['y']
+            bx, by = arco[b]['x'], arco[b]['y']
+            dx, dy = bx - ax, by - ay
+            L2 = dx * dx + dy * dy
+            for i in range(a + 1, b):
+                px, py = arco[i]['x'], arco[i]['y']
+                t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((px-ax)*dx + (py-ay)*dy) / L2))
+                pior = max(pior, _m.hypot(px - (ax + t*dx), py - (ay + t*dy)))
+        assert pior <= eps + 1e-9, f'eps={eps} mas desviou {pior:.3f}'
+
+
+def test_tolerancia_maior_da_menos_cantos():
+    import math as _m
+    arco = _t([(_m.cos(a * 0.05) * 3, _m.sin(a * 0.05) * 3) for a in range(40)])
+    assert len(cantos_da_trilha(arco, 0.05)) > len(cantos_da_trilha(arco, 0.50))
+
+
+def test_waypoint_NUNCA_e_simplificado_pra_fora():
+    """Waypoint e onde o cone ancora e o LED pisca — perder um e perder a rota."""
+    reta = _t([(i * 0.1, 0.0) for i in range(30)])
+    c = cantos_da_trilha(reta, 0.20, forcados=[7, 18])
+    assert 7 in c and 18 in c
+    assert c == sorted(c), 'os cantos tem que sair em ordem de percurso'
+
+
+def test_forcado_invalido_e_ignorado_sem_quebrar():
+    reta = _t([(i * 0.1, 0.0) for i in range(10)])
+    assert cantos_da_trilha(reta, 0.20, forcados=[-1, 99]) == [0, 9]
+
+
+def test_trilha_curta_nao_quebra():
+    assert cantos_da_trilha([], 0.2) == []
+    assert cantos_da_trilha(_t([(0, 0), (1, 1)]), 0.2) == [0, 1]

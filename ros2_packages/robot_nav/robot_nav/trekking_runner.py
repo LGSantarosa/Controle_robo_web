@@ -156,6 +156,59 @@ def atualiza_trava_do_cone(travado, candidato, raio_de_troca):
     return candidato if d <= raio_de_troca else travado
 
 
+def cantos_da_trilha(trail, eps, forcados=()):
+    """Indices da trilha que sobram como CANTOS (Douglas-Peucker) + os forcados.
+
+    POR QUE EXISTE (pedido do dono, 2026-08-25): "quero ele seco, giro diretao,
+    sem curvinhas". Perseguindo um ponto de mira 0,6 m a frente, uma curva gera
+    erro de rumo o tempo todo e o robo — que so sabe RETO ou GIRO NO LUGAR — e
+    obrigado a picar a correcao em varios giros pequenos. Medido na rota dele:
+    5 episodios, todos entrando em ~22° e saindo em ~6°, 23% do percurso parado.
+
+    Reduzindo a trilha a cantos, cada canto vira UM giro completo e o trecho
+    entre cantos vira RETA PURA — sem erro de rumo pra corrigir no meio, o robo
+    fica em velocidade cheia o tempo todo.
+
+    `eps` e o orcamento de imprecisao: a polilinha devolvida NUNCA se afasta
+    mais que `eps` da trilha gravada. E o knob que troca precisao por tempo, e
+    ele e explicito — nao um efeito colateral de quao firme foi a mao.
+
+    `forcados` entram sempre (os waypoints): sao onde o cone ancora e onde o LED
+    pisca. Perder um deles numa simplificacao seria perder a rota.
+    """
+    n = len(trail)
+    if n < 3:
+        return list(range(n))
+    manter = {0, n - 1}
+    manter.update(i for i in forcados if 0 <= i < n)
+
+    def parte(a, b):
+        """Ponto mais distante da corda a-b; corta ali se passar de eps."""
+        ax, ay = trail[a]['x'], trail[a]['y']
+        bx, by = trail[b]['x'], trail[b]['y']
+        dx, dy = bx - ax, by - ay
+        L2 = dx * dx + dy * dy
+        pior, k = 0.0, -1
+        for i in range(a + 1, b):
+            px, py = trail[i]['x'], trail[i]['y']
+            t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((px-ax)*dx + (py-ay)*dy) / L2))
+            d = math.hypot(px - (ax + t*dx), py - (ay + t*dy))
+            if d > pior:
+                pior, k = d, i
+        if pior > eps and k > 0:
+            manter.add(k)
+            parte(a, k)
+            parte(k, b)
+
+    # Parte entre os pontos ja obrigatorios, e nao a trilha toda de uma vez:
+    # senao um waypoint no meio de um trecho reto seria ignorado pela recursao.
+    fixos = sorted(manter)
+    for a, b in zip(fixos, fixos[1:]):
+        if b - a > 1:
+            parte(a, b)
+    return sorted(manter)
+
+
 def trail_progress(trail, p, x, y, window=25):
     """Avanca o marcador de progresso na trilha. NUNCA anda pra tras.
 
@@ -306,6 +359,11 @@ class TrekkingRunner(Node):
         # cai no caminho de sempre — nada muda pra elas.
         self.declare_parameter('follow_trail', True)
         self.declare_parameter('lookahead', 0.6)      # m — distância da mira
+        # MODO CANTO (2026-08-25): simplifica a trilha em cantos e faz UM giro
+        # por canto + reta pura entre eles, no lugar da mira contínua. É o
+        # orçamento de imprecisão em metros: a rota seguida nunca se afasta mais
+        # que isto da trilha gravada. 0 = desliga e volta pra mira (permite A/B).
+        self.declare_parameter('corner_tol', 0.20)
         self.declare_parameter('trail_window', 25)    # migalhas varridas por tick
 
         # --- Trilha densa (teach-and-repeat) ---
@@ -351,6 +409,7 @@ class TrekkingRunner(Node):
         self.follow_trail = bool(self.get_parameter('follow_trail').value)
         self.lookahead = float(self.get_parameter('lookahead').value)
         self.trail_window = int(self.get_parameter('trail_window').value)
+        self.corner_tol = float(self.get_parameter('corner_tol').value)
         self.trail_ds = float(self.get_parameter('trail_ds').value)
         self.trail_dyaw = math.radians(float(self.get_parameter('trail_dyaw_deg').value))
         self.trail_max = int(self.get_parameter('trail_max').value)
@@ -393,6 +452,8 @@ class TrekkingRunner(Node):
         self.trail = []
         self._trail_cheia = False   # avisa 1x só quando bate o teto
         self.trail_p = 0            # progresso na trilha (monotônico) no PLAY
+        self.cantos = []            # índices da trilha que viraram canto
+        self.canto_i = 0            # qual canto está sendo perseguido
         self.locked_cone = None    # (x, y) — cone "trancado" pra esse waypoint, ou None
         # Correção de pose: confirmador + trava 1x-por-cone + telemetria read-only.
         self._confirmer = ConeFixConfirmer(self.cone_confirm_frames, self.cone_stable_eps)
@@ -535,6 +596,7 @@ class TrekkingRunner(Node):
             self.waypoints = sane
             self.trail = self._sanitize_trail(data.get('trail') or [])
             self.trail_p = 0
+            self._recalcula_cantos()
             self.current_idx = 0
             if errors:
                 self.last_msg = f'{len(sane)} waypoints carregados ({errors} ignorados)'
@@ -699,6 +761,17 @@ class TrekkingRunner(Node):
             self.last_msg = f'wp{idx}: ({x:.2f}, {y:.2f}) — cone não visto'
         self._publish_trail()
 
+    def _recalcula_cantos(self):
+        if not (self.trail and self.corner_tol > 0.0):
+            self.cantos = []
+            return
+        forcados = [w.get('trail_i', -1) for w in self.waypoints]
+        self.cantos = cantos_da_trilha(self.trail, self.corner_tol, forcados)
+        self.canto_i = 0
+        self.get_logger().info(
+            f'trilha de {len(self.trail)} migalhas -> {len(self.cantos)} cantos '
+            f'(tolerância {self.corner_tol*100:.0f} cm)')
+
     def _start_play(self):
         if not self.waypoints:
             self.last_msg = 'sem waypoints — nada pra fazer'
@@ -710,6 +783,8 @@ class TrekkingRunner(Node):
         self.mode = MODE_PLAY
         self.current_idx = 0
         self.trail_p = 0
+        self.canto_i = 0
+        self._recalcula_cantos()
         self.locked_cone = None
         self._reset_cone_fix()
         self.last_to_target = None
@@ -773,9 +848,22 @@ class TrekkingRunner(Node):
         if self.enable_cone_pose_fix and wp['has_cone'] and not self._cone_fix_done:
             self._maybe_publish_pose_fix(wp, x, y, yaw, cones)
 
-        # 2) Alvo: mira na trilha, ou o próprio waypoint (rota sem trilha).
+        # 2) Alvo. Três modos, do mais novo pro mais antigo:
+        #    CANTO  — alvo é o próximo canto; entre cantos é RETA PURA.
+        #    MIRA   — ponto 0,6 m à frente sobre a trilha (corrige o tempo todo).
+        #    WP     — rota sem trilha (as antigas): o próprio waypoint.
         seguindo_trilha = bool(self.follow_trail and self.trail)
-        if seguindo_trilha:
+        modo_canto = seguindo_trilha and bool(self.cantos)
+        if modo_canto:
+            ci = min(self.canto_i, len(self.cantos) - 1)
+            i_canto = self.cantos[ci]
+            c = self.trail[i_canto]
+            target_x, target_y = c['x'] + sx, c['y'] + sy
+            fim_da_trilha = ci == len(self.cantos) - 1
+            # Progresso = último canto ALCANÇADO. É o que gateia o snap do cone
+            # e a chegada do waypoint, que continuam presos à trilha original.
+            self.trail_p = self.cantos[max(0, ci - 1)]
+        elif seguindo_trilha:
             self.trail_p = trail_progress(self.trail, self.trail_p, x - sx,
                                           y - sy, self.trail_window)
             mira = trail_lookahead(self.trail, self.trail_p, self.lookahead)
@@ -796,7 +884,32 @@ class TrekkingRunner(Node):
         # o cone e é nele que o LED pisca).
         d_wp = math.hypot(wp['x'] + sx - x, wp['y'] + sy - y)
         passed_by = False
-        if seguindo_trilha and wp.get('trail_i', -1) >= 0:
+
+        if modo_canto:
+            # Chegou NO CANTO? (por distância ou por ter passado batido)
+            no_canto = dist < self.arr_tol
+            if self.passby and self.last_to_target is not None:
+                dot = dx * self.last_to_target[0] + dy * self.last_to_target[1]
+                no_canto = no_canto or (dot < 0.0 and dist < 2.0 * self.arr_tol)
+            self.last_to_target = (dx, dy)
+            if no_canto:
+                self.trail_p = i_canto
+                self.last_to_target = None
+                self._turning = False
+                # O waypoint sempre é um canto (entra como forçado), então
+                # alcançá-lo é o que dispara a chegada — LED, cone, avanço.
+                if i_canto >= wp.get('trail_i', -1) >= 0 or fim_da_trilha:
+                    self._log_csv(x, y, yaw, target_x, target_y, d_wp, h_err,
+                                  0.0, 0.0, 'arrive')
+                    self._on_arrival(self.current_idx)
+                    self.current_idx += 1
+                    self.locked_cone = None
+                    self._reset_cone_fix()
+                self.canto_i = min(self.canto_i + 1, len(self.cantos) - 1) \
+                    if not fim_da_trilha else self.canto_i
+                return
+            arrived = False
+        elif seguindo_trilha and wp.get('trail_i', -1) >= 0:
             # Chegou quando o PROGRESSO passou da migalha do waypoint. Distância
             # não serve aqui: a mira vai 0,6 m à frente, então o robô nunca fica
             # a <25 cm do alvo e a chegada por distância jamais dispararia.
@@ -822,7 +935,11 @@ class TrekkingRunner(Node):
         # 4) RETO ou GIRO NO LUGAR — o robô não arqueia (arc_calib 06-25).
         # Freia só no fim; nos pontos intermediários passa voado.
         is_last = self.current_idx == len(self.waypoints) - 1
-        if seguindo_trilha:
+        if modo_canto:
+            # `dist` já é a distância até o canto alvo — o que frear precisa
+            # saber. Só freia no último canto; nos do meio passa voado.
+            is_last = is_last and fim_da_trilha
+        elif seguindo_trilha:
             # Com mira, `dist` é sempre ~lookahead e nunca frearia. Quem manda
             # na freada é a distância que falta até o WAYPOINT final.
             is_last = is_last and fim_da_trilha
