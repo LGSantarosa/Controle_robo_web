@@ -21,6 +21,8 @@ from typing import Optional
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
+                       ReliabilityPolicy)
 from std_msgs.msg import String
 
 
@@ -47,7 +49,18 @@ class TrekkingBridge:
             String, '/trekking/cmd', 10
         )
 
+        # Trilha densa do RECORD. LATCHED nos dois lados: o runner publica por
+        # evento (ao gravar ponto / ao parar), e o latch entrega a ULTIMA versao
+        # pra este nó mesmo tendo assinado depois — sem isso, reiniciar a web no
+        # meio de uma gravação perderia a trilha inteira.
+        self._node.create_subscription(
+            String, '/trekking/trail', self._on_trail,
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                       reliability=ReliabilityPolicy.RELIABLE,
+                       history=HistoryPolicy.KEEP_LAST))
+
         self._last_state: Optional[dict] = None
+        self._last_trail: list = []
         self._state_lock = threading.Lock()
 
         # Throttle do estado pro browser — o runner publica a 10 Hz; reemite
@@ -104,6 +117,17 @@ class TrekkingBridge:
             log.debug(f'[TrekkingBridge] emit falhou: {e}')
 
     # ---- API pública (chamada pelo app.py) ----
+    def _on_trail(self, msg: String):
+        try:
+            pts = json.loads(msg.data)
+        except (ValueError, TypeError):
+            log.warning('[TrekkingBridge] trilha ilegivel no /trekking/trail')
+            return
+        if not isinstance(pts, list):
+            return
+        with self._state_lock:
+            self._last_trail = pts
+
     def send_cmd(self, cmd: str, **kwargs) -> dict:
         payload = {'cmd': cmd, **kwargs}
         msg = String(data=json.dumps(payload))
@@ -124,6 +148,8 @@ class TrekkingBridge:
             wps = self._last_state.get('waypoints') or []
         if not wps:
             return {'ok': False, 'error': 'nenhum waypoint para salvar'}
+        with self._state_lock:
+            trail = list(self._last_trail)
         safe = self._safe_name(name)
         path = os.path.join(self._routes_dir, safe + '.json')
         # Atomic write (tempfile no mesmo diretório + os.replace) — evita JSON
@@ -136,6 +162,7 @@ class TrekkingBridge:
                     json.dump({
                         'name': safe,
                         'waypoints': wps,
+                        'trail': trail,
                         'saved_ts': time.time(),
                     }, f, indent=2)
                     f.flush()
@@ -147,8 +174,9 @@ class TrekkingBridge:
                 except OSError:
                     pass
                 raise
-            log.info(f'[TrekkingBridge] rota salva: {path}')
-            return {'ok': True, 'name': safe}
+            log.info(f'[TrekkingBridge] rota salva: {path} '
+                     f'({len(wps)} wps, {len(trail)} migalhas de trilha)')
+            return {'ok': True, 'name': safe, 'trail_n': len(trail)}
         except Exception as e:
             return {'ok': False, 'error': str(e)}
 
@@ -159,9 +187,11 @@ class TrekkingBridge:
             with open(path) as f:
                 data = json.load(f)
             wps = data.get('waypoints') or []
+            trail = data.get('trail') or []
             # Envia ao runner via /trekking/cmd
-            self.send_cmd('load_waypoints', waypoints=wps)
-            return {'ok': True, 'name': safe, 'count': len(wps), 'waypoints': wps}
+            self.send_cmd('load_waypoints', waypoints=wps, trail=trail)
+            return {'ok': True, 'name': safe, 'count': len(wps),
+                    'waypoints': wps, 'trail': trail}
         except Exception as e:
             return {'ok': False, 'error': str(e)}
 

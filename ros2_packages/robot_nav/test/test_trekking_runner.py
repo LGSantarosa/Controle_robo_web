@@ -156,3 +156,69 @@ def test_bearing_e_relativo_ao_yaw_gravado():
     relativo ao yaw do robô na hora da gravação, não absoluto."""
     c = pick_cone([(0.0, 1.5, 0.22)], 0.0, 0.0, math.radians(90.0), 3.0)
     assert math.degrees(c[2]) == pytest.approx(0.0)   # está bem à frente
+
+
+# --- trilha densa (teach-and-repeat, 2026-08-25) -----------------------------
+#
+# O RECORD so guardava os waypoints do botao; entre eles o PLAY inventa uma
+# reta. `trail_step` e o gate que transforma a pose em migalhas de trilha.
+
+from robot_nav.trekking_runner import trail_step
+
+DS, DYAW = 0.10, math.radians(10.0)
+
+
+def _step(last, x, y, yaw=0.0, t=1.0):
+    return trail_step(last, x, y, yaw, t, DS, DYAW)
+
+
+def test_primeira_migalha_sempre_entra():
+    p = _step(None, 1.0, 2.0, 0.5, t=0.0)
+    assert p is not None
+    assert (p['x'], p['y']) == (1.0, 2.0)
+    assert p['v'] == 0.0 and p['wz'] == 0.0
+
+
+def test_parado_nao_gera_migalha():
+    """O motivo de amostrar por distancia: 30 Hz parado encheria o arquivo."""
+    last = _step(None, 0.0, 0.0, t=0.0)
+    for i in range(100):
+        assert _step(last, 0.001, 0.0, t=i * 0.03) is None
+
+
+def test_anda_o_passo_gera_migalha():
+    last = _step(None, 0.0, 0.0, t=0.0)
+    assert _step(last, DS - 0.001, 0.0, t=1.0) is None
+    assert _step(last, DS + 0.001, 0.0, t=1.0) is not None
+
+
+def test_point_turn_entra_pelo_gate_de_yaw():
+    """Giro no lugar anda 0 m — sem o gate de yaw ele sumiria da trilha,
+    justo onde o robo mais erra."""
+    last = _step(None, 0.0, 0.0, yaw=0.0, t=0.0)
+    assert _step(last, 0.0, 0.0, yaw=math.radians(9.0), t=1.0) is None
+    p = _step(last, 0.0, 0.0, yaw=math.radians(11.0), t=1.0)
+    assert p is not None and p['v'] == 0.0 and p['wz'] > 0
+
+
+def test_yaw_cruzando_pi_nao_vira_giro_gigante():
+    """+179° -> -179° sao 2° de giro, nao 358°."""
+    last = _step(None, 0.0, 0.0, yaw=math.radians(179.0), t=0.0)
+    # Sem wrap, 179 -> -179 daria 358° e passaria o gate de 10° gritando.
+    assert _step(last, 0.0, 0.0, yaw=math.radians(-179.0), t=1.0) is None
+    # Com o gate baixado pra 1°, passa — e o wz tem que ser 2°/s, nao 358°/s.
+    p2 = trail_step(last, 0.0, 0.0, math.radians(-179.0), 1.0, DS, math.radians(1.0))
+    assert abs(p2['wz']) == pytest.approx(math.radians(2.0), abs=1e-3)
+
+
+def test_v_sai_da_pose_e_nao_do_comando():
+    """Em skid o cmd_vel mente; a trilha registra o que ANDOU."""
+    last = _step(None, 0.0, 0.0, t=0.0)
+    p = _step(last, 0.5, 0.0, t=2.0)
+    assert p['v'] == pytest.approx(0.25)      # 0.5 m em 2 s
+
+
+def test_dt_zero_nao_divide_por_zero():
+    last = _step(None, 0.0, 0.0, t=1.0)
+    p = _step(last, 1.0, 0.0, t=1.0)
+    assert p is not None and p['v'] == 0.0 and p['wz'] == 0.0

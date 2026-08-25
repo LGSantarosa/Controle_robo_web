@@ -43,6 +43,8 @@ from dataclasses import dataclass
 import rclpy
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped, Twist, Vector3Stamped
 from rclpy.node import Node
+from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
+                       ReliabilityPolicy)
 from sensor_msgs.msg import Joy
 from std_msgs.msg import ColorRGBA, String
 
@@ -93,6 +95,35 @@ class DriveConfig:
     # ponto NUNCA pode descer abaixo disso ou o robô congela sem finalizar.
     min_speed: float = 0.22         # m/s — avanço mínimo
     d_brake: float = 0.6            # m — começa a frear no ÚLTIMO waypoint
+
+
+def trail_step(last, x, y, yaw, t, ds_min, dyaw_min):
+    """Decide se (x, y, yaw) vira uma migalha da trilha. `None` = nao vale.
+
+    POR QUE POR DISTANCIA E NAO POR TEMPO: gravando a 30 Hz por tempo, o robo
+    parado gera milhares de migalhas identicas e a rota vira um arquivo inutil;
+    e quem dirige devagar (que e justamente onde a precisao importa) gastaria
+    mais pontos que quem passa voado. Por distancia, a densidade da trilha
+    acompanha o CAMINHO, nao o relogio.
+
+    O gate de yaw existe porque point-turn anda 0 m: sem ele, um giro no lugar
+    — que e exatamente onde o robo mais erra — nao deixaria migalha nenhuma.
+
+    v e wz saem da DIFERENCA de pose, nao do cmd_vel: e o que o robo fez, nao o
+    que foi mandado. Em skid-steer a diferenca entre os dois e o que interessa.
+    """
+    if last is None:
+        return {'x': round(x, 3), 'y': round(y, 3), 'yaw': round(yaw, 4),
+                't': round(t, 2), 'v': 0.0, 'wz': 0.0}
+    ds = math.hypot(x - last['x'], y - last['y'])
+    dyaw = _wrap_pi(yaw - last['yaw'])
+    if ds < ds_min and abs(dyaw) < dyaw_min:
+        return None
+    dt = t - last['t']
+    return {'x': round(x, 3), 'y': round(y, 3), 'yaw': round(yaw, 4),
+            't': round(t, 2),
+            'v':  round(ds / dt, 3) if dt > 1e-3 else 0.0,
+            'wz': round(dyaw / dt, 3) if dt > 1e-3 else 0.0}
 
 
 def pick_cone(cones, x, y, yaw, radius):
@@ -184,6 +215,17 @@ class TrekkingRunner(Node):
         self.declare_parameter('cone_stable_eps', 0.10)      # m — "mesma posição" entre ciclos
         self.declare_parameter('cone_unique_radius', 0.50)   # m — se >1 candidato aqui → ambíguo
 
+        # --- Trilha densa (teach-and-repeat) ---
+        # O RECORD so guardava os waypoints que voce apertou no botao: entre um
+        # e outro, o PLAY inventa uma RETA. Se voce contornou alguma coisa, a
+        # reta passa por cima. A trilha grava por onde o robo REALMENTE andou.
+        # Amostrada por DISTANCIA (nao por tempo): parado nao gera migalha, e
+        # andar devagar nao enche o arquivo. Curva entra pelo gate de yaw, senao
+        # um giro no lugar (que anda 0 m) sumiria da trilha.
+        self.declare_parameter('trail_ds', 0.10)          # m entre migalhas
+        self.declare_parameter('trail_dyaw_deg', 10.0)    # ° que forcam migalha
+        self.declare_parameter('trail_max', 20000)        # teto (2 km a 10 cm)
+
         # --- LEDs ---
         self.declare_parameter('led_arrival_ms', 600)
         self.declare_parameter('publish_state_hz', 10.0)
@@ -213,6 +255,9 @@ class TrekkingRunner(Node):
             d_brake=self.d_brake,
         )
         self.arr_tol = float(self.get_parameter('arrival_tolerance').value)
+        self.trail_ds = float(self.get_parameter('trail_ds').value)
+        self.trail_dyaw = math.radians(float(self.get_parameter('trail_dyaw_deg').value))
+        self.trail_max = int(self.get_parameter('trail_max').value)
         self.passby  = bool(self.get_parameter('passby_detection').value)
         self.r_search= float(self.get_parameter('cone_search_radius').value)
         self.r_match = float(self.get_parameter('cone_match_radius').value)
@@ -247,6 +292,9 @@ class TrekkingRunner(Node):
         # cone_bearing é relativo ao yaw do robô na gravação (rad).
         self.waypoints = []
         self.current_idx = 0
+        # trilha: [{x, y, yaw, t, v, wz}, ...] — por onde o robo passou no RECORD
+        self.trail = []
+        self._trail_cheia = False   # avisa 1x só quando bate o teto
         self.locked_cone = None    # (x, y) — cone "trancado" pra esse waypoint, ou None
         # Correção de pose: confirmador + trava 1x-por-cone + telemetria read-only.
         self._confirmer = ConeFixConfirmer(self.cone_confirm_frames, self.cone_stable_eps)
@@ -273,6 +321,18 @@ class TrekkingRunner(Node):
         self.pub_wps    = self.create_publisher(PoseArray, 'trekking/waypoints', 10)
         self.pub_target = self.create_publisher(PoseStamped, 'trekking/target', 10)
         self.pub_pose_fix = self.create_publisher(Vector3Stamped, 'trekking/pose_fix', 10)
+        # Trilha: LATCHED (transient_local) e publicada por EVENTO, nao no tick.
+        # A trilha inteira a 10 Hz seriam centenas de KB/s pra nada; quem assina
+        # (a web, ao salvar a rota) so precisa da ULTIMA versao, e o latch
+        # entrega ela pra quem assinar DEPOIS — sem isso, reiniciar a web no
+        # meio de uma gravacao perderia a trilha inteira.
+        # JSON e nao PoseArray: PoseArray so carrega pose, e ai o v/wz/t (os
+        # "dados de movimento") morreriam antes de chegar no disco.
+        self.pub_trail = self.create_publisher(
+            String, 'trekking/trail',
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                       reliability=ReliabilityPolicy.RELIABLE,
+                       history=HistoryPolicy.KEEP_LAST))
         if self.joy_enabled:
             self.create_subscription(Joy, 'joy', self._on_joy, 10)
 
@@ -345,6 +405,9 @@ class TrekkingRunner(Node):
         elif cmd == 'record':
             self.mode = MODE_RECORD
             self.last_msg = 'modo RECORD'
+        elif cmd == 'get_trail':
+            self._publish_trail()
+            self.last_msg = f'trilha: {len(self.trail)} migalhas'
         elif cmd == 'save_point':
             if self.mode != MODE_RECORD:
                 self.mode = MODE_RECORD
@@ -352,10 +415,13 @@ class TrekkingRunner(Node):
         elif cmd == 'play':
             self._start_play()
         elif cmd == 'stop':
+            was_record = self.mode == MODE_RECORD
             self.mode = MODE_IDLE
             self.current_idx = 0
             self._stop_robot()
             self.last_msg = 'parado'
+            if was_record:
+                self._publish_trail()   # fecha a gravação com a trilha no fio
         elif cmd == 'load_waypoints':
             wps = data.get('waypoints') or []
             sane = []
@@ -369,6 +435,7 @@ class TrekkingRunner(Node):
                     errors += 1
                     self.get_logger().warn(f'waypoint inválido descartado: {e}')
             self.waypoints = sane
+            self.trail = self._sanitize_trail(data.get('trail') or [])
             self.current_idx = 0
             if errors:
                 self.last_msg = f'{len(sane)} waypoints carregados ({errors} ignorados)'
@@ -376,7 +443,10 @@ class TrekkingRunner(Node):
                 self.last_msg = f'{len(sane)} waypoints carregados'
         elif cmd == 'clear':
             self.waypoints = []
+            self.trail = []
+            self._trail_cheia = False
             self.current_idx = 0
+            self._publish_trail()
             self.last_msg = 'lista limpa'
         elif cmd == 'set_cone':
             self._set_wp_cone(data)
@@ -415,7 +485,28 @@ class TrekkingRunner(Node):
             'cone_y':       float(w.get('cone_y', 0.0)),
             'cone_bearing': float(w.get('cone_bearing', 0.0)),
             'has_cone':     bool(w.get('has_cone', False)),
+            # rota antiga (gravada antes da trilha) nao tem o elo -> -1
+            'trail_i':      int(w.get('trail_i', -1)),
         }
+
+    def _sanitize_trail(self, pts) -> list:
+        """Migalha invalida some SOZINHA — trilha meia-boca vale mais que rota
+        recusada. Ao contrario do waypoint, aqui nao ha o que consertar: um
+        ponto ruim no meio de mil so precisa nao existir."""
+        sane = []
+        for p in pts:
+            try:
+                sane.append({'x': float(p['x']), 'y': float(p['y']),
+                             'yaw': float(p.get('yaw', 0.0)),
+                             't': float(p.get('t', 0.0)),
+                             'v': float(p.get('v', 0.0)),
+                             'wz': float(p.get('wz', 0.0))})
+            except (KeyError, TypeError, ValueError):
+                continue
+        descartadas = len(pts) - len(sane)
+        if descartadas:
+            self.get_logger().warn(f'trilha: {descartadas} migalhas inválidas descartadas')
+        return sane
 
     def _set_wp_cone(self, data: dict):
         # Corrige/limpa o cone preso a um waypoint (só faz sentido fora do PLAY;
@@ -455,6 +546,28 @@ class TrekkingRunner(Node):
         wp['cone_bearing'] = cone_bearing(wp['x'], wp['y'], wp['yaw'], cx, cy)
         self.last_msg = f'wp{idx}: cone → ({cx:.2f}, {cy:.2f})'
 
+    def _sample_trail(self):
+        """Uma migalha da trilha, se `trail_step` disser que vale a pena."""
+        x, y, yaw, have_pose, _ = self._state_snapshot()
+        if not have_pose:
+            return
+        if len(self.trail) >= self.trail_max:
+            # Teto: para de gravar e AVISA (1x). Jogar fora as migalhas antigas
+            # seria pior — perderia o comeco da rota calado.
+            if not self._trail_cheia:
+                self._trail_cheia = True
+                self.get_logger().warn(
+                    f'trilha atingiu o teto de {self.trail_max} migalhas — '
+                    'parei de gravar (aumente trail_max ou trail_ds)')
+            return
+        p = trail_step(self.trail[-1] if self.trail else None, x, y, yaw,
+                       time.time() - self._t0, self.trail_ds, self.trail_dyaw)
+        if p is not None:
+            self.trail.append(p)
+
+    def _publish_trail(self):
+        self.pub_trail.publish(String(data=json.dumps(self.trail)))
+
     def _save_point(self):
         x, y, yaw, have_pose, cones = self._state_snapshot()
         if not have_pose:
@@ -472,6 +585,9 @@ class TrekkingRunner(Node):
             'cone_y': cone[1] if cone else 0.0,
             # bearing relativo ao yaw atual (importante na verificação no play)
             'cone_bearing': cone[2] if cone else 0.0,
+            # Onde este waypoint cai DENTRO da trilha. E o elo que deixa o PLAY
+            # seguir a trilha e ainda saber em que migalha o cone/ancora entra.
+            'trail_i': len(self.trail) - 1 if self.trail else -1,
         }
         self.waypoints.append(wp)
         idx = len(self.waypoints) - 1
@@ -481,6 +597,7 @@ class TrekkingRunner(Node):
         else:
             self._flash_led(1.0, 0.7, 0.0, mode=1)   # amarelo pisca → sem cone
             self.last_msg = f'wp{idx}: ({x:.2f}, {y:.2f}) — cone não visto'
+        self._publish_trail()
 
     def _start_play(self):
         if not self.waypoints:
@@ -510,6 +627,9 @@ class TrekkingRunner(Node):
     # Loop de controle (30 Hz)
     # ------------------------------------------------------------------
     def _control_tick(self):
+        if self.mode == MODE_RECORD:
+            self._sample_trail()
+            return
         if self.mode != MODE_PLAY:
             return
         x, y, yaw, have_pose, cones = self._state_snapshot()
@@ -721,6 +841,8 @@ class TrekkingRunner(Node):
             'anchor_status': self._anchor_status,
             'anchor_clutter': [list(c) for c in self._anchor_clutter],
             'anchor_confirm': [self._anchor_confirm, self.cone_confirm_frames],
+            # so a contagem: a trilha inteira vai no /trekking/trail (latched)
+            'trail_n': len(self.trail),
             'msg': self.last_msg,
             'ts': time.time(),
         }
