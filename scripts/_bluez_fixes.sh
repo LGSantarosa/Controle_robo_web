@@ -5,6 +5,9 @@
 # As 4 pegadinhas que cobrimos aqui (PLANO_HEADLESS_2026-05-22 §4.2):
 #   1) ERTM: PS4 não fala ERTM; precisa desabilitar via modprobe option.
 #   2) ControllerMode=bredr: PS4 é só clássico, BLE quebra.
+#      Override: BLUEZ_CONTROLLER_MODE=dual antes de chamar. O controle Xbox
+#      Series X|S fala BLE (HID over GATT) e NÃO aparece no scan em bredr —
+#      pair-xbox.sh usa dual por isso. Ver pair-xbox.sh §cabeçalho.
 #   3) AutoEnable=true: adaptador acorda "Powered: yes" no boot (headless).
 #   4) ClassicBondedOnly=false: bluetoothd aceita HID sem bonding completo.
 #
@@ -34,18 +37,20 @@ bluez_apply_persistent_fixes() {
         BLUEZ_NEED_REBOOT=1
     fi
 
-    # Fix 2 + 3: /etc/bluetooth/main.conf (ControllerMode=bredr, AutoEnable=true).
+    # Fix 2 + 3: /etc/bluetooth/main.conf (ControllerMode, AutoEnable=true).
+    # bredr = default histórico (PS4). dual = exigido pelo Xbox Series (BLE).
+    local mode="${BLUEZ_CONTROLLER_MODE:-bredr}"
     local main_conf=/etc/bluetooth/main.conf
     if [ -f "$main_conf" ]; then
-        if ! grep -qE '^[[:space:]]*ControllerMode[[:space:]]*=[[:space:]]*bredr' "$main_conf"; then
-            echo "  → Forçando ControllerMode = bredr em $main_conf"
+        if ! grep -qE "^[[:space:]]*ControllerMode[[:space:]]*=[[:space:]]*${mode}\$" "$main_conf"; then
+            echo "  → Forçando ControllerMode = $mode em $main_conf"
             sudo cp "$main_conf" "$main_conf.bak.bluez_fixes"
             if grep -qE '^[[:space:]]*#?[[:space:]]*ControllerMode' "$main_conf"; then
-                sudo sed -i 's|^[[:space:]]*#\?[[:space:]]*ControllerMode[[:space:]]*=.*|ControllerMode = bredr|' "$main_conf"
+                sudo sed -i "s|^[[:space:]]*#\?[[:space:]]*ControllerMode[[:space:]]*=.*|ControllerMode = ${mode}|" "$main_conf"
             elif grep -q '^\[General\]' "$main_conf"; then
-                sudo sed -i '/^\[General\]/a ControllerMode = bredr' "$main_conf"
+                sudo sed -i "/^\[General\]/a ControllerMode = ${mode}" "$main_conf"
             else
-                printf '\n[General]\nControllerMode = bredr\n' | sudo tee -a "$main_conf" >/dev/null
+                printf '\n[General]\nControllerMode = %s\n' "$mode" | sudo tee -a "$main_conf" >/dev/null
             fi
             BLUEZ_NEED_RESTART=1
         fi
