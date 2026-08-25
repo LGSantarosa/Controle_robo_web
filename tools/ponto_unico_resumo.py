@@ -14,12 +14,17 @@ ap.add_argument('csv')
 ap.add_argument('--standoff', type=float, default=1.2)
 ap.add_argument('--spawn', default='2.0,2.5')
 ap.add_argument('--cone-odom', default='4.0,0.0')
+ap.add_argument('--wp-odom', default=None, help='X,Y em odom — usar quando o lote rodou com --wp-odom')
 a = ap.parse_args()
 
 sx, sy = [float(v) for v in a.spawn.split(',')]
 cxo, cyo = [float(v) for v in a.cone_odom.split(',')]
 cone_w = (sx + cxo, sy + cyo)                       # cone no mundo
-ideal = (cone_w[0] - a.standoff, cone_w[1])         # onde ele DEVERIA parar
+if a.wp_odom:                                       # alvo livre (teste de giro)
+    wxo, wyo = [float(v) for v in a.wp_odom.split(',')]
+    ideal = (sx + wxo, sy + wyo)
+else:
+    ideal = (cone_w[0] - a.standoff, cone_w[1])     # onde ele DEVERIA parar
 
 rows = list(csv.DictReader(open(a.csv)))
 ok = [r for r in rows if r['fim'] == 'concluiu' and r['x']]

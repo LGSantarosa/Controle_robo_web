@@ -42,11 +42,19 @@ ap.add_argument('--standoff', type=float, default=1.2)
 ap.add_argument('--cone-odom', default='4.0,0.0')
 ap.add_argument('--sem-cone', action='store_true')
 ap.add_argument('--timeout', type=float, default=60.0)
+# --wp-odom poe o waypoint ONDE EU QUISER (em odom), ignorando o cone. Serve pra
+# testar GIRO: um alvo em (2,-2) obriga um point-turn pra DIREITA antes do reto,
+# e o espelho (2,+2) pra esquerda. Comparar os dois responde 'gira igual pros
+# dois lados?' sem depender de cone nenhum -- use junto com --sem-cone.
+ap.add_argument('--wp-odom', default=None, help='X,Y em odom (ignora --standoff)')
 a = ap.parse_args()
 
 cx, cy = [float(v) for v in a.cone_odom.split(',')]
-# waypoint = standoff metros ANTES do cone, na linha de aproximacao (+x)
-wx, wy = cx - a.standoff, cy
+if a.wp_odom:
+    wx, wy = [float(v) for v in a.wp_odom.split(',')]
+else:
+    # waypoint = standoff metros ANTES do cone, na linha de aproximacao (+x)
+    wx, wy = cx - a.standoff, cy
 wp = {'x': wx, 'y': wy, 'yaw': 0.0, 'has_cone': not a.sem_cone,
       'cone_x': cx if not a.sem_cone else 0.0,
       'cone_y': cy if not a.sem_cone else 0.0,

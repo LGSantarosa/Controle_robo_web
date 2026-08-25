@@ -21,6 +21,13 @@ N=5
 TAG="lote"
 STANDOFF="1.2"
 TIMEOUT="60"
+WP=""            # --wp-odom: alvo livre em odom (teste de giro), sem cone
+SPAWN_Y="2.5"    # --spawn-y: desloca o NASCIMENTO do robo. E o unico jeito de criar
+                 # um descasamento honesto entre o que a odom acha e onde o cone
+                 # REALMENTE esta: a odom zera no spawn, entao nascer 30 cm fora da
+                 # linha do cone equivale a chegar ali com 30 cm de deriva. Com
+                 # ancora o robo deve terminar na MESMA linha do cone; sem ancora,
+                 # deve terminar deslocado igual ao spawn. E o teste do snap.
 EXTRA=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -28,7 +35,9 @@ while [ $# -gt 0 ]; do
         --tag)       TAG="$2"; shift 2 ;;
         --standoff)  STANDOFF="$2"; shift 2 ;;
         --timeout)   TIMEOUT="$2"; shift 2 ;;
-        --sem-cone)  EXTRA+=(--sem-cone); TAG="${TAG}"; shift ;;
+        --sem-cone)  EXTRA+=(--sem-cone); shift ;;
+        --wp-odom)   WP="$2"; EXTRA+=(--wp-odom "$2"); shift 2 ;;
+        --spawn-y)   SPAWN_Y="$2"; shift 2 ;;
         -h|--help)   sed -n '2,16p' "$0"; exit 0 ;;
         *)           EXTRA+=("$1"); shift ;;
     esac
@@ -85,6 +94,7 @@ espera_pronto() {   # $1 = segundos maximos
 for i in $(seq 1 "$N"); do
     echo "=== trial $i/$N ($TAG) ==="
     setsid ./launch.sh --sim --trekking --world=worlds/trekking_min.sdf \
+        --spawn-y="$SPAWN_Y" \
         > "$LOGS/trial_$i.log" 2>&1 &
     LAUNCH_PID=$!
     if ! espera_pronto 90; then
@@ -96,6 +106,11 @@ for i in $(seq 1 "$N"); do
     LINHA="$(python3 tools/_ponto_unico_run.py --standoff "$STANDOFF" \
              --timeout "$TIMEOUT" ${EXTRA[@]+"${EXTRA[@]}"} 2>/dev/null | tail -1)"
     echo "  $LINHA"
+    # O trekking_runner abre a telemetria com 'w' — o proximo launch APAGA a do
+    # trial anterior. Sem esta copia, o tick-a-tick (onde da pra ver a hora exata
+    # em que o snap engatou) so existe pro ultimo trial do lote.
+    cp -f "$SCRIPT_DIR/controle_web/logs/trekking.csv" \
+          "$LOGS/trekking_trial_$i.csv" 2>/dev/null
     python3 - "$i" "$CSV" "$LINHA" <<'PY'
 import json, sys
 i, csv, linha = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -113,4 +128,5 @@ done
 
 echo
 echo "CSV: $CSV"
-python3 tools/ponto_unico_resumo.py "$CSV" --standoff "$STANDOFF"
+python3 tools/ponto_unico_resumo.py "$CSV" --standoff "$STANDOFF" \
+    --spawn "2.0,$SPAWN_Y" ${WP:+--wp-odom "$WP"}
