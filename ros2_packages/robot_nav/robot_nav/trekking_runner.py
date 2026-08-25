@@ -85,10 +85,16 @@ class DriveConfig:
     """
     rot_deadzone: float = 1.7       # rad/s — abaixo disso a roda não vira (spin_calib)
     rot_k: float = 3.0              # ganho P do giro (rad/s por rad)
-    rot_min: float = 2.4            # piso do giro (2.0 = rastejo ~10°/s reais)
+    # 2.4 -> 3.4 (2026-08-25, varredura no sim com a rota do dono). O piso do
+    # giro e o que MANDA em quase toda correcao: `|h_err| * rot_k` so passa de
+    # `rot_min` quando o erro passa de 46°, entao correcao de 20° e de 40°
+    # giravam identicas, no minimo da autoridade. Pelo modelo do atuador
+    # (spin_calib) 2.4 rende 0.44 rad/s = 25°/s; 3.4 rende 1.02 = 61°/s.
+    # Medido: tempo PARADO girando caiu de 5.0 s para 2.3 s na mesma rota.
+    rot_min: float = 3.4            # piso do giro (2.0 = rastejo ~10°/s reais)
     rot_max: float = 4.5            # teto do giro
     turn_enter: float = math.radians(20.0)  # entra em point-turn
-    turn_exit: float = math.radians(6.0)    # e só solta aqui (histerese)
+    turn_exit: float = math.radians(2.0)    # e só solta aqui (histerese)
     v_max: float = 0.35             # m/s — cruzeiro da reta
     # path_follower 06-26, medido em campo: "0.11 trava, 0.25 anda" -> a
     # zona-morta linear está no meio; 0.22 fica bem acima. O freio do último

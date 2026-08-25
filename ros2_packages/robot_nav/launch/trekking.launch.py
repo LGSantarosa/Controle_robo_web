@@ -21,7 +21,18 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     v_max_arg = DeclareLaunchArgument(
-        'v_max', default_value='0.35',
+        # 0.35 -> 0.90 (2026-08-25). Trekking e prova de VELOCIDADE e 76% do
+        # tempo de uma rota era reta a 0.33 m/s. Varredura no sim com a rota
+        # gravada pelo dono (0.35/0.50/0.70/0.90/1.20), com o giro ja rapido:
+        # 18.4 s -> 10.2 s (-45%), pior desvio da trilha 9.1 -> 16.2 cm, dentro
+        # do orcamento de 40 cm que ele definiu. 1.20 dava so 0.7 s a mais e
+        # gastava metade da margem que sobrava — e alta velocidade e justamente
+        # onde o sim e menos confiavel (o atrito de skid do Gazebo e
+        # aproximacao; o robo real derrapa MAIS, nao menos).
+        # ATENCAO: nao validado no robo real. A deriva assimetrica do giro
+        # (+13.4 cm por curva a direita contra -3.1 a esquerda, medida hoje a
+        # 24°/s) tende a CRESCER a 61°/s, e a odometria nao a enxerga.
+        'v_max', default_value='0.90',
         description='Velocidade linear máxima do PID (m/s)'
     )
     lidar_offset_x_arg = DeclareLaunchArgument(
