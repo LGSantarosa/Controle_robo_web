@@ -1,7 +1,132 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-07-20**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-08-25**.
+
+---
+
+## 🥾⚡ 2026-08-25 — TREKKING: rota 60% mais rápida + LiDAR finalmente medido
+
+Dia inteiro no trekking, tudo no sim, tudo mergeado na `main`. Rota de teste =
+`rota2`, gravada pelo dono na pista (`worlds/trekking.sdf`), 6,94 m, 2 cones.
+
+### O que ganhamos
+
+| | tempo | giros | pior desvio da trilha |
+|---|---|---|---|
+| como estava de manhã | 19,2 s | 5 | 10,7 cm |
+| + velocidade | 10,7 s | 5 | 9,7 cm |
+| + um giro por canto | 8,3 s | 2 | 11,8 cm |
+| **+ giro 83°/s** | **7,7 s** | 2 | **8,0 cm** |
+
+**60% mais rápido e MAIS preciso que o ponto de partida.** Orçamento de precisão
+definido pelo dono: 40 cm no pior ponto — gastamos 8.
+
+1. **`101d3e7` — o RECORD grava a trilha densa.** Antes a rota só guardava os
+   pontos do botão e o PLAY inventava uma reta entre eles. Migalha a cada 10 cm
+   + gate de yaw de 10° (point-turn anda 0 m; sem o gate sumiria justo onde ele
+   mais erra). `v`/`wz` saem da diferença de pose, não do `cmd_vel`.
+2. **`5d14694` — o PLAY segue a trilha.** A reta entre início e fim da rota de
+   teste cortava 89 cm do caminho dirigido; o replay ficou a 7,4 cm médio.
+3. **`7119e9a` — o snap do cone engata CEDO.** O gatilho media do robô ao CONE,
+   então dependia de quão perto do cone o ponto foi gravado: gravando colado
+   rodopiava 48° em cima do cone (o "foi de cara no cone"); gravando a 1,5 m
+   **nunca engatava** (0 de 209 ticks, medido). Agora gatilho pelo mais perto
+   (cone **ou** waypoint) + raio 3,5 m + trava que refina.
+4. **`210f810` — velocidade.** `v_max` 0,35→0,90 (e ele mora no
+   `trekking.launch.py`, **não** no `DriveConfig`), `rot_min` 2,4→3,4,
+   `turn_exit` 6°→4°.
+5. **`287273a` — um giro por canto** (ideia do dono). Douglas-Peucker reduz a
+   trilha a cantos; entre cantos é **reta pura**. 5 giros picados de ~19° viram
+   2 giros inteiros de 42° e 45°. `corner_tol` (20 cm) é o orçamento de
+   imprecisão, agora **explícito**.
+6. **`bfcf945` — giro 83°/s** (`rot_min` 4,0). Ganho nos dois eixos.
+   **⛔ Penhasco entre 4,0 e 4,5**: 4,5 dá 35 cm de desvio e um giro extra, com
+   portão 6° **e** com 4° — o vilão é a taxa, não a histerese (isolado).
+7. **`0eb182c` — o sim finalmente consome a correção do cone.** Ver abaixo.
+
+### O LiDAR: medido pela primeira vez
+
+O `sim_trekking_pose` era relay puro da `/odom` e **não assinava**
+`/trekking/pose_fix`. O runner publicava a correção do cone-âncora e ninguém
+escutava — o mecanismo central do trekking estava há meses sem nunca ter sido
+medido a favor ou contra. Agora consome, com o mesmo `apply_pose_fix` e os
+mesmos ganho 0,5 / rejeição 0,6 m do `pose_estimator` real.
+
+| | mentira da pose (vs verdade-terreno) |
+|---|---|
+| **âncora ligada** | 17,9 / 19,9 / 19,6 → **19,1 cm** |
+| âncora desligada | 29,9 / 48,0 / 49,0 → **42,3 cm** |
+
+Corta o erro pela metade e o deixa **consistente** (dispersão 2 cm contra 19).
+**Não** muda a distância física ao cone (74,3 vs 76,5 cm): a correção chega
+quando o robô já andou, então conserta a crença, não a posição. Numa pista de 6
+cones deve aparecer, porque cada cone zera a deriva antes de acumular.
+
+### O que erramos (e o que a lição custou)
+
+- **"A `/odom` do Gazebo não tem deriva".** Era comentário no topo do
+  `sim_trekking_pose` e eu repeti, mesmo tendo medido o contrário horas antes.
+  **Tem 48,4 cm de deriva** — as rodas patinam no pivô. Quem pegou foi o dono,
+  olhando o mapa da web. Isso invalidou um diagnóstico meu: eu atribuí o erro
+  final de 32-37 cm à `arrival_tolerance`, e boa parte é deriva.
+- **Culpei o robô por um giro que era MEU script.** O dono viu o robô "girando
+  travado pra direita"; fui atrás do `sim_actuator_model`, achei 2 fragilidades
+  reais **lendo** o código, consertei (`9076847`) e disse que casava com o
+  sintoma. Era o `volta_pra_origem` do meu script de validação girando em
+  pulsos de 0,12 s por 60 s. **Sintoma de movimento no sim → primeira coisa é
+  `ps` pelos meus processos.** E "achei furos lendo" ≠ "achei a causa".
+- **Corrida sem reset.** Reaproveitei uma stack pra não perder um logger; o robô
+  começou de onde a corrida anterior parou, saiu 6,7 m fora da rota, e eu tirei
+  conclusão ("0 pose_fix") de uma corrida inválida. O dono pegou de novo.
+- **A/B de duas mudanças juntas não mede nenhuma.** Aconteceu 2x: no raio do
+  snap (o ganho vinha do gatilho, não do raio) e no giro 4,5 (taxa × portão).
+  Nos dois casos só o isolamento respondeu.
+- **Descartei a simplificação de trilha pelo critério errado** — medi o ângulo
+  total girado (mudava 0,4 s) em vez do número de paradas. O dono insistiu; era
+  a mudança que mais valeu do dia.
+- **Removi o `_cone_fix_done` sem entender pra que servia.** Ver abaixo.
+
+### 🔴 A correção repetida — REVERTIDA, e por quê
+
+Pedido do dono (observação certeira olhando a tela): *"o cone salvo em amarelo
+não casa com a posição do cone encontrado"*. Está certo — com ganho 0,5 e **uma
+correção por cone**, fecha metade da distância, uma vez, e para.
+
+Deixei corrigir repetido. Resultado em 3 corridas: **2,6 cm / 308,5 cm /
+53,6 cm**. Quando uma mudança produz o melhor **e** o pior número da série, ela
+não é ajuste — é **instabilidade**. Realimentação positiva na associação: cada
+correção move a pose → a pose movida muda qual cone casa → casa com o cone
+errado → puxa mais pra ele. Na rep2 ele ancorou no **cone anterior** e voltou
+pra trás (o dono viu: *"ele tá voltando pro cone 1 ao invés de seguir pro 2"*),
+batendo num obstáculo no caminho.
+
+O `_cone_fix_done` **não era conservadorismo — era a barreira que impede o laço
+fechar.** E o teste unitário que escrevi não podia pegar isso: ele assumia
+associação constante, que é justamente o que estava em jogo.
+
+**Caminho certo (não feito):** melhorar a **associação** antes de confiar mais
+nela — travar identidade do cone, rejeitar correção que aproxime de um cone
+vizinho, exigir consistência entre correções consecutivas.
+
+### ⏳ O que falta
+
+- **NADA disso viu o robô real.** Riscos, em ordem: (1) a deriva assimétrica do
+  giro (+13,4 cm à direita × −3,1 à esquerda, medida a 24°/s — hoje ele gira a
+  83°/s, e a odometria não a enxerga); (2) o penhasco em `rot_min` 4,5 sugere
+  margem menor no real; (3) o sim não modela skid dependente de velocidade.
+  **Se aparecer giro extra + traçado torto no robô, o primeiro knob a baixar é
+  o `rot_min`.**
+- **`arc_calib` no quadrante que falta.** A conclusão "o robô não arqueia" veio
+  de `vx=0,25` fixo, onde **todo** arco testado tinha raio ≤ 0,83 m num robô de
+  0,5 m — nunca testou curva, só pirueta. O quadrante útil (vx 0,8-1,2 com
+  wz 0,2-0,6 = raio 2-5 m) está vazio. O dono afirma que ele arqueia com
+  velocidade. Se arquear, os ~20% do tempo ainda gastos parado viram zero.
+- **Erro final de 32-37 cm** — precisa ser reatacado sabendo que boa parte é
+  deriva, não `arrival_tolerance`.
+- **Associação de cone robusta**, pré-requisito pra qualquer correção mais forte.
+- **A âncora tem ~36 cm de ruído próprio** (pediu 36 cm de correção num momento
+  sem deriva). Deriva 48 × ruído 36 é o que justifica o ganho 0,5 hoje.
 
 ---
 
