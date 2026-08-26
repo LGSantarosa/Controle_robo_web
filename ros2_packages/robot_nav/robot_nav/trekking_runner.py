@@ -210,6 +210,101 @@ def cantos_da_trilha(trail, eps, forcados=()):
     return sorted(manter)
 
 
+def _desvio_do_trecho(trail, a, b):
+    """Maior afastamento da trilha[a..b] em relacao a corda a-b (m)."""
+    ax, ay = trail[a]['x'], trail[a]['y']
+    bx, by = trail[b]['x'], trail[b]['y']
+    dx, dy = bx - ax, by - ay
+    L2 = dx * dx + dy * dy
+    pior = 0.0
+    for i in range(a + 1, b):
+        px, py = trail[i]['x'], trail[i]['y']
+        t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((px-ax)*dx + (py-ay)*dy) / L2))
+        pior = max(pior, math.hypot(px - (ax + t*dx), py - (ay + t*dy)))
+    return pior
+
+
+def angulo_do_canto(trail, ant, canto, prox):
+    """Quanto o rumo muda NESTE canto (rad, sempre positivo)."""
+    h1 = math.atan2(trail[canto]['y'] - trail[ant]['y'],
+                    trail[canto]['x'] - trail[ant]['x'])
+    h2 = math.atan2(trail[prox]['y'] - trail[canto]['y'],
+                    trail[prox]['x'] - trail[canto]['x'])
+    return abs(_wrap_pi(h2 - h1))
+
+
+def poda_cantos_rasos(trail, cantos, min_turn, max_desvio, forcados=()):
+    """Tira cantos que nao pagam a parada que custam.
+
+    POR QUE EXISTE (pedido do dono, 2026-08-26): "ele gira demais, deu 2 giros
+    extras, pode fazer 3". A contagem de giros e' geometria: N cantos = N-1
+    giros. Medido na rota2, os cantos pediam 16, 31 e 40 graus — e o de 16
+    existia so' porque o WAYPOINT entra forcado em `cantos_da_trilha`, nao
+    porque a trilha dobrava ali. Um canto de 16 graus custa uma parada inteira
+    (frear de 0,9 m/s, girar no lugar, acelerar de novo) e devolve quase nada.
+
+    Tres condicoes, as TRES obrigatorias:
+      1. o canto NAO e' um waypoint (`forcados`);
+      2. o rumo muda menos que `min_turn` ali;
+      3. tirando o canto, a reta resultante fica dentro de `max_desvio` da
+         trilha gravada.
+
+    A (1) custou uma medicao pra aparecer. Sem ela, podar o canto do waypoint
+    fazia o robo NAO IR NO PONTO: a chegada e' detectada por
+    `i_canto >= wp['trail_i']`, entao o canto SEGUINTE ja' satisfaz a condicao
+    e o waypoint e' marcado como visitado de longe. Medido na rota2: "chegou no
+    wp0" com o robo a **1,50 m** do waypoint (contra 0,32 m sem a poda). Pior
+    que nao ir: ele acha que foi, e dispara LED e ancora no lugar errado.
+    Quem pegou foi o dono, olhando a tela.
+
+    A (2) existe porque `cantos_da_trilha` promete que a polilinha nunca se
+    afasta mais que `eps` da trilha, e podar quebra essa promessa. Em vez de
+    quebra-la em silencio, a poda tem o SEU proprio orcamento, explicito.
+
+    Extremos nunca saem (sao o inicio e o fim da rota). `min_turn <= 0`
+    desliga a poda inteira.
+    """
+    if min_turn <= 0.0 or len(cantos) < 3:
+        return list(cantos)
+    intocaveis = {i for i in forcados if i >= 0}
+    fora = list(cantos)
+    mudou = True
+    while mudou and len(fora) >= 3:
+        mudou = False
+        for k in range(1, len(fora) - 1):
+            ant, canto, prox = fora[k - 1], fora[k], fora[k + 1]
+            if canto in intocaveis:
+                continue
+            if angulo_do_canto(trail, ant, canto, prox) >= min_turn:
+                continue
+            if _desvio_do_trecho(trail, ant, prox) > max_desvio:
+                continue
+            fora.pop(k)
+            mudou = True
+            break
+    return fora
+
+
+def congela_mira(dist, raio, is_last):
+    """Perto do alvo, PARA de perseguir a mira. `True` = segue reto.
+
+    POR QUE EXISTE (2026-08-26): o erro de rumo pra um ponto explode quando a
+    distancia vai a zero — a 0,3 m do alvo, 5 cm de desvio lateral ja' viram
+    ~10 graus, e a 0,15 m viram 20. O robo entao PARA pra corrigir a mira de um
+    ponto onde ele vai chegar de qualquer jeito. Medido na rota2: um giro de
+    -9 a -22 graus em TODA corrida, so' por causa disso.
+
+    E ele nao e' so' desperdicio de tempo: quanto maior esse giro, mais torto o
+    robo entra no canto seguinte, e ai ele paga um giro EXTRA la' na frente. As
+    corridas com giro de chegada pequeno (-9) saiam em 4 giros; as com giro
+    grande (-22), em 5.
+
+    O ultimo waypoint e' exceção: la' a mira importa, porque e' onde a rota
+    termina e a precisao do ponto final e' o que se mede.
+    """
+    return (not is_last) and dist < raio
+
+
 def trail_progress(trail, p, x, y, window=25):
     """Avanca o marcador de progresso na trilha. NUNCA anda pra tras.
 
@@ -370,6 +465,18 @@ class TrekkingRunner(Node):
         # orçamento de imprecisão em metros: a rota seguida nunca se afasta mais
         # que isto da trilha gravada. 0 = desliga e volta pra mira (permite A/B).
         self.declare_parameter('corner_tol', 0.20)
+        # Poda de cantos rasos (ver poda_cantos_rasos). DESLIGADA por default:
+        # ela nasceu da hipotese errada de que os giros extras vinham de cantos
+        # demais. Vinham do portao de 20 graus e do giro de chegada (ver
+        # `congela_mira`). Na rota2 e' inerte — o unico canto raso e' o waypoint,
+        # que e' intocavel. Fica o knob; o valor dela nunca foi medido.
+        self.declare_parameter('corner_min_turn_deg', 0.0)
+        # Raio em que ele para de perseguir a mira e segue reto (congela_mira).
+        # 0 desliga.
+        self.declare_parameter('aim_freeze_radius', 0.40)
+        # Orcamento PROPRIO da poda — ela quebra a promessa do corner_tol, entao
+        # tem o seu. 0,40 m e' o teto de imprecisao que o dono definiu p/ a rota.
+        self.declare_parameter('corner_prune_tol', 0.40)
         self.declare_parameter('trail_window', 25)    # migalhas varridas por tick
 
         # --- Trilha densa (teach-and-repeat) ---
@@ -424,6 +531,8 @@ class TrekkingRunner(Node):
         self.r_match = float(self.get_parameter('cone_match_radius').value)
         self.bear_tol= math.radians(float(self.get_parameter('cone_bearing_tol_deg').value))
         self.r_lock_track = float(self.get_parameter('cone_lock_track_radius').value)
+        self.aim_freeze_radius = float(
+            self.get_parameter('aim_freeze_radius').value)
         self.r_capture = float(self.get_parameter('cone_capture_radius').value)
         self.led_ms  = int(self.get_parameter('led_arrival_ms').value)
         self.state_dt= 1.0 / float(self.get_parameter('publish_state_hz').value)
@@ -787,11 +896,19 @@ class TrekkingRunner(Node):
             self.cantos = []
             return
         forcados = [w.get('trail_i', -1) for w in self.waypoints]
-        self.cantos = cantos_da_trilha(self.trail, self.corner_tol, forcados)
+        brutos = cantos_da_trilha(self.trail, self.corner_tol, forcados)
+        self.cantos = poda_cantos_rasos(
+            self.trail, brutos,
+            math.radians(float(self.get_parameter('corner_min_turn_deg').value)),
+            float(self.get_parameter('corner_prune_tol').value),
+            forcados)
         self.canto_i = 0
+        podados = len(brutos) - len(self.cantos)
         self.get_logger().info(
             f'trilha de {len(self.trail)} migalhas -> {len(self.cantos)} cantos '
-            f'(tolerância {self.corner_tol*100:.0f} cm)')
+            f'(tolerância {self.corner_tol*100:.0f} cm'
+            + (f'; {podados} canto(s) raso(s) podado(s) = '
+               f'{podados} giro(s) a menos)' if podados else ')'))
 
     def _start_play(self):
         if not self.waypoints:
@@ -920,15 +1037,25 @@ class TrekkingRunner(Node):
             if no_canto:
                 self.trail_p = i_canto
                 self.last_to_target = None
-                # Tentado 2026-08-26 e REVERTIDO: `True` aqui faz ele
-                # alinhar no canto (criterio vira o turn_exit) em vez de sair
-                # dirigindo torto ate estourar o turn_enter. O mecanismo
-                # funciona — da' pra ver no traco girando a 12 graus em vez de
-                # pagar 20 depois — mas MEDIDO em 3+3 corridas na rota2 deu
-                # EMPATE: 4.3 -> 4.7 giros, 11.4 -> 11.1 s, tudo dentro do
-                # ruido corrida-a-corrida. Os giros do meio da perna nascem de
-                # outra coisa, ainda nao isolada. Nao repetir sem causa nova.
-                self._turning = False
+                # ALINHA NO CANTO. Era `False`, e isso adiava o giro:
+                # ao trocar de canto o robo HERDA um erro de rumo, e com
+                # `False` o criterio vira o `turn_enter` (20 graus). Herdando
+                # 17,6 graus ele NAO gira — sai dirigindo torto, o erro cresce
+                # sozinho ate 20 e ele paga um SEGUNDO giro. O mesmo canto em
+                # duas parcelas, e qual dos dois acontece depende de 2 graus de
+                # nada. Flagrado no CSV (2026-08-26):
+                #   t=19.306  troca de canto -> h_err 17.6  (17.6 < 20: nao gira)
+                #   t=19.440  h_err 17.9
+                #   t=19.574  h_err 20.0     -> giro extra
+                #
+                # Com `True` o criterio passa a ser o `turn_exit` (4 graus): ele
+                # resolve o canto DE UMA VEZ. Nao gera giro espurio — se ja'
+                # estiver alinhado, `drive_cmd` sai de `turning` no mesmo tick.
+                #
+                # Foi revertido uma vez por medir MEDIA de giros (deu empate).
+                # A media era a metrica errada: 4,7 pode ser "sempre 4,7" ou
+                # "metade 4, metade 5". O que importa e' a TAXA DE CORRIDA LIMPA.
+                self._turning = True
                 # O waypoint sempre é um canto (entra como forçado), então
                 # alcançá-lo é o que dispara a chegada — LED, cone, avanço.
                 if i_canto >= wp.get('trail_i', -1) >= 0 or fim_da_trilha:
@@ -977,8 +1104,13 @@ class TrekkingRunner(Node):
             # na freada é a distância que falta até o WAYPOINT final.
             is_last = is_last and fim_da_trilha
             dist = d_wp
+        # Perto do alvo a mira vira ruido (ver congela_mira): segue reto e
+        # deixa a chegada disparar, em vez de parar pra corrigir a mira de um
+        # ponto onde ele vai chegar de qualquer jeito.
+        h_err_giro = 0.0 if congela_mira(
+            dist, self.aim_freeze_radius, is_last) else h_err
         v, omega, self._turning = drive_cmd(
-            h_err, dist, is_last, self._turning, self.drive_cfg)
+            h_err_giro, dist, is_last, self._turning, self.drive_cfg)
 
         tw = Twist()
         tw.linear.x = float(v)

@@ -13,7 +13,8 @@ import math
 
 import pytest
 
-from robot_nav.trekking_runner import DriveConfig, drive_cmd
+from robot_nav.trekking_runner import (DriveConfig, congela_mira, drive_cmd,
+                                       poda_cantos_rasos)
 
 
 CFG = DriveConfig()
@@ -387,3 +388,75 @@ def test_forcado_invalido_e_ignorado_sem_quebrar():
 def test_trilha_curta_nao_quebra():
     assert cantos_da_trilha([], 0.2) == []
     assert cantos_da_trilha(_t([(0, 0), (1, 1)]), 0.2) == [0, 1]
+
+
+# ----------------------------------------------------- poda de cantos rasos
+# 2026-08-26: "ele gira demais". N cantos = N-1 giros; um canto de 16° custa
+# uma parada inteira e devolve quase nada. Ver poda_cantos_rasos.
+
+def _trilha(pts):
+    return [{'x': x, 'y': y} for x, y in pts]
+
+
+def test_poda_tira_canto_raso_que_cabe_no_orcamento():
+    # quase reto: o do meio dobra ~11°
+    t = _trilha([(0, 0), (1, 0), (2, 0.2), (3, 0.4)])
+    assert poda_cantos_rasos(t, [0, 1, 3], math.radians(20), 0.40) == [0, 3]
+
+
+def test_poda_preserva_canto_de_verdade():
+    t = _trilha([(0, 0), (1, 0), (1, 1), (1, 2)])   # dobra 90° no indice 1
+    assert poda_cantos_rasos(t, [0, 1, 3], math.radians(20), 0.40) == [0, 1, 3]
+
+
+def test_poda_respeita_o_proprio_orcamento_de_desvio():
+    """Canto raso em ANGULO mas cuja remocao afastaria demais da trilha: FICA.
+
+    É a razão de a poda ter orçamento próprio — ela quebra a promessa do
+    corner_tol, então não pode quebrá-la em silêncio.
+    """
+    t = _trilha([(0, 0), (1, 0), (2, 0.9), (3, 1.8)])
+    assert poda_cantos_rasos(t, [0, 1, 3], math.radians(20), 0.10) == [0, 1, 3]
+
+
+def test_poda_nunca_tira_os_extremos():
+    t = _trilha([(0, 0), (1, 0.01), (2, 0.02)])
+    assert poda_cantos_rasos(t, [0, 2], math.radians(180), 99.0) == [0, 2]
+
+
+def test_poda_desligada_com_min_turn_zero():
+    t = _trilha([(0, 0), (1, 0), (2, 0.2), (3, 0.4)])
+    assert poda_cantos_rasos(t, [0, 1, 3], 0.0, 0.40) == [0, 1, 3]
+
+
+def test_poda_NUNCA_tira_o_canto_de_um_waypoint():
+    """Sem isto o robô NÃO VAI NO PONTO — ele marca como visitado de longe.
+
+    Medido na rota2 (2026-08-26): "chegou no wp0" com o robô a 1,50 m dele,
+    porque a chegada é `i_canto >= wp['trail_i']` e o canto seguinte já
+    satisfaz. Quem pegou foi o dono, olhando a tela.
+    """
+    t = _trilha([(0, 0), (1, 0), (2, 0.2), (3, 0.4)])
+    assert poda_cantos_rasos(t, [0, 1, 3], math.radians(20), 0.40,
+                             forcados=[1]) == [0, 1, 3]
+
+
+# ------------------------------------------------------------ congela_mira
+# 2026-08-26: o erro de rumo explode quando a distancia vai a zero, e o robo
+# parava pra corrigir a mira de um ponto onde ia chegar de qualquer jeito.
+
+def test_congela_perto_do_alvo():
+    assert congela_mira(dist=0.30, raio=0.40, is_last=False) is True
+
+
+def test_nao_congela_longe():
+    assert congela_mira(dist=1.50, raio=0.40, is_last=False) is False
+
+
+def test_nunca_congela_no_ultimo_waypoint():
+    """No fim da rota a mira importa — é ali que a precisão é medida."""
+    assert congela_mira(dist=0.05, raio=0.40, is_last=True) is False
+
+
+def test_raio_zero_desliga():
+    assert congela_mira(dist=0.01, raio=0.0, is_last=False) is False
