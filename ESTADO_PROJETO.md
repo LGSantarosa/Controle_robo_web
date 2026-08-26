@@ -1,7 +1,98 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-08-25**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-08-26**.
+
+---
+
+## 🧭 2026-08-26 — O SIM NÃO TINHA IMU (e isso invalida medições de ontem)
+
+Dia inteiro no sim, na branch `sim-imu-yaw`. Começou como "investigar giro em
+arco" e virou outra coisa.
+
+### O achado principal
+
+**O `/trekking/pose` do sim vinha da `/odom` do DiffDrive — yaw integrado das
+RODAS.** O robô real usa a IMU (`yaw_source='imu'`) e só cai pra roda quando a
+IMU morre. O sim rodava **permanentemente no modo degradado do real**, e
+justamente no point-turn, que é a manobra em que o trekking inteiro se apoia.
+
+Medido contra verdade-terreno: no **primeiro tick de cada giro** a odom girava
+**7,8° que o robô não girava**; depois disso o giro rastreava perfeito. É
+patinagem de roda creditada como rotação. Com 4-5 giros por rota, ~10° de rumo
+errado e ~0,5 m de desvio lateral.
+
+A/B na rota2, 3 corridas de cada lado, `v_max` 0,90:
+
+| | yaw de RODA | yaw de IMU |
+|---|---|---|
+| média \|erro de rumo\| | **26,2°** | **0,5°** |
+| pulsos de giro falso | 9 por corrida | **zero** |
+| folga mínima ao bloco | 0,24 m | **0,35 m** |
+| bateu | **1 de 3** (299 cm) | **0 de 3** |
+| erro final | 36,9 / 299 / 43,3 cm | 38,2 / 38,9 / **36,7** cm |
+
+**⚠️ CONSEQUÊNCIA: tudo que o sim "provou" sobre GIRO antes de 26/08 precisa ser
+relido** — inclusive os "8 cm de desvio" e os "42,3 cm sem âncora / 19,1 com"
+registrados abaixo, no dia 25. Não estão necessariamente errados; é que foram
+medidos com a fonte de yaw errada.
+
+### O instrumento também mentia
+
+O `gt_trekking.py` chamava `gz model -p` (~1 s de latência) e comparava a pose
+verdadeira VELHA com a odom ATUAL. Reportei "deriva 0,51 m a 0,90 contra 0,20 m
+a 0,35" como descoberta — a razão (2,55) era quase exatamente a razão das
+velocidades (2,57). **Eu tinha medido a latência do meu próprio instrumento.**
+Consertado: stream carimbado + odom interpolada; defasagem de ~1000 ms → **8 ms**.
+A coluna `dt_match_ms` agora publica o resíduo em vez de escondê-lo.
+
+### Decisões
+
+- **Arco DESCARTADO** (decisão do dono). O robô arqueia, mas só em velocidade
+  alta; o ganho seria em cima dos ~20% do tempo parado girando e não paga o
+  risco. **Rápido reto + point-turn é o desenho.** Antes de descartar ficou
+  provado que o dado nunca existiu: em 4 dias de campo o maior raio que chegou
+  às rodas foi **0,42 m** num robô de 0,5 m — o `path_follower` é reto-ou-giro
+  por projeto e tem prioridade sobre o nav2 no mux, então o robô nunca foi
+  *convidado* a arquear. Não medir de novo sem motivo novo.
+
+### Tentado e revertido
+
+- **Alinhar no canto** (`_turning = True` na troca de canto, pra ele não sair
+  dirigindo torto até estourar o `turn_enter` de 20°). O mecanismo funciona, dá
+  pra ver no traço, mas medido em 3+3 corridas deu **empate**: 4,3 → 4,7 giros,
+  11,4 → 11,1 s, tudo dentro do ruído corrida-a-corrida. Comentário deixado no
+  código pra não tentarem de novo sem causa nova.
+
+### ⏳ Aberto
+
+- **🔴 Giros extras.** Ele faz 4-5 giros onde 3 bastariam, 20% do tempo parado
+  girando. **Descartado com medida:** não é o Douglas-Peucker (`corner_tol` 0,20
+  ou 0,35 dão os mesmos 5 cantos; 0,40 corta por cima do `obst_6` e sobram 3 cm
+  de folga de carroceria) e não é o giro adiado pelo `turn_enter`. **Suspeito
+  vivo:** o erro de rumo CRESCE enquanto ele anda reto na mesma perna (−2,7° →
+  +23,9° em 2,1 s). Um candidato concreto é a âncora do cone deslocar o alvo ao
+  engatar — visto o alvo pular de (1,938 , 5,752) pra (2,068 , 5,664) no tick em
+  que `anchor` virou `fixed`.
+- **🔴 Erro final de ~37 cm.** Com o yaw consertado a deriva praticamente sumiu
+  e o erro final NÃO mudou — logo **nunca foi deriva**. Agora repete dentro de
+  2 cm, virou alvo parado.
+- **Associação de cone robusta.** A instrumentação (`cone_id`, `fix_dx/dy`,
+  `n_cand`) está pronta e a flag `cone_fix_repeat` religa a correção repetida,
+  mas o diagnóstico não chegou a rodar — o dia virou pro achado da IMU.
+- **A IMU do sim é PERFEITA** (sem ruído, de propósito — o da MPU6050 real nunca
+  foi medido). O sim agora é otimista sobre rumo.
+- **A rota2 passa a 49 cm do `obst_6`**, ou seja **24 cm de folga de
+  carroceria** num robô de 0,5 m. E os cones/blocos do mundo são
+  `<static>true</static>`, imóveis: bater é bater em poste, não derrubar cone.
+  Com o trekking sem collision monitor (por decisão), essa rota bate sempre que
+  o erro passar de 24 cm.
+
+### Banco de teste
+
+`tools/diag_assoc.sh -n 3 --tag X [--repeat] [--vmax 0.35]` sobe a stack, roda
+a rota2, mede contra a verdade-terreno e derruba tudo. ~4 min pra 3 corridas,
+sem mão humana. CSVs em `log/cone_assoc/`.
 
 ---
 
