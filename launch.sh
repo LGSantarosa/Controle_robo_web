@@ -559,7 +559,11 @@ case "$MODE" in
         # pose e NÃO SAI DO LUGAR no Play.
         TREK_SIM_ARG=""
         [ "$SIM" = true ] && TREK_SIM_ARG="sim_pose_from_odom:=true"
-        ros2 launch robot_nav trekking.launch.py $SIM_TIME_ARG $TREK_SIM_ARG > "$NAV2_LOG" 2>&1 &
+        # TREK_EXTRA_ARGS: passagem direta pro trekking.launch.py, sem precisar
+        # de uma flag nova no launch.sh a cada experimento. Ex.:
+        #   TREK_EXTRA_ARGS="cone_fix_repeat:=true" ./launch.sh --sim --trekking
+        ros2 launch robot_nav trekking.launch.py $SIM_TIME_ARG $TREK_SIM_ARG \
+            ${TREK_EXTRA_ARGS:-} > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
         wait_for_topic /trekking/pose 15 || echo "  AVISO: trekking_runner ainda não publicou /trekking/pose — seguindo."

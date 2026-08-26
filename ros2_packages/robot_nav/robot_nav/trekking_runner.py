@@ -55,7 +55,8 @@ MODE_PLAY   = 'play'
 
 
 from .utils import quat_to_yaw as _quat_to_yaw, spin_node, wrap_pi as _wrap_pi
-from .cone_pose_fix import ConeFixConfirmer, cone_fix_delta, cone_bearing
+from .cone_pose_fix import (ConeFixConfirmer, cone_fix_delta, cone_bearing,
+                            cone_id_do_match)
 
 
 def _yaw_to_quat(yaw):
@@ -352,6 +353,11 @@ class TrekkingRunner(Node):
         self.declare_parameter('cone_confirm_frames', 4)     # ciclos estáveis p/ confirmar
         self.declare_parameter('cone_stable_eps', 0.10)      # m — "mesma posição" entre ciclos
         self.declare_parameter('cone_unique_radius', 0.50)   # m — se >1 candidato aqui → ambíguo
+        # INSTRUMENTAÇÃO 2026-08-26: religa a correção repetida (default OFF —
+        # ela foi REVERTIDA por instabilidade). Serve pra PROVAR a causa: com
+        # ela ligada, a coluna `cone_id` do CSV deve trocar de cone no tick em
+        # que o erro explode. Não é feature; é o instrumento do diagnóstico.
+        self.declare_parameter('cone_fix_repeat', False)
 
         # --- Seguir a trilha no PLAY ---
         # Com trilha gravada, o alvo deixa de ser o waypoint e passa a ser um
@@ -429,6 +435,7 @@ class TrekkingRunner(Node):
         self.cone_confirm_frames  = int(self.get_parameter('cone_confirm_frames').value)
         self.cone_stable_eps      = float(self.get_parameter('cone_stable_eps').value)
         self.cone_unique_radius   = float(self.get_parameter('cone_unique_radius').value)
+        self.cone_fix_repeat      = bool(self.get_parameter('cone_fix_repeat').value)
 
         # --- Estado do robô ---
         # _state_lock protege x/y/yaw/have_pose/cones — escritos pelos callbacks
@@ -461,6 +468,9 @@ class TrekkingRunner(Node):
         self._anchor = None            # (x,y) detecção usada como referência, ou None
         self._anchor_status = 'idle'   # idle | confirming | ambiguous | fixed
         self._anchor_clutter = []      # [(x,y), ...] candidatos descartados perto do esperado
+        self._anchor_cands = 0         # quantos candidatos no raio de unicidade
+        self._fix_count = 0            # quantas correções já saíram neste waypoint
+        self._last_fix = ('', '')      # Δ da última correção publicada
         self._anchor_confirm = 0       # progresso do confirmador
         self.last_to_target = None # vetor (dx, dy) último → detecção de pass-by
         self._turning = False
@@ -508,6 +518,17 @@ class TrekkingRunner(Node):
         self._csv.writerow([
             't', 'idx', 'n_wps', 'state', 'dist', 'h_err_deg', 'vx', 'wz',
             'x', 'y', 'yaw_deg', 'tx', 'ty', 'snap', 'snap_dx', 'snap_dy',
+            # INSTRUMENTAÇÃO da associação (2026-08-26): cone_id é a IDENTIDADE
+            # do que casou (índice do cone gravado mais próximo) — é a coluna
+            # que prova ou mata a hipótese da re-associação. match_x/y é onde a
+            # detecção estava; n_cand quantos concorriam; fix_n quantas
+            # correções já saíram.
+            'cone_id', 'match_x', 'match_y', 'n_cand', 'fix_n', 'anchor_st',
+            # Δ da ÚLTIMA correção publicada. Separa os dois suspeitos: Δ que
+            # salta pra ~distância-entre-cones = re-associação; Δ que fica
+            # pequeno enquanto a pose passeia = a pose virou escrava do ruído
+            # da âncora (~36 cm medidos).
+            'fix_dx', 'fix_dy',
             'event'])
         # flush em timer, não por linha (8ª auditoria A5: flush a 30 Hz
         # castiga o SD da Pi). Perde <=2 s no pior caso.
@@ -793,6 +814,9 @@ class TrekkingRunner(Node):
 
     def _reset_cone_fix(self):
         self._cone_fix_done = False
+        self._fix_count = 0
+        self._anchor_cands = 0
+        self._last_fix = ('', '')
         self._confirmer.reset()
         self._anchor = None
         self._anchor_status = 'idle'
@@ -845,7 +869,8 @@ class TrekkingRunner(Node):
 
         # 1b) Correção PERSISTENTE de pose por cone-âncora (aditiva: não mexe no
         # alvo acima). Gates conservadores no _confirmer; na dúvida não corrige.
-        if self.enable_cone_pose_fix and wp['has_cone'] and not self._cone_fix_done:
+        if (self.enable_cone_pose_fix and wp['has_cone']
+                and (self.cone_fix_repeat or not self._cone_fix_done)):
             self._maybe_publish_pose_fix(wp, x, y, yaw, cones)
 
         # 2) Alvo. Três modos, do mais novo pro mais antigo:
@@ -895,6 +920,14 @@ class TrekkingRunner(Node):
             if no_canto:
                 self.trail_p = i_canto
                 self.last_to_target = None
+                # Tentado 2026-08-26 e REVERTIDO: `True` aqui faz ele
+                # alinhar no canto (criterio vira o turn_exit) em vez de sair
+                # dirigindo torto ate estourar o turn_enter. O mecanismo
+                # funciona — da' pra ver no traco girando a 12 graus em vez de
+                # pagar 20 depois — mas MEDIDO em 3+3 corridas na rota2 deu
+                # EMPATE: 4.3 -> 4.7 giros, 11.4 -> 11.1 s, tudo dentro do
+                # ruido corrida-a-corrida. Os giros do meio da perna nascem de
+                # outra coisa, ainda nao isolada. Nao repetir sem causa nova.
                 self._turning = False
                 # O waypoint sempre é um canto (entra como forçado), então
                 # alcançá-lo é o que dispara a chegada — LED, cone, avanço.
@@ -997,7 +1030,13 @@ class TrekkingRunner(Node):
             round(vx, 3), round(wz, 3),
             round(x, 3), round(y, 3), round(math.degrees(yaw), 1),
             round(tx, 3), round(ty, 3),
-            int(self.locked_cone is not None), snap_dx, snap_dy, event])
+            int(self.locked_cone is not None), snap_dx, snap_dy,
+            cone_id_do_match(self._anchor, self._cones_gravados()),
+            round(self._anchor[0], 3) if self._anchor else '',
+            round(self._anchor[1], 3) if self._anchor else '',
+            self._anchor_cands, self._fix_count, self._anchor_status,
+            self._last_fix[0], self._last_fix[1],
+            event])
 
     def _find_matching_cone(self, wp: dict, x: float, y: float, yaw: float, cones):
         expected_x = wp['cone_x']
@@ -1024,6 +1063,15 @@ class TrekkingRunner(Node):
                 best_score = score
                 best = (cx, cy)
         return best
+
+    def _cones_gravados(self):
+        """[(x, y), ...] dos cones gravados, na ordem dos waypoints que os têm.
+
+        O índice nesta lista é a IDENTIDADE usada na coluna `cone_id` do CSV:
+        0 = primeiro cone da rota, 1 = segundo, etc.
+        """
+        return [(w['cone_x'], w['cone_y'])
+                for w in self.waypoints if w['has_cone']]
 
     def _candidates(self, wp: dict, cones):
         # Detecções dentro do raio de unicidade ao redor da posição esperada do
@@ -1052,6 +1100,7 @@ class TrekkingRunner(Node):
             self._anchor = match
             self._anchor_status = 'ambiguous' if n_cand > 1 else 'confirming'
             self._anchor_clutter = [c for c in cands if c != match]
+        self._anchor_cands = n_cand
         self._anchor_confirm = self._confirmer.count
         if not confirmed:
             return
@@ -1063,7 +1112,15 @@ class TrekkingRunner(Node):
         v.vector.x = float(dx)
         v.vector.y = float(dy)
         self.pub_pose_fix.publish(v)
+        self._fix_count += 1
+        self._last_fix = (round(dx, 3), round(dy, 3))
         self._cone_fix_done = True   # só uma vez por cone travado
+        if self.cone_fix_repeat:
+            # Instrumentação: cada correção seguinte exige `confirm_frames`
+            # quadros estáveis NOVOS. Sem este reset o confirmador continuaria
+            # devolvendo True e o nó despejaria uma correção por tick (30 Hz),
+            # o que testaria a taxa, não a associação.
+            self._confirmer.reset()
         self._anchor_status = 'fixed'
         self.last_msg = f'pose_fix wp{self.current_idx}: Δ=({dx:+.2f}, {dy:+.2f})'
 

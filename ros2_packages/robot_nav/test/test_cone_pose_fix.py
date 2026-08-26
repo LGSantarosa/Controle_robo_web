@@ -7,6 +7,7 @@ from robot_nav.cone_pose_fix import (
     apply_pose_fix,
     cone_bearing,
     cone_fix_delta,
+    cone_id_do_match,
 )
 
 
@@ -72,3 +73,24 @@ def test_confirmer_count_exposes_progress():
     assert c.count == 1
     c.update((1.0, 2.0), n_candidates=1)
     assert c.count == 2
+
+
+# ---------------------------------------------------------------- identidade
+# INSTRUMENTAÇÃO 2026-08-26: `cone_id_do_match` é a coluna do CSV que separa
+# "a pose derivou" de "a associação pulou de cone". Os dois viram Δ grande.
+
+def test_cone_id_escolhe_o_cone_gravado_mais_proximo():
+    gravados = [(1.0, 0.0), (5.0, 0.0), (9.0, 0.0)]
+    assert cone_id_do_match((5.2, 0.1), gravados) == 1
+
+
+def test_cone_id_denuncia_o_pulo_pro_cone_anterior():
+    """O BO real: a pose corrigida passeia e a detecção casa com o cone ANTERIOR."""
+    gravados = [(1.0, 0.0), (5.0, 0.0)]
+    assert cone_id_do_match((4.9, 0.0), gravados) == 1   # antes: cone 2
+    assert cone_id_do_match((1.3, 0.0), gravados) == 0   # depois: voltou pro 1
+
+
+def test_cone_id_sem_match_ou_sem_cones_devolve_menos_um():
+    assert cone_id_do_match(None, [(1.0, 0.0)]) == -1
+    assert cone_id_do_match((1.0, 0.0), []) == -1

@@ -40,6 +40,31 @@ def cone_bearing(wp_x, wp_y, wp_yaw, cone_x, cone_y):
     return math.atan2(math.sin(b), math.cos(b))  # wrap_pi
 
 
+def cone_id_do_match(match, cones_gravados):
+    """QUAL cone gravado a detecção casada representa (índice), ou -1.
+
+    INSTRUMENTAÇÃO 2026-08-26. Só olhar o Δ da correção não distingue "a pose
+    derivou 40 cm" de "a associação pulou pro cone vizinho" — os dois aparecem
+    como um Δ grande. Esta função dá NOME ao que casou: a identidade é o cone
+    gravado mais próximo da detecção. Se a série trocar de índice no tick em
+    que o erro dispara, a re-associação está provada; se não trocar, a hipótese
+    morre e o problema é outro.
+
+    `cones_gravados` = [(x, y), ...] na ordem dos waypoints que têm cone.
+    Sem match ou sem cones gravados devolve -1 (nunca levanta).
+    """
+    if match is None or not cones_gravados:
+        return -1
+    melhor = -1
+    melhor_d = float('inf')
+    for i, (cx, cy) in enumerate(cones_gravados):
+        d = math.hypot(match[0] - cx, match[1] - cy)
+        if d < melhor_d:
+            melhor_d = d
+            melhor = i
+    return melhor
+
+
 class ConeFixConfirmer:
     """Gate temporal + unicidade antes de corrigir a pose.
 
