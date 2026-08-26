@@ -285,7 +285,7 @@ def poda_cantos_rasos(trail, cantos, min_turn, max_desvio, forcados=()):
     return fora
 
 
-def congela_mira(dist, raio, is_last):
+def congela_mira(dist, raio, is_last, raio_final, perna=None, fracao=0.4):
     """Perto do alvo, PARA de perseguir a mira. `True` = segue reto.
 
     POR QUE EXISTE (2026-08-26): o erro de rumo pra um ponto explode quando a
@@ -299,10 +299,26 @@ def congela_mira(dist, raio, is_last):
     corridas com giro de chegada pequeno (-9) saiam em 4 giros; as com giro
     grande (-22), em 5.
 
-    O ultimo waypoint e' exceção: la' a mira importa, porque e' onde a rota
-    termina e a precisao do ponto final e' o que se mede.
+    No ULTIMO ponto o congelamento vale igual, mas com raio proprio
+    (`raio_final`, menor). Perseguir a mira a 10 cm do alvo nao compra nada: o
+    desvio lateral medido no fim e' de 5,4 cm, ou seja ele JA' esta alinhado, e
+    o que sobra e' erro angular inflado pela distancia curta. Medido: sem isto,
+    baixar a tolerancia final pra 8 cm fazia aparecer um giro extra no fim em
+    3 de 5 corridas (-13,2 e -15,9 graus), pura pirueta em cima do ponto.
+    Quem da' a precisao final e' o ANEL de chegada, nao a mira.
     """
-    return (not is_last) and dist < raio
+    r = raio_final if is_last else raio
+    if r <= 0.0:
+        return False
+    # GUARDA CONTRA PERNA CURTA: o raio e' uma constante em METROS, escolhida
+    # olhando UMA rota (a rota2, cujas pernas tem 1 a 2 m). Numa rota com
+    # cantos a 0,6 m um do outro, um raio de 0,40 congelaria a mira a perna
+    # INTEIRA e o robo nunca corrigiria rumo — bug esperando rota curta.
+    # Limitando a uma fracao da perna, o congelamento e' sempre o TRECHO FINAL
+    # da aproximacao, seja a perna de 6 m ou de 30 cm.
+    if perna is not None and perna > 0.0:
+        r = min(r, fracao * perna)
+    return dist < r
 
 
 def trail_progress(trail, p, x, y, window=25):
@@ -418,6 +434,14 @@ class TrekkingRunner(Node):
 
         # --- Avanço de waypoint ---
         self.declare_parameter('arrival_tolerance', 0.25)    # m
+        # Tolerancia do ULTIMO ponto, separada. O anel de 25 cm faz sentido nos
+        # pontos do MEIO — eles sao passagem, e parar em cima seria desperdicio.
+        # No ultimo ele vira a precisao da rota inteira: `arrived = dist <
+        # arr_tol` faz o robo parar ao CRUZAR o anel, nao convergir no ponto.
+        # MEDIDO 2026-08-26, 8 corridas: erro final de +37,3 cm CURTO no eixo de
+        # aproximacao com desvio padrao de 0,9 cm (e so' 5,4 cm de lado). Isso
+        # nao e' imprecisao, e' a regra — uma constante.
+        self.declare_parameter('final_arrival_tolerance', 0.08)  # m
         # Se o produto escalar do vetor pro alvo trocar de sinal: passou batido.
         self.declare_parameter('passby_detection', True)
 
@@ -474,6 +498,11 @@ class TrekkingRunner(Node):
         # Raio em que ele para de perseguir a mira e segue reto (congela_mira).
         # 0 desliga.
         self.declare_parameter('aim_freeze_radius', 0.40)
+        # Raio de congelamento no ULTIMO ponto (menor: ali ele ja' esta
+        # alinhado e o anel de chegada e' apertado). 0 desliga.
+        self.declare_parameter('aim_freeze_radius_final', 0.25)
+        # Teto do congelamento como fracao da perna (ver congela_mira).
+        self.declare_parameter('aim_freeze_leg_frac', 0.4)
         # Orcamento PROPRIO da poda — ela quebra a promessa do corner_tol, entao
         # tem o seu. 0,40 m e' o teto de imprecisao que o dono definiu p/ a rota.
         self.declare_parameter('corner_prune_tol', 0.40)
@@ -519,6 +548,8 @@ class TrekkingRunner(Node):
             d_brake=self.d_brake,
         )
         self.arr_tol = float(self.get_parameter('arrival_tolerance').value)
+        self.arr_tol_final = float(
+            self.get_parameter('final_arrival_tolerance').value)
         self.follow_trail = bool(self.get_parameter('follow_trail').value)
         self.lookahead = float(self.get_parameter('lookahead').value)
         self.trail_window = int(self.get_parameter('trail_window').value)
@@ -533,6 +564,10 @@ class TrekkingRunner(Node):
         self.r_lock_track = float(self.get_parameter('cone_lock_track_radius').value)
         self.aim_freeze_radius = float(
             self.get_parameter('aim_freeze_radius').value)
+        self.aim_freeze_radius_final = float(
+            self.get_parameter('aim_freeze_radius_final').value)
+        self.aim_freeze_leg_frac = float(
+            self.get_parameter('aim_freeze_leg_frac').value)
         self.r_capture = float(self.get_parameter('cone_capture_radius').value)
         self.led_ms  = int(self.get_parameter('led_arrival_ms').value)
         self.state_dt= 1.0 / float(self.get_parameter('publish_state_hz').value)
@@ -577,6 +612,8 @@ class TrekkingRunner(Node):
         self._anchor = None            # (x,y) detecção usada como referência, ou None
         self._anchor_status = 'idle'   # idle | confirming | ambiguous | fixed
         self._anchor_clutter = []      # [(x,y), ...] candidatos descartados perto do esperado
+        self._alvo_ant = None          # alvo do tick anterior (detecta troca)
+        self._perna = None             # distancia ao alvo no inicio da perna
         self._anchor_cands = 0         # quantos candidatos no raio de unicidade
         self._fix_count = 0            # quantas correções já saíram neste waypoint
         self._last_fix = ('', '')      # Δ da última correção publicada
@@ -1029,10 +1066,14 @@ class TrekkingRunner(Node):
 
         if modo_canto:
             # Chegou NO CANTO? (por distância ou por ter passado batido)
-            no_canto = dist < self.arr_tol
+            tol = self.arr_tol_final if fim_da_trilha else self.arr_tol
+            no_canto = dist < tol
             if self.passby and self.last_to_target is not None:
                 dot = dx * self.last_to_target[0] + dy * self.last_to_target[1]
-                no_canto = no_canto or (dot < 0.0 and dist < 2.0 * self.arr_tol)
+                # passby continua sendo a rede de seguranca: se ele PASSOU do
+                # ponto, aceita — senao com tolerancia apertada ele daria a
+                # volta atras de um alvo que ficou pra tras.
+                no_canto = no_canto or (dot < 0.0 and dist < 2.0 * tol)
             self.last_to_target = (dx, dy)
             if no_canto:
                 self.trail_p = i_canto
@@ -1075,10 +1116,13 @@ class TrekkingRunner(Node):
             # a <25 cm do alvo e a chegada por distância jamais dispararia.
             arrived = self.trail_p >= wp['trail_i']
         else:
-            arrived = d_wp < self.arr_tol
+            # `is_last` so' e' calculado la' embaixo; aqui vale o mesmo teste.
+            ultimo = self.current_idx == len(self.waypoints) - 1
+            tol_wp = self.arr_tol_final if ultimo else self.arr_tol
+            arrived = d_wp < tol_wp
             if self.passby and self.last_to_target is not None:
                 dot = dx * self.last_to_target[0] + dy * self.last_to_target[1]
-                passed_by = dot < 0.0 and dist < 2.0 * self.arr_tol
+                passed_by = dot < 0.0 and dist < 2.0 * tol_wp
             self.last_to_target = (dx, dy)
 
         if arrived or passed_by:
@@ -1104,11 +1148,21 @@ class TrekkingRunner(Node):
             # na freada é a distância que falta até o WAYPOINT final.
             is_last = is_last and fim_da_trilha
             dist = d_wp
+        # Comprimento da PERNA: a distancia ao alvo no tick em que o alvo
+        # mudou. E' o que impede o congelamento de engolir uma perna curta.
+        if (self._alvo_ant is None
+                or math.hypot(target_x - self._alvo_ant[0],
+                              target_y - self._alvo_ant[1]) > 0.15):
+            self._perna = dist
+        self._alvo_ant = (target_x, target_y)
+
         # Perto do alvo a mira vira ruido (ver congela_mira): segue reto e
         # deixa a chegada disparar, em vez de parar pra corrigir a mira de um
         # ponto onde ele vai chegar de qualquer jeito.
         h_err_giro = 0.0 if congela_mira(
-            dist, self.aim_freeze_radius, is_last) else h_err
+            dist, self.aim_freeze_radius, is_last,
+            self.aim_freeze_radius_final, self._perna,
+            self.aim_freeze_leg_frac) else h_err
         v, omega, self._turning = drive_cmd(
             h_err_giro, dist, is_last, self._turning, self.drive_cfg)
 

@@ -58,7 +58,9 @@ set -u
 echo "=== diag_assoc  tag=$TAG  n=$N  ${REPEAT:-(correcao 1x por cone)} ==="
 for i in $(seq 1 "$N"); do
     echo "--- trial $i/$N ---"
-    # YAWARG: gancho do A/B roda-vs-IMU, ex.: YAWARG="use_imu_yaw:=false"
+    # YAWARG: gancho de A/B por launch arg. Ex.:
+    #   YAWARG="use_imu_yaw:=false"
+    #   YAWARG="aim_freeze_radius:=0.0 final_arrival_tolerance:=0.25"
     setsid env TREK_EXTRA_ARGS="$REPEAT $VMAX ${YAWARG:-}" \
         ./launch.sh --sim --trekking --world=worlds/trekking.sdf \
         > "$OUT/${TAG}_${STAMP}_t${i}_launch.log" 2>&1 &

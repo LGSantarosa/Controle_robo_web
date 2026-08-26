@@ -44,6 +44,16 @@ def generate_launch_description():
         'enable_cone_pose_fix', default_value='true',
         description='Liga a correção persistente de pose por cone-âncora (A/B em campo)'
     )
+    aim_freeze_arg = DeclareLaunchArgument(
+        'aim_freeze_radius', default_value='0.40',
+        description='m — para de perseguir a mira a menos disto do alvo. 0 desliga')
+    aim_freeze_final_arg = DeclareLaunchArgument(
+        'aim_freeze_radius_final', default_value='0.25',
+        description='idem, no ultimo ponto. 0 desliga')
+    final_arr_arg = DeclareLaunchArgument(
+        'final_arrival_tolerance', default_value='0.08',
+        description='m — anel de chegada do ULTIMO ponto (o do meio e o '
+                    'arrival_tolerance, que e passagem)')
     use_imu_yaw_arg = DeclareLaunchArgument(
         'use_imu_yaw', default_value='true',
         description='SIM: yaw da IMU (como o robô real). false = yaw das RODAS, '
@@ -86,6 +96,11 @@ def generate_launch_description():
             'v_max': LaunchConfiguration('v_max'),
             'enable_cone_pose_fix': LaunchConfiguration('enable_cone_pose_fix'),
             'cone_fix_repeat': LaunchConfiguration('cone_fix_repeat'),
+            'aim_freeze_radius': LaunchConfiguration('aim_freeze_radius'),
+            'aim_freeze_radius_final':
+                LaunchConfiguration('aim_freeze_radius_final'),
+            'final_arrival_tolerance':
+                LaunchConfiguration('final_arrival_tolerance'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
         # Saída vai pra auto_vel = a entrada de AUTONOMIA do twist_mux (prio 10),
@@ -122,6 +137,9 @@ def generate_launch_description():
         enable_cone_pose_fix_arg,
         cone_fix_repeat_arg,
         use_imu_yaw_arg,
+        aim_freeze_arg,
+        aim_freeze_final_arg,
+        final_arr_arg,
         sim_pose_arg,
         use_sim_time_arg,
         sim_trekking_pose,

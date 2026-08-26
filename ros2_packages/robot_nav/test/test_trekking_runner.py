@@ -446,17 +446,34 @@ def test_poda_NUNCA_tira_o_canto_de_um_waypoint():
 # parava pra corrigir a mira de um ponto onde ia chegar de qualquer jeito.
 
 def test_congela_perto_do_alvo():
-    assert congela_mira(dist=0.30, raio=0.40, is_last=False) is True
+    assert congela_mira(0.30, raio=0.40, is_last=False, raio_final=0.25) is True
 
 
 def test_nao_congela_longe():
-    assert congela_mira(dist=1.50, raio=0.40, is_last=False) is False
+    assert congela_mira(1.50, raio=0.40, is_last=False, raio_final=0.25) is False
 
 
-def test_nunca_congela_no_ultimo_waypoint():
-    """No fim da rota a mira importa — é ali que a precisão é medida."""
-    assert congela_mira(dist=0.05, raio=0.40, is_last=True) is False
+def test_ultimo_ponto_usa_o_raio_proprio():
+    """No fim ele congela mais tarde: o anel de chegada é apertado ali."""
+    assert congela_mira(0.30, raio=0.40, is_last=True, raio_final=0.25) is False
+    assert congela_mira(0.20, raio=0.40, is_last=True, raio_final=0.25) is True
 
 
 def test_raio_zero_desliga():
-    assert congela_mira(dist=0.01, raio=0.0, is_last=False) is False
+    assert congela_mira(0.01, raio=0.0, is_last=False, raio_final=0.25) is False
+    assert congela_mira(0.01, raio=0.40, is_last=True, raio_final=0.0) is False
+
+
+def test_congelamento_nunca_engole_perna_curta():
+    """O raio é em METROS e saiu de UMA rota. Numa perna de 0,6 m, um raio de
+    0,40 congelaria quase tudo e o robô nunca corrigiria rumo."""
+    # perna de 0,60 m -> teto = 0,4*0,60 = 0,24 m
+    assert congela_mira(0.30, raio=0.40, is_last=False,
+                        raio_final=0.25, perna=0.60) is False
+    assert congela_mira(0.20, raio=0.40, is_last=False,
+                        raio_final=0.25, perna=0.60) is True
+
+
+def test_perna_longa_usa_o_raio_cheio():
+    assert congela_mira(0.35, raio=0.40, is_last=False,
+                        raio_final=0.25, perna=6.0) is True
