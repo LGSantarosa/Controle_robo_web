@@ -19,6 +19,11 @@ build/
 install/
 log/
 
+# Workspace de build alternativo: src/robot_nav é SYMLINK pra este repo e
+# src/wheel_msgs é cópia (com .git próprio) do que já está em ros2_packages/.
+# Nada ali é fonte — é scaffolding do colcon.
+.ros2_ws/
+
 # PlatformIO build artifacts (firmware/mega_bridge)
 .pio/
 firmware/**/.pio/
