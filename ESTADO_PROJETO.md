@@ -56,6 +56,15 @@ A coluna `dt_match_ms` agora publica o resíduo em vez de escondê-lo.
   por projeto e tem prioridade sobre o nav2 no mux, então o robô nunca foi
   *convidado* a arquear. Não medir de novo sem motivo novo.
 
+### Tentado e descartado (fora o arco)
+
+- **Poda de cantos rasos** (`poda_cantos_rasos`, no código, **desligada por
+  default**). Nasceu da hipótese errada de que os giros extras vinham de cantos
+  demais. Inerte na rota2. Deixou uma lição cara: **waypoint nunca pode ser
+  podado** — sem a guarda o robô marcava o ponto como visitado **a 1,50 m dele**
+  (a chegada é `i_canto >= wp['trail_i']`, então o canto seguinte já satisfaz) e
+  disparava LED e âncora no lugar errado. Tem teste.
+
 ### Tentado e revertido
 
 - **Alinhar no canto** (`_turning = True` na troca de canto, pra ele não sair
@@ -66,14 +75,16 @@ A coluna `dt_match_ms` agora publica o resíduo em vez de escondê-lo.
 
 ### ⏳ Aberto
 
-- **🔴 Giros extras.** Ele faz 4-5 giros onde 3 bastariam, 20% do tempo parado
-  girando. **Descartado com medida:** não é o Douglas-Peucker (`corner_tol` 0,20
-  ou 0,35 dão os mesmos 5 cantos; 0,40 corta por cima do `obst_6` e sobram 3 cm
-  de folga de carroceria) e não é o giro adiado pelo `turn_enter`. **Suspeito
-  vivo:** o erro de rumo CRESCE enquanto ele anda reto na mesma perna (−2,7° →
-  +23,9° em 2,1 s). Um candidato concreto é a âncora do cone deslocar o alvo ao
-  engatar — visto o alvo pular de (1,938 , 5,752) pra (2,068 , 5,664) no tick em
-  que `anchor` virou `fixed`.
+- **✅ Giros extras RESOLVIDO** (`222556e`). Eram 4 **ou** 5 no sorteio; agora é
+  **4 em 8 de 8**, 11,4 → 10,7 s. Duas causas somadas: (1) ao trocar de canto ele
+  herdava o erro de rumo e o portão `turn_enter` de 20° mandava seguir em frente
+  com 17,6° — o erro crescia sozinho até 20 e ele pagava um 2º giro no mesmo
+  canto; (2) o erro de rumo explode perto do alvo, e ele parava pra corrigir a
+  mira de um ponto onde ia chegar de qualquer jeito (giro de −9 a −22° em toda
+  corrida), entrando torto no canto seguinte. **Lição de método:** o `alinha no
+  canto` foi revertido uma vez por medir MÉDIA de giros (deu empate) — a métrica
+  certa era a **taxa de corrida limpa**. Média de 4,7 pode ser "sempre 4,7" ou
+  "metade 4, metade 5".
 - **🔴 Erro final de ~37 cm.** Com o yaw consertado a deriva praticamente sumiu
   e o erro final NÃO mudou — logo **nunca foi deriva**. Agora repete dentro de
   2 cm, virou alvo parado.
