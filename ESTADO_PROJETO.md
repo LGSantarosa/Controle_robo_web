@@ -85,9 +85,15 @@ A coluna `dt_match_ms` agora publica o resíduo em vez de escondê-lo.
   canto` foi revertido uma vez por medir MÉDIA de giros (deu empate) — a métrica
   certa era a **taxa de corrida limpa**. Média de 4,7 pode ser "sempre 4,7" ou
   "metade 4, metade 5".
-- **🔴 Erro final de ~37 cm.** Com o yaw consertado a deriva praticamente sumiu
-  e o erro final NÃO mudou — logo **nunca foi deriva**. Agora repete dentro de
-  2 cm, virou alvo parado.
+- **✅ Erro final 37 → 21 cm** (`3fdc409`). Nunca foi deriva: decomposto em 8
+  corridas deu **+37,3 cm CURTO no eixo de aproximação (dp 0,9 cm)** e só 5,4 cm
+  de lado. Isso é uma constante, não imprecisão — `arrived = dist < arr_tol`
+  faz o robô parar ao **cruzar o anel** de 25 cm. O anel está certo pros pontos
+  do meio (são passagem); o último ganhou o seu (`final_arrival_tolerance`,
+  8 cm). Medido: 19,8 / 21,7 / 22,1 / 21,3 / 20,6 cm.
+  **⏳ Pendente de medição:** o anel apertado trouxe um giro extra no fim em 3
+  de 5 corridas (pirueta em cima do ponto). O conserto — congelar a mira também
+  no último ponto — está implementado e com teste, mas **não rodou no sim**.
 - **Associação de cone robusta.** A instrumentação (`cone_id`, `fix_dx/dy`,
   `n_cand`) está pronta e a flag `cone_fix_repeat` religa a correção repetida,
   mas o diagnóstico não chegou a rodar — o dia virou pro achado da IMU.
@@ -98,6 +104,25 @@ A coluna `dt_match_ms` agora publica o resíduo em vez de escondê-lo.
   `<static>true</static>`, imóveis: bater é bater em poste, não derrubar cone.
   Com o trekking sem collision monitor (por decisão), essa rota bate sempre que
   o erro passar de 24 cm.
+
+### ⚠️ TUDO FOI VALIDADO NUMA ROTA SÓ
+
+Pergunta do dono: *"vc está ajeitando coisas só pra essa rota, ou vai funcionar
+pra todas?"*. Resposta honesta, caso a caso:
+
+| mudança | geral? |
+|---|---|
+| IMU no sim | **sim** — é física do estimador, não tem rota envolvida |
+| alinha no canto | **sim** — é a histerese de 20° na troca de canto |
+| tolerância final separada | intenção geral; o valor 8 cm saiu de uma rota só |
+| congela a mira | **tinha risco real** — o raio de 0,40 m é constante em metros, e numa rota com pernas curtas engoliria a perna inteira. Corrigido com teto por fração da perna (`aim_freeze_leg_frac`), **com teste, sem medição no sim** |
+
+As 30+ corridas do dia foram todas na **rota2**, no `worlds/trekking.sdf`.
+A `rota1` (4,3 m, 1 cone) e as rotas sem trilha (`2pontos`, `4pontos`, que
+exercitam o modo waypoint puro) **nunca foram testadas com nada disso**.
+
+**Decisão do dono (26/08): ignorar a rota1 e gravar uma rota NOVA** pra servir
+de segundo banco. Fica como próxima tarefa.
 
 ### Banco de teste
 
