@@ -95,6 +95,10 @@ def generate_launch_description():
             '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
             '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
             '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
+            # IMU do sim (2026-08-26). O robô REAL estima yaw pela IMU; sem esta
+            # ponte o sim caía na /odom de RODA, que num skid-steer patina no
+            # point-turn (medido: 7,8° de giro falso no 1º tick de cada giro).
+            '/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
             '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
             '/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model',
         ],

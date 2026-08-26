@@ -44,6 +44,15 @@ def generate_launch_description():
         'enable_cone_pose_fix', default_value='true',
         description='Liga a correção persistente de pose por cone-âncora (A/B em campo)'
     )
+    use_imu_yaw_arg = DeclareLaunchArgument(
+        'use_imu_yaw', default_value='true',
+        description='SIM: yaw da IMU (como o robô real). false = yaw das RODAS, '
+                    'que patinam no pivô — é o comportamento de antes de '
+                    '2026-08-26, mantido só para o A/B')
+    cone_fix_repeat_arg = DeclareLaunchArgument(
+        'cone_fix_repeat', default_value='false',
+        description='corrige a pose REPETIDO no mesmo cone (instrumentação do '
+                    'diagnóstico de associação; foi revertido por instabilidade)')
     sim_pose_arg = DeclareLaunchArgument(
         'sim_pose_from_odom', default_value='false',
         description='SÓ SIM: publica /trekking/pose a partir da /odom do Gazebo. '
@@ -76,6 +85,7 @@ def generate_launch_description():
         parameters=[{
             'v_max': LaunchConfiguration('v_max'),
             'enable_cone_pose_fix': LaunchConfiguration('enable_cone_pose_fix'),
+            'cone_fix_repeat': LaunchConfiguration('cone_fix_repeat'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
         # Saída vai pra auto_vel = a entrada de AUTONOMIA do twist_mux (prio 10),
@@ -99,7 +109,10 @@ def generate_launch_description():
         executable='sim_trekking_pose',
         name='sim_trekking_pose',
         output='screen',
-        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'use_imu_yaw': LaunchConfiguration('use_imu_yaw'),
+        }],
         condition=IfCondition(LaunchConfiguration('sim_pose_from_odom')),
     )
 
@@ -107,6 +120,8 @@ def generate_launch_description():
         v_max_arg,
         lidar_offset_x_arg,
         enable_cone_pose_fix_arg,
+        cone_fix_repeat_arg,
+        use_imu_yaw_arg,
         sim_pose_arg,
         use_sim_time_arg,
         sim_trekking_pose,

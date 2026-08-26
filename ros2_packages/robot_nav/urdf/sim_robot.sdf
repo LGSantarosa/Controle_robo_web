@@ -190,6 +190,41 @@
       <child>base_laser</child>
     </joint>
 
+    <!-- ====== IMU ======
+      POR QUE EXISTE (2026-08-26): ate hoje o sim NAO tinha IMU, e o
+      `/trekking/pose` saia da `/odom` do DiffDrive, ou seja, yaw integrado de
+      RODA. Num skid-steer a roda patina no point-turn: medido com verdade-
+      terreno, a odom girava 7,8 graus no primeiro tick de cada giro enquanto o
+      robo girava 0,5. O robo REAL nao tem esse erro = o `pose_estimator` usa a
+      IMU pro yaw (`yaw_source='imu'`) e so' cai pra roda quando a IMU morre.
+      Sem este sensor, o sim rodava PERMANENTEMENTE no modo degradado do real,
+      justamente na manobra em que o trekking inteiro se apoia.
+
+      SEM RUIDO, de proposito: o ruido/bias da MPU6050 real nao foi medido, e
+      inventar numero aqui seria fabricar fisica (a IMU do sim fica melhor que a
+      real). Quando houver medida do sensor fisico, entra em <noise> aqui.
+    -->
+    <link name="imu_link">
+      <pose relative_to="base_link">0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.01</mass>
+        <inertia>
+          <ixx>1e-6</ixx><iyy>1e-6</iyy><izz>1e-6</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <sensor name="imu" type="imu">
+        <always_on>1</always_on>
+        <update_rate>50</update_rate>
+        <topic>imu</topic>
+        <gz_frame_id>base_link</gz_frame_id>
+      </sensor>
+    </link>
+    <joint name="imu_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>imu_link</child>
+    </joint>
+
     <!-- ====== Plugins ====== -->
     <!-- Skid-steer: 2 juntas de cada lado. wheel_separation = track (centros) = 0.44 -->
     <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">

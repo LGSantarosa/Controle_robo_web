@@ -54,6 +54,11 @@
             name="gz::sim::systems::UserCommands"/>
     <plugin filename="gz-sim-scene-broadcaster-system"
             name="gz::sim::systems::SceneBroadcaster"/>
+    <!-- IMU: sem este system o <sensor type="imu"> do sim_robot fica MUDO e o
+         sim volta a estimar yaw por RODA (o modo degradado do robo real).
+         Ver o comentario do sensor em urdf/sim_robot.sdf (2026-08-26). -->
+    <plugin filename="gz-sim-imu-system"
+            name="gz::sim::systems::Imu"></plugin>
     <plugin filename="gz-sim-sensors-system"
             name="gz::sim::systems::Sensors">
       <render_engine>ogre2</render_engine>
