@@ -11,6 +11,7 @@ from robot_nav.fused_odom import (
     flow_yaw_gate,
     fuse_translation,
     heading_correction,
+    slip_estimate,
     wheel_twist,
 )
 
@@ -372,3 +373,31 @@ def test_degenerate_matches_wheel_only_odom():
     assert r.x == pytest.approx(exp_x)
     assert r.y == pytest.approx(exp_y)
     assert r.yaw == pytest.approx(angular * dt)
+
+
+# ---------------------------------------------------------------------------
+# slip_estimate — NaN quando não há referência (o PMW3901 saiu em 2026-07-01)
+# ---------------------------------------------------------------------------
+
+def test_slip_estimate_sem_referencia_devolve_nan():
+    """Sem flow vivo (α=0) o slip é DESCONHECIDO, não zero.
+
+    Regressão do bug real: `slip = ... if alpha > 0.1 else 0.0` fazia
+    /trekking/slip publicar "sem derrapagem" pra sempre depois que o sensor
+    saiu do robô — um detector reportando tudo em ordem porque perdeu a fonte.
+    """
+    assert math.isnan(slip_estimate(2.0, 0.0, 0.0))
+    assert math.isnan(slip_estimate(2.0, 0.0, 0.1))     # no limite, ainda sem fonte
+
+
+def test_slip_estimate_com_referencia_mede_a_divergencia():
+    # roda diz 1.0, flow diz 0.4 → 0.6 m/s de derrapagem
+    assert slip_estimate(1.0, 0.4, 0.9) == pytest.approx(0.6)
+    # sinal preserva o sentido (roda mais LENTA que o chão = negativo)
+    assert slip_estimate(0.4, 1.0, 0.9) == pytest.approx(-0.6)
+
+
+def test_slip_estimate_nan_nunca_dispara_o_warn():
+    """Comparação com NaN é sempre False — o gate de warn não pode disparar."""
+    slip = slip_estimate(5.0, 0.0, 0.0)
+    assert not (abs(slip) > 0.15)

@@ -110,6 +110,24 @@ def flow_tick_velocity(accum_dx, accum_dy, dt):
     return accum_dx / dt, accum_dy / dt
 
 
+def slip_estimate(vx_wheel, vx_ref, ref_alpha, alpha_min=0.1):
+    """Divergência roda ↔ referência de translação (m/s), ou NaN sem referência.
+
+    NaN e NÃO zero. Zero é uma AFIRMAÇÃO — "medi, e as rodas conferem" — e era
+    mentira desde 2026-07-01, quando o PMW3901 foi arrancado: sem flow o α fica
+    0, o ramo `else` devolvia 0.0 e /trekking/slip publicava "sem derrapagem"
+    pra sempre. Um detector que reporta tudo em ordem porque perdeu o sensor é
+    pior que detector nenhum, porque parece que tem.
+
+    NaN diz "não sei", que é a verdade, e se propaga: comparação com NaN é
+    sempre False (o warn não dispara), e qualquer consumidor que faça conta com
+    ele vira NaN em vez de absorver um zero como dado bom.
+    """
+    if ref_alpha <= alpha_min:
+        return float('nan')
+    return vx_wheel - vx_ref
+
+
 def blend_yaw_rate(imu_fresh, imu_rate, imu2_fresh, imu2_rate,
                    imu2_weight, disagree_min=0.15):
     """Combina as taxas de yaw das DUAS IMUs. Devolve (rate, source, disagree).

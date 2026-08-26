@@ -21,7 +21,9 @@ Saídas:
   /odom            nav_msgs/Odometry          (frame: odom→base_link) + TF
   /trekking/pose   geometry_msgs/PoseStamped  (frame: odom)
   /trekking/odom   nav_msgs/Odometry          (com twist no body frame)
-  /trekking/slip   std_msgs/Float32           (módulo da divergência roda↔flow, m/s)
+  /trekking/slip   std_msgs/Float32           (divergência roda↔flow em m/s; NaN
+                                              quando não há referência — ver
+                                              slip_estimate no fused_odom)
 
 É o nó único de odometria agora: /odom + TF `odom→base_link` alimentam SLAM/
 AMCL/Nav2. O trekking_runner e o cone_detector consomem /trekking/pose direto
@@ -33,7 +35,10 @@ Fusão:
   α       = sigmoid((quality - q_mid) / q_slope)   ∈ [0, 1]
 
 Quando |vx_roda - vx_flow| > slip_threshold, /trekking/slip recebe a diferença
-e o logger emite warn — útil pra UI marcar derrapagem.
+e o logger emite warn — útil pra UI marcar derrapagem. SEM referência viva de
+translação (hoje é o caso: o PMW3901 saiu do robô em 2026-07-01) o tópico
+publica NaN, não zero — a detecção de derrapagem está SEM FONTE, e dizer isso
+em voz alta é o ponto.
 """
 import json
 import math
@@ -46,6 +51,7 @@ from tf2_ros import TransformBroadcaster
 
 from .fused_odom import (
     FusedOdom, flow_alpha, flow_plausible, flow_tick_velocity, flow_yaw_gate,
+    slip_estimate,
 )
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
@@ -122,12 +128,15 @@ class PoseEstimator(Node):
         # 0.4 rad/s ≈ 23°/s (curva mansa, flow vale); 1.2 ≈ 69°/s (giro, corta).
         self.declare_parameter('flow_yaw_gate_lo', 0.4)
         self.declare_parameter('flow_yaw_gate_hi', 1.2)
-        # Liga/desliga a CONTRIBUIÇÃO do flow na fusão de translação. O PMW3901
-        # cospe lixo por EMI do motor ao dirigir (ver project_pmw3901_emi_motor);
-        # com use_flow=False o α é forçado a 0 → translação = só roda (+ IMU no
-        # yaw). Mantém o nó assinando /optical_flow (diagnóstico) sem deixá-lo
-        # corromper a pose. Religar quando o HW do shifter for corrigido.
-        self.declare_parameter('use_flow', True)
+        # Liga/desliga a CONTRIBUIÇÃO do flow na fusão de translação. Default
+        # False desde 2026-08-26: o PMW3901 foi ARRANCADO do robô em 2026-07-01
+        # (commit 33647e4) — não há o que fundir, e a odometria hoje é roda +
+        # 2 IMUs (+ âncora de cone por LiDAR no trekking). O nó segue assinando
+        # /optical_flow, então religar é só use_flow:=true quando o sensor
+        # voltar; o histórico de por que ele saiu (EMI do motor, lixo com
+        # quality alta) está em project_pmw3901_emi_motor e nos gates abaixo,
+        # que continuam válidos.
+        self.declare_parameter('use_flow', False)
         # Gate de plausibilidade: EMI do motor faz o PMW3901 cuspir velocidades
         # impossíveis (medido -10,6 m/s parado) com quality ALTA — o gate de
         # qualidade não pega. Acima de flow_v_max (m/s) a amostra é descartada
@@ -332,6 +341,15 @@ class PoseEstimator(Node):
         self.pub_pose = self.create_publisher(PoseStamped, 'trekking/pose', 10)
         self.pub_odom = self.create_publisher(Odometry, 'trekking/odom', 10)
         self.pub_slip = self.create_publisher(Float32, 'trekking/slip', 10)
+        # A detecção de derrapagem compara roda contra FLOW. Sem PMW3901 no
+        # robô ela não tem com o que comparar — avisa UMA vez no boot, porque
+        # descobrir isso no meio de um teste de campo custa caro.
+        if not self.use_flow:
+            self.get_logger().warn(
+                'detecção de derrapagem SEM FONTE: use_flow=false, então /trekking/slip '
+                'publica NaN e nada vai avisar se as rodas patinarem. A translação é '
+                '100% roda. Meça com trena, ou traga o LiDAR pra conferir.'
+            )
         self.pub_health = self.create_publisher(String, 'trekking/health', 10)
 
         # /odom + TF odom->base_link: o que SLAM/AMCL/Nav2 consomem. Este nó é o
@@ -611,8 +629,9 @@ class PoseEstimator(Node):
             self.vx_body = res.vx_body
             self.vy_body = res.vy_body
 
-            # Detecta slip (só log/publish)
-            slip = vx_wheel - flow_vx if alpha > 0.1 else 0.0
+            # Detecta slip (só log/publish). NaN quando não há referência de
+            # translação viva — ver slip_estimate(): zero seria mentira.
+            slip = slip_estimate(vx_wheel, flow_vx, alpha)
             if alpha > 0.3 and abs(slip) > self.slip_threshold:
                 self.get_logger().warn(
                     f'slip detectado: roda={vx_wheel:+.2f} m/s vs flow={flow_vx:+.2f} m/s '
@@ -776,6 +795,9 @@ class PoseEstimator(Node):
                 'flow_stale': bool(flow_stale),
                 'flow_age':   round(flow_age, 3) if flow_age != float('inf') else None,
                 'alpha':      round(alpha, 3),
+                # de onde sai a referência do slip neste tick — None = detecção
+                # de derrapagem SEM FONTE (o /trekking/slip está publicando NaN)
+                'slip_source': 'flow' if alpha > 0.1 else None,
                 'quality':    int(quality_out),
                 'yaw_source': yaw_source,
                 # IMU #2 (BNO055): dá pra ver da web/CLI se ela está entrando na
