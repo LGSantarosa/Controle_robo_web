@@ -1,7 +1,7 @@
 # HANDOFF — nav2_trekking (2026-08-27)
 
 > Estado de quem pega o bastão. Tudo aqui foi **medido no sim**, nada foi ao robô real.
-> Branch: **`nav2-trekking`**. Último commit: `80d9f35`.
+> Branch: **`nav2-trekking`**. Último commit: `e03555b`.
 
 ---
 
@@ -56,8 +56,19 @@ porquê e os números.
 | **0,60 m/s (fase 2 atual)** | **2** | **16/16** | **621,6 s** | **0,237** | 1 toque |
 | 0,60 + `aim_tau` 1.6 (revertido) | 1 | 8/8 | 685,2 s | 0,220 | 1 toque |
 | 0,60 + `lookahead` 1.0 (revertido) | 1 | 8/8 | 597,9 s | 0,236 | **11 colisões** |
+| 0,60 + `rot_min` 3.0 (revertido) | 1 | 8/8 | 649,1 s | 0,241 | 1 toque |
+| **0,60 + raio 0,32 + inflation 0,60 (ATUAL)** | **2** | **16/16** | **654,3 s** | **0,233** | **ZERO** |
 
-**Ganho acumulado: 791,6 s → 621,6 s = 21% mais rápido, com 16/16 goals.**
+**Ganho acumulado vs BASELINE (nav2 padrão, `robot_nav`): 791,6 s → 654,3 s =
+17% mais rápido, 7/8 → 16/16 goals, e ZERO contato com parede em 2 voltas.**
+
+⚠️ **"baseline" = o nav2 PADRÃO (791,6 s, 7/8).** Não usar a palavra pros degraus
+intermediários nossos — confundir os dois inverte o sinal da notícia (a fase de
+velocidade, 621,6 s, é 5% mais rápida no relógio mas é a que RASPA a 1 mm).
+
+⚠️ **Comparar v média, não relógio bruto.** O planner sorteia rota diferente a
+cada volta: 140,1 a 156,5 m entre as runs (11% de spread). O relógio bruto é
+contaminado pela rota; `dist/tempo` é a métrica honesta.
 
 CSVs em `log/nav2_trekking_velocidade/` (um por configuração + os `*_colisao.csv`
 brutos, que são a prova ponto a ponto da folga contra as paredes).
@@ -68,7 +79,9 @@ brutos, que são a prova ponto a ponto da folga contra as paredes).
 
 - **`collision_monitor`**: UMA zona `PolygonFront`, modo **`limit`**,
   caixa `x 0.25..0.50 × |y| <= 0.22`, `linear_limit 0.0`, `angular_limit 4.0`.
-- **`inflation`**: global **0.45**, local **0.35**.
+- **`costmap`**: `robot_radius` **0.32** (era footprint quadrado ±0.25 = inscrito
+  0.25, e o canto em diagonal alcança 0.354 → passava colado por desenho).
+- **`inflation`**: global **0.60**, local **0.45**.
 - **`unstuck`**: `stuck_timeout` 2.0 / `mapped` 1.0 / `rear_half_width` **0.26**.
 - **`path_follower`**: `forward_speed` **0.60**, `lookahead` 0.6,
   `turn_enter` 16°, `turn_exit` 3°, `aim_tau_short` 0.8,
@@ -132,24 +145,32 @@ dente-de-serra (sair torto → anda em diagonal → estoura o enter → mais gir
 
 ## 6. ⏳ Próximos passos (em ordem)
 
-1. **SUAVIZAR O PLANO — agora é o caminho principal.** O `nav2_smoother` **não
-   está no launch** e o BT não chama `SmoothPath`: o plano do Theta* chega
-   quebrado e o carrot persegue os cantos. As três tentativas de resolver as
-   curvas **no seguidor** (banda `turn_enter`, filtro `aim_tau`, carrot
-   `lookahead`) falharam do mesmo jeito — o que resta é a fonte. É a abordagem
-   estrutural e ainda **não foi tentada**.
-2. **Margem lateral** (subiu de prioridade). A 0,60 m/s ele navega **colado**:
-   passou ~1 s inteiro a **6-8 mm** de `wall_10` e `wall_12`. No sim "não bate";
-   no real, com erro de AMCL + derrapagem, isso É batida. O teste do `lookahead`
-   1.0 mostrou o quanto essa margem é fina: bastou o carrot esticar para virarem
-   11 colisões. Atacar antes de ir pro robô.
-3. **Degrau 0,90 m/s** (o dono quer o mais rápido possível). ⚠️ A `PolygonFront`
-   é caixa FIXA e **não escala**: a 0,90 a conta de parada é 0.27 + 0.09 = 0.36 m,
-   então ela teria que ir a ~0.65 — e aí passa a pegar obstáculo que o robô ia
-   contornar. É o teto prático deste desenho.
-4. **Girar colado numa parede segue desprotegido** por desenho (o canto varre
-   0.354 m; o reflexo é estreito e frontal). Lugar certo: o `path_follower`
-   checar o anel 0.25..0.36 m antes de iniciar point-turn.
+1. **AFROUXAR O `speed_for_clearance`** — é onde está o tempo. Medido na volta:
+   de 613 s de seguidor, **403 s dirigindo** e **211 s parado girando (34%)**; e
+   das 403 s dirigindo, só **51% a 0,55-0,60** — **28,6% rastejando a 0,25-0,40**
+   (média comandada 0,493 contra `forward_speed` 0,60). Esse freio foi criado
+   pra compensar o robô passar COLADO. Agora o plano garante 3-8 cm de folga:
+   ele cobra duas vezes pela mesma segurança. Subir `clear_min` / baixar
+   `clear_full` e medir — a folga real (colisao.py) diz na hora se passou do
+   ponto. É o único lugar onde "menos cuidadoso = mais rápido" ainda tem espaço.
+2. **BUG ABERTO: "start pose is an obstacle" a 42-72 cm de parede.** Longe do
+   raio 0.32 E da inflação (que ali dá custo ~93, contra 253 de letal). Não é
+   regressão do fix de margem: acontecia na config velha e PIOR (16 na volta
+   `la10_1`, 0 na `rot30_1`, 5 na `r32_1`) e acompanha o robô andar colado.
+   Suspeita: `obstacle_layer` marcando fantasma ou falhando em limpar marcação
+   velha. É QUEM GERA OS RECOVERIES — e recovery é tempo perdido puro.
+3. **SUAVIZAR O PLANO.** O `nav2_smoother` não está no launch e o BT não chama
+   `SmoothPath`: o Theta* entrega o caminho quebrado e o carrot persegue os
+   cantos. As QUATRO tentativas de resolver as curvas no SEGUIDOR falharam
+   (`turn_enter`, `aim_tau`, `lookahead`, `rot_min` — ver §5); o que resta é a
+   fonte. Ataca os 34% da volta girando parado.
+4. **Degrau 0,90 m/s.** ⚠️ A `PolygonFront` é caixa FIXA e não escala: a 0,90 a
+   conta de parada é 0.36 m, então ela iria a ~0.65 e passaria a pegar obstáculo
+   que o robô ia contornar. Teto prático deste desenho.
+5. **Girar colado numa parede** segue desprotegido no reflexo (o canto varre
+   0.354; a caixa é estreita e frontal). Com o raio 0.32 no costmap o problema
+   ficou MUITO menor (o plano não o leva mais pra lá), mas o lugar certo do
+   cinto continua sendo o `path_follower` checar o anel antes do point-turn.
 
 ---
 
