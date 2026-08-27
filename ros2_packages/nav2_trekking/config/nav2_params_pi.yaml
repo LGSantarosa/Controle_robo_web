@@ -195,7 +195,11 @@ controller_server:
       # 2026-06-08: revertido 0.25 → 0.35 (estava medroso/devagar). A segurança
       # agora fica só no collision_monitor enfraquecido (reflexo de última hora),
       # não em cortar velocidade no controlador.
-      max_vel_x: 0.35
+      # 2026-08-27 (fase VELOCIDADE): 0.35 -> 0.60, casando com o forward_speed
+      # do path_follower. Este teto só morde quando o controller_server assume
+      # (o path_follower fura o DWB pelo mux), mas deixá-lo baixo faria o
+      # fallback andar na metade da velocidade sem ninguém entender por quê.
+      max_vel_x: 0.60
       min_vel_y: 0.0
       max_vel_y: 0.0
       # 2.5 → 6.0: idem ao shim — o chassi precisa de ~6.0 p/ rotacionar de fato.
@@ -203,7 +207,7 @@ controller_server:
       # foi subido p/ 6.0, senão corta aqui).
       max_vel_theta: 6.0
       min_speed_xy: 0.0
-      max_speed_xy: 0.35
+      max_speed_xy: 0.60
       min_speed_theta: 0.0
       acc_lim_x: 1.0
       acc_lim_theta: 10.0
@@ -474,7 +478,10 @@ velocity_smoother:
     # corta o giro do controller em 0.8). Ver docs/NAV2_GIRO_2026-06-03.md.
     # 2026-06-08: linear revertido 0.25 → 0.35 (casa com DWB max_vel_x; estava
     # medroso). Angular 6.0 (necessário p/ vencer a patinagem do giro).
-    max_velocity: [0.35, 0.0, 6.0]
+    # 2026-08-27 (fase VELOCIDADE): linear 0.35 -> 0.60 (casa com DWB e
+    # path_follower). O smoother corta o que o controller_server manda; o
+    # follow_vel do path_follower não passa por aqui.
+    max_velocity: [0.60, 0.0, 6.0]
     # Smoother fica PERMISSIVO em -0.1 de propósito: o DWB virou min_vel_x: 0.0
     # (não atravessa porta de costas), mas o BackUp recovery, se rotear por aqui,
     # ainda precisa da folga de ré. O smoother não INVENTA ré — só passa o que o
@@ -550,7 +557,17 @@ collision_monitor:
       # era exatamente o que fazia a caixa anterior parar o robô 38 vezes.
       # Só à FRENTE do para-choque (x 0.25..0.40): 15 cm de aviso para o que
       # está no caminho de marcha, que é o único jeito de bater indo pra frente.
-      points: "[[0.40, 0.22], [0.40, -0.22], [0.25, -0.22], [0.25, 0.22]]"
+      # 2026-08-27 (fase VELOCIDADE): frente 0.40 -> 0.50. A caixa é FIXA e não
+      # escala com a velocidade, então ela tem que ser dimensionada PELA
+      # velocidade do degrau. Conta a 0.60 m/s: parada = v²/2a = 0.36/3.0 =
+      # 0.12 m (o DiffDrive do sim tem max_linear_acceleration 1.5), mais ~0.09 m
+      # de reação (scan a 10 Hz + ciclo) = ~0.21 m. Com aviso de só 0.15 m
+      # (a caixa antiga, dimensionada pra 0.30 m/s) ele ENCOSTARIA.
+      # 0.25..0.50 = 0.25 m de aviso, ~4 cm de margem sobre a conta.
+      # ⚠️ No degrau 0.90 m/s a conta vira 0.27+0.09 = 0.36 m -> a caixa precisa
+      # ir pra ~0.65, e aí ela começa a pegar obstáculo que o robô ia contornar.
+      # É o limite prático deste desenho de caixa fixa.
+      points: "[[0.50, 0.22], [0.50, -0.22], [0.25, -0.22], [0.25, 0.22]]"
       action_type: "limit"
       # 0.0 = trava o avanço enquanto houver algo à frente. Não é "devagar":
       # é "não vai em cima". Como o giro segue livre, ele se realinha e sai.

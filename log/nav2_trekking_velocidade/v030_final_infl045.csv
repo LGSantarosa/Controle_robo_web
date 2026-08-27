@@ -1,0 +1,5 @@
+volta,goals_ok,goals,colisoes,raspoes,folga_min_m,tempo_s,dist_m,v_media_pct,v_media_andando,v_max,parado_s,unstuck_s,freio_s,min_scan_m,falhas_plano,recoveries,naochegou
+destemido4,8,8,,,,783.4,144.9,0.185,0.19,0.3,0.5,0.0,0.4,0.286,1,1,
+conf1,8,8,,,,817.1,146.0,0.179,0.188,0.3,0.2,0.0,0.1,0.25,2,0,
+conf2,8,8,,,,766.8,143.7,0.187,0.194,0.3,0.2,0.0,0.1,0.262,1,0,
+conf3,8,8,,,,783.5,145.2,0.185,0.19,0.3,0.4,0.0,0.3,0.25,0,0,

@@ -94,16 +94,36 @@ entrou em recovery. **O tempo NÃO mudou** — `v_max` segue 0,30 m/s: tirar o m
 comprou fluidez e confiabilidade, não velocidade. O teto é o `forward_speed` do
 path_follower.
 
+### ⚡ FASE 2 — VELOCIDADE: 0,30 → 0,60 m/s (21% mais rápido)
+
+**621,6 s contra 791,6 s do baseline medroso, com 16/16 goals.** Mudanças:
+`forward_speed` 0,30 → 0,60 (é o path_follower que dirige, não o DWB),
+`max_vel_x`/smoother 0,35 → 0,60, e a caixa do `PolygonFront` 0,40 → 0,50
+(ela é FIXA e não escala: a 0,60 m/s a parada é 0,12 m + 0,09 m de reação).
+
+**🆕 velocidade por folga (`speed_for_clearance`)**: o robô passou a RASPAR quina
+ao dobrar a velocidade (contato medido na `wall_12` com 0,41 m de folga). O
+path_follower tinha velocidade FIXA — a única freada era a do goal. Agora o
+cruzeiro é proporcional à folga à frente: cheio acima de 1,2 m, caindo até
+`min_speed` em 0,35 m. Não é medo (não para, não desvia); é dirigir.
+
+**🔬 detector de colisão de verdade** (`tools/sim_ab/colisao.py`): ground truth do
+Gazebo + SAT entre o retângulo do robô e as 20 caixas do mundo, em milímetros.
+Antes eu media `min_scan`, que é proxy — o laser fica no centro, então 0,25 m
+tanto pode ser "passei raspando" quanto "encostei".
+
 ### O que falta
 
-1. **VELOCIDADE** (fase 2, em andamento): degraus medidos 0,30 → 0,60 → 0,90 no
-   `forward_speed` + DWB `max_vel_x` + smoother + acelerações.
-   ⚠️ A caixa do `PolygonFront` é FIXA (15 cm à frente) e **não escala com a
-   velocidade**: 0,25 s de aviso a 0,60 m/s, 0,17 s a 0,90. Ela terá que crescer
-   junto — é a primeira coisa a re-medir a cada degrau.
-2. **Girar colado numa parede segue desprotegido** por desenho (o canto varre
-   0,354 m e o reflexo frontal não vê isso). Tarefa do path_follower: checar o
-   anel 0,25..0,36 m antes de iniciar point-turn.
+**Ver `HANDOFF_NAV2_TREKKING.md` na raiz — handoff completo desta frente.**
+
+1. **Minicurvinhas** (pedido do dono): 39% da volta é giro parado e **72% do giro
+   se cancela**. `turn_enter` 24° e `aim_tau_short` 1.6 foram testados e
+   REVERTIDOS (o segundo piorou: cancelamento 87,8%). Hipótese aberta:
+   `lookahead` 0,6 → 1,0 (ganho de laço do pure-pursuit).
+2. **Degrau 0,90 m/s** — a `PolygonFront` fixa é o teto prático do desenho.
+3. **Girar colado numa parede segue desprotegido** (o canto varre 0,354 m).
+4. **Margem lateral**: a 0,60 ele navega colado — ~1 s a 6-8 mm de parede. No
+   real, com AMCL + derrapagem, isso é batida.
 
 ---
 

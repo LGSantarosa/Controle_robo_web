@@ -1,0 +1,3 @@
+volta,goals_ok,goals,colisoes,raspoes,folga_min_m,tempo_s,dist_m,v_media_pct,v_media_andando,v_max,parado_s,unstuck_s,freio_s,min_scan_m,falhas_plano,recoveries,naochegou
+v601,8,8,0,2,0.006,626.8,148.2,0.236,0.253,0.6,2.6,0.5,1.9,0.257,0,0,
+v602,8,8,1,1,-0.0,616.4,147.1,0.239,0.256,0.6,2.9,3.8,1.7,0.269,1,0,

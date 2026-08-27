@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from nav2_trekking.path_follower import (
+from nav2_trekking.path_follower import (speed_for_clearance,
     wrap,
     closest_index,
     carrot_point,
@@ -329,7 +329,10 @@ def test_near_carrot_with_short_lookahead_would_turn():
     # um desvio lateral que estoura a banda (20cm a 0.6m = ~18° > turn_enter
     # 16°) dispara turning; esticado, os mesmos 20cm seriam ~7.6° e seguiriam
     # driving — o mecanismo do zigue-zague antigo.
-    f = DecisiveFollower(FollowConfig(straight_tol=0.0))
+    # lookahead FIXADO em 0.6: este teste é sobre o carrot CURTO (está no nome).
+    # O default virou 1.0 em 2026-08-27 e a 1.0 m os mesmos 20 cm dariam ~11°,
+    # abaixo do turn_enter — que é justamente o efeito buscado lá, não aqui.
+    f = DecisiveFollower(FollowConfig(straight_tol=0.0, lookahead=0.6))
     path = [(x * 0.05, 0.0) for x in range(80)]
     cmd = f.update((0.0, 0.20, 0.0), path, goal_active=True, goal_yaw=0.0)
     assert cmd.state == 'turning'
@@ -401,3 +404,63 @@ def test_goal_turn_then_arrived():
     cmd = f.update((0.0, 0.0, math.pi / 2), path, goal_active=True,
                    goal_yaw=math.pi / 2)
     assert cmd.state == 'arrived' and (cmd.vx, cmd.wz) == (0.0, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# VELOCIDADE POR FOLGA (2026-08-27, fase velocidade do nav2_trekking)
+#
+# BO medido no sim a 0.60 m/s: o robô RASPOU a quina da wall_12 (ground truth do
+# Gazebo, penetração 0.0 cm) andando em `driving` com front_clear=0.41 m. A
+# velocidade era FIXA em forward_speed — a única redução existente era o
+# slow_radius, que só age perto do GOAL. A 0.30 m/s o mesmo caminho passava; a
+# 0.60 o corte de quina virou contato.
+#
+# Não é "medo": ele não para nem contorna mais longe. Só anda mais devagar
+# quando a folga à frente é pequena, como um motorista faz.
+# ---------------------------------------------------------------------------
+
+def _cfg_vel(**kw):
+    base = dict(forward_speed=0.60, min_speed=0.22,
+                clear_full=1.2, clear_min=0.35)
+    base.update(kw)
+    return FollowConfig(**base)
+
+
+def test_velocidade_cheia_com_a_frente_livre():
+    c = _cfg_vel()
+    assert speed_for_clearance(c, float('inf')) == pytest.approx(0.60)
+    assert speed_for_clearance(c, 5.0) == pytest.approx(0.60)
+    assert speed_for_clearance(c, 1.2) == pytest.approx(0.60)
+
+
+def test_velocidade_cai_quando_a_folga_encolhe():
+    c = _cfg_vel()
+    # no meio da faixa (0.775 m) -> meio caminho entre min_speed e forward_speed
+    v = speed_for_clearance(c, (1.2 + 0.35) / 2)
+    assert 0.22 < v < 0.60
+    assert v == pytest.approx(0.22 + (0.60 - 0.22) * 0.5, abs=0.02)
+    # monotônica: menos folga => menos velocidade
+    assert (speed_for_clearance(c, 1.0) > speed_for_clearance(c, 0.7)
+            > speed_for_clearance(c, 0.45))
+
+
+def test_folga_minima_nao_derruba_abaixo_do_piso():
+    # nunca abaixo de min_speed: abaixo da zona-morta o robô não anda, e parar
+    # quem decide é o collision_monitor/unstuck, não este ajuste.
+    c = _cfg_vel()
+    assert speed_for_clearance(c, 0.35) == pytest.approx(0.22)
+    assert speed_for_clearance(c, 0.10) == pytest.approx(0.22)
+    assert speed_for_clearance(c, 0.0) == pytest.approx(0.22)
+
+
+def test_a_quina_do_BO_desacelera_de_verdade():
+    # o caso medido: front_clear 0.41 m a 0.60 m/s raspou a quina da wall_12.
+    c = _cfg_vel()
+    v = speed_for_clearance(c, 0.41)
+    assert v < 0.30, f"a 0.41 m de folga ainda andaria a {v:.2f} m/s"
+
+
+def test_desligavel_por_parametro():
+    # clear_full <= 0 desliga o ajuste (volta ao comportamento antigo)
+    c = _cfg_vel(clear_full=0.0)
+    assert speed_for_clearance(c, 0.41) == pytest.approx(0.60)

@@ -1,0 +1,2 @@
+volta,goals_ok,goals,colisoes,raspoes,folga_min_m,tempo_s,dist_m,v_media_pct,v_media_andando,v_max,parado_s,unstuck_s,freio_s,min_scan_m,falhas_plano,recoveries,naochegou
+baseline,7,8,,,,791.6,140.1,0.177,0.181,0.3,4.3,3.3,73.5,0.273,1,0,6:TIMEOUT

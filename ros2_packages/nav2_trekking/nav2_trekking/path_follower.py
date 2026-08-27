@@ -80,9 +80,30 @@ def straight_deviation(path: List[Pt], i0: int, i1: int) -> float:
 
 @dataclass
 class FollowConfig:
-    forward_speed: float = 0.30     # m/s no trecho reto (2026-06-27: 0.25->0.30 a
-                                    # pedido — robô tava lento; teto do nav é 0.35)
+    forward_speed: float = 0.60     # m/s no trecho reto. 2026-08-27 (nav2_trekking,
+                                    # fase VELOCIDADE): 0.30 -> 0.60. Este é o
+                                    # motorista de fato — publica follow_vel DIRETO
+                                    # no twist_mux_auto (prio 15), NÃO passa pelo
+                                    # velocity_smoother. Subir só o DWB/smoother
+                                    # não acelera nada.
     lookahead: float = 0.6          # m — distância do carrot à frente no plano.
+                                    # ⏳ HIPÓTESE ABERTA 2026-08-27: testar 1.0.
+                                    # SIM, já foi revertido em 06-27/28 por
+                                    # "raspar" — mas ali não havia velocidade-por-
+                                    # folga, a inflação era menor e, principalmente,
+                                    # NÃO HAVIA MEDIÇÃO: "raspava" era observação.
+                                    # Agora o colisao.py mede a folga real em mm
+                                    # contra a geometria do mundo, então dá pra
+                                    # saber se raspa e QUANTO.
+                                    # Motivo de tentar de novo: medido a 0.60 m/s,
+                                    # 72% do giro se cancela. Alargar a banda
+                                    # (turn_enter 24°) e filtrar a mira (tau 1.6)
+                                    # FALHARAM os dois — não é ruído, é ganho de
+                                    # laço: a 0.6 m o robô corrige o rumo mas segue
+                                    # deslocado de lado, cruza a linha e gira pro
+                                    # outro lado. Carrot mais longo baixa o ganho.
+                                    # SE a folga mínima piorar (hoje 6-8 mm em
+                                    # wall_10/wall_12), reverter para 0.6.
                                     # 1.0 cortava o arco/raspava; 0.6 = VALIDADO (porta
                                     # real 4/4). 2026-06-27 tentei 0.4 (achei que sairia
                                     # mais da porta antes de virar) e a mira-no-canto
@@ -125,6 +146,17 @@ class FollowConfig:
                                     # hotmilk_portas raspando a quina por chegar
                                     # de diagonal rasa. <=0 desliga o gate.
     turn_enter: float = 0.28        # rad (~16°) — acima disso COMEÇA a girar.
+                                    # 2026-08-27 TENTEI 24° e REVERTI (medido no
+                                    # sim a 0.60): giros/min caíram 30% (39->27),
+                                    # MAS cada giro ficou proporcionalmente maior
+                                    # (13.1°->21.2°) e o tempo girando não mudou
+                                    # (39%->42%); o goal 1 piorou (110->119 s) e o
+                                    # robô ficou mais torto (min_scan 0.336->0.252).
+                                    # Alargar a banda troca "muitos giros pequenos"
+                                    # por "menos giros grandes" — não é a alavanca.
+                                    # O que desperdiça é a MIRA OSCILANDO: medido
+                                    # 1275° de giro bruto para 362° líquidos, 72%
+                                    # se cancela. Ver aim_tau_short.
                                     # 12->16 (07-10): no sim hotmilk_portas 63%
                                     # dos giros eram VAI-E-VOLTA (+14/-14 que se
                                     # cancelam, herr de entrada mediano 14° = na
@@ -176,6 +208,14 @@ class FollowConfig:
                                     # -> corredor reto fica reto. <=0 desliga
                                     # (mira crua no esticado).
     aim_tau_short: float = 0.8      # s — EMA da mira no carrot CURTO (curva).
+                                    # 2026-08-27 TENTEI 1.6 e REVERTI: PIOROU.
+                                    # O cancelamento do giro subiu de 72% pra
+                                    # 87.8% e a volta ficou 9% mais lenta. EMA
+                                    # forte em malha fechada é atraso de fase:
+                                    # ele gira por uma mira defasada, passa do
+                                    # ponto e volta. A oscilação NÃO é ruído de
+                                    # alta frequência — é geométrica (ver
+                                    # lookahead).
                                     # Run 07-17 pós-filtro: zona curva perto da
                                     # casa (x 1-2.5 do hotmilk) seguia chovendo
                                     # giro (8-12/30s) — a 0.6m o mesmo ruído
@@ -205,6 +245,16 @@ class FollowConfig:
     # foi medida — só a do giro=1.7; o sim_actuator_model tb só modela o giro, por
     # isso o sim não pegava esse trava.)
     min_speed: float = 0.22         # m/s — avanço mínimo (acima da zona-morta)
+    # VELOCIDADE POR FOLGA (2026-08-27, fase velocidade). Até aqui a velocidade
+    # no reto era FIXA em forward_speed, e a única redução era o slow_radius —
+    # que só age perto do GOAL. Subindo pra 0.60 m/s o robô passou a RASPAR
+    # quina (medido por ground truth do Gazebo: contato na wall_12 com
+    # front_clear=0.41 m, penetração 0.0 cm). Não é medo: ele não para nem
+    # desvia mais longe; só anda mais devagar quando a folga à frente encolhe,
+    # o que dá tempo do controlador fechar o rumo antes da quina.
+    # clear_full <= 0 desliga (volta ao comportamento de velocidade fixa).
+    clear_full: float = 1.2         # m — folga a partir da qual anda a plena
+    clear_min: float = 0.35         # m — folga em que já está no min_speed
 
 
 @dataclass
@@ -212,6 +262,24 @@ class Cmd:
     vx: float
     wz: float
     state: str          # idle | turning | driving | goal_turn | arrived
+
+
+def speed_for_clearance(c: 'FollowConfig', front_clear: float) -> float:
+    """Velocidade de cruzeiro em função da folga à frente.
+
+    Interpola linear entre `min_speed` (folga <= clear_min) e `forward_speed`
+    (folga >= clear_full). NUNCA desce abaixo de min_speed: abaixo da zona-morta
+    o robô não anda, e quem decide PARAR é o collision_monitor / unstuck — não
+    este ajuste, que só modula o cruzeiro.
+    """
+    if c.clear_full <= 0.0:          # desligado
+        return c.forward_speed
+    if not math.isfinite(front_clear) or front_clear >= c.clear_full:
+        return c.forward_speed
+    if front_clear <= c.clear_min:
+        return c.min_speed
+    frac = (front_clear - c.clear_min) / (c.clear_full - c.clear_min)
+    return c.min_speed + (c.forward_speed - c.min_speed) * frac
 
 
 class DecisiveFollower:
@@ -336,10 +404,12 @@ class DecisiveFollower:
         if self.state == 'turning':
             return Cmd(0.0, self._turn_cmd(herr), 'turning')
 
-        # 4) de frente -> anda RETO (wz=0). Freia perto do goal.
-        speed = c.forward_speed
+        # 4) de frente -> anda RETO (wz=0). Freia perto do goal E perto de
+        # obstáculo: vence a MENOR das duas (a mais conservadora).
+        speed = speed_for_clearance(c, front_clear)
         if dist_goal < c.slow_radius:
-            speed = max(c.min_speed, c.forward_speed * dist_goal / c.slow_radius)
+            speed = min(speed,
+                        max(c.min_speed, c.forward_speed * dist_goal / c.slow_radius))
         return Cmd(speed, 0.0, 'driving')
 
 
@@ -370,7 +440,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             super().__init__('path_follower')
             g = {}
             for name, default in (
-                ('forward_speed', 0.30), ('lookahead', 0.6),
+                ('forward_speed', 0.60), ('lookahead', 0.6),
                 ('lookahead_far', 1.5), ('straight_tol', 0.18),
                 # sector 40° (era 60 na 1ª run 07-10): a 60° a parede LATERAL
                 # do corredor (~0.67m) entrava no gate (0.67/sin60=0.77 <0.9)
@@ -382,6 +452,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
                 ('slow_radius', 0.4), ('min_speed', 0.22), ('rate_hz', 20.0),
+                ('clear_full', 1.2), ('clear_min', 0.35),
                 ('turn_stop_tau', 0.10), ('aim_tau', 2.0),
                 ('aim_tau_short', 0.8),
             ):
@@ -399,6 +470,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 goal_yaw_tol=math.radians(g['goal_yaw_tol_deg']),
                 rot_k=g['rot_k'], rot_min=g['rot_min'], rot_max=g['rot_max'],
                 slow_radius=g['slow_radius'], min_speed=g['min_speed'],
+                clear_full=g['clear_full'], clear_min=g['clear_min'],
                 turn_stop_tau=g['turn_stop_tau'], aim_tau=g['aim_tau'],
                 aim_tau_short=g['aim_tau_short'],
                 tick_dt=1.0 / g['rate_hz'])
