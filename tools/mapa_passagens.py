@@ -29,8 +29,15 @@ import argparse
 import os
 import sys
 
-import numpy as np
-from scipy import ndimage
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    np = None
+
+try:
+    from scipy import ndimage
+except ModuleNotFoundError:
+    ndimage = None
 
 
 def le_pgm(caminho):
@@ -65,7 +72,7 @@ def le_yaml(caminho):
         if linha.startswith('resolution:'):
             res = float(linha.split(':', 1)[1])
         elif linha.startswith('image:'):
-            img = linha.split(':', 1)[1].strip()
+            img = linha.split(':', 1)[1].strip().strip("'\"")
     if img is None:
         raise ValueError(f'{caminho}: sem campo "image:"')
     if not os.path.isabs(img):
@@ -86,14 +93,17 @@ def analisa(yaml_path, raios):
     print()
     print(f'  {"raio":>7}  {"fresta mín":>10}  {"trechos":>8}  {"maior trecho":>13}')
     base = None
+    resultados = {}
     for r in raios:
         nav = livre & (dist >= r)
         lab, n = ndimage.label(nav)
         if n == 0:
             print(f'  {r:7.3f}  {2 * r:9.2f}m  {"-":>8}  NADA NAVEGÁVEL')
+            resultados[r] = {'trechos': 0, 'maior': 0.0}
             continue
         tam = ndimage.sum(nav, lab, range(1, n + 1))
         frac = tam.max() / tam.sum()
+        resultados[r] = {'trechos': n, 'maior': float(frac)}
         if base is None:
             base = frac
         alerta = ''
@@ -104,7 +114,7 @@ def analisa(yaml_path, raios):
     print('  "fresta mín" = corredor mais estreito que o robô ainda atravessa (2·raio).')
     print('  "trechos" alto é normal (ruído/salpico do SLAM); o que importa é o')
     print('  MAIOR TRECHO não desabar quando o raio sobe — isso é passagem fechando.')
-    return dist, livre, res
+    return dist, livre, res, resultados
 
 
 def gargalos(dist, livre, res, raio, quantos=8):
@@ -140,14 +150,46 @@ def main():
     ap.add_argument('mapa', help='caminho do .yaml do mapa')
     ap.add_argument('--raio', type=float, default=0.32,
                     help='robot_radius do costmap (default 0.32, o do nav2_trekking)')
+    ap.add_argument('--strict', action='store_true',
+                    help='sai com erro se o raio novo desconectar >2%% do mapa')
+    ap.add_argument('--max-perda', type=float, default=0.02,
+                    help='queda máxima tolerada no maior trecho com --strict (default 0.02)')
     args = ap.parse_args()
+    if args.raio <= 0:
+        ap.error('--raio precisa ser maior que zero')
+    if not 0 <= args.max_perda <= 1:
+        ap.error('--max-perda precisa estar entre 0 e 1')
+    if np is None or ndimage is None:
+        print('ERRO: NumPy/SciPy ausentes. Instale com: '
+              'sudo apt install python3-numpy python3-scipy', file=sys.stderr)
+        return 2
     if not os.path.exists(args.mapa):
-        sys.exit(f'não achei {args.mapa}')
+        print(f'ERRO: mapa não encontrado: {args.mapa}', file=sys.stderr)
+        return 2
     raios = sorted({0.25, args.raio, 0.354})
-    dist, livre, res = analisa(args.mapa, raios)
+    try:
+        dist, livre, res, resultados = analisa(args.mapa, raios)
+    except (OSError, ValueError, IndexError) as exc:
+        print(f'ERRO: mapa inválido: {exc}', file=sys.stderr)
+        return 2
     print()
     gargalos(dist, livre, res, args.raio)
 
+    if args.strict:
+        base = resultados.get(0.25, {'trechos': 0, 'maior': 0.0})
+        alvo = resultados.get(args.raio, {'trechos': 0, 'maior': 0.0})
+        perda = base['maior'] - alvo['maior']
+        if base['trechos'] == 0 or alvo['trechos'] == 0:
+            print('\nREPROVADO: não restou trecho navegável com o raio pedido.', file=sys.stderr)
+            return 2
+        if perda > args.max_perda:
+            print(f'\nREPROVADO: maior trecho perdeu {100 * perda:.1f}% '
+                  f'(limite {100 * args.max_perda:.1f}%).', file=sys.stderr)
+            return 2
+        print(f'\nAPROVADO: perda do maior trecho = {100 * max(0.0, perda):.1f}% '
+              f'(limite {100 * args.max_perda:.1f}%).')
+    return 0
+
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

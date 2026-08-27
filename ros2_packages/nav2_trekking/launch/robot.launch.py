@@ -137,12 +137,16 @@ def generate_launch_description():
                     'continua entrando como 2a taxa de giro.'
     )
     use_flow_arg = DeclareLaunchArgument(
-        'use_flow', default_value='true',
-        description='Funde o optical flow (PMW3901) na translacao. ON por padrao '
-                    'desde 2026-06-08: escala calibrada (0.200mm/count), EMI nao '
-                    'vaza (mitigacao do firmware, lixo=0 girando) e a translacao '
-                    'falsa no giro e cortada pelo flow_yaw_gate. use_flow:=false '
-                    'desliga (so roda+IMU).'
+        'use_flow', default_value='false',
+        description='Funde o optical flow (PMW3901) na translacao. OFF por padrao '
+                    'desde 2026-08-26: o SENSOR NAO ESTA NO ROBO (arrancado em '
+                    '2026-07-01, commit 33647e4). O codigo fica: a escala '
+                    '(0.200mm/count), o corte de EMI e o flow_yaw_gate seguem '
+                    'validos e use_flow:=true reativa tudo no dia que o PMW3901 '
+                    'voltar pro chassi. Ate la, ligado ele so rende dois warns '
+                    'por minuto (flow stale / alpha=0.000) sobre um sensor '
+                    'ausente — a fusao ja cai pra roda sozinha (flow_age=inf '
+                    '-> alpha=0), entao isto e ruido, nao correcao de conta.'
     )
     mega_port_arg = DeclareLaunchArgument(
         'mega_port', default_value='/dev/mega',
@@ -221,7 +225,8 @@ def generate_launch_description():
             'heading_gain': 0.2,
             'heading_max_rate': 0.15,
             'mag_calib_min': 2,
-            # Flow OFF por padrão (EMI do PMW3901 infla a pose ao dirigir).
+            # Flow OFF por padrão desde 2026-08-26 — o PMW3901 saiu do robô.
+            # use_flow:=true reativa quando ele voltar (ver use_flow_arg).
             'use_flow': LaunchConfiguration('use_flow'),
             # Calibração do PMW3901 → body frame (movida do trekking.launch.py:
             # frente entra por dy negativo do sensor). Vale pra TODOS os modos

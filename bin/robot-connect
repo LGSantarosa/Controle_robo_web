@@ -6,6 +6,8 @@
 #   robot-connect [slam|nav2|trekking|teleop] [args extras do launch.sh]
 #   robot-connect                                  # default: teleop
 #   robot-connect nav2 --map=maps/sala.yaml
+#   robot-connect nav2-trekking-slam
+#   robot-connect nav2-trekking --map=maps/<mapa>.yaml
 #   ROBOT_HOST=192.168.0.50 robot-connect slam     # se o mDNS não pegar
 #
 # Config (variáveis de ambiente):

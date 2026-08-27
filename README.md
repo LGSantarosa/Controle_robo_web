@@ -76,14 +76,15 @@ cd ~/Workspace/Controle_robo_web
 ```
 
 Cobre:
-- **apt install**: `xacro`, `robot-state-publisher`, `slam-toolbox`, `nav2-bringup`, `nav2-map-server`, `nav2-amcl`, `ros-gz*` (para Jazzy), `git`, `python3-venv`, `python3-pip`.
-- **Workspace**: compila este próprio diretório como workspace colcon (`colcon build --base-paths ros2_packages --symlink-install`) e adiciona `source $HOME/Workspace/Controle_robo_web/install/setup.bash` ao `~/.bashrc`. Todos os pacotes ROS2 (`robot_nav`, `wheel_msgs`, `costmap_converter`, `teb_local_planner`) vivem em `ros2_packages/`.
+- **apt install**: `xacro`, `robot-state-publisher`, `slam-toolbox`, `nav2-bringup`, `nav2-map-server`, `nav2-amcl`, `ros-gz*` (para Jazzy), `git`, `python3-venv`, `python3-pip`, `python3-numpy` e `python3-scipy`.
+- **Workspace**: compila este próprio diretório como workspace colcon (`colcon build --base-paths ros2_packages --symlink-install`) e adiciona `source $HOME/Workspace/Controle_robo_web/install/setup.bash` ao `~/.bashrc`. Todos os pacotes ROS2 (`robot_nav`, `nav2_trekking`, `wheel_msgs`, `costmap_converter`, `teb_local_planner`) vivem em `ros2_packages/`.
 
 > **Rodando na Raspberry Pi?** Use `./setup_pi.sh` em vez do `setup.sh` — pula Gazebo, limita o `colcon build` a 2 workers (Pi 4 4 GB não aguenta 4 paralelos) e clona o driver do LiDAR. Detalhes em [Raspberry Pi — setup enxuto](#5-raspberry-pi--setup-enxuto).
 
 | Pacote | Origem | Obrigatório? |
 |--------|--------|--------------|
 | `robot_nav` | `ros2_packages/robot_nav` (este repo) | **sempre** |
+| `nav2_trekking` | `ros2_packages/nav2_trekking` (branch `nav2-trekking`) | stack de competição, separada do `robot_nav` |
 | `wheel_msgs` | `ros2_packages/wheel_msgs` (vendored neste repo) | **sempre** (até no sim, senão `colcon build` falha) |
 | `costmap_converter` | `ros2_packages/costmap_converter` (vendored) | usado pelo Nav2 (opcional p/ teb) |
 | `teb_local_planner` | `ros2_packages/teb_local_planner` (vendored, `COLCON_IGNORE` no sub-pacote C++) | opcional — precisa de `libg2o-dev` |
@@ -128,7 +129,7 @@ cd ~/Workspace/Controle_robo_web
 ./launch.sh --sim
 ```
 
-O `launch.sh` (e o `start.sh`) faz incrementalmente: cria/atualiza o symlink no workspace ROS2, roda `colcon build` se algum arquivo do `robot_nav` mudou, instala `python3-serial` se faltar e cria o venv Python do servidor. Tudo cacheado por hash — execuções seguintes pulam direto.
+O `launch.sh` (e o `start.sh`) faz incrementalmente: compila o pacote ROS selecionado quando seu hash muda, instala `python3-serial` se faltar e cria o venv Python do servidor. Tudo cacheado por hash — execuções seguintes pulam direto.
 
 O que deve acontecer:
 1. Uma janela do Gazebo Harmonic abre com o mundo padrão (`worlds/empty.sdf`, sala 6×6 m).
@@ -157,6 +158,23 @@ Clique num ponto livre do mapa → Nav2 calcula a rota e o robô vai até lá.
 ### 9. Migrar para o hardware real
 
 Quando o fluxo estiver redondo no sim, tire o `--sim` dos comandos. A mesma UI, o mesmo `/goal_pose`, o mesmo mapa (se for a mesma sala). Pré-requisitos: passos **4** (firmware flasheado) e **5** (udev) feitos.
+
+### 10. Prova real com `nav2_trekking`
+
+Na branch `nav2-trekking`, use o launcher dedicado para não subir a stack
+histórica por engano:
+
+```bash
+./launch_nav2_trekking.sh --slam
+# salve o mapa, volte ao ponto onde começou e encerre com Ctrl+C; então:
+./launch_nav2_trekking.sh --nav2 --map=maps/<mapa_novo>.yaml
+```
+
+No modo Nav2 ele exige mapa explícito, confere passagens para o raio de 0,32 m,
+força `nav2_params_pi.yaml` e só abre a interface depois que a stack estiver
+ativa. Antes do primeiro goal, confirme a pose desenhada; se o robô não voltou
+ao início do SLAM, use **📍 Definir pose**. O flash da MEGA fica desligado por
+padrão nesse fluxo.
 
 ---
 
@@ -362,11 +380,12 @@ O `worlds/empty.sdf` serve como template pronto.
 
 ### 1. Workspace ROS2
 
-O **próprio repositório é o workspace colcon**. Todos os pacotes ROS2 vivem em `ros2_packages/` (`robot_nav`, `wheel_msgs`, `costmap_converter`, `teb_local_planner` — esses três últimos vendored com seus `.git` preservados). Não existe `~/ros2_ws/` separado.
+O **próprio repositório é o workspace colcon**. Todos os pacotes ROS2 vivem em `ros2_packages/` (`robot_nav`, `nav2_trekking`, `wheel_msgs`, `costmap_converter`, `teb_local_planner`). Não existe `~/ros2_ws/` separado.
 
 | Pacote | Origem | Obrigatório? |
 |--------|--------|--------------|
 | `robot_nav` | `ros2_packages/robot_nav` | **sempre** |
+| `nav2_trekking` | `ros2_packages/nav2_trekking` | stack de competição na branch própria |
 | `wheel_msgs` | `ros2_packages/wheel_msgs` (vendored) | **sempre** — o `robot_nav` declara `<depend>wheel_msgs</depend>` |
 | `costmap_converter` | `ros2_packages/costmap_converter` (vendored) | dependência do Nav2 |
 | `teb_local_planner` | `ros2_packages/teb_local_planner` (vendored) | opcional — sub-pacote C++ tem `COLCON_IGNORE` (precisa `libg2o-dev`) |
@@ -381,7 +400,7 @@ source install/setup.bash
 echo "source $HOME/Workspace/Controle_robo_web/install/setup.bash" >> ~/.bashrc
 ```
 
-> Depois de editar qualquer arquivo em `ros2_packages/robot_nav/`, o `start.sh`/`launch.sh` detecta a mudança por hash e recompila automaticamente. Só preciso rodar `colcon build` manual se quiser controlar.
+> Depois de editar o pacote selecionado, o `start.sh`/`launch.sh` detecta a mudança por hash e recompila automaticamente. Só preciso rodar `colcon build` manual se quiser controlar.
 >
 > **Rodando os testes no PC dev:** prefira a árvore fonte ao `install/` (que pode estar velho e quebrar a coleta do pytest): `cd ros2_packages/robot_nav && PYTHONPATH=. python3 -m pytest test/`. Os testes do servidor web rodam de `controle_web/` com `python3 -m pytest test_*.py`.
 >
@@ -852,6 +871,9 @@ robot-connect                            # sem modo = teleop (padrão): só PS4/
 robot-connect slam                       # conecta por SSH + sobe a stack no tmux (mapeamento)
 #    robot-connect nav2 --map=maps/sala.yaml
 #    robot-connect trekking
+# Prova com a stack separada:
+#    robot-connect nav2-trekking-slam
+#    robot-connect nav2-trekking --map=maps/<mapa_novo>.yaml
 # 3. Liga o PS4 (botão PS) e segura L1 + analógico esquerdo pra dirigir. R1 = turbo.
 # 4. (Opcional) abre http://robo-desktop.local:5000 no navegador pra ver o mapa.
 ```
@@ -867,6 +889,8 @@ Se preferir entrar no robô na mão, os mesmos atalhos valem lá dentro:
 ```bash
 ssh usuario@robo-desktop.local
 robot-up             # sem modo = teleop (padrão); ou: robot-up slam / nav2 / trekking
+robot-up nav2-trekking-slam
+robot-up nav2-trekking --map=maps/<mapa_novo>.yaml
 robot-key            # (noutro terminal) WASD via teclado
 ```
 

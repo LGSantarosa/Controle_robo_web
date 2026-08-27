@@ -26,6 +26,26 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROS2_SETUP="$SCRIPT_DIR/install/setup.bash"
 
+# Pacote ROS que fornece a stack. O launcher historicamente era hardcoded em
+# `robot_nav`; isso fazia o pacote novo `nav2_trekking` ser compilado no sim,
+# mas `./launch.sh --nav2` continuar subindo a stack ANTIGA no robô real.
+# `launch_nav2_trekking.sh` fixa esta variável no pacote novo.
+ROBOT_NAV_PACKAGE="${ROBOT_NAV_PACKAGE:-robot_nav}"
+case "$ROBOT_NAV_PACKAGE" in
+    robot_nav|nav2_trekking) ;;
+    *)
+        echo "ERRO: ROBOT_NAV_PACKAGE inválido: '$ROBOT_NAV_PACKAGE'."
+        echo "      Valores aceitos: robot_nav, nav2_trekking."
+        exit 1
+        ;;
+esac
+ROBOT_NAV_SOURCE="$SCRIPT_DIR/ros2_packages/$ROBOT_NAV_PACKAGE"
+if [ ! -d "$ROBOT_NAV_SOURCE" ]; then
+    echo "ERRO: fontes do pacote '$ROBOT_NAV_PACKAGE' não encontradas em:"
+    echo "      $ROBOT_NAV_SOURCE"
+    exit 1
+fi
+
 # --- Argumentos ---
 NO_LIDAR=false
 LIDAR_PORT="/dev/lidar"
@@ -64,6 +84,7 @@ for arg in "$@"; do
         --help|-h)
             echo "Uso: $0 [--teleop|--slam|--nav2|--trekking] [--sim] [--web-teleop] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
             echo ""
+            echo "  Stack ROS:        $ROBOT_NAV_PACKAGE"
             echo "  --web-teleop     reativa o controle de movimento pela web (default: off — use PS4/WASD)"
             echo "  --flash-mega     força \`pio run -t upload\` mesmo sem mudança"
             echo "  --no-flash-mega  pula o flash da MEGA sempre"
@@ -93,10 +114,16 @@ if [ "$SIM" = true ] && [ "${WORLD_FILE:0:1}" != "/" ]; then
     WORLD_FILE="$SCRIPT_DIR/$WORLD_FILE"
 fi
 
+# O mapa também aceita caminho relativo ao repositório, independentemente do
+# diretório de onde o launcher foi chamado.
+if [ "${MAP_FILE:0:1}" != "/" ]; then
+    MAP_FILE="$SCRIPT_DIR/$MAP_FILE"
+fi
+
 # Mundos com mesh (ex.: educacao_criativa.sdf) usam URI relativo 'meshes/...' —
 # o Gazebo só resolve com worlds/ no GZ_SIM_RESOURCE_PATH.
 if [ "$SIM" = true ]; then
-    export GZ_SIM_RESOURCE_PATH="$SCRIPT_DIR/worlds:$GZ_SIM_RESOURCE_PATH"
+    export GZ_SIM_RESOURCE_PATH="$SCRIPT_DIR/worlds${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
 fi
 
 # Em SLAM e NAV2 o LiDAR é obrigatório (no modo real; no sim o Gazebo simula).
@@ -130,33 +157,25 @@ if [ "$SIM" = true ] && [ ! -f "$WORLD_FILE" ]; then
     exit 1
 fi
 
-# SIM requer ros_gz (Gazebo Harmonic + bridges).
-if [ "$SIM" = true ]; then
-    if ! ros2 pkg list 2>/dev/null | grep -q "^ros_gz_sim$"; then
-        echo "ERRO: pacote ros_gz_sim não encontrado. Instale:"
-        echo "  sudo apt install ros-\$ROS_DISTRO-ros-gz ros-\$ROS_DISTRO-ros-gz-sim ros-\$ROS_DISTRO-ros-gz-bridge"
-        exit 1
-    fi
-fi
-
 mkdir -p "$SCRIPT_DIR/maps"
 
 WS_DIR="$SCRIPT_DIR"
 
 # --- colcon build incremental (hash dos fontes do workspace) ---
 # Pacotes vivem em ros2_packages/ — colcon descobre via --base-paths.
-# Hash cobre robot_nav E wheel_msgs (incluindo .msg) — sem wheel_msgs no scan,
+# Hash cobre o pacote selecionado E wheel_msgs (incluindo .msg) — sem wheel_msgs no scan,
 # alterar WheelSpeeds.msg não dispara rebuild apesar do colcon recompilá-lo.
-PKG_STAMP="$WS_DIR/install/.robot_nav.sha1"
-PKG_HASH=$(find "$SCRIPT_DIR/ros2_packages/robot_nav" "$SCRIPT_DIR/ros2_packages/wheel_msgs" -type f \
-    \( -name "*.py" -o -name "*.xml" -o -name "*.xacro" -o -name "*.yaml" -o -name "*.msg" \) \
-    -not -path "*/build/*" -not -path "*/install/*" \
-    2>/dev/null | sort | xargs sha1sum 2>/dev/null | sha1sum | awk '{print $1}')
+PKG_STAMP="$WS_DIR/install/.${ROBOT_NAV_PACKAGE}.sha1"
+PKG_HASH=$(find "$ROBOT_NAV_SOURCE" "$SCRIPT_DIR/ros2_packages/wheel_msgs" -type f \
+    -not -path "*/build/*" -not -path "*/install/*" -not -path "*/.git/*" \
+    -not -path "*/__pycache__/*" -not -path "*/.pytest_cache/*" \
+    -not -name "*.pyc" -print0 2>/dev/null \
+    | sort -z | xargs -0 -r sha1sum 2>/dev/null | sha1sum | awk '{print $1}')
 
 if [ ! -f "$ROS2_SETUP" ] \
    || [ ! -f "$PKG_STAMP" ] \
    || [ "$(cat "$PKG_STAMP" 2>/dev/null)" != "$PKG_HASH" ]; then
-    if [ -z "$ROS_DISTRO" ]; then
+    if [ -z "${ROS_DISTRO:-}" ]; then
         for d in /opt/ros/*/setup.bash; do
             [ -f "$d" ] && source "$d" && break
         done
@@ -173,8 +192,8 @@ if [ ! -f "$ROS2_SETUP" ] \
             exit 1
         }
     else
-        echo "Compilando workspace ROS2 (mudanças detectadas em robot_nav)..."
-        (cd "$WS_DIR" && colcon build --base-paths ros2_packages --symlink-install --packages-select robot_nav wheel_msgs) || {
+        echo "Compilando workspace ROS2 (mudanças detectadas em $ROBOT_NAV_PACKAGE)..."
+        (cd "$WS_DIR" && colcon build --base-paths ros2_packages --symlink-install --packages-select "$ROBOT_NAV_PACKAGE" wheel_msgs) || {
             echo "ERRO: colcon build falhou."
             exit 1
         }
@@ -189,6 +208,28 @@ if [ ! -f "$ROS2_SETUP" ]; then
 fi
 
 source "$ROS2_SETUP"
+
+if ! ROBOT_NAV_PREFIX=$(ros2 pkg prefix "$ROBOT_NAV_PACKAGE" 2>/dev/null); then
+    echo "ERRO: pacote ROS '$ROBOT_NAV_PACKAGE' não está instalado neste workspace."
+    echo "      Refaça: colcon build --base-paths ros2_packages --symlink-install --packages-select $ROBOT_NAV_PACKAGE wheel_msgs"
+    exit 1
+fi
+EXPECTED_ROBOT_NAV_PREFIX="$WS_DIR/install/$ROBOT_NAV_PACKAGE"
+if [ "$(readlink -f "$ROBOT_NAV_PREFIX")" != "$(readlink -f "$EXPECTED_ROBOT_NAV_PREFIX")" ]; then
+    echo "ERRO: ROS resolveu '$ROBOT_NAV_PACKAGE' em outro workspace:"
+    echo "      $ROBOT_NAV_PREFIX"
+    echo "      esperado: $EXPECTED_ROBOT_NAV_PREFIX"
+    echo "      Abra um terminal limpo e refaça a build deste checkout."
+    exit 1
+fi
+
+# Só consulta o índice ROS depois de carregar o overlay deste checkout. Antes
+# isso rodava acima do `source` e um terminal limpo dizia que ros_gz não existia.
+if [ "$SIM" = true ] && ! ros2 pkg list 2>/dev/null | grep -q "^ros_gz_sim$"; then
+    echo "ERRO: pacote ros_gz_sim não encontrado. Instale:"
+    echo "  sudo apt install ros-\$ROS_DISTRO-ros-gz ros-\$ROS_DISTRO-ros-gz-sim ros-\$ROS_DISTRO-ros-gz-bridge"
+    exit 1
+fi
 
 # --- python3-serial (dependência do mega_bridge) ---
 if ! python3 -c "import serial" 2>/dev/null; then
@@ -227,15 +268,18 @@ fi
 # --- Limpa órfãos de execuções anteriores (nós ROS2 e app.py) ---
 # Mesma lista usada no cleanup() ao final — uma fonte só pra evitar drift
 # quando adicionar/remover um nó (M5 da AUDITORIA_2026-05-27).
-KNOWN_NODE_PATTERNS=(
-    "robot_nav/cmd_vel_to_wheels"
-    "robot_nav/mega_bridge"
-    "robot_nav/pose_estimator"
-    "robot_nav/cone_detector"
-    "robot_nav/trekking_runner"
-    "robot_nav/unstuck_supervisor"
-    "robot_nav/scan_sanitizer"
-    "robot_nav/door_crossing"
+KNOWN_PROJECT_EXECUTABLES=(
+    cmd_vel_to_wheels mega_bridge pose_estimator cone_detector trekking_runner
+    unstuck_supervisor scan_sanitizer door_crossing path_follower
+    freeze_capture sim_actuator_model sim_trekking_pose motion_guard
+)
+KNOWN_NODE_PATTERNS=()
+for _pkg in robot_nav nav2_trekking; do
+    for _exe in "${KNOWN_PROJECT_EXECUTABLES[@]}"; do
+        KNOWN_NODE_PATTERNS+=("$_pkg/$_exe")
+    done
+done
+KNOWN_NODE_PATTERNS+=(
     "twist_mux"
     "joy_node"
     "teleop_node"
@@ -347,6 +391,7 @@ kill_tree() {
 }
 
 cleanup() {
+    local exit_code=$?
     trap '' EXIT INT TERM
     echo ""
     echo "Encerrando todos os processos..."
@@ -374,7 +419,7 @@ cleanup() {
     pkill -9 -f "gz sim"                        2>/dev/null
     pkill -9 -f "parameter_bridge"              2>/dev/null
     echo "Pronto."
-    exit 0
+    exit "$exit_code"
 }
 trap cleanup INT TERM EXIT
 
@@ -399,11 +444,67 @@ wait_for_topic() {
     return 1
 }
 
+wait_for_message() {
+    local topic=$1 type=$2 timeout=${3:-30} durability=${4:-volatile}
+    local qos_args=(--qos-profile sensor_data)
+    local sample
+    if [ "$durability" = "transient_local" ]; then
+        # /map e /costmap publicam a amostra inicial de forma latched. Sem esta
+        # durabilidade, um subscriber aberto depois da ativação pode esperar
+        # para sempre por uma segunda mensagem que não virá.
+        qos_args+=(--qos-reliability reliable --qos-durability transient_local)
+    fi
+    # O CLI retorna exit 0 até quando --timeout vence sem mensagem. Só conteúdo
+    # não vazio prova que uma amostra realmente chegou.
+    sample=$(ros2 topic echo "$topic" "$type" "${qos_args[@]}" \
+        --once --timeout "$timeout" --no-arr 2>/dev/null)
+    if [ -n "$sample" ]; then
+        return 0
+    fi
+    echo "  [wait_for_message] timeout $timeout s sem dados em $topic"
+    return 1
+}
+
+wait_for_lifecycle_active() {
+    local node=$1 timeout=${2:-180} elapsed=0
+    while [ "$elapsed" -lt "$timeout" ]; do
+        # `grep active` também casa com INactive e liberava o Nav2 antes da
+        # hora. A palavra inteira distingue os dois estados.
+        if ros2 lifecycle get "$node" 2>/dev/null | grep -qw "active"; then
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    echo "  [wait_for_lifecycle] timeout $timeout s aguardando $node ficar active"
+    return 1
+}
+
+wait_for_action() {
+    local action=$1 timeout=${2:-30} elapsed=0
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if ros2 action list 2>/dev/null | grep -qx "$action"; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    echo "  [wait_for_action] timeout $timeout s aguardando $action"
+    return 1
+}
+
 # /scan publicando DE FATO (não só listado no discovery)? O LD06 cria o tópico
 # logo no start e só ~3s depois morre ("abnormal"), então a presença na lista
-# não basta — confirma dado fluindo via `topic hz`.
+# não basta — confirma dado fluindo com o QoS real do sensor.
 lidar_scan_healthy() {
-    timeout 6 ros2 topic hz /scan 2>/dev/null | grep -q "average rate"
+    # O LD06 publica BEST_EFFORT. `ros2 topic hz` já mentiu que o sensor estava
+    # morto porque assinava RELIABLE; o retry então matava um LiDAR saudável.
+    # `sensor_data` negocia BEST_EFFORT e --once prova fluxo real sem despejar o
+    # vetor inteiro do scan no log.
+    local sample
+    sample=$(ros2 topic echo /scan sensor_msgs/msg/LaserScan \
+        --qos-profile sensor_data --once --timeout 6 --no-arr 2>/dev/null)
+    [ -n "$sample" ]
 }
 
 # Sobe o LD06 com retry. O sensor quase nunca vinga de 1ª: ~3s após o start solta
@@ -416,7 +517,7 @@ start_lidar() {
     local try
     for ((try = 1; try <= LIDAR_TRIES; try++)); do
         echo "      [lidar] tentativa $try/$LIDAR_TRIES..."
-        ros2 launch robot_nav lidar.launch.py lidar_port:="$LIDAR_PORT" > "$LIDAR_LOG" 2>&1 &
+        ros2 launch "$ROBOT_NAV_PACKAGE" lidar.launch.py lidar_port:="$LIDAR_PORT" > "$LIDAR_LOG" 2>&1 &
         LIDAR_PID=$!
         sleep 5   # passa a janela do "abnormal" antes de julgar
         if pgrep -f ldlidar_stl_ros2_node >/dev/null 2>&1 \
@@ -465,28 +566,53 @@ if [ "$SIM" = true ]; then
     # --- [SIM] Gazebo Harmonic + robô diff-drive + bridges ROS↔GZ ---
     echo "[1/4] Modo SIM — subindo Gazebo com mundo: $WORLD_FILE"
     SIM_LOG="$LOG_DIR/sim.log"
-    SIM_WORLD="$WORLD_FILE" ros2 launch robot_nav sim.launch.py \
+    SIM_WORLD="$WORLD_FILE" ros2 launch "$ROBOT_NAV_PACKAGE" sim.launch.py \
         world:="$WORLD_FILE" \
         spawn_x:="$SPAWN_X" spawn_y:="$SPAWN_Y" spawn_z:="$SPAWN_Z" > "$SIM_LOG" 2>&1 &
     SIM_PID=$!
     echo "      PID: $SIM_PID  |  Log: $SIM_LOG"
     # Espera o /clock vir do bridge GZ → ROS antes de seguir.
-    wait_for_topic /clock 30 || echo "  AVISO: Gazebo ainda não publicou /clock — seguindo mesmo assim."
+    wait_for_message /clock rosgraph_msgs/msg/Clock 30 \
+        || echo "  AVISO: Gazebo ainda não publicou dados em /clock — seguindo mesmo assim."
     # Hardware desligado no sim
     NO_LIDAR=true
 else
     # --- [1+2] Nós do robô (mega_bridge + URDF + odom + cmd_vel_to_wheels) ---
     echo "[1/4] Iniciando nós do robô (MEGA bridge, URDF, odometria, cmd_vel->wheels)..."
     if [ ! -e "/dev/mega" ]; then
-        echo "      AVISO: /dev/mega não encontrado — rode sudo ./setup_udev.sh primeiro,"
-        echo "      ou plug a Arduino MEGA antes de subir."
+        if [ "$MODE" = "teleop" ]; then
+            echo "      AVISO: /dev/mega não encontrado — teleop subirá sem atuar os motores."
+            echo "      Rode sudo ./setup_udev.sh ou conecte a Arduino MEGA."
+        else
+            echo "ERRO: /dev/mega não encontrado; modo $MODE abortado antes da autonomia."
+            echo "      Rode sudo ./setup_udev.sh ou conecte a Arduino MEGA."
+            exit 1
+        fi
     fi
     ROBOT_LOG="$LOG_DIR/robot_nodes.log"
-    ros2 launch robot_nav robot.launch.py > "$ROBOT_LOG" 2>&1 &
+    ros2 launch "$ROBOT_NAV_PACKAGE" robot.launch.py > "$ROBOT_LOG" 2>&1 &
     ROBOT_PID=$!
     echo "      PID: $ROBOT_PID  |  Log: $ROBOT_LOG"
 
-    wait_for_topic /odom 15 || echo "  AVISO: pose_estimator ainda não publicou /odom — seguindo."
+    # /odom pode aparecer no discovery mesmo se o publisher estiver sem dados.
+    # Antes de autonomia, exige um STATE real vindo da MEGA e uma odometria real.
+    if ! wait_for_message /hoverboard/wheel_velocities std_msgs/msg/Float64MultiArray 20; then
+        if [ "$MODE" = "teleop" ]; then
+            echo "  AVISO: sem feedback da MEGA — teleop pode abrir, mas não opere o robô."
+        else
+            echo "ERRO: a MEGA não publicou feedback das rodas; modo $MODE abortado."
+            echo "      Consulte: $ROBOT_LOG"
+            exit 1
+        fi
+    fi
+    if ! wait_for_message /odom nav_msgs/msg/Odometry 20; then
+        if [ "$MODE" = "teleop" ]; then
+            echo "  AVISO: pose_estimator não enviou dados em /odom — teleop pode seguir sem pose."
+        else
+            echo "ERRO: modo $MODE não pode subir sem dados em /odom. Nada autônomo foi iniciado."
+            exit 1
+        fi
+    fi
 
     # --- [3] LiDAR LD06 + detector de obstáculos ---
     if [ "$NO_LIDAR" = false ]; then
@@ -498,12 +624,23 @@ else
             if start_lidar; then
                 LIDAR_OK=true
             else
-                echo "  AVISO: LiDAR não subiu após $LIDAR_TRIES tentativas — seguindo sem /scan."
+                if [ "$MODE" = "teleop" ]; then
+                    echo "  AVISO: LiDAR não subiu após $LIDAR_TRIES tentativas — teleop seguirá sem /scan."
+                else
+                    echo "ERRO: LiDAR não subiu após $LIDAR_TRIES tentativas."
+                    echo "      Modo $MODE foi abortado antes de iniciar autonomia."
+                    exit 1
+                fi
             fi
         else
-            echo "[2/4] AVISO: Porta do LiDAR $LIDAR_PORT não encontrada. Pulando LiDAR."
-            echo "      Para especificar outra porta: ./launch.sh --lidar-port=/dev/ttyUSB2"
-            NO_LIDAR=true
+            if [ "$MODE" = "teleop" ]; then
+                echo "[2/4] AVISO: Porta do LiDAR $LIDAR_PORT não encontrada. Pulando LiDAR."
+                NO_LIDAR=true
+            else
+                echo "ERRO: porta do LiDAR $LIDAR_PORT não encontrada; modo $MODE abortado."
+                echo "      Para especificar outra porta: $0 --$MODE --lidar-port=/dev/ttyUSB2"
+                exit 1
+            fi
         fi
     else
         echo "[2/4] LiDAR desativado (--no-lidar)"
@@ -520,10 +657,13 @@ case "$MODE" in
     slam)
         echo "[3/4] Modo SLAM — subindo slam_toolbox (mapping online)..."
         SLAM_LOG="$LOG_DIR/slam.log"
-        ros2 launch robot_nav slam.launch.py $SIM_TIME_ARG > "$SLAM_LOG" 2>&1 &
+        ros2 launch "$ROBOT_NAV_PACKAGE" slam.launch.py $SIM_TIME_ARG > "$SLAM_LOG" 2>&1 &
         SLAM_PID=$!
         echo "      PID: $SLAM_PID  |  Log: $SLAM_LOG"
-        wait_for_topic /map 30 || echo "  AVISO: slam_toolbox ainda não publicou /map — seguindo."
+        if ! wait_for_message /map nav_msgs/msg/OccupancyGrid 60 transient_local; then
+            echo "ERRO: slam_toolbox não enviou dados em /map. Encerrando a stack incompleta."
+            exit 1
+        fi
         ;;
     nav2)
         NAV2_PARAMS_ARG=""
@@ -532,7 +672,7 @@ case "$MODE" in
         # sem RotationShim, max_vel_theta 0.8) → outro nav, resultado que não vale
         # pro real. Ver ESTADO_PROJETO.md (análise de lacunas sim vs real).
         if [ "$PI_PROFILE" = true ] || [ "$SIM" = true ]; then
-            PI_YAML="$(ros2 pkg prefix robot_nav 2>/dev/null)/share/robot_nav/config/nav2_params_pi.yaml"
+            PI_YAML="$ROBOT_NAV_PREFIX/share/$ROBOT_NAV_PACKAGE/config/nav2_params_pi.yaml"
             if [ -f "$PI_YAML" ]; then
                 NAV2_PARAMS_ARG="params_file:=$PI_YAML"
                 _perfil="PI"; [ "$SIM" = true ] && _perfil="SIM=REAL"
@@ -551,11 +691,19 @@ case "$MODE" in
             INIT_POSE_ARG="set_initial_pose:=true init_x:=$SPAWN_X init_y:=$SPAWN_Y init_yaw:=0.0"
             echo "      [SIM] AMCL nasce em ($SPAWN_X, $SPAWN_Y, yaw 0) — sem setar pose na mão"
         fi
-        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG $INIT_POSE_ARG > "$NAV2_LOG" 2>&1 &
+        ros2 launch "$ROBOT_NAV_PACKAGE" nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG $INIT_POSE_ARG > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
-        # Nav2 demora pra ativar todos os lifecycle nodes; espera o costmap global.
-        wait_for_topic /global_costmap/costmap 30 || echo "  AVISO: Nav2 ainda não publicou /global_costmap/costmap — seguindo."
+        # Presença de tópico não prova bringup: o map_server pode existir ainda
+        # inactive enquanto a fila do lifecycle travou. Só libera a web quando
+        # bt_navigator está ACTIVE e o action server realmente existe.
+        if ! wait_for_lifecycle_active /bt_navigator 180 \
+           || ! wait_for_message /global_costmap/costmap nav_msgs/msg/OccupancyGrid 60 transient_local \
+           || ! wait_for_action /navigate_to_pose 30; then
+            echo "ERRO: Nav2 não ficou operacional; nenhum goal será aceito."
+            echo "      Consulte: $NAV2_LOG"
+            exit 1
+        fi
         ;;
     trekking)
         echo "[3/4] Modo TREKKING — subindo cone_detector + trekking_runner (pose_estimator já vem do robot.launch)..."
@@ -568,7 +716,7 @@ case "$MODE" in
         # TREK_EXTRA_ARGS: passagem direta pro trekking.launch.py, sem precisar
         # de uma flag nova no launch.sh a cada experimento. Ex.:
         #   TREK_EXTRA_ARGS="cone_fix_repeat:=true" ./launch.sh --sim --trekking
-        ros2 launch robot_nav trekking.launch.py $SIM_TIME_ARG $TREK_SIM_ARG \
+        ros2 launch "$ROBOT_NAV_PACKAGE" trekking.launch.py $SIM_TIME_ARG $TREK_SIM_ARG \
             ${TREK_EXTRA_ARGS:-} > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
@@ -584,6 +732,7 @@ echo ""
 SIM_TAG=""
 [ "$SIM" = true ] && SIM_TAG=" [SIM/Gazebo]"
 echo "[4/4] Iniciando servidor web em http://0.0.0.0:5000 (modo: $MODE$SIM_TAG)"
+echo "      Stack ROS: $ROBOT_NAV_PACKAGE"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 case "$MODE" in
@@ -595,6 +744,7 @@ case "$MODE" in
         echo "  MODO NAV2$SIM_TAG — clique no mapa web para enviar o robô a um destino."
         echo "  Mapa: $MAP_FILE"
         echo "  AMCL publicando map→odom. bt_navigator consome /goal_pose."
+        echo "  ANTES do 1º goal: confira a pose; se não voltou à origem do SLAM, use '📍 Definir pose'."
         ;;
     trekking)
         echo "  MODO TREKKING$SIM_TAG — ponto-a-ponto com PID e snap-to-cone."
@@ -642,3 +792,4 @@ export ROBOT_SIM="$SIM"
 python3 app.py
 SERVER_EXIT=$?
 echo "Servidor web encerrou (exit=$SERVER_EXIT)"
+exit "$SERVER_EXIT"

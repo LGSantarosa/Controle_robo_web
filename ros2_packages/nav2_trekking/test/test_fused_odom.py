@@ -11,6 +11,7 @@ from nav2_trekking.fused_odom import (
     flow_yaw_gate,
     fuse_translation,
     heading_correction,
+    slip_estimate,
     wheel_twist,
 )
 
@@ -372,3 +373,18 @@ def test_degenerate_matches_wheel_only_odom():
     assert r.x == pytest.approx(exp_x)
     assert r.y == pytest.approx(exp_y)
     assert r.yaw == pytest.approx(angular * dt)
+
+
+def test_slip_estimate_sem_referencia_devolve_nan():
+    assert math.isnan(slip_estimate(2.0, 0.0, 0.0))
+    assert math.isnan(slip_estimate(2.0, 0.0, 0.1))
+
+
+def test_slip_estimate_com_referencia_mede_a_divergencia():
+    assert slip_estimate(1.0, 0.4, 0.9) == pytest.approx(0.6)
+    assert slip_estimate(0.4, 1.0, 0.9) == pytest.approx(-0.6)
+
+
+def test_slip_estimate_nan_nunca_dispara_o_warn():
+    slip = slip_estimate(5.0, 0.0, 0.0)
+    assert not (abs(slip) > 0.15)

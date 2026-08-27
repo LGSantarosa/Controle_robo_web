@@ -4,6 +4,8 @@
 #
 # Uso:
 #   robot-up [slam|nav2|trekking|teleop] [args extras do launch.sh]
+#   robot-up nav2-trekking-slam [args extras]
+#   robot-up nav2-trekking --map=maps/<mapa>.yaml [args extras]
 #   robot-up                       # default: teleop
 #   robot-up nav2 --map=maps/sala.yaml
 #
@@ -19,8 +21,28 @@ SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 REPO_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
 cd "$REPO_DIR"
 
-if [ ! -f "$REPO_DIR/launch.sh" ]; then
-    echo "ERRO: launch.sh não encontrado em $REPO_DIR" >&2
+case "$MODE" in
+    teleop|slam|nav2|trekking)
+        LAUNCHER="$REPO_DIR/launch.sh"
+        LAUNCH_MODE="--$MODE"
+        ;;
+    nav2-trekking-slam)
+        LAUNCHER="$REPO_DIR/launch_nav2_trekking.sh"
+        LAUNCH_MODE="--slam"
+        ;;
+    nav2-trekking)
+        LAUNCHER="$REPO_DIR/launch_nav2_trekking.sh"
+        LAUNCH_MODE="--nav2"
+        ;;
+    *)
+        echo "ERRO: modo desconhecido '$MODE'." >&2
+        echo "      Use teleop, slam, nav2, trekking, nav2-trekking-slam ou nav2-trekking." >&2
+        exit 1
+        ;;
+esac
+
+if [ ! -x "$LAUNCHER" ]; then
+    echo "ERRO: launcher não encontrado ou não executável: $LAUNCHER" >&2
     echo "      O symlink em /usr/local/bin/ pode estar apontando pra um repo movido." >&2
     exit 1
 fi
@@ -36,6 +58,9 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
     exec tmux attach -t "$SESSION"
 else
     echo "Subindo a stack ($MODE) na sessão tmux '$SESSION'..."
-    # `; bash` mantém o painel aberto pra inspeção mesmo se o launch.sh sair.
-    exec tmux new -s "$SESSION" "./launch.sh --$MODE $*; bash"
+    # tmux recebe uma string de shell. `%q` preserva cada argumento e impede
+    # que espaço/metacaractere em nome de mapa seja reinterpretado.
+    printf -v LAUNCH_CMD '%q ' "$LAUNCHER" "$LAUNCH_MODE" "$@"
+    # Mantém o painel aberto pra inspeção mesmo se o launcher sair.
+    exec tmux new -s "$SESSION" "$LAUNCH_CMD; exec bash"
 fi

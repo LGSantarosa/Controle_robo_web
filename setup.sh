@@ -36,7 +36,7 @@ WS_DIR="$REPO_DIR"
 echo "=== [1/4] Instalando dependências apt ==="
 sudo apt update
 sudo apt install -y \
-    git python3-venv python3-pip pipx \
+    git python3-venv python3-pip pipx python3-numpy python3-scipy \
     python3-colcon-common-extensions \
     python3-serial \
     ros-jazzy-xacro ros-jazzy-robot-state-publisher \
@@ -78,7 +78,7 @@ fi
 
 echo
 echo "=== [3/4] Compilando workspace em $WS_DIR ==="
-# Os pacotes ROS2 vivem em ros2_packages/ (robot_nav, wheel_msgs,
+# Os pacotes ROS2 vivem em ros2_packages/ (robot_nav, nav2_trekking, wheel_msgs,
 # costmap_converter, teb_local_planner). colcon descobre via --base-paths.
 cd "$WS_DIR"
 source /opt/ros/jazzy/setup.bash

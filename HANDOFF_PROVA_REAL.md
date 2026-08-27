@@ -60,16 +60,44 @@ Relógio bruto é contaminado pela rota sorteada.
 
 O pacote **`nav2_trekking` nunca existiu na Pi** — é a primeira vez que sobe.
 
-1. A branch `nav2-trekking` **não está na `main`**, e a Pi normalmente faz
-   `git reset --hard origin/main`. **Pergunte ao dono** se prefere push da branch
-   (e checkout dela na Pi) ou merge na main. Não decida sozinho.
-2. Na Pi: **`git fetch` + `git reset --hard <ref>`**. **NUNCA `scp`** — o repo da
-   Pi é `~/workspace/Controle_robo_web`.
-3. Na Pi: **`colcon build --packages-select nav2_trekking`** (é pacote novo lá;
-   `wheel_msgs` é compartilhado com o `robot_nav` e já existe).
+1. A ref de deploy é a ponta atual da branch **`nav2-trekking`**, depois que o
+   commit do launcher dedicado estiver nela. Ela não está na `main`.
+2. **Não use `git reset --hard` cegamente na Pi.** Primeiro confira se existe
+   trabalho local e pare se houver algo a preservar:
+
+   ```bash
+   cd ~/workspace/Controle_robo_web
+   git status --short --branch
+   git fetch origin
+   git switch nav2-trekking   # se não existir: git switch --track origin/nav2-trekking
+   git pull --ff-only
+   ```
+
+   Não use `scp`: o checkout da Pi deve continuar rastreável pelo Git.
+3. Não precisa montar um comando `colcon` manual: o launcher calcula o hash e
+   compila **`nav2_trekking` + `wheel_msgs`**, depois confirma via `ros2 pkg
+   prefix` que subirá o pacote correto.
 4. SSH na Pi: `ssh robo@robo-desktop.local`, e **use retry** —
    `until ssh ...; do sleep 3; done`. Pi offline = bateria do robô OU o PC em
    WiFi diferente; não especule crash.
+
+### Sequência exata da prova
+
+```bash
+cd ~/workspace/Controle_robo_web
+./launch_nav2_trekking.sh --slam
+# dirija, salve o mapa e volte ao ponto físico onde o SLAM começou (ou anote a pose)
+# encerre com Ctrl+C
+./launch_nav2_trekking.sh --nav2 --map=maps/<mapa_novo>.yaml
+# antes do primeiro goal, confira a pose na web; use "📍 Definir pose" se necessário
+```
+
+O launcher dedicado não aceita teleop/trekking antigo, força
+`nav2_params_pi.yaml`, não flasheia a MEGA por efeito colateral e aborta antes da
+autonomia se MEGA, `/odom`, LiDAR, mapa ou lifecycle do Nav2 não estiverem vivos.
+Para rodar dentro do tmux: `robot-up nav2-trekking-slam` e depois
+`robot-up nav2-trekking --map=maps/<mapa_novo>.yaml` (encerre a primeira sessão
+antes de iniciar a segunda).
 
 ---
 
@@ -86,21 +114,24 @@ acha caminho** — e isso parece bug misterioso se você não souber. Rode isto 
 que o mapa novo estiver salvo (é só análise de imagem, não sobe nada):
 
 ```bash
-python3 tools/mapa_passagens.py maps/<mapa_novo>.yaml
+python3 tools/mapa_passagens.py maps/<mapa_novo>.yaml --raio 0.32 --strict
 ```
 
-Ele diz se o mapa continua inteiro com o robô de 32 cm e aponta as coordenadas
-das passagens mais apertadas. Referência dos mapas conhecidos:
+O `launch_nav2_trekking.sh --nav2` já executa exatamente esse pré-voo e não sobe
+o robô se ele reprovar. O relatório também aponta as coordenadas das passagens
+mais apertadas. Referência medida nos arquivos que estão hoje no repo:
 
-| mapa | raio 0,25 | raio 0,32 |
-|---|---|---|
-| `sala` (golden) | 100% inteiro | **100% inteiro** (gargalos de 0,64 m — no limite) |
-| `sala_grande` (sim) | 100% | **100%** |
-| `hotmilk` | 89,2% | 82,0% (**perde 7%**) |
+| arquivo | raio 0,25 | raio 0,32 | `--strict` |
+|---|---|---|---|
+| `sala_grande.yaml` (sim) | 100,0% | 100,0% | passa |
+| `hotmilk_portas.yaml` | 50,5% | 51,5% | passa (já nasce fragmentado) |
+| `hotmilk.yaml` | 89,2% | 82,0% | **reprova: perde 7,2%** |
+| `mapa_golden_2026-06-10.yaml` | 94,3% | 87,6% | **reprova: perde 6,7%** |
 
-Se o mapa novo perder pedaço grande: **avise o dono antes de rodar** e ofereça
-baixar o raio (0,30 → fresta de 0,60 m). Não baixe por conta própria — a prova é
-justamente do 0,32.
+Se o mapa novo reprovar: **avise o dono antes de rodar**. Não baixe o raio por
+conta própria — a prova é justamente do 0,32. Se ele inspecionar os gargalos e
+decidir conscientemente prosseguir, existe o override explícito
+`--allow-narrow-map`; ele não muda o raio, apenas libera o mapa reprovado.
 
 ---
 

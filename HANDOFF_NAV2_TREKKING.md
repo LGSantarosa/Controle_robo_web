@@ -1,7 +1,8 @@
 # HANDOFF — nav2_trekking (2026-08-27)
 
 > Estado de quem pega o bastão. Tudo aqui foi **medido no sim**, nada foi ao robô real.
-> Branch: **`nav2-trekking`**. Último commit: `e03555b`.
+> Branch: **`nav2-trekking`**. Use a ponta atual da branch; o hash antigo
+> `e03555b` não inclui o launcher da prova real.
 
 ---
 
@@ -21,14 +22,18 @@ E, crucialmente (define o critério de sucesso):
 Logo: **8/8 goals sempre, zero colisão, e o tempo é a nota.**
 
 `ros2_packages/nav2_trekking/` é uma **cópia integral** do `robot_nav`, renomeada
-por dentro. Os dois convivem (colcon acha os dois); **nenhuma linha do robot_nav
-foi tocada**. `wheel_msgs` é compartilhado de propósito.
+por dentro. Os dois convivem (colcon acha os dois) e `wheel_msgs` é compartilhado
+de propósito. O pacote novo evolui separado; a branch também carrega correções
+anteriores de sim no `robot_nav`, portanto integrar a branch inteira não é uma
+adição literalmente isolada no diff.
 
 ---
 
 ## 2. ESTADO DO CÓDIGO AGORA
 
-**Tudo commitado. Working tree limpo.** Nada pendente de deploy.
+O controle de movimento continua congelado no último estado validado. A branch
+também possui `launch_nav2_trekking.sh`, launcher dedicado que impede subir
+`robot_nav` por engano, compila o pacote certo e faz o pré-voo do mapa.
 
 | commit | o que entrou |
 |---|---|
@@ -41,6 +46,19 @@ tentativas de melhorar as curvas foram testadas e revertidas (`turn_enter` 24°,
 porquê e os números.
 
 ⚠️ **Nada disto foi ao robô real ainda.**
+
+Para a prova, não use `./launch.sh --nav2`: sem o seletor explícito ele mantém o
+comportamento histórico e sobe `robot_nav`. Use sempre:
+
+```bash
+./launch_nav2_trekking.sh --slam
+./launch_nav2_trekking.sh --nav2 --map=maps/<mapa_novo>.yaml
+```
+
+O launcher força o perfil `nav2_params_pi.yaml`, faz o pré-voo de passagens do
+mapa, espera dados reais de MEGA/LiDAR/odometria e confirma que o lifecycle do
+Nav2 ficou `active`. Ele também desliga o flash automático da MEGA; só
+`--flash-mega` explícito altera firmware durante essa prova.
 
 ---
 

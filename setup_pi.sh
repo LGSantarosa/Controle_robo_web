@@ -14,7 +14,7 @@
 #   cd ~/Workspace/Controle_robo_web
 #   ./setup_pi.sh
 #   sudo ./setup_udev.sh           # depois — fixa /dev/mega e /dev/lidar
-#   ./launch.sh --trekking         # ou --slam / --nav2
+#   ./launch_nav2_trekking.sh --slam
 
 set -e
 
@@ -77,7 +77,7 @@ echo
 # --- 1/5 — apt: só o essencial ---
 echo "=== [1/4] Instalando dependências apt (enxuto pro modo real) ==="
 APT_BASE=(
-    git python3-venv python3-pip python3-serial
+    git python3-venv python3-pip python3-serial python3-numpy python3-scipy
     "ros-${ROS_DISTRO}-xacro"
     "ros-${ROS_DISTRO}-robot-state-publisher"
     "ros-${ROS_DISTRO}-tf2-ros"
@@ -224,16 +224,18 @@ Próximos passos:
 
   3) Abra um terminal NOVO (pra carregar o source do ~/.bashrc) e rode:
         cd $REPO_DIR
-        ./launch.sh --trekking
+        ./launch_nav2_trekking.sh --slam
 
   Outras opções:
-        ./launch.sh --slam
-        ./launch.sh --nav2
+        ./launch_nav2_trekking.sh --nav2 --map=maps/<mapa_novo>.yaml
+        ./launch.sh --slam       # stack histórica robot_nav
+        ./launch.sh --nav2       # stack histórica robot_nav
 
   Operação headless (de outro PC):
         ./pair-ps4.sh                    # parear o DualShock 4 (uma vez)
         ssh $USER@$(hostname).local      # acessar sem cabo (mDNS)
-        robot-up slam                    # sobe a stack no tmux (sobrevive ao SSH cair)
+        robot-up nav2-trekking-slam      # SLAM novo no tmux (sobrevive ao SSH cair)
+        robot-up nav2-trekking --map=maps/<mapa_novo>.yaml
         robot-key                        # WASD via teclado (publica em key_vel)
 
 Dicas pra Pi:

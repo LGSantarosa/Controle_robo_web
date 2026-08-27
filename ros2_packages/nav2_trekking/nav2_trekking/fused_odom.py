@@ -110,6 +110,18 @@ def flow_tick_velocity(accum_dx, accum_dy, dt):
     return accum_dx / dt, accum_dy / dt
 
 
+def slip_estimate(vx_wheel, vx_ref, ref_alpha, alpha_min=0.1):
+    """Divergência roda ↔ referência de translação (m/s), ou NaN sem referência.
+
+    NaN e NÃO zero. Zero é uma afirmação — "medi, e as rodas conferem" — e era
+    mentira desde que o PMW3901 saiu do robô: sem flow, o alpha fica zero e o
+    detector não possui uma fonte independente para medir derrapagem.
+    """
+    if ref_alpha <= alpha_min:
+        return float('nan')
+    return vx_wheel - vx_ref
+
+
 def blend_yaw_rate(imu_fresh, imu_rate, imu2_fresh, imu2_rate,
                    imu2_weight, disagree_min=0.15):
     """Combina as taxas de yaw das DUAS IMUs. Devolve (rate, source, disagree).
