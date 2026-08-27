@@ -93,6 +93,12 @@ if [ "$SIM" = true ] && [ "${WORLD_FILE:0:1}" != "/" ]; then
     WORLD_FILE="$SCRIPT_DIR/$WORLD_FILE"
 fi
 
+# Mundos com mesh (ex.: educacao_criativa.sdf) usam URI relativo 'meshes/...' —
+# o Gazebo só resolve com worlds/ no GZ_SIM_RESOURCE_PATH.
+if [ "$SIM" = true ]; then
+    export GZ_SIM_RESOURCE_PATH="$SCRIPT_DIR/worlds:$GZ_SIM_RESOURCE_PATH"
+fi
+
 # Em SLAM e NAV2 o LiDAR é obrigatório (no modo real; no sim o Gazebo simula).
 if [ "$SIM" = false ] && [ "$MODE" != "teleop" ] && [ "$NO_LIDAR" = true ]; then
     echo "ERRO: modo $MODE precisa do LiDAR. Remova --no-lidar."
