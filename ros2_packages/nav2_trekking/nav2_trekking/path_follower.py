@@ -87,23 +87,28 @@ class FollowConfig:
                                     # velocity_smoother. Subir só o DWB/smoother
                                     # não acelera nada.
     lookahead: float = 0.6          # m — distância do carrot à frente no plano.
-                                    # ⏳ HIPÓTESE ABERTA 2026-08-27: testar 1.0.
-                                    # SIM, já foi revertido em 06-27/28 por
-                                    # "raspar" — mas ali não havia velocidade-por-
-                                    # folga, a inflação era menor e, principalmente,
-                                    # NÃO HAVIA MEDIÇÃO: "raspava" era observação.
-                                    # Agora o colisao.py mede a folga real em mm
-                                    # contra a geometria do mundo, então dá pra
-                                    # saber se raspa e QUANTO.
-                                    # Motivo de tentar de novo: medido a 0.60 m/s,
-                                    # 72% do giro se cancela. Alargar a banda
-                                    # (turn_enter 24°) e filtrar a mira (tau 1.6)
-                                    # FALHARAM os dois — não é ruído, é ganho de
-                                    # laço: a 0.6 m o robô corrige o rumo mas segue
-                                    # deslocado de lado, cruza a linha e gira pro
-                                    # outro lado. Carrot mais longo baixa o ganho.
-                                    # SE a folga mínima piorar (hoje 6-8 mm em
-                                    # wall_10/wall_12), reverter para 0.6.
+                                    # ⛔ HIPÓTESE 1.0 TESTADA E REFUTADA 2026-08-27
+                                    # (1 volta medida, rota1/sala_grande, 0.60 m/s;
+                                    #  log/nav2_trekking_velocidade/v060_lookahead10.csv):
+                                    #   tempo 597,9 s vs 621,6 s do 0.6 — MAS a volta
+                                    #   encurtou (141,2 m vs 147,7): v média IDÊNTICA
+                                    #   (0,236 vs 0,237). Não ficou mais rápido, ficou
+                                    #   mais CURTO — cortando canto, colado na parede.
+                                    #   COLISÕES 11 e raspões 17 numa volta (0.6: 1 e 3
+                                    #   em DUAS voltas), 21 s em contato, folga -1 mm.
+                                    #   16 "failed to plan" + 3 recoveries (0.6: 0,5 e 0):
+                                    #   colado, a célula do robô vira custo letal.
+                                    #   E NÃO curou o que motivou o teste: cancelamento
+                                    #   de giro 72% -> 87,5% (mesma janela de 3 min),
+                                    #   giro bruto igual (1275 -> 1230°), líquido 362 ->
+                                    #   153°. Mesma assinatura do aim_tau 1.6 (87,8%).
+                                    # => carrot longo NÃO é ganho de laço; filtrar E
+                                    #    alongar a mira falham igual. O que sobra é o
+                                    #    PLANO quebrado do Theta* (nav2_smoother fora do
+                                    #    launch, BT sem SmoothPath). Ver HANDOFF §6.2.
+                                    # Contexto de por que valeu tentar: em 06-27/28 a
+                                    # reversão foi por "raspar" OBSERVADO, sem medição;
+                                    # agora o colisao.py mede em mm — e confirmou.
                                     # 1.0 cortava o arco/raspava; 0.6 = VALIDADO (porta
                                     # real 4/4). 2026-06-27 tentei 0.4 (achei que sairia
                                     # mais da porta antes de virar) e a mira-no-canto

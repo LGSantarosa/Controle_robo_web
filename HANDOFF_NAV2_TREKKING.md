@@ -1,7 +1,7 @@
 # HANDOFF — nav2_trekking (2026-08-27)
 
 > Estado de quem pega o bastão. Tudo aqui foi **medido no sim**, nada foi ao robô real.
-> Branch: **`nav2-trekking`**. Último commit: `6a365d0`.
+> Branch: **`nav2-trekking`**. Último commit: `80d9f35`.
 
 ---
 
@@ -26,24 +26,21 @@ foi tocada**. `wheel_msgs` é compartilhado de propósito.
 
 ---
 
-## 2. ⚠️ ESTADO DO CÓDIGO AGORA
+## 2. ESTADO DO CÓDIGO AGORA
 
-**Commitado (`6a365d0`)**: o pacote + a fase "sem medo" (0,30 m/s).
+**Tudo commitado. Working tree limpo.** Nada pendente de deploy.
 
-**NO WORKING TREE, NÃO COMMITADO** — a fase velocidade:
+| commit | o que entrou |
+|---|---|
+| `6a365d0` | o pacote `nav2_trekking` + fase 1 "sem medo" (0,30 m/s) |
+| `80d9f35` | fase 2 velocidade: `forward_speed` 0.60, `speed_for_clearance`, `PolygonFront` 0.50, harness `tools/sim_ab/`, CSVs |
 
-| mudança | arquivo | validado? |
-|---|---|---|
-| `speed_for_clearance` (velocidade por folga) + 5 testes | `path_follower.py` | ✅ **sim** — foi o que fez parar de bater |
-| `forward_speed` 0.30 → **0.60** | `path_follower.py` | ✅ sim (2 voltas, 16/16) |
-| `max_vel_x` / smoother 0.35 → **0.60** | `nav2_params_pi.yaml` | ✅ sim |
-| `PolygonFront` frente 0.40 → **0.50** | `nav2_params_pi.yaml` | ✅ sim |
-| harness de A/B | `tools/sim_ab/` | ✅ sim |
-| dados das corridas | `log/nav2_trekking_velocidade/` | — |
+O `path_follower` está no **último estado validado** (`lookahead` 0.6). **Três**
+tentativas de melhorar as curvas foram testadas e revertidas (`turn_enter` 24°,
+`aim_tau` 1.6, `lookahead` 1.0 — ver §5); os comentários no código guardam o
+porquê e os números.
 
-O `path_follower` está no **último estado validado**. Duas tentativas de melhorar
-as curvas foram **testadas e revertidas** (ver §5); os comentários no código
-guardam o porquê.
+⚠️ **Nada disto foi ao robô real ainda.**
 
 ---
 
@@ -58,6 +55,7 @@ guardam o porquê.
 | **`limit` + inflation 0.45 (fase 1 final)** | **4** | **32/32** | 787,7 s | 0,184 | — |
 | **0,60 m/s (fase 2 atual)** | **2** | **16/16** | **621,6 s** | **0,237** | 1 toque |
 | 0,60 + `aim_tau` 1.6 (revertido) | 1 | 8/8 | 685,2 s | 0,220 | 1 toque |
+| 0,60 + `lookahead` 1.0 (revertido) | 1 | 8/8 | 597,9 s | 0,236 | **11 colisões** |
 
 **Ganho acumulado: 791,6 s → 621,6 s = 21% mais rápido, com 16/16 goals.**
 
@@ -108,6 +106,24 @@ Duas tentativas, ambas revertidas:
   +9%. EMA forte em malha fechada = atraso de fase: gira por mira defasada,
   passa do ponto, volta.
 
+**`lookahead` 0.6 → 1.0** (era a hipótese #1 aberta) — **testado 2026-08-27 com
+medição, REFUTADO**. Ver `log/nav2_trekking_velocidade/v060_lookahead10.csv`:
+- **Não é mais rápido.** 597,9 s contra 621,6 s, mas a volta ENCURTOU (141,2 m
+  contra 147,7): a v média é a **mesma** (0,236 vs 0,237). Ele não andou mais
+  rápido, andou menos — **cortando canto, colado na parede**.
+- **Preço**: **11 colisões + 17 raspões numa volta** (o 0.6 fez 1 e 3 em DUAS),
+  21 s em contato, folga mínima **−1 mm**. Bateu em `wall_7` e `wall_10`.
+- **Efeito colateral no planner**: 16 `failed to plan` + 3 recoveries (o 0.6 fez
+  0,5 e 0) — colado na parede a célula do robô vira custo letal, o mesmo
+  mecanismo do "medo ≠ folga" acima.
+- **E não curou o que motivou o teste**: cancelamento de giro **72% → 87,5%**
+  (mesma janela de 3 min), giro bruto igual (1275° → 1230°), líquido 362° → 153°.
+  **Mesma assinatura do `aim_tau` 1.6** (87,8%).
+
+⭐ **A conclusão que sobra**: alongar a mira e filtrar a mira falham do MESMO
+jeito, logo o problema **não é ganho de laço nem ruído** — é o **plano**. Vai
+para o item 1 dos próximos passos.
+
 Do histórico antigo do arquivo (também não repetir): `turn_exit` 3° → 7° gera
 dente-de-serra (sair torto → anda em diagonal → estoura o enter → mais giros);
 `lookahead` 0.4 e "mira longe" pioraram em 06-27/28.
@@ -116,16 +132,17 @@ dente-de-serra (sair torto → anda em diagonal → estoura o enter → mais gir
 
 ## 6. ⏳ Próximos passos (em ordem)
 
-1. **HIPÓTESE ABERTA: `lookahead` 0.6 → 1.0.** Como banda e filtro falharam, o
-   quadro aponta para **ganho de laço** (pure-pursuit com carrot curto oscila:
-   corrige o rumo, segue deslocado de lado, cruza a linha, gira pro outro lado).
-   Já foi revertido em 06-27/28 por "raspar" — **mas ali não havia medição**.
-   Hoje o `colisao.py` mede a folga em mm: dá pra saber se raspa e quanto.
-   Critério: comparar com 621,6 s / 16-16 / folga mínima 6-8 mm.
-   *(Foi aplicado e revertido antes de rodar — a sessão acabou.)*
-2. Se o lookahead não resolver: **suavizar o plano**. O `nav2_smoother` **não
-   está no launch** e o BT não chama `SmoothPath` — o plano do Theta* chega
-   quebrado e o carrot persegue os cantos. É a abordagem estrutural.
+1. **SUAVIZAR O PLANO — agora é o caminho principal.** O `nav2_smoother` **não
+   está no launch** e o BT não chama `SmoothPath`: o plano do Theta* chega
+   quebrado e o carrot persegue os cantos. As três tentativas de resolver as
+   curvas **no seguidor** (banda `turn_enter`, filtro `aim_tau`, carrot
+   `lookahead`) falharam do mesmo jeito — o que resta é a fonte. É a abordagem
+   estrutural e ainda **não foi tentada**.
+2. **Margem lateral** (subiu de prioridade). A 0,60 m/s ele navega **colado**:
+   passou ~1 s inteiro a **6-8 mm** de `wall_10` e `wall_12`. No sim "não bate";
+   no real, com erro de AMCL + derrapagem, isso É batida. O teste do `lookahead`
+   1.0 mostrou o quanto essa margem é fina: bastou o carrot esticar para virarem
+   11 colisões. Atacar antes de ir pro robô.
 3. **Degrau 0,90 m/s** (o dono quer o mais rápido possível). ⚠️ A `PolygonFront`
    é caixa FIXA e **não escala**: a 0,90 a conta de parada é 0.27 + 0.09 = 0.36 m,
    então ela teria que ir a ~0.65 — e aí passa a pegar obstáculo que o robô ia
@@ -133,9 +150,6 @@ dente-de-serra (sair torto → anda em diagonal → estoura o enter → mais gir
 4. **Girar colado numa parede segue desprotegido** por desenho (o canto varre
    0.354 m; o reflexo é estreito e frontal). Lugar certo: o `path_follower`
    checar o anel 0.25..0.36 m antes de iniciar point-turn.
-5. **Margem lateral**: a 0,60 m/s ele navega **colado** — passou ~1 s inteiro a
-   **6-8 mm** de `wall_10` e `wall_12`. No sim "não bate"; no real, com erro de
-   AMCL + derrapagem, isso É batida. Atacar antes de ir pro robô.
 
 ---
 
