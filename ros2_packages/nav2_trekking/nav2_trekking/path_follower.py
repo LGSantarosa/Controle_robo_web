@@ -239,6 +239,21 @@ class FollowConfig:
     rot_min: float = 2.4            # rad/s — piso do giro (2.0 dava ~10°/s real =
                                     # rastejo na zona-morta 1.7; 2.4 ≈ 25°/s,
                                     # ver spec fluidez 07-02)
+                                    # 2026-08-27 TESTADO 3.0 (≈45°/s) e REVERTIDO:
+                                    # rendeu ~2% (v média 0,241 vs 0,237) — não paga
+                                    # o risco de derrapagem no skid real. Voltou a 2.4.
+                                    # O que o teste ENSINOU, e vale guardar:
+                                    # MEDIDO na volta la10_1: o robô comanda 2.4 em
+                                    # 98,6% das amostras girando e entrega 17°/s
+                                    # (mediana). Este piso É a velocidade de giro da
+                                    # volta INTEIRA: as minicurvinhas têm ~12° e o
+                                    # ganho P dá 0.22·3.0 = 0.66 rad/s, muito abaixo
+                                    # do piso, então tudo clampa aqui. O rot_max 4.5
+                                    # é decoração (16 de 3765 amostras).
+                                    # 39% da volta é giro parado (~240 s de 621 s), a
+                                    # 24°/s. E giro no lugar NÃO custa folga: o canto
+                                    # varre os mesmos 0.354 m em qualquer velocidade —
+                                    # o oposto do knob linear, que paga com parede.
     rot_max: float = 4.5            # rad/s — teto do giro
     slow_radius: float = 0.4        # m — começa a frear o avanço perto do goal
     # 2026-06-26: 0.10 -> 0.22. CAMPO: perto do goal o ramp baixava p/ ~0.10-0.11

@@ -274,7 +274,32 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      footprint: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
+      # 2026-08-27 RAIO CIRCUNSCRITO (era o footprint quadrado ±0.25).
+      # CAUSA MEDIDA dos raspões: o nav2 usa o raio INSCRITO do footprint (0.25,
+      # a meia-largura) como fronteira do proibido. Mas o robô é um QUADRADO que
+      # anda em diagonal — o canto dele alcança 0.354. Resultado medido nos 4
+      # eventos da volta rot30_1: o robô passava com o CENTRO a 29,6-35,5 cm da
+      # parede, com yaw ~45°, e o corpo alcançando 34,8-35,3 cm. Margem ZERO por
+      # construção: o planner traçava rota legal pra um círculo de 0.25 e o corpo
+      # real ocupava 0.354. Os corredores ali têm 1,56-1,87 m — sobrava mais de um
+      # metro, ele escolhia passar encostado porque nada no stack proibia.
+      # robot_radius 0.354 = inscrito PASSA A SER o circunscrito: nenhum plano
+      # nasce colado, em nenhum yaw.
+      # ⚠️ CUSTO: o robô "engorda". Fresta mínima pra passar = 2·robot_radius.
+      # 0.354 (o circunscrito exato) FOI TESTADO 2026-08-27 e REPROVADO: a margem
+      # ficou ótima (folga mínima 0,0 -> 1,7 cm, p5 0,6 -> 14,8 cm, 0 colisões)
+      # mas QUEBROU O PLANNER — 9 "failed to plan" em 180 s (baseline 0,5 na volta
+      # inteira), 8 delas "Could not generate path": o Theta* trata inscrito-inflado
+      # como BLOQUEIO, então 0.354 exige fresta de 70,8 cm e isso FECHA vãos reais
+      # do sala_grande (os dois de 70 cm: wall_2×obst_6 e wall_4×obst_0) e estrangula
+      # o de 90 cm (wall_11×wall_14) numa faixa livre de 19 cm = 4 células.
+      # 0.32 = meio-termo: exige 64 cm (reabre os vãos) e ainda deixa só 3,4 cm de
+      # canto de fora no pior diagonal, contra 10,4 cm do footprint quadrado. Quem
+      # dá a margem PRÁTICA é a inflation_radius abaixo; o raio dá o piso duro.
+      # ⚠️ Risco do "start pose is an obstacle": tudo a <raio de parede vira letal.
+      # MEDIDO antes do fix: 0,23% do tempo a <0.30 e 0,89% a <0.354. A 0.45 seria
+      # 11% = inviável. Em 0.32 é ~0,4%: aceitável.
+      robot_radius: 0.32
       # PI: VoxelLayer → ObstacleLayer. Sem câmera RGB-D, o tracking 3D é
       # custo morto. ObstacleLayer é ~3× mais leve mantendo idêntico
       # comportamento com LiDAR 2D.
@@ -325,7 +350,10 @@ local_costmap:
         # comentário longo no global_costmap: com 0.30 + reflexo lateral fora, o
         # robô encostava a 0.245 m e o planner recusava replanejar. Piso duro =
         # 0.25 (raio inscrito): abaixo disso a inflação não cobre nem o corpo.
-        inflation_radius: 0.35
+        # 2026-08-27: 0.35 -> 0.45. O inscrito virou 0.354 (robot_radius acima),
+        # então 0.35 deixaria a inflação DENTRO do próprio corpo = sem gradiente
+        # nenhum. 0.45 dá ~10 cm de faixa pra empurrar pro meio do corredor.
+        inflation_radius: 0.45
       # PI: false → só publica diffs. Reduz bandwidth pro web bridge.
       always_send_full_costmap: false
 
@@ -337,7 +365,32 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      footprint: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
+      # 2026-08-27 RAIO CIRCUNSCRITO (era o footprint quadrado ±0.25).
+      # CAUSA MEDIDA dos raspões: o nav2 usa o raio INSCRITO do footprint (0.25,
+      # a meia-largura) como fronteira do proibido. Mas o robô é um QUADRADO que
+      # anda em diagonal — o canto dele alcança 0.354. Resultado medido nos 4
+      # eventos da volta rot30_1: o robô passava com o CENTRO a 29,6-35,5 cm da
+      # parede, com yaw ~45°, e o corpo alcançando 34,8-35,3 cm. Margem ZERO por
+      # construção: o planner traçava rota legal pra um círculo de 0.25 e o corpo
+      # real ocupava 0.354. Os corredores ali têm 1,56-1,87 m — sobrava mais de um
+      # metro, ele escolhia passar encostado porque nada no stack proibia.
+      # robot_radius 0.354 = inscrito PASSA A SER o circunscrito: nenhum plano
+      # nasce colado, em nenhum yaw.
+      # ⚠️ CUSTO: o robô "engorda". Fresta mínima pra passar = 2·robot_radius.
+      # 0.354 (o circunscrito exato) FOI TESTADO 2026-08-27 e REPROVADO: a margem
+      # ficou ótima (folga mínima 0,0 -> 1,7 cm, p5 0,6 -> 14,8 cm, 0 colisões)
+      # mas QUEBROU O PLANNER — 9 "failed to plan" em 180 s (baseline 0,5 na volta
+      # inteira), 8 delas "Could not generate path": o Theta* trata inscrito-inflado
+      # como BLOQUEIO, então 0.354 exige fresta de 70,8 cm e isso FECHA vãos reais
+      # do sala_grande (os dois de 70 cm: wall_2×obst_6 e wall_4×obst_0) e estrangula
+      # o de 90 cm (wall_11×wall_14) numa faixa livre de 19 cm = 4 células.
+      # 0.32 = meio-termo: exige 64 cm (reabre os vãos) e ainda deixa só 3,4 cm de
+      # canto de fora no pior diagonal, contra 10,4 cm do footprint quadrado. Quem
+      # dá a margem PRÁTICA é a inflation_radius abaixo; o raio dá o piso duro.
+      # ⚠️ Risco do "start pose is an obstacle": tudo a <raio de parede vira letal.
+      # MEDIDO antes do fix: 0,23% do tempo a <0.30 e 0,89% a <0.354. A 0.45 seria
+      # 11% = inviável. Em 0.32 é ~0,4%: aceitável.
+      robot_radius: 0.32
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -411,7 +464,17 @@ global_costmap:
         # 0.45 e não 0.50: em 06-11 o 0.45+ "engordou" uma porta de 0.93 m a
         # ponto do plano não threadar o vão. Os vãos do sala_grande são ~1.0 m.
         # SE o plano parar de achar passagem -> descer pra 0.40.
-        inflation_radius: 0.45
+        # 2026-08-27: 0.45 -> 0.60. Dupla com o robot_radius 0.354. O raio dá a
+        # GARANTIA (nada abaixo de 0.354 é planejável); a inflação dá a MARGEM
+        # (empurra o caminho pro meio do corredor em vez de deixar ele legal
+        # encostado no limite). Sem ela o fix só troca "encosta" por "passa a
+        # 0 mm do permitido" — e no real o erro de AMCL + derrapagem come isso.
+        # Com 0.354 de inscrito, 0.60 dá 0.246 m de gradiente.
+        # ⚠️ Acima de 0.45 nenhuma faixa de custo ZERO sobra num vão de 0.90 m
+        # (wall_11×wall_14). Custo alto != bloqueio (Theta* passa se precisar),
+        # mas com w_traversal_cost 2.0 ele vai preferir contornar. SE aparecer
+        # falha de plano ou goal perdido -> descer pra 0.50.
+        inflation_radius: 0.60
       # PI: false — diffs em vez do mapa inteiro.
       always_send_full_costmap: false
 
