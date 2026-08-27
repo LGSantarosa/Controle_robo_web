@@ -1,0 +1,585 @@
+# Parâmetros Nav2 — variante para Raspberry Pi 4 4GB.
+#
+# Mantém a estrutura do nav2_params.yaml (notebook), com os seguintes ajustes
+# pra caber no Cortex-A72 quad-core sem estourar a CPU:
+#
+#   1) AMCL: max_particles 2000 → 800; min_particles 500 → 200.
+#      Reduz drasticamente o custo do likelihood field (~O(n_particles)).
+#
+#   2) local_costmap: VoxelLayer → ObstacleLayer.
+#      Sem câmera RGB-D, o eixo Z do voxel é desperdício puro. ObstacleLayer
+#      é ~3× mais barato em CPU pro mesmo resultado com LiDAR 2D.
+#
+#   3) DWB: vx_samples 20 → 12, vtheta_samples 20 → 12, sim_time 1.5 → 1.2.
+#      Menos trajetórias avaliadas por ciclo — comportamento praticamente
+#      igual em ambiente sem obstáculos densos, ganho grande em CPU.
+#
+#   4) costmaps: publish_frequency reduzido (UI não precisa de 2 Hz).
+#      always_send_full_costmap: false — só publica diffs.
+#
+# Tudo o que NÃO está documentado nessa lista é idêntico ao nav2_params.yaml.
+# Razão: preservamos o tuning de comportamento já calibrado (BaseObstacle,
+# Oscillation, GoalAlign etc.) — só cortamos custo computacional.
+
+amcl:
+  ros__parameters:
+    use_sim_time: false
+    # 2026-06-23: REVERTIDO pra 0.2 (eram 0.1 num beco sem saída — a pose torta
+    # era do MAPA SKEWED, resolvida por re-SLAM, não do alpha). Com mapa bom o
+    # lidar acerta; voltar a 0.2 deixa o scan corrigir o yaw normalmente.
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+    scan_topic: "scan"
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    # PI: reduzido pra caber na CPU sem perder convergência em ambiente pequeno.
+    min_particles: 200
+    max_particles: 800
+    laser_max_range: 12.0
+    laser_min_range: 0.1
+    laser_model_type: "likelihood_field"
+    max_beams: 60
+    set_initial_pose: true
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
+    tf_broadcast: true
+    # Alinhado com DWB e behaviors em 0.5 — antes AMCL=1.0 e DWB=0.2,
+    # com erros transientes de TF quando AMCL atualizava map→odom devagar.
+    transform_tolerance: 0.5
+    # 2026-06-23: 0.2/0.25 -> 0.1/0.10. AMCL só usa o laser (corrige a pose)
+    # depois do robô se mover esse tanto; com mapa bom o lidar está certo, então
+    # baixar faz a pose re-encaixar com MENOS movimento (era "só ajusta depois
+    # de andar"). ~0.1 rad (5.7°) / 0.10 m. Custa um pouco mais de CPU.
+    update_min_a: 0.1
+    update_min_d: 0.10
+    resample_interval: 1
+    do_beamskip: true
+    beam_skip_distance: 0.5
+    beam_skip_threshold: 0.3
+    beam_skip_error_threshold: 0.9
+
+map_server:
+  ros__parameters:
+    use_sim_time: false
+    yaml_filename: ""
+
+planner_server:
+  ros__parameters:
+    use_sim_time: false
+    planner_plugins: ["GridBased"]
+    # RETO+POINT-TURN (2026-06-25): troca NavFn → Theta* (any-angle).
+    # NavFn traçava caminho CURVO (segue gradiente do costmap, abraça a inflação)
+    # → o robô (que não arqueia) tentava seguir a curva e zigzagueava. Theta* traça
+    # RETAS longas com cantos esparsos → no reto o RotationShim só anda, no canto faz
+    # UM giro decisivo no lugar. (Theta* já foi testado com ARCO e deu "pulinhos"; o
+    # par certo é com reto+point-turn.) Reverter = voltar o bloco NavfnPlanner.
+    # CONTORNO-EM-L — TODAS as 3 opções REPROVADAS (2026-06-27). Mantido Theta* (diagonal
+    # suave, que o path_follower dirige como reto+point-turn) — é o melhor que temos.
+    #   A) Theta* how_many_corners 8->4: line-of-sight costura diagonal -> 4≈8 (sem L).
+    #   C) SmacPlanner2D (grid A*): 8-conn (Moore) FIXO, sem param de 4-conn; smoother off
+    #      -> escada de 45° (curva 765°); on -> diagonal. Pior que Theta*.
+    #   B) plan_manhattanizer (pós-processa o /plan em pernas ortogonais): forma certa no
+    #      teste estático, mas ao DIRIGIR ficou PIOR (robô para-gira-anda seco; dono: "tá
+    #      uma merda, o anterior tava bem melhor"). REVERTIDO (nó/testes/wiring removidos).
+    # NÃO re-tentar A/B/C. Forçar o canto-90 piora; a diagonal suave é melhor de dirigir.
+    #   Ver docs/superpowers/specs/2026-06-26-contorno-em-L-design.md
+    GridBased:
+      plugin: "nav2_theta_star_planner::ThetaStarPlanner"
+      how_many_corners: 8          # opção A (4) reprovada — line-of-sight costura diagonal
+      w_euc_cost: 1.0
+      w_traversal_cost: 2.0        # 06-26: piso do knob; <2.0 enfia em vão impossível
+      w_heuristic_cost: 1.0
+      allow_unknown: true
+      use_final_approach_orientation: false
+
+controller_server:
+  ros__parameters:
+    use_sim_time: false
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    # diff-drive tem vy=0 sempre, então o threshold em y é inócuo — default 0.001.
+    min_y_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.3
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["goal_checker"]
+    controller_plugins: ["FollowPath"]
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.3
+      # 2026-06-10: 15 -> 8 s. É o tempo SEM andar 0.3 m antes do controller
+      # declarar "travado" e o BT cair no recovery (limpa costmap -> Spin -> Wait
+      # -> BackUp). Era a peça que faltava do "ré + desvia quando encurralado":
+      # com 15 s ele ficava parado tempo demais coladinho no obstáculo. 8 s ainda
+      # é folgado p/ qualquer avanço legítimo (mesmo no slowdown a 0.1 m/s anda
+      # 0.8 m em 8 s) — só morde quando realmente encurralado. O contorno SUAVE
+      # (sem travar) vem do replan@1Hz + obstacle_layer marcando o /scan, então
+      # na maioria das vezes ele contorna ANTES de chegar aqui.
+      movement_time_allowance: 8.0
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      # 2026-06-19 PORTA: 0.40 -> 0.15. O ponto-pré-porta fica a 1.0 m do centro
+      # da porta; o robô entra na zona do door_crossing a 1.2 m (0.2 m do ponto).
+      # Com 0.40 o nav2 dava o ponto por "alcançado" a 0.2 m e JÁ curvava pro
+      # destino do outro lado -> puxava o robô pra fora do eixo bem quando o door
+      # assumia -> crossing torto -> roda no batente (campo 2026-06-19). Com 0.15
+      # (< 0.2 m) o nav2 segue reto pro ponto no eixo até o door assumir. Seguro:
+      # na travessia o robô passa pelo ponto de 1.0 m -> goal cumprido -> segue.
+      xy_goal_tolerance: 0.15
+      yaw_goal_tolerance: 0.35
+      stateful: true
+    FollowPath:
+      # 2026-06-03 (curvas/giro): DWB sozinho NÃO comita giro acentuado nem
+      # point-turn — os critics de progresso (PathDist/GoalDist) premiam ir reto,
+      # então o robô só faz curvinhas. Envelopamos o DWB no RotationShimController:
+      # quando o caminho aponta > angular_dist_threshold do yaw atual, ele gira no
+      # LUGAR (forte) até alinhar e SÓ ENTÃO entrega pro DWB seguir o caminho.
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "dwb_core::DWBLocalPlanner"
+      # 0.30 rad ≈ 17° (era 30°): o shim alinha MAIS perto antes de soltar pro DWB,
+      # senão sobra até 30° de yaw que o DWB não fecha (deadzone) e ele erra o
+      # ponto. Piso prático ~17° pq a 6.0 rad/s @10 Hz cada ciclo gira ~34° (giro
+      # grosso) — abaixo disso ele passa do alvo e o shim pode ficar oscilando.
+      # 2026-06-11 PORTA: apertamos p/ 0.15 (~9°) pra caber na porta — e a
+      # oscilação prevista CONFIRMOU em campo 2026-06-12 ("tenta várias e
+      # várias vezes até ficar de frente"). Rollback executado: 0.30 (~17°) +
+      # rotate_to_heading_angular_vel 6.0->4.2 (giro mais fino). A precisão
+      # fina de porta agora é do door_crossing (alinha |lat|<8cm |yaw|<5° em
+      # malha fechada no TF e atravessa reto) — o shim não precisa mais dela.
+      angular_dist_threshold: 0.30    # ≈17° — acima disso, gira no lugar antes
+      # RETO+POINT-TURN (2026-06-25, arc_calib provou que o robô NÃO arqueia):
+      # olha 1.2 m à frente (era 0.5) p/ mirar a direção do CORREDOR lá na frente
+      # e girar DECIDIDO no canto, em vez de seguir a curvinha local de 0.5 m
+      # (= o "vira em tangente / cedo"). Casa com vtheta_samples:1 (DWB só reto).
+      forward_sampling_distance: 1.2      # ponto do caminho p/ medir o heading-alvo
+      # 6.0 rad/s CASA com o manual (teleop_ps4.yaml scale_angular=6.0,
+      # BASE_ANGULAR_SPEED=6.0). Este chassi 4 rodas só vence a patinagem a ~6.0:
+      # via cmd_vel_to_wheels (±100·ω) isso é ±600 unid/roda; abaixo disso as rodas
+      # patinam e o robô NÃO gira. Era a causa raiz do "não vira" (nav2 ia até 2.5
+      # = ±250, fraco demais). 2026-06-12: o rotate_to_heading usa 4.2 — o giro
+      # do shim é CONTÍNUO (já vencido o atrito estático, fica mais fino); o
+      # piso de 6.0 segue valendo pro arranque parado do teleop/unstuck.
+      # 2026-06-19: 4.2 -> 4.0. As fitas nas rodas deram grip -> o giro no lugar
+      # passava do alvo (overshoot ~14°/ciclo a 10Hz). Passo pequeno pra testar;
+      # o spin_calib indica que dá pra ir até ~3.0 (gira de rest, ~4.5°/ciclo).
+      rotate_to_heading_angular_vel: 4.0
+      max_angular_accel: 10.0
+      rotate_to_goal_heading: true        # também gira p/ encarar o yaw final do goal
+      simulate_ahead_time: 1.0
+      # CRÍTICO (2026-06-03): false. Com closed_loop=true (default) o shim rampa o
+      # giro a partir da velocidade angular MEDIDA pela odom — e como ±100 (1.0
+      # rad/s, = max_angular_accel·dt) não vence o atrito estático, o robô não
+      # gira, a odom lê ~0, e ele re-comanda só 1.0 eternamente (trava em ±100, NÃO
+      # sobe pros 6.0). Medido na bancada: nav2 ±100 travado vs manual ±600 gira.
+      # false = rampa pela última velocidade COMANDADA (1→2→…→6.0), estoura o
+      # atrito e chega nos ±600 como o manual.
+      closed_loop: false
+      # ---- DWBLocalPlanner (primary_controller, params herdados deste bloco) ----
+      debug_trajectory_details: false
+      # 2026-06-15: REVERTIDO -0.1 -> 0.0. A ré em navegação normal (latente
+      # desde que o approach do collision_monitor destravou o robô na porta)
+      # fazia o DWB pontuar uma trajetória de RÉ melhor que a de frente na porta
+      # apertada -> o robô ATRAVESSAVA A PORTA DE COSTAS, e como ré mantém
+      # nav_forward=False o door_crossing nunca armava (ciclo vicioso). 0.0 = DWB
+      # encara a porta de nariz e o door_crossing assume a travessia fina. A ré
+      # de DESENCALHE não some: unstuck_supervisor (canal unstuck_vel, prio 30) +
+      # BackUp recovery — nenhum usa min_vel_x.
+      min_vel_x: 0.0
+      # 2026-06-08: revertido 0.25 → 0.35 (estava medroso/devagar). A segurança
+      # agora fica só no collision_monitor enfraquecido (reflexo de última hora),
+      # não em cortar velocidade no controlador.
+      max_vel_x: 0.35
+      min_vel_y: 0.0
+      max_vel_y: 0.0
+      # 2.5 → 6.0: idem ao shim — o chassi precisa de ~6.0 p/ rotacionar de fato.
+      # Dá ao DWB autoridade angular pra curvas em movimento (o smoother também
+      # foi subido p/ 6.0, senão corta aqui).
+      max_vel_theta: 6.0
+      min_speed_xy: 0.0
+      max_speed_xy: 0.35
+      min_speed_theta: 0.0
+      acc_lim_x: 1.0
+      acc_lim_theta: 10.0
+      decel_lim_x: -1.0
+      decel_lim_theta: -10.0
+      # PI: 20 → 12 samples por eixo. CPU do DWB cai linearmente, e o resultado
+      # é idêntico em rota livre (a granularidade fina só importa em manobra
+      # apertada — e mesmo aí 12×12=144 trajetórias é mais que suficiente).
+      vx_samples: 12
+      vy_samples: 1
+      # RETO+POINT-TURN (2026-06-25): vtheta_samples 12 → 1 = o DWB só considera
+      # trajetórias RETAS (wz=0), nunca arqueia. Antes ele gastava o comando num
+      # arco fraco (wz~0.55) que o robô vira só 3% (arc_calib) = ia reto pra cima
+      # do obstáculo. Agora TODO giro é point-turn do RotationShim (autoridade 4.0,
+      # acima da zona-morta 1.7). Se DWB reclamar de trajetória, reavaliar.
+      vtheta_samples: 1
+      # PI: sim_time 1.5 → 1.2. Cada trajetória integrada por 1.2 s em vez
+      # de 1.5 s. Olha menos pra frente; com nossa v_max baixa (0.35 m/s)
+      # 1.2 s já cobre 42 cm — suficiente pra escolher.
+      sim_time: 1.2
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      # Alinhado com AMCL/behaviors em 0.5 — ver comentário em AMCL.
+      transform_tolerance: 0.5
+      xy_goal_tolerance: 0.07
+      trans_stopped_velocity: 0.05
+      short_circuit_trajectory_evaluation: true
+      limit_vel_cmd_in_traj: false
+      stateful: true
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      # 2026-06-08: ataca o "corta reto pro goal e ignora a linha / bate". Os
+      # critics de SEGUIR-CAMINHO estavam baixos (PathDist 12, PathAlign 8; o
+      # default do nav2 é 32) e o GoalDist puxava pro goal → DWB cortava quina.
+      # Subidos pra dominar: o robô prefere FICAR NA LINHA a mirar o goal direto.
+      # BaseObstacle 0.15 → 1.0: pesa mais ficar longe de obstáculo (anti-bate).
+      BaseObstacle.scale: 1.0
+      PathAlign.scale: 32.0
+      # 2026-06-10: forward_point_distance 0.1 -> 0.325 (default do nav2). 0.1 era
+      # MIOPIA: alinhava o heading com um ponto a 10 cm do nariz = ~heading atual =
+      # o critic de alinhamento NAO mordia. Sintoma: planner manda pro MEIO do
+      # corredor, mas o robo segue reto colado na parede ("preguica de ajeitar a
+      # direcao"). Mirando 0.325 m a frente, ele vira pra acompanhar a LINHA.
+      PathAlign.forward_point_distance: 0.325
+      GoalAlign.scale: 6.0
+      GoalAlign.forward_point_distance: 0.325
+      PathDist.scale: 32.0
+      GoalDist.scale: 8.0
+      RotateToGoal.scale: 64.0
+      RotateToGoal.slowing_factor: 2.0
+      RotateToGoal.lookahead_time: -1.0
+      Oscillation.scale: 0.1
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: false
+      update_frequency: 5.0
+      # PI: 2.0 → 1.0 Hz. UI/RViz consomem; 1 Hz é mais que suficiente pra
+      # visualização e elimina metade do trabalho de serialização.
+      publish_frequency: 1.0
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 3
+      height: 3
+      resolution: 0.05
+      footprint: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
+      # PI: VoxelLayer → ObstacleLayer. Sem câmera RGB-D, o tracking 3D é
+      # custo morto. ObstacleLayer é ~3× mais leve mantendo idêntico
+      # comportamento com LiDAR 2D.
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          # 2026-06-23: /scan -> /scan_safe. Com /scan cru e obstacle_min_range
+          # 0.0, os fantasmas <0.15 m do LD06 (a porta dispara) viravam obstaculo
+          # letal colado no robo -> DWB "Failed to make progress" e robo fincado
+          # >1 min na porta + re do unstuck "no nada". O scan_sanitizer ja dropa
+          # esses fantasmas em /scan_safe (so o collision_monitor usava). Aqui o
+          # costmap passa a usar o mesmo scan limpo.
+          topic: /scan_safe
+          data_type: "LaserScan"
+          marking: true
+          clearing: true
+          max_obstacle_height: 2.0
+          # LiDAR-only: todos os pontos vêm na altura do laser (~0.21 m).
+          # Antes era -0.05 (filtro de chão da câmera RGB-D removida).
+          min_obstacle_height: 0.0
+          # 2026-06-08: revertido 1.0 → 0.0 (estava medroso — segurava obstáculo
+          # fantasma por 1 s e bloqueava a rota).
+          # 2026-07-03: 0.0 → 1.0 DE VOLTA. O dropout de feixe rasante do LD06
+          # fazia a marca PISCAR -> Theta* trocava de
+          # LADO a cada replan de 1Hz ("plano enlouquece") -> robô em zigue-
+          # zague sem nada na frente. Os fantasmas <0.15m que motivaram o 0.0
+          # hoje morrem no scan_safe. Rastro de 1s de quem passa é aceitável.
+          # 2026-08-27: MANTIDO em 1.0 mesmo sem o motion_guard — o que ele
+          # resolve é o dropout de feixe rasante do LD06 (marca piscando ->
+          # plano trocando de lado a cada replan), não gente.
+          observation_persistence: 1.0
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        # 2026-06-08: revertido p/ 0.25 / 3.5 (estava 0.45 / 2.5 = medroso —
+        # inflava demais e tornava ponto perto de parede inalcançável → o planner
+        # falhava "Failed to create plan" e o robô desistia). Risco de raspar a
+        # quina volta; aceitável pra não travar a navegação.
+        cost_scaling_factor: 3.5
+        # 2026-06-26: 0.25 -> 0.35 (bump pedido — afastar mais do obstáculo perto).
+        # 2026-08-27 (nav2_trekking): 0.35 -> 0.30 -> 0.35 de volta. Ver o
+        # comentário longo no global_costmap: com 0.30 + reflexo lateral fora, o
+        # robô encostava a 0.245 m e o planner recusava replanejar. Piso duro =
+        # 0.25 (raio inscrito): abaixo disso a inflação não cobre nem o corpo.
+        inflation_radius: 0.35
+      # PI: false → só publica diffs. Reduz bandwidth pro web bridge.
+      always_send_full_costmap: false
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: false
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      footprint: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
+      resolution: 0.05
+      track_unknown_space: true
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          # 2026-06-23: /scan -> /scan_safe (idem ao local). Fantasma <0.15 m do
+          # LD06 nao entra mais como obstaculo no costmap global.
+          topic: /scan_safe
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          # 2026-06-08: revertido 1.0 → 0.0 (idem ao local — estava medroso).
+          # 2026-07-03: 0.0 → 1.0 de volta (ver local: dropout piscava a marca
+          # -> plano trocava de lado a cada replan -> zigue-zague).
+          observation_persistence: 1.0
+          raytrace_max_range: 3.0
+          obstacle_max_range: 2.5
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        # FACA DE 2 GUMES (knob sensível, já revertido antes):
+        #  - 0.45/2.5 (medroso, 06-08): inflava demais → goal perto de parede
+        #    INALCANÇÁVEL → "Failed to create plan" → robô desistia. REVERTIDO.
+        #  - 0.25/3.5: 0.25 = raio inscrito do robô → custo ZERA a 26 cm da parede
+        #    → o planner cola na parede e o collision monitor (para ~12-20 cm além
+        #    do footprint ±0.25) trava o robô. Era o sintoma "passa perto e para".
+        # 2026-06-09: meio-termo 0.35/3.0 — não centralizou o bastante (planner
+        # ainda colava → collision travava). 2026-06-10: reforço da centralização.
+        #  - cost_scaling_factor 3.0 -> 2.0: é O knob de centralização. Menor =
+        #    custo cai mais DEVAGAR = continua alto ATRAVESSANDO o corredor → o
+        #    planner busca o custo mínimo, que fica no MEIO. Com 3.0 zerava rápido
+        #    e ele cortava reto/colava na parede.
+        #  - inflation_radius 0.35 -> 0.40: gradiente alcança o centro de corredores
+        #    até ~0.80 m (com 0.35 só ~0.70 m; mais largo = centro custo-zero, sem
+        #    atração). Continua ABAIXO do 0.45 que falhava (goal inalcançável).
+        # 2026-06-11 VALIDADO EM CAMPO: 0.40/2.0 REPROVADO — o robô parou de
+        # passar na PORTA. Com raio 0.40 os batentes inflam um contra o outro
+        # e o vão inteiro vira custo alto (porta ~0.80: centro a 0.40 de cada
+        # batente = nada de faixa custo-zero). REVERTIDO pro 0.35/3.0 de
+        # 2026-06-10, que passava porta E melhorou o planner ao vivo.
+        # Centralizar corredor SEM engordar a porta fica pra outra abordagem.
+        cost_scaling_factor: 3.0
+        # 2026-06-25 EXPERIMENTO: 0.35 -> 0.45. O 0.40 foi reprovado em 06-11
+        # porque ENGORDAVA A PORTA (plano global não threadava o vão). MAS agora
+        # quem atravessa a porta é o door_crossing — o plano global só precisa
+        # CHEGAR perto da porta, não passar por dentro. Logo a folga de 0.45 (que
+        # tira o robô de cima do box3: 0.45 da borda = ~0.20 m de folga real)
+        # deve ser OK. SE a porta parar de engatar no sim -> reverter pra 0.35.
+        # 2026-06-30: 0.45 -> 0.50. O dono pediu MAIS berço no contorno de pessoa
+        # (o robô desviou mas TRISCOU no sapato dele, devagar — inaceitável). +5cm
+        # de folga no plano que contorna a perna (marcada na obstacle_layer ao vivo).
+        # 2026-08-27 (nav2_trekking): 0.50 -> 0.35 -> 0.45. HISTÓRICO DA VOLTA:
+        # baixei pra 0.35 junto com o reflexo (o berço de 0.50 existia por causa
+        # de PESSOA). MEDIDO na 4ª volta do A/B: com o reflexo lateral fora E a
+        # inflação em 0.35, o robô passou a **0.245 m** das paredes — ABAIXO do
+        # raio inscrito (0.25) -> a célula do próprio robô vira custo letal ->
+        # `GridBased plugin failed to plan: "Either of the start or goal pose are
+        # an obstacle!"` 19 vezes na volta (baseline: 1). O planner PARA DE
+        # REPLANEJAR e o BT cai em backup/wait — minutos perdidos em recovery.
+        # DISTINÇÃO QUE IMPORTA (dono 2026-08-27, "não pode desistir dos goals"):
+        #   - medo no REFLEXO (collision) = PARA o robô -> custa tempo -> fora.
+        #   - folga no PLANO (inflation)  = contorna mais longe ANDANDO -> não
+        #     custa tempo, e mantém o robô fora da faixa <0.25 onde o planner
+        #     trava. São coisas diferentes; cortei as duas juntas por engano.
+        # 0.45 e não 0.50: em 06-11 o 0.45+ "engordou" uma porta de 0.93 m a
+        # ponto do plano não threadar o vão. Os vãos do sala_grande são ~1.0 m.
+        # SE o plano parar de achar passagem -> descer pra 0.40.
+        inflation_radius: 0.45
+      # PI: false — diffs em vez do mapa inteiro.
+      always_send_full_costmap: false
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /odom
+    bt_loop_duration: 10
+    # PI (2026-06-08): 20 → 200 ms. É o tempo que o BT espera o action server só
+    # ACEITAR (ack) o pedido. Medido na bancada: com SLAM localizando, o nav2
+    # replaneja a ~1 Hz e o pedido compute_path_to_pose estourava 20 ms na Pi sob
+    # carga (AMCL + 2 costmaps + DWB + smoother + collision_monitor) → "Timed out
+    # while waiting for action server to acknowledge goal request" → Goal failed
+    # ("girou um pouco e desistiu"). 200 ms dá folga p/ o planner_server aceitar
+    # sem largar a navegação. NÃO é o tempo de planejar (esse é outro) — só o ack.
+    default_server_timeout: 200
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: false
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: true
+      waypoint_pause_duration: 1500
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: false
+    local_costmap_topic: local_costmap/costmap_raw
+    global_costmap_topic: global_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    global_frame: odom
+    robot_base_frame: base_link
+    # Alinhado com AMCL/DWB em 0.5 — ver comentário em AMCL.
+    transform_tolerance: 0.5
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 6.0
+    min_rotational_vel: 1.0
+    rotational_acc_lim: 10.0
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: false
+    # PI: 20 → 15 Hz. Smoother não precisa rodar mais rápido que o controller
+    # (10 Hz). 15 Hz dá uma folga e libera ~25% do custo do nó.
+    smoothing_frequency: 15.0
+    scale_velocities: false
+    feedback: "OPEN_LOOP"
+    # theta 0.8 → 2.5 (casa com FollowPath.max_vel_theta; senão o smoother
+    # corta o giro do controller em 0.8). Ver docs/NAV2_GIRO_2026-06-03.md.
+    # 2026-06-08: linear revertido 0.25 → 0.35 (casa com DWB max_vel_x; estava
+    # medroso). Angular 6.0 (necessário p/ vencer a patinagem do giro).
+    max_velocity: [0.35, 0.0, 6.0]
+    # Smoother fica PERMISSIVO em -0.1 de propósito: o DWB virou min_vel_x: 0.0
+    # (não atravessa porta de costas), mas o BackUp recovery, se rotear por aqui,
+    # ainda precisa da folga de ré. O smoother não INVENTA ré — só passa o que o
+    # DWB gera (0..0.35); o -0.1 é só headroom pro recovery.
+    min_velocity: [-0.1, 0.0, -6.0]
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+    max_accel: [1.0, 0.0, 10.0]
+    max_decel: [-1.0, 0.0, -10.0]
+    odom_topic: "odom"
+    odom_duration: 0.1
+
+# Collision Monitor — REFLEXO CURTO (nav2_trekking, 2026-08-27).
+# Lê o /scan_safe (independe de pose/costmap/planner) e freia o comando ANTES
+# de chegar nos motores. É a ÚNICA rede de segurança que sobrou: só existe pra
+# "não bater", não pra ser cauteloso.
+#
+# O QUE SAIU (era o "medo" do robot_nav, decisão do dono 2026-08-27):
+#  - PolygonSlow: caixa de 0.65 m à frente / ±0.32 lateral que LIMITAVA o robô
+#    a 0.10 m/s com 2 pontinhos de laser. Em pista com obstáculos isso é crawl
+#    permanente. REMOVIDA por inteiro (não desativada — não deixar zona órfã).
+#  - action_type "approach" (footprint projetado 1.0 s à frente, freada
+#    proporcional): virou uma caixa FIXA curta, a pedido do dono. Rollback do
+#    approach está no fim deste bloco.
+#  - motion_guard (cautela com pessoas): o nó não existe mais neste pacote.
+#
+# PIPELINE (sem o guard):
+#   smoother(nav_vel)/path_follower(follow_vel)/door(door_vel)
+#     -> [twist_mux_auto] -> auto_vel_raw -> [collision_monitor]
+#     -> auto_vel -> twist_mux FINAL(prio 10) -> cmd_vel -> rodas
+# unstuck (prio 30) e humano (web/PS4) entram no mux FINAL, A JUSANTE do
+# collision -> seguem furando o reflexo (resgate e override sempre funcionam).
+collision_monitor:
+  ros__parameters:
+    use_sim_time: false
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "auto_vel_raw"
+    cmd_vel_out_topic: "auto_vel"
+    state_topic: "collision_monitor_state"
+    transform_tolerance: 0.5
+    # Scan do LD06 é ~10 Hz; 1 s = 10 scans de tolerância antes de considerar
+    # o sensor "mudo". base_shift_correction reposiciona os pontos pelo TF
+    # odom->base_link entre o instante do scan e agora (corrige o movimento).
+    source_timeout: 1.0
+    base_shift_correction: True
+    stop_pub_timeout: 2.0
+    # UMA zona só, modo LIMIT (corta POR EIXO).
+    polygons: ["PolygonFront"]
+    # 2026-08-27, 3ª volta — POR QUE "limit" NUMA CAIXA FRONTAL ESTREITA.
+    # Medido no sim (rota1/sala_grande, 3 voltas A/B), os outros dois modos
+    # tinham defeitos OPOSTOS e ambos fatais:
+    #  - caixa fixa "stop" [±0.35 × ±0.28]: 38 paradas / 60,3 s, TODAS com a
+    #    frente livre (min_front >= 0.41 m). Quem entrava na caixa era a PAREDE
+    #    DO LADO a ~0.275 m. Uma caixa fixa não gira com o robô, então não sabe
+    #    a diferença entre "passo reto ao lado da parede" (seguro) e "giro
+    #    colado nela" (o canto varre 0.354 e bate).
+    #  - "approach" (time 0.3): não para à toa, MAS escala o comando INTEIRO,
+    #    wz junto. Medido: follow_vel pedia 2.40 e saía 0.00/-0.96/-1.12 —
+    #    ABAIXO da zona-morta do skid (1.7) -> o robô comanda giro, patina e
+    #    NÃO VIRA, justo quando girar era a saída. 251 ocorrências; o unstuck
+    #    (que via "parado", corretamente) manobrou 217 s na volta. É o DEADLOCK
+    #    point-turn que estava aberto na memória do projeto, agora reproduzido.
+    # O "limit" corta por EIXO — mesma lição de 2026-07-03, quando o slowdown
+    # (que escalava o giro junto e era "o vilão das pausas") virou limit com o
+    # angular livre. Aqui: linear_limit 0.0 = NÃO AVANÇA contra o que está na
+    # frente; angular_limit 4.0 = o giro NUNCA é capado, então o robô sempre
+    # pode girar pra sair. Sem deadlock por construção.
+    PolygonFront:
+      type: "polygon"
+      # ESTREITA DE PROPÓSITO: |y| <= 0.22 é MENOR que a meia-largura do corpo
+      # (0.25). Uma parede lateral a 0.275 m não entra nela em ângulo nenhum —
+      # era exatamente o que fazia a caixa anterior parar o robô 38 vezes.
+      # Só à FRENTE do para-choque (x 0.25..0.40): 15 cm de aviso para o que
+      # está no caminho de marcha, que é o único jeito de bater indo pra frente.
+      points: "[[0.40, 0.22], [0.40, -0.22], [0.25, -0.22], [0.25, 0.22]]"
+      action_type: "limit"
+      # 0.0 = trava o avanço enquanto houver algo à frente. Não é "devagar":
+      # é "não vai em cima". Como o giro segue livre, ele se realinha e sai.
+      linear_limit: 0.0
+      # 4.0 > qualquer giro que a stack comanda (o atuador satura em 2.5) =
+      # giro intocado. NUNCA baixar isto pra perto de 1.7 (zona-morta): giro
+      # capado abaixo dela é comando morto e o robô trava.
+      angular_limit: 4.0
+      # min_points 2: perna fina de obstáculo a ~1 m devolve 1-2 feixes. Os
+      # fantasmas <0.23 m do LD06 já morrem no scan_sanitizer.
+      min_points: 2
+      visualize: True
+      polygon_pub_topic: "polygon_front"
+      enabled: True
+    # ⚠️ O QUE ESTE DESENHO NÃO COBRE: girar colado numa parede. O canto do robô
+    # varre 0.354 m, então uma parede a 0.28 m é raspão em point-turn — e este
+    # reflexo não vê isso (a caixa é estreita e fica à frente). Proteger o giro
+    # exigiria escalar o wz, que é justamente o que trava o robô (ver o approach
+    # acima). O lugar certo pra isso é o path_follower: antes de iniciar um
+    # point-turn, olhar o anel 0.25..0.36 m e se afastar antes de girar.
+    # TAREFA SEPARADA, decidida com o dono em 2026-08-27.
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      # 2026-06-12: "scan" -> "scan_safe" (nav2_trekking/scan_sanitizer). O LD06
+      # cospe retornos fantasmas <15 cm (DENTRO do chassi) em ~2% dos scans,
+      # em setores fixos (~200-260°/80-120°); com min_points=2, dois pontinhos
+      # congelavam o robô — inclusive parado no meio da PORTA (17/22 freezes
+      # da captura no bag). O sanitizer troca só esses por inf. Rollback:
+      # voltar topic pra "scan".
+      topic: "scan_safe"
+      enabled: True

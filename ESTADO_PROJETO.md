@@ -1,7 +1,109 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-08-26**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-08-27**.
+
+---
+
+## 🥾🤖 2026-08-27 — O TREKKING VIROU NAV2 (pacote `nav2_trekking`)
+
+Decisão do dono: **trekking parado; quem substitui é o nav2** — "o nav2 está
+ÓTIMO em movimentação, OTIMO, só precisamos ajeitar o medo dele e a velocidade".
+Contexto: a pista terá **vários obstáculos, em galpão fechado**, o lidar mapeia e
+o nav2 segue. **Sem pessoas na cena.**
+
+Branch **`nav2-trekking`**. ⚠️ **NADA COMMITADO AINDA** (working tree).
+
+### O pacote
+
+`ros2_packages/nav2_trekking/` = cópia **integral** do `robot_nav` (13 nós, 6
+launches, configs, BT, urdf, 326 testes), renomeada por dentro. Ordem: "TODO ele,
+tudo oq ele precisa pra existir, um NÃO DEVE atrapalhar o outro em NADA".
+
+- Os dois convivem: `colcon --base-paths ros2_packages` acha ambos, `ros2 pkg
+  list` mostra ambos, **zero linha do `robot_nav` tocada**.
+- `wheel_msgs` **compartilhado** de propósito (duplicar = 2 tipos de msg
+  incompatíveis entre si).
+- **Amputado**: `motion_guard` inteiro + os 4 tentáculos (standdown
+  `guard_blocked` do unstuck, coluna do `freeze_capture`, estágio `auto_vel_pre`
+  do launch, 7 testes). `nav2_params_legacy.yaml` **apagado** (era a stack de
+  06-08 com a PolygonSlow viva — armadilha).
+- **Inflation**: global 0.50 → **0.35**, local 0.35 → **0.30**. O berço de meio
+  metro existia por causa de PESSOA; em pista com obstáculos ele estrangula as
+  passagens. Piso é 0.25 (raio inscrito) — abaixo disso não cobre nem o corpo.
+
+### 🔬 A/B no sim (rota1 + `sala_grande`, 8 goals, 3 voltas medidas)
+
+| | baseline (`robot_nav`) | caixa fixa `stop` | `approach` 0.3 |
+|---|---|---|---|
+| goals OK (de 8) | 7 | **8** | 6 |
+| tempo total | 791,6 s | 800,4 s | 926,7 s |
+| parado | 4,3 s | 61,8 s | 69,9 s |
+| unstuck | 3,3 s | 27,1 s | **217,0 s** |
+
+**Tirar o medo NÃO acelera sozinho**: `v_max` ficou 0,30 m/s nas três voltas. O
+teto é o `forward_speed` do **path_follower** (quem dirige de fato), não o DWB.
+
+### ⭐ Os 3 modos do collision_monitor têm defeitos OPOSTOS
+
+- **caixa fixa `stop`**: 38 paradas / 60,3 s, **todas com a frente livre**
+  (`min_front` ≥ 0,41 m). Quem entrava na caixa era a **parede do LADO** a
+  ~0,275 m. Caixa fixa não gira com o robô → não distingue "passo reto ao lado
+  da parede" (seguro, corpo tem 0,25) de "giro colado" (o canto varre **0,354**).
+- **`approach`**: escala o **twist inteiro, wz junto** → reproduziu o DEADLOCK
+  do point-turn mesmo com `time_before_collision` 0.3. Medido: `follow_vel 2.40
+  → auto_vel 0.00/−0.96/−1.12`, **abaixo da zona-morta 1.7** → rodas patinam,
+  não vira. 251 ocorrências; o unstuck manobrou 217 s.
+- **`limit`** (o que ficou): corta **por eixo** — `linear_limit 0.0` +
+  `angular_limit 4.0`, caixa estreita **só à frente** (`x 0.25..0.40, |y| ≤
+  0.22`, mais estreita que o corpo pra parede lateral não entrar). Não avança
+  contra nada, **giro nunca capado** = sem deadlock por construção. Mesma lição
+  de 07-03 (slowdown → limit).
+
+**Não dá pra ter as duas metades do pedido no collision_monitor**: proteger o
+giro exige escalar o wz, e escalar o wz trava o robô. A metade "aqui não posso
+girar pq vou bater" fica como **tarefa do path_follower** (olhar o anel
+0,25..0,36 m antes do point-turn e se afastar antes de girar).
+
+### 🐞 Armadilha do unstuck (custou uma volta)
+
+Baixar `stuck_timeout` para 0,5/0,3 s (pedido "quase instantâneo") **cortava
+point-turn legítimo**: girando no lugar o robô não translada, então parece
+encalhe — e empurrar corta o giro no meio (era o "ele tem dificuldade de
+identificar que já chegou no ponto"). Ficou em **2,0 / 1,0 s**.
+
+`rear_half_width` **0.30 → 0.26** (este funcionou): com 0,30 uma parede lateral a
+0,275 caía no corredor do `front_min_gap` → unstuck lia "frente bloqueada a 5 cm"
+sem nada na frente e **girava**. Antes 5 advancing × 21 turning; depois **22 × 7**
+— voltou a "frente livre = vai pra frente".
+
+### ✅ CONFIRMADO: 3 voltas seguidas, 24/24 goals
+
+| | baseline (medroso) | média de 3 voltas |
+|---|---|---|
+| goals OK | 7/8 | **8/8, 8/8, 8/8** |
+| tempo total | 791,6 s | 789,1 s |
+| parado | 4,3 s | **0,3 s** |
+| unstuck | 3,3 s | **0,0 s** |
+| freio do reflexo | **73,5 s** | **0,2 s** |
+| recoveries do nav2 | 0 | **0** |
+
+O reflexo freia **0,2 s numa volta de 13 min** (o medroso passava 9% do percurso
+capado a 0,10 m/s), o unstuck **não agiu nenhuma vez** nas 3 voltas e o nav2 não
+entrou em recovery. **O tempo NÃO mudou** — `v_max` segue 0,30 m/s: tirar o medo
+comprou fluidez e confiabilidade, não velocidade. O teto é o `forward_speed` do
+path_follower.
+
+### O que falta
+
+1. **VELOCIDADE** (fase 2, em andamento): degraus medidos 0,30 → 0,60 → 0,90 no
+   `forward_speed` + DWB `max_vel_x` + smoother + acelerações.
+   ⚠️ A caixa do `PolygonFront` é FIXA (15 cm à frente) e **não escala com a
+   velocidade**: 0,25 s de aviso a 0,60 m/s, 0,17 s a 0,90. Ela terá que crescer
+   junto — é a primeira coisa a re-medir a cada degrau.
+2. **Girar colado numa parede segue desprotegido** por desenho (o canto varre
+   0,354 m e o reflexo frontal não vê isso). Tarefa do path_follower: checar o
+   anel 0,25..0,36 m antes de iniciar point-turn.
 
 ---
 
