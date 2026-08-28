@@ -7,12 +7,27 @@
 > Registrar o que foi **medido**, não o que se espera. Erro meu entra igual a
 > erro achado — a §5 existe pra isso e não deve ser podada.
 >
-> **Ordem do dono (2026-08-28, segunda):** *"Sempre que tirar essas conclusões e
-> trazer pra mim, anota no arquivo"*. Ou seja: **conclusão, diagnóstico ou
-> recomendação que eu apresento no chat entra AQUI no mesmo momento** — não só o
-> que foi rodado. Se o dono leu, o arquivo tem que ter. Inclusive a conclusão que
-> depois se mostrar errada: ela fica, com a correção do lado (foi o que aconteceu
-> com "a samba encostou no cone", §2.8).
+> ### ⛔ A REGRA: arquivo ANTES do chat
+>
+> **Ordem do dono (2026-08-28, terceira e mais dura):** *"sempre que vc trouxer
+> uma conclusão aqui no chat, leve para o arquivo antes"*.
+>
+> **A ordem das operações é essa, literalmente:**
+>
+> 1. tirei uma conclusão / diagnóstico / recomendação
+> 2. **escrevo AQUI**
+> 3. **só então** mando no chat
+>
+> Não é "anoto depois", não é "anoto quando ele pedir". As duas primeiras versões
+> desta regra eram *"anote tudo"* e *"anota no arquivo quando trouxer pra mim"* —
+> e nas duas o dono teve que perguntar **"anotou?"**, porque eu mandava primeiro e
+> registrava depois (erros 24 e 38 da §5). O chat vira o **resumo** do que já está
+> no arquivo, nunca a fonte.
+>
+> Vale pro parágrafo inteiro que eu mando, não só pra parte tabelada — foi assim
+> que o plano do point-turn escapou. E vale para conclusão que depois se mostrar
+> errada: ela **fica**, com a correção do lado (é o caso de "a samba encostou no
+> cone", §2.8).
 >
 > Documentos irmãos: `docs/superpowers/specs/2026-08-28-arena-galpao-design.md`
 > (o desenho) e `ESTADO_PROJETO.md` (estado geral do projeto).
