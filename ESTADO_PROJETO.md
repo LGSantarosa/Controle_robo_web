@@ -16,6 +16,14 @@ Branch **`nav2-trekking`**. ⚠️ **NADA COMMITADO AINDA** (working tree).
 
 ### O pacote
 
+> ⛔ **DESATUALIZADO desde 2026-08-28 (`1f08a60`, branch `arena-galpao`).** O
+> `nav2_trekking` **foi dissolvido de volta no `robot_nav`** — ele não existe mais e
+> os dois NÃO convivem. A geometria virou o perfil
+> `robot_nav/config/nav2_params_arena.yaml`, ligado por `./launch.sh --nav2 --arena`.
+> O `motion_guard` (que o fork tinha amputado) **ficou**, porque a arena tem
+> obstáculo móvel. Ver `docs/superpowers/specs/2026-08-28-arena-galpao-design.md`.
+> O texto abaixo descreve o fork enquanto ele existiu, em 08-27.
+
 `ros2_packages/nav2_trekking/` = cópia **integral** do `robot_nav` (13 nós, 6
 launches, configs, BT, urdf, 326 testes), renomeada por dentro. Ordem: "TODO ele,
 tudo oq ele precisa pra existir, um NÃO DEVE atrapalhar o outro em NADA".

@@ -66,13 +66,20 @@ Relógio bruto é contaminado pela rota sorteada.
 
 O pacote **`nav2_trekking` nunca existiu na Pi** — é a primeira vez que sobe.
 
-1. A branch `nav2-trekking` **não está na `main`**, e a Pi normalmente faz
-   `git reset --hard origin/main`. **Pergunte ao dono** se prefere push da branch
-   (e checkout dela na Pi) ou merge na main. Não decida sozinho.
-2. Na Pi: **`git fetch` + `git reset --hard <ref>`**. **NUNCA `scp`** — o repo da
-   Pi é `~/workspace/Controle_robo_web`.
-3. Na Pi: **`colcon build --packages-select nav2_trekking`** (é pacote novo lá;
-   `wheel_msgs` é compartilhado com o `robot_nav` e já existe).
+> ⛔ **OS PASSOS 1-3 ABAIXO ESTÃO OBSOLETOS desde 2026-08-28** (`1f08a60`). O
+> `nav2_trekking` não existe mais — `colcon build --packages-select nav2_trekking`
+> **falha**. O deploy hoje é o normal do `robot_nav`, e a geometria entra por flag:
+>
+> 1. Na Pi: `git fetch` + `git reset --hard <ref>` da branch `arena-galpao`.
+>    **NUNCA `scp`** — o repo da Pi é `~/workspace/Controle_robo_web`.
+> 2. Na Pi: `colcon build --packages-select robot_nav wheel_msgs`.
+> 3. Rodar com `./launch.sh --nav2 --arena` (sem `--arena` sobe a geometria antiga).
+>
+> O texto riscado fica só como registro do que se planejava em 08-27.
+
+1. ~~A branch `nav2-trekking` **não está na `main`**~~ — hoje a branch é `arena-galpao`.
+2. ~~Na Pi: `git fetch` + `git reset --hard <ref>`~~ — segue valendo, ver acima.
+3. ~~Na Pi: `colcon build --packages-select nav2_trekking`~~ — **este comando falha.**
 4. SSH na Pi: `ssh robo@robo-desktop.local`, e **use retry** —
    `until ssh ...; do sleep 3; done`. Pi offline = bateria do robô OU o PC em
    WiFi diferente; não especule crash.

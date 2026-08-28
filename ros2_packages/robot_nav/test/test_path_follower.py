@@ -449,14 +449,26 @@ def test_desligavel_por_parametro():
     c = _cfg_vel(clear_full=0.0)
     assert speed_for_clearance(c, 0.41) == pytest.approx(0.60)
 
-def test_default_da_arena_tambem_modula():
-    """A arena mantem forward_speed 0.30 (a fase de velocidade saiu de escopo).
+def test_default_do_robot_nav_vem_DESLIGADO():
+    """O `--nav2` normal NAO pode herdar a velocidade-por-folga sem pedir.
 
-    Pinado de proposito: o speed_for_clearance foi medido a 0.60 m/s, entao
-    este teste garante que ele continua modulando no cruzeiro que vamos usar
-    de verdade, e nao vira no-op.
+    Ela foi medida no perfil ARENA. Default 0.0 = no-op: quem liga e' o launch
+    (follow_clear_full:=1.2), que o ./launch.sh so' passa com --arena.
     """
     c = FollowConfig()                       # defaults do robot_nav
+    assert c.clear_full == pytest.approx(0.0)
+    for folga in (float('inf'), 1.2, 0.41, 0.10, 0.0):
+        assert speed_for_clearance(c, folga) == pytest.approx(c.forward_speed)
+
+
+def test_perfil_arena_modula_no_cruzeiro_de_0_30():
+    """Ligado, tem que modular no cruzeiro que a arena usa (0.30, nao 0.60).
+
+    O speed_for_clearance foi medido a 0.60 m/s; a arena manteve 0.30 porque a
+    fase de velocidade saiu de escopo. Este teste garante que ele nao virou
+    no-op nesse cruzeiro mais baixo.
+    """
+    c = FollowConfig(clear_full=1.2, clear_min=0.35)
     assert c.forward_speed == pytest.approx(0.30)
     assert speed_for_clearance(c, float('inf')) == pytest.approx(0.30)
     assert speed_for_clearance(c, 0.35) == pytest.approx(c.min_speed)

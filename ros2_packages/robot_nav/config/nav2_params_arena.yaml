@@ -586,8 +586,11 @@ velocity_smoother:
 
 # Collision Monitor — REFLEXO CURTO (nav2_trekking, 2026-08-27).
 # Lê o /scan_safe (independe de pose/costmap/planner) e freia o comando ANTES
-# de chegar nos motores. É a ÚNICA rede de segurança que sobrou: só existe pra
-# "não bater", não pra ser cauteloso.
+# de chegar nos motores. Existe pra "não bater", não pra ser cauteloso.
+#
+# ⚠️ ELE NÃO É A ÚNICA REDE, E NÃO COBRE TUDO — ver "O QUE ESTE DESENHO NÃO
+# COBRE" no fim deste bloco: raspão em POINT-TURN colado numa parede fica de
+# fora, e é o bloqueador aberto do critério A4 (zero contato) da arena.
 #
 # O QUE SAIU (era o "medo" do robot_nav, decisão do dono 2026-08-27):
 #  - PolygonSlow: caixa de 0.65 m à frente / ±0.32 lateral que LIMITAVA o robô
@@ -596,11 +599,17 @@ velocity_smoother:
 #  - action_type "approach" (footprint projetado 1.0 s à frente, freada
 #    proporcional): virou uma caixa FIXA curta, a pedido do dono. Rollback do
 #    approach está no fim deste bloco.
-#  - motion_guard (cautela com pessoas): o nó não existe mais neste pacote.
 #
-# PIPELINE (sem o guard):
+# ⚠️ CORREÇÃO 2026-08-28: o fork nav2_trekking também tinha REMOVIDO o
+# motion_guard ("cautela com pessoas"). Ao dissolver o fork de volta no
+# robot_nav, o guard FICOU — a arena tem obstáculo MÓVEL, e o guard é
+# exatamente a cautela com objeto em movimento. O nó É lançado
+# (launch/nav2.launch.py) e o pipeline abaixo já reflete isso.
+#
+# PIPELINE (com o guard):
 #   smoother(nav_vel)/path_follower(follow_vel)/door(door_vel)
-#     -> [twist_mux_auto] -> auto_vel_raw -> [collision_monitor]
+#     -> [twist_mux_auto] -> auto_vel_pre -> [motion_guard]
+#     -> auto_vel_raw -> [collision_monitor]
 #     -> auto_vel -> twist_mux FINAL(prio 10) -> cmd_vel -> rodas
 # unstuck (prio 30) e humano (web/PS4) entram no mux FINAL, A JUSANTE do
 # collision -> seguem furando o reflexo (resgate e override sempre funcionam).

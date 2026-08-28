@@ -216,7 +216,11 @@ class FollowConfig:
     # condução virava rastejo) e estava na fila pra ser afrouxado. A arena não tem
     # limite de tempo e cobra precisão -> o custo sumiu e sobrou só o benefício.
     # clear_full <= 0 desliga (volta ao comportamento de velocidade fixa).
-    clear_full: float = 1.2         # m — folga a partir da qual anda a plena
+    # 2026-08-28: default 0.0 = DESLIGADO. Isto foi medido no perfil ARENA e
+    # muda o comportamento do reto — nao pode vazar pro `--nav2` normal sem
+    # ninguem ter pedido. Quem liga e' o launch (follow_clear_full:=1.2),
+    # que o ./launch.sh passa quando recebe --arena.
+    clear_full: float = 0.0         # m — folga a partir da qual anda a plena (0 = off)
     clear_min: float = 0.35         # m — folga em que já está no min_speed
 
 
@@ -415,7 +419,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
                 ('slow_radius', 0.4), ('min_speed', 0.22), ('rate_hz', 20.0),
-                ('clear_full', 1.2), ('clear_min', 0.35),
+                ('clear_full', 0.0), ('clear_min', 0.35),
                 ('turn_stop_tau', 0.10), ('aim_tau', 2.0),
                 ('aim_tau_short', 0.8),
             ):

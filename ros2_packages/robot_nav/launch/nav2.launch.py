@@ -56,6 +56,18 @@ def generate_launch_description():
     init_y_arg = DeclareLaunchArgument('init_y', default_value='0.0')
     init_yaw_arg = DeclareLaunchArgument('init_yaw', default_value='0.0')
 
+    # VELOCIDADE POR FOLGA do path_follower (2026-08-28). DESLIGADA por default:
+    # ela foi medida no perfil ARENA e muda o comportamento do reto, entao nao
+    # pode vazar pro `--nav2` normal sem ninguem ter pedido. `--arena` liga
+    # passando follow_clear_full:=1.2. clear_full <= 0 = desligado.
+    follow_clear_full_arg = DeclareLaunchArgument(
+        'follow_clear_full', default_value='0.0',
+        description='m — folga a partir da qual o path_follower anda a plena '
+                    '(0 = desligado, comportamento de velocidade fixa)')
+    follow_clear_min_arg = DeclareLaunchArgument(
+        'follow_clear_min', default_value='0.35',
+        description='m — folga em que o path_follower ja esta no min_speed')
+
     map_yaml = LaunchConfiguration('map')
     use_sim_time = LaunchConfiguration('use_sim_time')
     params_file = LaunchConfiguration('params_file')
@@ -174,7 +186,12 @@ def generate_launch_description():
         Node(
             package='robot_nav', executable='path_follower',
             name='path_follower', output=nav_output,
-            parameters=[sim_time_param],
+            parameters=[sim_time_param, {
+                'clear_full': ParameterValue(
+                    LaunchConfiguration('follow_clear_full'), value_type=float),
+                'clear_min': ParameterValue(
+                    LaunchConfiguration('follow_clear_min'), value_type=float),
+            }],
         ),
         # Travessia de porta: alinha no eixo de porta MARCADA e atravessa
         # reto vigiando o vão (door_vel, prio 20 no twist_mux). Publica
@@ -316,4 +333,5 @@ def generate_launch_description():
 
     return LaunchDescription([map_arg, use_sim_time_arg, params_arg,
                               init_pose_arg, init_x_arg, init_y_arg, init_yaw_arg,
+                              follow_clear_full_arg, follow_clear_min_arg,
                               *nodes])

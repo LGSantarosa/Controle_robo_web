@@ -1,6 +1,16 @@
 #!/bin/bash
 # Uma volta do A/B: sobe gazebo+nav2 do PACOTE indicado, roda a rota, mata tudo.
 # Uso: run_one.sh <pacote> <tag>
+#
+# 2026-08-28: world/mapa/rota/params/spawn eram FIXOS em sala_grande + o
+# nav2_params_pi.yaml, entao este harness nao conseguia testar outro perfil nem
+# outra arena. Agora tudo entra por env var, com os valores antigos de default
+# (nenhuma chamada existente muda de comportamento):
+#   AB_WORLD  AB_MAP  AB_ROTA  AB_PARAMS  AB_SX  AB_SY  AB_EXTRA_LAUNCH
+# Exemplo (perfil da arena):
+#   AB_PARAMS=nav2_params_arena.yaml \
+#   AB_EXTRA_LAUNCH="follow_clear_full:=1.2 follow_clear_min:=0.35" \
+#   ./run_one.sh robot_nav arena_v1
 # Sai 0 = volta completa (result.json escrito). Sai 2 = falha de SETUP (não é
 # resultado do robô — a volta deve ser refeita, não contabilizada).
 set +u
@@ -8,10 +18,14 @@ PKG="$1"; TAG="$2"
 REPO=/home/rbe-luis/Workspace/Controle_robo_web
 SP=${SIM_AB_DIR:-/home/rbe-luis/Workspace/Controle_robo_web/log/sim_ab}
 OUT="$SP/$TAG"; rm -rf "$OUT"; mkdir -p "$OUT"
-WORLD="$REPO/worlds/sala_grande.sdf"
-MAP="$REPO/maps/sala_grande.yaml"
-ROTA="$REPO/maps/routes/rota1.json"
-SX=2.0; SY=0.0
+WORLD="${AB_WORLD:-$REPO/worlds/sala_grande.sdf}"
+MAP="${AB_MAP:-$REPO/maps/sala_grande.yaml}"
+ROTA="${AB_ROTA:-$REPO/maps/routes/rota1.json}"
+PARAMS_NAME="${AB_PARAMS:-nav2_params_pi.yaml}"
+SX=${AB_SX:-2.0}; SY=${AB_SY:-0.0}
+for _f in "$WORLD" "$MAP" "$ROTA"; do
+    [ -f "$_f" ] || { echo "SETUP: nao existe: $_f" >&2; exit 2; }
+done
 
 cd "$REPO" || exit 2          # cwd fixo: os CSVs dos nós vão pro controle_web/logs certo
 source /opt/ros/jazzy/setup.bash
@@ -38,9 +52,14 @@ for BOOT in 1 2 3; do
     sleep 15   # gazebo assentando: subir o nav2 em cima do pico de CPU do gz
                # trava o bringup no map_server (lifecycle desiste de esperar)
 
-    PARAMS="$(ros2 pkg prefix $PKG)/share/$PKG/config/nav2_params_pi.yaml"
+    PARAMS="$(ros2 pkg prefix $PKG)/share/$PKG/config/$PARAMS_NAME"
+    # FALHA FECHADA, mesma razao do ./launch.sh --arena: o params_file carrega a
+    # geometria de seguranca. Rodar um A/B com outro footprint do que foi pedido
+    # produz numero que parece valido e nao e'.
+    [ -f "$PARAMS" ] || { echo "SETUP: params nao encontrado: $PARAMS" >&2; exit 2; }
     setsid ros2 launch "$PKG" nav2.launch.py map:="$MAP" use_sim_time:=true \
         params_file:="$PARAMS" set_initial_pose:=true init_x:=$SX init_y:=$SY init_yaw:=0.0 \
+        $AB_EXTRA_LAUNCH \
         > "$OUT/nav2.log" 2>&1 &
 
     # Prontidão REAL: não basta o tópico do costmap existir — o que o probe usa

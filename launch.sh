@@ -67,8 +67,9 @@ for arg in "$@"; do
             echo "Uso: $0 [--teleop|--slam|--nav2|--trekking] [--sim] [--arena] [--web-teleop] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
             echo ""
             echo "  --arena          perfil da prova do galpao (05/09): robot_radius 0.32,"
-            echo "                   inflacao maior, PolygonFront unico. Vao < 0.64 m vira PAREDE"
-            echo "                   — proposital: a fresta apertada e atalho OPCIONAL."
+            echo "                   inflacao maior, PolygonFront unico. Na geometria continua"
+            echo "                   isso fecha vao < 0.64 m — CONFIRME no mapa rasterizado com"
+            echo "                   tools/mapa_passagens.py. NAO cobre raspao em point-turn."
             echo "  --web-teleop     reativa o controle de movimento pela web (default: off — use PS4/WASD)"
             echo "  --flash-mega     força \`pio run -t upload\` mesmo sem mudança"
             echo "  --no-flash-mega  pula o flash da MEGA sempre"
@@ -542,6 +543,15 @@ case "$MODE" in
                 _perfil="PI"; [ "$SIM" = true ] && _perfil="SIM=REAL"
                 [ "$ARENA" = true ] && _perfil="ARENA"
                 echo "[3/4] Modo NAV2 (perfil $_perfil) — params: $PI_YAML"
+            elif [ "$ARENA" = true ]; then
+                # FALHA FECHADA: --arena troca a GEOMETRIA DE SEGURANCA (raio,
+                # inflacao, collision). Cair no default em silencio subiria o robo
+                # com outro footprint do que o operador pediu — exatamente o tipo
+                # de divergencia que a prova existe pra nao ter.
+                echo "ERRO: --arena pedido, mas $_PARAMS_NAME nao foi encontrado em"
+                echo "      $(ros2 pkg prefix robot_nav 2>/dev/null)/share/robot_nav/config/"
+                echo "      Rode um colcon build antes. Abortando (nao vou subir com outra geometria)."
+                exit 1
             else
                 echo "[3/4] Modo NAV2 — aviso: $_PARAMS_NAME não encontrado, usando defaults"
             fi
@@ -556,7 +566,11 @@ case "$MODE" in
             INIT_POSE_ARG="set_initial_pose:=true init_x:=$SPAWN_X init_y:=$SPAWN_Y init_yaw:=0.0"
             echo "      [SIM] AMCL nasce em ($SPAWN_X, $SPAWN_Y, yaw 0) — sem setar pose na mão"
         fi
-        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG $INIT_POSE_ARG > "$NAV2_LOG" 2>&1 &
+        # A velocidade-por-folga do path_follower nao mora no params_file (o nó
+        # nao le' ele) — entra por launch arg, so' no perfil ARENA.
+        ARENA_FOLLOW_ARG=""
+        [ "$ARENA" = true ] && ARENA_FOLLOW_ARG="follow_clear_full:=1.2 follow_clear_min:=0.35"
+        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG $INIT_POSE_ARG $ARENA_FOLLOW_ARG > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
         # Nav2 demora pra ativar todos os lifecycle nodes; espera o costmap global.

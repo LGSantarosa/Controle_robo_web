@@ -73,7 +73,7 @@ do "entre-eixos" é o mesmo 37 da linha de cima, o comprimento da **estrutura in
 
 O `sim_robot.sdf` usa rodas em ±0,22 e ±0,165, resultando em envelope 0,50 × 0,50 e
 coincidindo com a medida externa declarada. A alteração da URDF deve ser feita nas duas
-cópias hoje existentes (`robot_nav` e `nav2_trekking`) **somente após confirmar no robô as
+duas cópias da URDF (`robot_nav/urdf/`) **somente após confirmar no robô as
 distâncias centro-a-centro**.
 
 Isso é uma correção da geometria visual/TF. **Não trocar automaticamente o
@@ -115,13 +115,16 @@ conjunto; não basta apertar um parâmetro.
 
 ## 4. Arquitetura — modo seguro obrigatório e bônus isolado
 
-### Nível 1 — nav2 com `robot_radius: 0.32` = MODO SEGURO
+### Nível 1 — perfil `--arena` (`robot_radius: 0.32`) = MODO CONSERVADOR
 
-O parâmetro `robot_radius: 0.32` existe em
-`ros2_packages/nav2_trekking/config/nav2_params_pi.yaml`. Porém, o fluxo normal de
-`launch.sh --nav2` ainda compila e lança **`robot_nav`**, cujo footprint é o quadrado de
-±0,25 m. Antes de usar esta arquitetura, `nav2_trekking` precisa ser definido como fonte
-oficial e integrado ao launcher; misturar os dois pacotes invalida as conclusões abaixo.
+⚠️ **Não chamar de "modo seguro".** Ele reduz a chance de contato ao planejar com folga,
+mas **não satisfaz A4 sozinho** — ver "O bloqueador do A4" logo abaixo.
+
+**Estado (2026-08-28, commit `1f08a60`):** o pacote `nav2_trekking` foi **dissolvido** de
+volta no `robot_nav`. A geometria vive em
+`ros2_packages/robot_nav/config/nav2_params_arena.yaml` e é selecionada por
+`./launch.sh --nav2 --arena` (falha fechada: se o yaml não estiver instalado, aborta em
+vez de subir com outro footprint). Um pacote só; não há mais o que unificar.
 
 Na geometria contínua ideal, o raio 0,32 exige vão ≥ 0,64 m:
 
@@ -139,11 +142,28 @@ contorno explícitos e um preflight que rejeite qualquer plano que entre nas reg
 quatro frestas. O resultado de 70/80/90 cm só pode ser marcado como aprovado depois dos
 testes de mapa e colisão.
 
+### 🔴 O bloqueador do A4 — point-turn colado na parede
+
+O `PolygonFront` protege **só uma faixa frontal estreita** (x 0,25–0,50, y ±0,22). O canto
+do robô varre **0,354 m** ao girar no lugar, então **uma parede a 0,28 m é raspão em
+point-turn** — e o reflexo não vê isso, porque a caixa é estreita e fica à frente. O
+`robot_radius` de 0,32 também deixa 3,4 cm de canto para fora do círculo, e o
+`path_follower` gira no lugar por construção (o robô é skid-steer; arco foi refutado).
+
+O perfil da arena **removeu o `PolygonStop`**, que projetava o footprint — foi a troca
+certa (o modo `approach` escalava o `wz` para baixo da zona-morta 1,7 e travava o robô num
+deadlock de point-turn), mas deixou o giro descoberto.
+
+**Enquanto isto não for resolvido, A4 (zero contato) não pode ser declarado.** O lugar
+certo é o `path_follower`: antes de iniciar um point-turn, olhar o anel 0,25–0,36 m e se
+afastar antes de girar. Não é o collision monitor — lá a única alavanca é escalar o `wz`,
+que é exatamente o que trava o robô.
+
 ### Nível 2 — o atalho de 60 cm (`door_crossing` generalizado)
 
 O `door_crossing` existente pode servir de base, mas **não entrega esse comportamento hoje**:
 
-- está comentado/desabilitado em `nav2_trekking/launch/nav2.launch.py`;
+- está comentado/desabilitado em `robot_nav/launch/nav2.launch.py`;
 - só trabalha com portas marcadas manualmente;
 - exige que o goal anterior à porta seja concluído;
 - o `MapBridge` só insere esse goal quando o plano do Nav2 já cruza uma porta marcada —
@@ -188,6 +208,14 @@ aproximação final, o scan sanitizado deve mascarar **somente o cluster do cone
 enquanto houver autorização fresca (TTL); o controlador continua usando o scan bruto para
 parar. Perda de scan, TF, autorização ou associação única manda velocidade zero. Todos os
 outros obstáculos continuam visíveis ao collision monitor.
+
+### Isolamento do perfil
+
+Comportamento medido no perfil da arena **não pode vazar** para o `--nav2` normal. A
+velocidade-por-folga do `path_follower` nasce **desligada** (`clear_full: 0.0`) e é ligada
+por launch arg (`follow_clear_full:=1.2`), que só o `--arena` passa. Exceção consciente: o
+`rear_half_width` 0,26 ficou global, por ser correção de um disparo espúrio medido, não
+uma preferência de perfil.
 
 ### LED / relé
 
@@ -295,7 +323,9 @@ Depende do atalho de fresta estar pronto (a janela é a mesma fresta de 60, por�
 
 | # | passo | entrega |
 |---|---|---|
-| 1 | Definir `nav2_trekking` como fonte oficial e integrar `launch.sh`; medir bitola, entre-eixos e altura do LiDAR | premissas coerentes de runtime e geometria |
+| 1 | ✅ **FEITO** (`1f08a60`): `nav2_trekking` dissolvido no `robot_nav`, geometria vira `--arena` (falha fechada), harness `run_one.sh` parametrizado | um pacote só, perfil testável |
+| 1b | ⏳ Medir no robô: bitola, entre-eixos e altura do LiDAR | premissa de geometria |
+| 1c | 🔴 **Proteger o point-turn** (anel 0,25–0,36 m no `path_follower`) | **bloqueador do A4** |
 | 2 | Corrigir as duas URDFs visuais conforme a medição, sem alterar a bitola efetiva do drive sem calibração | TF/modelo coerentes |
 | 3 | Estender `mapa_passagens.py` para probes locais e `colisao.py` para cilindros | validadores capazes de medir A4/A5 |
 | 4 | `worlds/arena_galpao.sdf` + mapa + arquivo de missão com frestas, regiões, standoffs e contornos seguros | o campo de prova reproduzível |
@@ -333,7 +363,7 @@ Os passos 1–8 entregam a missão. O passo 9 é o bônus e não pode bloquear o
 | Bug aberto `"goal/start is an obstacle"` gera recovery | Não atribuir automaticamente à inflação. Manter o goal Nav2 no standoff, inspecionar costmap/obstáculo fantasma e usar comportamento dedicado só na aproximação final. |
 | Plataforma amarela invisível ao laser | Por desenho: o cone é a âncora, não a plataforma. |
 | Hardware do LED ainda não montado | A interface já existe; escolher pino 8 (`/light/marker`) ou relé no pino 7 (`/light/cmd`) conforme a fiação e testar o pulso. |
-| `robot_nav` e `nav2_trekking` divergem | Um único pacote deve ser compilado e lançado em sim e no robô; smoke test do launcher antes da arena. |
+| ✅ resolvido: `robot_nav` e `nav2_trekking` divergiam | Fork dissolvido em `1f08a60`. Um pacote só. Falta o smoke test do launcher antes da arena. |
 | Validador ignora cone cilíndrico | Implementar círculo/cilindro vs OBB antes de usar A4 como evidência. |
 | SLAM do galpão sai ruim | Conferir as passagens com probes locais e validar os planos seguros **no dia**, antes de rodar. |
 | Magnetômetro deriva no galpão metálico | Manter heading magnético desligado até validação no local. |
