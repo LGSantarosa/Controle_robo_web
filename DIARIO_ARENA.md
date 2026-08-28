@@ -456,9 +456,53 @@ se o intervalo contém algum 45° + k·90°  ->  max h = 0,354
 senão                                    ->  max h = max(h(extremo1), h(extremo2))
 ```
 
-Exato, O(1), sem passo de amostragem e sem margem de discretização. Cobre os dois
-casos: `ρ < 0,25` é invasão (verdadeiro em qualquer φ) e o canto só bloqueia
-quando o setor passa por 45°+k·90°.
+Cobre os dois casos: `ρ < 0,25` é invasão (verdadeiro em qualquer φ) e o canto só
+bloqueia quando o setor passa por 45°+k·90°.
+
+⏳ **Faltava dizer (review 11):** o intervalo é **com sinal** — `Δθ < 0` inverte a
+ordem — e precisa **desembrulhar o wrap de ±π** antes de procurar os 45°+k·90°.
+Custo: **O(1) por feixe, O(n) pelo scan inteiro** (n ≈ 450 no LD06). Sem
+amostragem de `φ`, mas não é O(1) no total.
+
+#### ⚠️ A guarda não é um teste de entrada — é contínua, e olha até a FRENAGEM
+
+Review 11, e é a correção mais importante do desenho. Duas coisas que eu tratava
+como detalhe e são estruturais:
+
+**1. Reavaliar a cada ciclo, não só ao iniciar o giro.** O skid desloca o centro,
+o alvo do carrot muda, e obstáculo pode aparecer no meio da manobra.
+
+**2. A margem tem que cobrir DINÂMICA, não ruído de scan.** Medido nesta volta
+(1466 amostras girando):
+
+| grandeza | mediana | p90 | max |
+|---|---|---|---|
+| taxa de yaw real | 25,0 °/s | 59,3 | 139,6 |
+| giro **entre dois scans** (10 Hz) | 2,5° | **5,9°** | **14,0°** |
+| deslocamento do centro girando (por 0,1 s) | — | **~1,6 cm** | — |
+
+E o número que manda em tudo, **a frenagem** (`max_angular_accel: 10.0`):
+
+| parando de | tempo | **ângulo varrido até parar** |
+|---|---|---|
+| `rot_min` 2,4 rad/s | 0,24 s | **17°** |
+| `rot_max` 4,5 rad/s | 0,45 s | **58°** |
+
+**Consequência:** mesmo detectando o bloqueio instantaneamente, o robô ainda varre
+17–58° antes de parar. Então a guarda **não verifica "o giro que vou fazer"** —
+ela verifica **tudo que eu varreria antes de conseguir parar**:
+
+```
+Δθ_verificar = giro durante a latência do scan (até 14°)
+             + giro durante a frenagem (17° a 2,4 rad/s, 58° a 4,5)
+             + folga
+```
+
+⏳ **Proposta que sai daí:** com algo no anel externo, **capar o giro em `rot_min`**
+antes de bloquear. 2,4 rad/s varre 17° até parar contra 58° do `rot_max` — três
+vezes menos setor a verificar, e **2,4 continua acima da zona-morta 1,7**, então
+não cai na armadilha do `approach` (comando morto). Capar é degrau intermediário
+entre girar livre e parar.
 
 #### Máquina de estados
 
@@ -556,6 +600,33 @@ yaw em que a folga zera. Falha hoje por construção — não existe guarda nenh
   comparada ao baseline (236,4 s · 2 colisões + 28 raspões · 13 blocos de
   `goal_turn`).
 
+#### ✂️ v1 ENXUTA (decidida no review 11, por causa do prazo)
+
+`INVERTE` e `AFASTA` continuam subdefinidos e carregam risco alto. **Eles saem da
+v1.** A primeira versão tem **dois estados**:
+
+| estado | ação |
+|---|---|
+| `LIVRE` | gira (⏳ com o cap em `rot_min` sob avaliação) |
+| `PARADO_SEGURO` | para, publica o estado latched e **bloqueia o `unstuck`** |
+
+Isso já ataca o modo de falha **observado** (canto varrendo o `cone_3`) e é uma
+mudança pequena — o que o projeto manda fazer a 8 dias da prova. `INVERTE` e
+`AFASTA` entram depois, sem bloquear a proteção básica.
+
+#### Integração da opção 1 (não existe no código hoje)
+
+Escolhida a opção 1, ela **não é só um `if`**. Precisa de quatro peças, e o
+`motion_guard` já é o molde de todas:
+
+1. o `path_follower` **publica um estado de bloqueio latched** (tópico novo);
+2. o `unstuck_supervisor` **assina** esse estado (hoje ele assina
+   `motion_guard/state` e `door_zone` — e **nenhum** estado do `path_follower`);
+3. ao receber bloqueio: **standdown E zerar o timer de encalhe** — senão ele
+   acumula "parado" durante o bloqueio e dispara no instante em que soltar;
+4. **cauda ao desbloquear**, como já faz com o guard (`_guard_tail_until`, 2,0 s):
+   soltar guarda e resgate no mesmo tick é convite pra thrash.
+
 #### ⏳ O que falta antes de virar código (lista honesta)
 
 A versão anterior dizia que faltavam só duas coisas. **Era falso.** Falta:
@@ -563,13 +634,15 @@ A versão anterior dizia que faltavam só duas coisas. **Era falso.** Falta:
 | # | pendência | tipo |
 |---|---|---|
 | 1 | `unstuck` respeita o bloqueio **ou** vira o `AFASTA` | **decisão do dono** |
-| 2 | `INVERTE` pelo arco complementar (`Δθ ∓ 2π`), com o setor maior | desenho |
-| 3 | `AFASTA`: volume varrido do retângulo + velocidade, distância máx., margem de frenagem, saída numérica | desenho |
-| 4 | Arquivar `/scan_safe` (teste integrado) | tarefa |
-| 5 | Valores: `margem`, `N` ciclos de histerese, TTL do scan | calibração |
+| 2 | Capar o giro em `rot_min` antes de bloquear? (17° × 58° de setor) | ⏳ desenho |
+| 3 | Arquivar `/scan_safe` (teste integrado) | tarefa |
+| 4 | Valores: folga da margem, `N` ciclos de histerese, TTL do scan | calibração |
+| ~~5~~ | ~~`INVERTE` / `AFASTA`~~ | **fora da v1** (review 11) |
 
 **Decidido no review 10:** critério analítico (sem amostragem) e **scan mudo →
 parada segura**.
+**Decidido no review 11:** guarda **contínua** com look-ahead até a frenagem; v1
+só `LIVRE` + `PARADO_SEGURO`.
 
 ## 3. Medições
 
@@ -721,6 +794,9 @@ que na arena fica **em cima do muro sul**.
 | 28 | "Chegou a 0,04 m e derivou até 0,59 m" | Os 0,59 são de **antes** da chegada. Depois de entrar na tolerância: min 0,066, max 0,281 | Ancorar "antes/depois" num evento, não na janela inteira |
 | 29 | **"A samba encostou no cone"** dito como conclusão | É hipótese: eu misturei pose do Gazebo (`colisao.csv`) com `dist_goal` do AMCL, e o AMCL erra **24 cm** ali. Co-suspeito não investigado | Não cruzar duas fontes de pose sem medir a diferença entre elas |
 | 30 | Escrevi **"unstuck nunca disparou"** sem qualificar | Vale só pro NOSSO supervisor. O **Nav2** fez 5 recoveries, incluindo o bug que eu chamava de "anterior a esta fase" | Ler o log do nav2, não só os CSVs dos nossos nós |
+| 52 | Desenhei a guarda como **teste de entrada** do giro | Tem que ser **contínua**: o skid desloca o centro, o carrot muda, obstáculo aparece no meio da manobra | Guarda que roda uma vez protege um instante, não uma manobra |
+| 53 | Pensei a margem como **ruído de scan** | É **dinâmica**: medido, o robô varre **17° parando de 2,4 rad/s e 58° de 4,5**, e gira até 14° entre dois scans. O teste geométrico pode ser exato para uma pose já vencida | Margem de guarda se dimensiona pela **frenagem**, não pelo sensor |
+| 54 | Chamei o critério de **O(1)** | O(1) **por feixe**; O(n) pelo scan (~450 feixes). E faltava intervalo **com sinal** e **wrap de ±π** | Dizer a complexidade do que roda, não de um pedaço |
 | 51 | Listei as duas saídas do `unstuck` **sem a consequência de cada uma** | O dono perguntou "anotou isso tudo?" pela terceira vez; o trade-off que eu descrevi no chat (pequena mas perde resgate × maior mas concentra num nó) não estava no arquivo | Opção sem consequência escrita não é decisão apresentada, é lista |
 | 45 | Chamei de **"exato"** um critério **amostrado** | Com passo de 5°, um obstáculo a 0,35 m e 47,5° passa nas pontas (h=0,339) e bate no meio (h=0,354). Faltava ~1,5 cm só de margem de discretização — e nem precisava amostrar: `h` tem máximo analítico em 45°+k·90° | "Exato" é palavra que se prova, não se escreve |
 | 46 | Ia **permitir giro com scan mudo**, alegando que o `collision_monitor` protege | **Circular:** ele bebe da mesma fonte (`source_timeout: 1.0`). Scan mudo cega os dois, e permitir ali reativa a colisão que a guarda existe pra impedir | Antes de contar com proteção a jusante, conferir se ela sobrevive à mesma falha |
