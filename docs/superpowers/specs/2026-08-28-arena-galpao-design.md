@@ -328,7 +328,7 @@ Depende do atalho de fresta estar pronto (a janela é a mesma fresta de 60, por�
 | 1d | ✅ **FEITO**: harness roda os scripts do REPO (não as cópias em `log/sim_ab/`) e valida args antes do `rm -rf` | o que roda é o que está no git |
 | 1b | ⏳ Medir no robô: bitola, entre-eixos e altura do LiDAR | premissa de geometria |
 | 1c | 🔴 **Proteger o point-turn** (anel 0,25–0,36 m no `path_follower`) | **bloqueador do A4** |
-| 2 | Corrigir as duas URDFs visuais conforme a medição, sem alterar a bitola efetiva do drive sem calibração | TF/modelo coerentes |
+| 2 | Corrigir a URDF visual (`robot_nav/urdf/robot.urdf.xacro`, única desde `1f08a60`) conforme a medição, **sem** alterar a bitola efetiva do drive sem calibração | TF/modelo coerentes |
 | 3 | Estender `mapa_passagens.py` para probes locais e `colisao.py` para cilindros | validadores capazes de medir A4/A5 |
 | 4 | `worlds/arena_galpao.sdf` + mapa + arquivo de missão com frestas, regiões, standoffs e contornos seguros | o campo de prova reproduzível |
 | 5 | Baseline Nav2 no sim: validar planos fora de todas as frestas e navegar até os standoffs | prova somente navegação segura; ainda não A1–A5 |

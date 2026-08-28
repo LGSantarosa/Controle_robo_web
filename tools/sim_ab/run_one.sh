@@ -18,7 +18,7 @@ PKG="$1"; TAG="$2"
 REPO=/home/rbe-luis/Workspace/Controle_robo_web
 SP=${SIM_AB_DIR:-/home/rbe-luis/Workspace/Controle_robo_web/log/sim_ab}
 # 2026-08-28: os SCRIPTS agora saem do repo (TOOLS = a pasta deste arquivo), nao
-# de $SIM_AB_DIR. Antes o run_n chamava "$TOOLS/run_one.sh" e log/sim_ab/ guardava
+# de $SIM_AB_DIR. Antes o run_n chamava "$SP/run_one.sh" e log/sim_ab/ guardava
 # COPIAS do harness inteiro — que e' gitignore'd (.gitignore:20). Resultado: o
 # codigo que rodava nao era o do git, correcao no repo nao chegava na execucao, e
 # o `rm -rf "$OUT"` podia apagar as proprias ferramentas. $SP agora e' SO' saida.
