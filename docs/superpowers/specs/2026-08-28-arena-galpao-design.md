@@ -1,5 +1,8 @@
 # Design — Arena do galpão (prova de 2026-09-05)
 
+> 📓 **Registro corrido do que foi feito, medido e errado: `DIARIO_ARENA.md`** (na raiz).
+> Este arquivo é o DESENHO; o diário é o HISTÓRICO.
+>
 > Sessão de 2026-08-28. Substitui o objetivo da fase anterior (`HANDOFF_PROVA_REAL.md`),
 > que era provar velocidade e margem. **A meta mudou: nada de velocidade — o robô
 > tem que ser destemido no movimento e MUITO preciso.**
