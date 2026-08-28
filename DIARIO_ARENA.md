@@ -377,7 +377,7 @@ mesmo: **girar**. Então a ordem muda:
 
 1. **Proteção de point-turn** (anel 0,25–0,36 m antes de girar). É a única das
    três que **fecha A4**, o mecanismo do contato está provado, e ela não depende
-   de resolver a questão da localização.
+   de resolver a questão da localização. **Detalhe do plano na §2.10.**
 2. **Latch da chegada.** Defeito provado por si só, e reduz a exposição: menos
    giro desnecessário colado no alvo. Com teste antes, e repetindo esta volta
    contra o baseline (236,4 s · 13 blocos de `goal_turn` · 2 colisões + 28 raspões).
@@ -386,6 +386,42 @@ mesmo: **girar**. Então a ordem muda:
    `--com-cones` fica como experimento, ciente de que mexe em duas coisas.
 
 ⏳ **Aguardando o dono decidir a ordem.**
+
+### 2.10 Plano da proteção de point-turn (⏳ não implementada)
+
+Registrado aqui porque foi apresentado ao dono no chat e a ordem é que conclusão
+apresentada entra no arquivo.
+
+**Onde:** no `path_follower`, **antes de iniciar um giro no lugar**. Não no
+`collision_monitor` — lá a única alavanca é escalar o `wz`, e escalar giro abaixo
+da zona-morta do skid (1,7) é comando morto: o robô patina e **não vira**, justo
+quando girar era a saída. Esse deadlock já foi reproduzido e está documentado no
+`nav2_params_arena.yaml` (o modo `approach` reprovado).
+
+**O quê:** antes de entrar em `turning`/`goal_turn`, olhar no scan o **anel entre
+o raio inscrito (0,25) e o circunscrito (0,354)**. É exatamente a faixa que o
+corpo **não** ocupa parado mas **varre** ao girar. Se houver retorno nesse anel,
+o giro no lugar é inseguro: afastar antes, ou girar para o lado livre.
+
+**Teste primeiro, com dado real desta volta.** O caso está gravado em
+`docs/baselines/2026-08-28-arena-baseline1/`:
+
+- pose (12,16 · 6,99), yaw varrendo **−37° → −54°**, `cone_3` a **0,51 m** do
+  centro do robô — superfície a 0,34 m, dentro do anel;
+- `colisao_eventos.csv` tem a folga amostra a amostra, mergulhando a **0,0 cm**.
+
+O teste alimenta essa sequência e exige que a guarda **recuse o giro** antes do
+yaw em que a folga chega a zero. Falha na versão de hoje, por construção — não
+existe guarda nenhuma.
+
+**O que ela NÃO resolve, dito na frente:**
+
+- usa o **scan ao vivo** (relativo), então **não depende do AMCL** — é por isso
+  que ela é independente da questão do erro de pose. Mas pela mesma razão **não
+  protege do que o laser não vê**;
+- **não** conserta a samba (item 2 da ordem) nem o erro de pose (item 3);
+- fechar A4 exige **repetir esta volta** e comparar contra o baseline: 236,4 s ·
+  2 colisões + 28 raspões · 13 blocos de `goal_turn`.
 
 ## 3. Medições
 
@@ -537,6 +573,7 @@ que na arena fica **em cima do muro sul**.
 | 28 | "Chegou a 0,04 m e derivou até 0,59 m" | Os 0,59 são de **antes** da chegada. Depois de entrar na tolerância: min 0,066, max 0,281 | Ancorar "antes/depois" num evento, não na janela inteira |
 | 29 | **"A samba encostou no cone"** dito como conclusão | É hipótese: eu misturei pose do Gazebo (`colisao.csv`) com `dist_goal` do AMCL, e o AMCL erra **24 cm** ali. Co-suspeito não investigado | Não cruzar duas fontes de pose sem medir a diferença entre elas |
 | 30 | Escrevi **"unstuck nunca disparou"** sem qualificar | Vale só pro NOSSO supervisor. O **Nav2** fez 5 recoveries, incluindo o bug que eu chamava de "anterior a esta fase" | Ler o log do nav2, não só os CSVs dos nossos nós |
+| 38 | Levei a conclusão pro chat e **deixei o plano de fora do arquivo** | O dono teve que perguntar "anotou?" pela **segunda vez**. A §2.9 tinha a ordem, mas o *como* do passo 1 (onde vai, o que testa, o que não resolve) só existia na conversa | A regra vale pro parágrafo inteiro que eu mando, não só pra parte tabelada |
 | 32 | Atribuí à **spec** uma frase que é do `HANDOFF_PROVA_REAL.md:42` | Citei documento errado; a frase existe | Conferir a origem antes de citar |
 | 33 | Liguei os **24 cm** direto à fresta e ao A2 | Erro euclidiano perto do cone ≠ erro lateral na fresta; e A2 é medido no **scan relativo**, não na pose absoluta | Não transportar uma métrica pra um contexto onde ela não é a métrica |
 | 34 | Chamei `--com-cones` de **"uma variável"** | O mesmo mapa alimenta AMCL **e** costmap global | "Uma variável" é sobre o que o experimento MEXE, não sobre quantos flags eu passo |
