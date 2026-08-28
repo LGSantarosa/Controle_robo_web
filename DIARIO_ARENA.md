@@ -30,7 +30,7 @@
 | A1 | visita 4 cones + chegada, na ordem, sem pular após falha | ⏳ falta executor |
 | A2 | para a ≤ 20 cm do cone | ⏳ falta aproximação final |
 | A3 | LED acende em cada ponto | ⏳ falta nó |
-| A4 | **zero contato** com bloco, cone ou parede | 🔴 **BLOQUEADO** — baseline 08-28: **2 colisões + 28 raspões, todos no `cone_3`**, pelo canto varrendo durante a samba (§2.8). Parede e bloco: **zero** |
+| A4 | **zero contato** com bloco, cone ou parede | 🔴 **BLOQUEADO** — baseline 08-28: **2 colisões + 28 raspões, todos no `cone_3`**, pelo canto varrendo no giro. Parede e bloco: **zero**. Causa em aberto: samba **e/ou** erro de pose de 24 cm (§2.8) |
 | A5 | completa a missão **sem** atravessar fresta | ✅ no mapa; ✅ **no sim** — baseline fez 5/5 goals em 236,4 s sem depender da fresta de 0,60 |
 
 ---
@@ -183,7 +183,9 @@ Comando: o do §4.5. Saídas arquivadas em `log/sim_ab/arena_baseline1/`
 | tempo total | **236,4 s** |
 | contato com parede/bloco | **zero** |
 | contato com CONE | 🔴 **2 colisões + 28 raspões, TODOS no `cone_3`** |
-| unstuck | nunca disparou (2203 amostras, todas `monitoring`) |
+| unstuck (nosso) | nunca disparou (2203 amostras, todas `monitoring`) |
+| recoveries do **Nav2** | 1 `No valid trajectories`, 1 `start/goal is an obstacle`, 3 `Failed to make progress` |
+| erro de pose AMCL × Gazebo | mediana **9,0 cm**, p90 15,8, **24,1 cm nos contatos** |
 
 Por goal: 43 s / 34 s / 66 s / 50 s / 43 s. O goal 3 é o dobro dos outros — e é
 onde estão os dois contatos.
@@ -192,52 +194,54 @@ onde estão os dois contatos.
 > `e440cb5` o `colisao.py` só lia caixas. O primeiro uso do oráculo corrigido já
 > pegou o contato que a versão anterior não veria.
 
-#### 🔴 A "samba" no goal — diagnosticada
+#### 🔴 A "samba" no goal — mecanismo confirmado, números corrigidos
 
 O dono viu ao vivo: *"ele fica sambando tentando achar o ângulo e o ponto exato,
 mas já está em cima do goal faz tempo, isso deixa ele burro"*.
 
-**Não é limite-ciclo em torno do yaw do goal** (foi minha primeira hipótese, e o
-CSV a derrubou: zero inversões de sinal DENTRO de cada bloco). São **dois
+**Não é limite-ciclo em torno do yaw do goal** (foi minha primeira hipótese; o CSV
+a derrubou — zero inversões de sinal DENTRO de cada bloco). São **dois
 controladores brigando através de um limiar sem histerese**:
 
 ```
  4.0  driving    dist 0.166           <- se aproxima
  4.3  goal_turn  dist 0.153  wz +4.50 <- cruza 0.15, gira pro YAW DO GOAL
- 6.3  goal_turn  dist 0.161  wz +2.40 <- girando no lugar, DERIVA pra 0.161
+ 6.3  goal_turn  dist 0.161  wz +2.40 <- girando no lugar, deriva pra 0.161
  6.6  turning    dist 0.174  wz -4.50 <- passou de 0.15: cai fora e INVERTE o giro
-10.3  driving    dist 0.185           <- 4 s girando pro outro lado, deriva mais
+10.3  driving    dist 0.185           <- 4 s girando pro outro lado
 10.6  goal_turn  dist 0.154  wz +4.50 <- volta pra baixo de 0.15... recomeça
 ```
 
 - `goal_turn` gira pro **yaw do goal**; `turning` gira pra **mira do carrot**.
-  Querem lados opostos — por isso o `wz` troca de sinal no instante da troca de
-  estado.
+  Querem lados opostos — por isso o `wz` troca de sinal no instante da troca.
 - Quem arbitra é um `dist_goal <= goal_xy_tol` **pelado**, sem histerese
   (`path_follower.py:295`).
-- O giro no lugar do skid **desloca o robô ±5 cm** — então **o próprio giro que o
-  limiar dispara é o que faz cruzar o limiar de volta**. Se auto-alimenta.
-- 13 blocos de `goal_turn`, cada um **reiniciando com um yaw novo** (26°, 115°,
-  157°, 177°…), ~35 s só no goal 3.
+- O giro no lugar do skid **desloca o robô**, então o giro que o limiar dispara
+  ajuda a cruzar o limiar de volta.
+
+**Números (corrigidos no review 7 — a versão anterior deste parágrafo exagerava):**
+
+| | |
+|---|---|
+| blocos de `goal_turn` na **volta inteira** | 13, somando **13,8 s** |
+| no **goal 3** | **7 blocos, 8,5 s** |
+| nos outros goals | 1 / 2 / 1 / 2 blocos, ≤ 2,6 s cada |
+| `dist_goal` no goal 3, **depois** de entrar na tolerância | entrou 0,139 → min **0,066** → max **0,281** m |
+
+⚠️ A versão anterior dizia "13 blocos e ~35 s no goal 3" (13 é a volta inteira; os
+35 s eram o tamanho da janela de CSV que eu arquivei) e chamava 115°/157°/177° de
+"yaw do robô" — são **`herr_deg`, o ERRO de yaw**. E dizia "chegou a 0,04 m e
+derivou até 0,59 m": os 0,59 são de **antes** da chegada.
 
 **A doença já foi curada uma vez neste arquivo.** O docstring (linhas 16-18)
 conta: *"ele girava e parava no MESMO limiar → limite-ciclo = pulinhos"*,
 resolvido com histerese `turn_enter`/`turn_exit`. **O limiar de CHEGADA nunca
-recebeu o mesmo remédio.**
+recebeu o mesmo remédio.** Isso é fato do código, independente da causa do contato.
 
-#### 🔴 O contato no cone É a samba
+#### 🔴 O contato no cone — assinatura clara, causa AINDA EM ABERTO
 
-| | |
-|---|---|
-| dist ao goal 3 | chegou a **0,04 m**, derivou até **0,59 m** |
-| pose no contato | robô (12,16 · 6,99), yaw −40,6°; cone a **0,51 m** do centro |
-| geometria | superfície do cone a **0,34 m** do centro do robô; o canto varre **0,354** |
-| de onde | cone a **+126° do nariz** = canto **traseiro**, girando |
-
-Ou seja: **a samba andou meio metro com o robô e encostou o canto de trás no
-cone.** Não é point-turn genérico perto de parede — é a deriva do vaivém.
-
-**Os 30 eventos são DOIS episódios de ~0,7 s, e a assinatura é inequívoca:**
+Os 30 eventos são **dois episódios de ~0,7 s**, com assinatura inequívoca
+(pose do **Gazebo**, ground truth):
 
 ```
    t      folga(cm)  pose                 yaw
@@ -251,13 +255,51 @@ cone.** Não é point-turn genérico perto de parede — é a deriva do vaivém.
 **A posição não muda** (12,16 → 12,14) e **o yaw varre** −37° → −54°. A folga
 mergulha até zero e volta a subir. É o **canto passando pelo cone durante o giro
 no lugar** — o cone a +126° do nariz é o canto **traseiro-esquerdo** (os cantos
-ficam a ±45° e ±135°).
+ficam a ±45° e ±135°). Nenhum evento em parede ou bloco: os 30 são no `cone_3`.
 
-Nenhum evento em parede ou bloco: **os 30 são no `cone_3`.**
+⚠️ **Mas eu escrevi que "a samba andou meio metro com o robô e encostou", e isso
+é forte demais.** Existe um segundo suspeito, medido abaixo, e eu tinha misturado
+duas fontes de pose: o `colisao.csv` usa o **Gazebo**, o `dist_goal` do
+`follow_debug` usa o **AMCL**. A samba provavelmente participa; **provar exige
+repetir a volta com o latch.**
 
-**Consequência pra A4:** o bloqueador tem agora um caso reproduzível e medido. E
-a hipótese é que travar a chegada mate os dois problemas de uma vez, porque a
-deriva vinha do vaivém.
+#### 🔴🔴 ACHADO NOVO: o AMCL erra 24 cm na arena
+
+Alinhando as duas séries pelo yaw (offset +3,45 s, erro de yaw médio 1,3°):
+
+| erro de pose AMCL × Gazebo | |
+|---|---|
+| mediana da volta | **9,0 cm** |
+| p90 | **15,8 cm** |
+| máximo | **27,1 cm** |
+| **nos 30 eventos de contato** | **24,1 cm** (21,0–26,1) |
+
+**Isto reordena a prioridade do projeto.** A spec dizia *"no sim o erro de pose é
+zero, no real não é"* — **falso nesta arena.** Consequências diretas:
+
+- a fresta de 0,60 m exige **yaw ≤ 5° e lateral ≤ ±3 cm** (§3.2). Com 24 cm de
+  erro de pose ela é **impossível**, aqui, no sim;
+- o critério A2 (parar a **20 cm** do cone) é menor que o erro de pose;
+- no contato, o robô "achava" que estava a 24 cm de onde estava de fato — então
+  **erro de localização é co-suspeito do contato, junto com a samba.**
+
+Suspeita da causa (⏳ não investigada): a arena é pobre em feature — muro liso e
+8 blocos — e o **mapa não tem os cones** (decisão consciente, §2.7), então os 4
+cones que o laser vê são obstáculos não-mapeados que o AMCL tem que ignorar.
+
+#### ⚠️ O Nav2 FEZ recoveries (o diário anterior omitiu)
+
+"unstuck nunca disparou" vale só pro **nosso supervisor**. O `nav2.log` mostra:
+
+| ocorrência | onde |
+|---|---|
+| `No valid trajectories out of 35!` | 1× |
+| `Either of the start or goal pose are an obstacle!` | 1×, de **(7,14 · 2,40)** para o goal 2 — o start está **dentro da fresta A (0,90 m)** |
+| `Failed to make progress` | **3×**, todas no goal 3 (a janela da samba) |
+
+O bug `"start/goal is an obstacle"` **foi reproduzido aqui**, então parar de
+chamá-lo de "anterior a esta fase": ele está vivo nesta arena, e disparou
+exatamente quando o robô estava atravessando uma fresta.
 
 #### Correção proposta (⏳ não implementada, aguardando o dono)
 
@@ -266,9 +308,17 @@ naquele goal, entra em fase de chegada e **não volta mais** pro carrot — só
 `goal_turn` até o yaw fechar, então `arrived`. Solta a trava só com goal novo (ou
 se algo empurrar o robô pra além de ~3× a tolerância).
 
+Isso mata a briga dos dois controladores — que é um defeito real do código,
+provado. Que **também** elimine o contato no cone é **HIPÓTESE**, não conclusão:
+o AMCL errando 24 cm é co-suspeito e o latch não mexe nele.
+
 Plano: **teste primeiro** (reproduzir o chatter com a sequência de poses do CSV,
 ver falhar), depois travar, depois **repetir esta mesma volta** e comparar contra
-este baseline — 236,4 s e **2 contatos**.
+este baseline — 236,4 s, 13 blocos de `goal_turn` (13,8 s), **2 colisões + 28
+raspões**. Se o contato sobreviver ao latch, o suspeito é a localização.
+
+**A proteção genérica de point-turn continua necessária pra fechar A4** — o latch
+não a substitui.
 
 ---
 
@@ -417,6 +467,12 @@ que na arena fica **em cima do muro sul**.
 | 20 | Autoteste do `colisao.py` cobria só a **matemática**, não o parser XML | A regressão das duas pernas não tinha teste — o bug que eu tinha acabado de corrigir podia voltar em silêncio | Bug corrigido sem teste é bug agendado |
 | 21 | Escrevi que caixa girada dá folga **"subestimada"** | Não é garantido: ignorar a rotação pode inventar folga **ou perder contato**. O resultado é NÃO CONFIÁVEL, não conservador | Não vender limitação como se fosse margem de segurança |
 | 23 | Diagnostiquei a samba como **limite-ciclo do yaw** antes de olhar o CSV | Zero inversões de sinal dentro de cada bloco derrubaram isso. A causa é chattering entre DOIS controladores num limiar sem histerese | A assinatura estava no dado; eu quase entreguei a causa errada |
+| 26 | Contei **13 blocos de `goal_turn` "no goal 3"** | São 13 na volta **inteira**; o goal 3 tem **7 (8,5 s)**. E os "~35 s" eram o tamanho da janela que eu arquivei, não a duração da samba | Não confundir o recorte da análise com o fenômeno |
+| 27 | Chamei `herr_deg` de **"yaw do robô"** | 115°/157°/177° são **erro** de yaw, não pose | Ler o nome da coluna |
+| 28 | "Chegou a 0,04 m e derivou até 0,59 m" | Os 0,59 são de **antes** da chegada. Depois de entrar na tolerância: min 0,066, max 0,281 | Ancorar "antes/depois" num evento, não na janela inteira |
+| 29 | **"A samba encostou no cone"** dito como conclusão | É hipótese: eu misturei pose do Gazebo (`colisao.csv`) com `dist_goal` do AMCL, e o AMCL erra **24 cm** ali. Co-suspeito não investigado | Não cruzar duas fontes de pose sem medir a diferença entre elas |
+| 30 | Escrevi **"unstuck nunca disparou"** sem qualificar | Vale só pro NOSSO supervisor. O **Nav2** fez 5 recoveries, incluindo o bug que eu chamava de "anterior a esta fase" | Ler o log do nav2, não só os CSVs dos nossos nós |
+| 31 | A evidência versionada tinha **`colisao.log` fora do git** (`*.log`) e **CSV com CRLF** | O README listava um arquivo que sumia em checkout limpo; `git diff --check` reprovava toda linha | Conferir `git ls-files` e `git diff --check` do que se declara versionado |
 | 25 | Reportei **"2 contatos"** olhando só o resumo do `colisao.log` | O CSV tinha **30 eventos**: 2 colisões + **28 raspões**. O resumo imprime só as colisões | Ler o CSV, não o resumo — foi a lição do "média esconde bimodal" outra vez |
 | 24 | **Rodei a volta e não anotei** | O dono teve que perguntar "anotou isso tudo?". Pior: os CSVs de `controle_web/logs/` são sobrescritos a cada launch — quase perdi o `follow_debug` que sustenta o diagnóstico | Arquivar CSV e escrever o diário fazem parte da run, não são pós-jogo |
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
@@ -429,10 +485,12 @@ que na arena fica **em cima do muro sul**.
 |---|---|---|
 | 1 | **Proteção de point-turn** (anel 0,25–0,36 m no `path_follower`) | 🔴 bloqueador de A4. **Não é** no collision monitor: lá a única alavanca é escalar o `wz`, que trava o robô (deadlock já reproduzido) |
 | 2 | Baseline Nav2 até os standoffs | ✅ **FEITO 08-28** — 5/5 goals, 236,4 s, 2 colisões + 28 raspões no cone (§2.8). Evidência em `docs/baselines/2026-08-28-arena-baseline1/` |
-| 2b | Travar a chegada (mata a samba e, com ela, o contato no cone) | ⏳ proposto, aguardando o dono |
+| 2b | Travar a chegada (mata a samba — defeito provado) | ⏳ proposto, aguardando o dono |
+| 2c | 🔴🔴 **AMCL erra 24 cm na arena** (mediana 9, p90 16, max 27) | ⏳ **novo, 08-28.** Maior que a tolerância de A2 (20 cm) e muito maior que os ±3 cm da fresta de 0,60. Suspeita: arena pobre em feature + os 4 cones não estão no mapa |
+| 2d | Bug `start/goal is an obstacle` **reproduzido nesta arena** | ⏳ disparou dentro da fresta A (0,90 m), indo pro goal 2 |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |
 | 6 | Medir no robô: bitola, entre-eixos, altura do LiDAR | ⏳ trena |
 | 7 | Refazer os números de 08-27 | ⏳ os antigos vieram do fork **sem `motion_guard`** e com oráculo cego a 5 obstáculos |
-| 8 | Bug aberto `"start/goal is an obstacle"` | ⏳ anterior a esta fase |
+| 8 | Bug `"start/goal is an obstacle"` | ⏳ **não é mais só "anterior a esta fase"** — reproduzido no baseline de 08-28 (§2.8) |
