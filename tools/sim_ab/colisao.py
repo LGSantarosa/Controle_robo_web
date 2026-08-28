@@ -31,12 +31,22 @@ RASPAO = 0.02          # folga <= 2 cm sem penetrar = passou raspando
 
 
 def obstaculos_do_mundo(sdf_path):
-    """Lê os <model> estáticos e devolve a lista de obstáculos COLIDÍVEIS.
+    """Lê os <model> estáticos e devolve TODAS as geometrias COLIDÍVEIS.
 
     ('box', nome, cx, cy, sx, sy)  ou  ('cyl', nome, cx, cy, raio)
 
-    Só olha geometria dentro de <collision>: <visual> não colide com nada, e a
-    plataforma amarela da arena é visual pura.
+    Regras, cada uma paga com um bug:
+    - só geometria dentro de <collision>: <visual> não colide, e a plataforma
+      amarela da arena é visual pura (viraria obstáculo fantasma no alvo);
+    - TODAS as <collision> de cada modelo, não a primeira. O modelo `pessoa` do
+      sala_grande tem DUAS (perna_esq em y+0.15, perna_dir em y-0.15): pegar só a
+      primeira perdia uma perna E colocava a outra no centro do modelo, que é o
+      espaço VAZIO entre as pernas;
+    - a <pose> local de cada colisão soma à pose do modelo, girada pelo yaw do
+      modelo. Sem isso as duas pernas caíam no mesmo ponto.
+
+    ⚠️ Caixa é tratada como AABB. Se um modelo com <box> tiver yaw != 0 a conta
+    fica errada, então isso é AVISADO em vez de silenciosamente aceito.
     """
     txt = open(sdf_path).read()
     obst = []
@@ -48,21 +58,41 @@ def obstaculos_do_mundo(sdf_path):
         if not pose:
             continue
         p = [float(v) for v in pose.group(1).split()]
-        col = ' '.join(re.findall(r'<collision\b.*?</collision>', corpo, re.S))
-        if not col:
-            continue
-        size = re.search(r'<box>\s*<size>([^<]+)</size>', col)
-        raio = re.search(r'<cylinder>\s*<radius>([^<]+)</radius>', col)
-        if size:
-            s = [float(v) for v in size.group(1).split()]
-            obst.append(('box', nome, p[0], p[1], s[0], s[1]))
-        elif raio:
-            obst.append(('cyl', nome, p[0], p[1], float(raio.group(1))))
+        mx, my = p[0], p[1]
+        myaw = p[5] if len(p) >= 6 else 0.0
+        cos, sen = math.cos(myaw), math.sin(myaw)
+        for cm in re.finditer(r'<collision\b[^>]*>(.*?)</collision>', corpo, re.S):
+            col = cm.group(1)
+            lp = re.search(r'<pose>([^<]+)</pose>', col)
+            lx, ly = (0.0, 0.0)
+            if lp:
+                v = [float(t) for t in lp.group(1).split()]
+                lx, ly = v[0], v[1]
+            cx = mx + cos * lx - sen * ly
+            cy = my + sen * lx + cos * ly
+            size = re.search(r'<box>\s*<size>([^<]+)</size>', col)
+            raio = re.search(r'<cylinder>\s*<radius>([^<]+)</radius>', col)
+            if size:
+                sz = [float(v) for v in size.group(1).split()]
+                if abs(myaw) > 1e-9:
+                    print(f'[colisao] AVISO: modelo "{nome}" tem <box> com yaw '
+                          f'{math.degrees(myaw):.1f}° — tratado como AABB, folga '
+                          f'subestimada nesse obstáculo', flush=True)
+                obst.append(('box', nome, cx, cy, sz[0], sz[1]))
+            elif raio:
+                obst.append(('cyl', nome, cx, cy, float(raio.group(1))))
     return obst
 
 
 def separacao(rx, ry, ryaw, cx, cy, sx, sy):
-    """SAT entre o OBB do robô e a AABB da caixa. >0 = folga, <=0 = penetração."""
+    """SAT entre o OBB do robô e a AABB da caixa. >0 = folga, <=0 = penetração.
+
+    ⚠️ O SINAL é exato (contato é contato). O VALOR positivo é o maior gap entre
+    os eixos testados, que é uma COTA INFERIOR da distância euclidiana: com
+    separação diagonal a distância real é hypot(gx, gy) >= max(gx, gy). Erra pro
+    lado seguro (reporta MENOS folga do que há), mas não chamar de "folga exata".
+    Contra CILINDRO (separacao_circulo) o valor é exato.
+    """
     c, s = math.cos(ryaw), math.sin(ryaw)
     eixos = [(1.0, 0.0), (0.0, 1.0), (c, s), (-s, c)]
     cantos_r = [(rx + c * dx - s * dy, ry + s * dx + c * dy)

@@ -26,6 +26,7 @@ T_MURO, H_MURO = 0.10, 1.5
 ESP_BLOCO, H_BLOCO = 0.60, 0.80      # espessura 0.60: ver nota no SDF
 R_CONE, H_CONE = 0.17, 0.70
 PLAT = 1.2
+STANDOFF = 1.0        # m do centro do cone ate o goal do nav2 (ver escreve_rota)
 RES = 0.05                            # m/célula do mapa
 
 PONTOS = {                            # nome: (x, y, tem_cone)
@@ -49,6 +50,7 @@ OBST = [
 # Rotulos SEM espaco: a saida de --probes/--folgas e' pra ser colada direto na
 # shell, e espaco no rotulo vira argumento solto.
 PROBES = [
+    (1.0, 1.0, 4.5, 1.5, 'largada->cone1_livre'),
     (4.5, 1.5, 11.5, 1.8, 'cone1->cone2_fresta0.90'),
     (11.5, 1.8, 12.2, 7.5, 'cone2->cone3_fresta0.70'),
     (12.2, 7.5, 5.0, 7.8, 'cone3->cone4_fresta0.60'),
@@ -180,6 +182,25 @@ def conferir():
             largura = 2 * dist[lin, col]
             diz(abs(largura - esperada) < 1e-9,
                 f'{nome}: mapa mede {largura:.3f} m, geometria diz {esperada:.2f} m')
+
+        # A ROTA tem que ser navegável: um goal do nav2 em cima de obstáculo ou
+        # inflação é recusado ("start or goal pose are an obstacle"), e aí a volta
+        # nem começa. Confere no MESMO mapa que o nav2 vai carregar.
+        RAIO = 0.32
+        print(f'\nROTA navegável (goal precisa de folga >= {RAIO} m)')
+        nav = ndimage.label(dist >= RAIO)[0]
+        anterior = None
+        for w in [{'x': PONTOS['largada'][0], 'y': PONTOS['largada'][1],
+                   'alvo': 'largada'}] + rota_waypoints():
+            col = int(round((w['x'] - x0) / RES))
+            lin = int(round((H - 1) - (w['y'] - y0) / RES))
+            folga, trecho = dist[lin, col], nav[lin, col]
+            ok_folga = folga >= RAIO
+            ligado = anterior is None or (trecho != 0 and trecho == anterior)
+            diz(ok_folga and ligado,
+                f"{w['alvo']:9s} ({w['x']:6.2f},{w['y']:5.2f}) folga {folga:.2f} m"
+                + ('' if ligado else '  ⚠️ SEPARADO do anterior'))
+            anterior = trecho
     except ImportError:
         print('  (pulado: numpy/scipy ausentes)')
 
@@ -270,10 +291,150 @@ def gera_mapa(destino_pgm, destino_yaml, com_cones=False):
     return W, H, (x0, y0)
 
 
+CABECALHO_SDF = r"""<?xml version="1.0"?>
+<!--
+  ARENA DO GALPÃO — prova de 2026-09-05.  Gerado a partir da tabela em
+  tools/gera_arena_galpao.py (fonte única da geometria; não editar à mão).
+
+  A MISSÃO: largada -> 4 cones -> chegada. Cada cone fica numa PLATAFORMA
+  AMARELA grande; chegar a 20 cm do cone = está na plataforma = ponto marcado.
+  Entre os pontos há blocos com frestas. PASSAR PELA FRESTA É OPCIONAL: é atalho,
+  e SEMPRE existe contorno. Sem limite de tempo. Critério = chegar sem bater.
+
+  ┌────────────────────────────────────────────────────────────────┐
+  │ y                                                              │
+  │ 9  ░░░░░░░░░[C_60]░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  │
+  │ 8              ▓C4          ░                    ▓C3           │
+  │ 7                           ░(fresta 0.60 em y 7.20-7.80)      │
+  │ 6                           ░                                  │
+  │ 5  ──[D_80]──   ──────      ░        ─────[B_70]──────         │
+  │ 4      (fresta 0.80         (fresta 0.70 em x 11.05-11.75)     │
+  │ 3       em x 2.20-3.00)  ░                                     │
+  │ 2  ▣chegada              ░(fresta 0.90 em y 1.80-2.70)  ▓C2    │
+  │ 1  ▣largada    ▓C1       ░                                     │
+  │ 0  ────────────────────────────────────────────────────────    │
+  │    0    2    4    6    8   10   12   14                    x   │
+  └────────────────────────────────────────────────────────────────┘
+
+  GEOMETRIA, e por quê cada número:
+  - Galpão 14 x 9 m com PAREDE nos quatro lados. O dono confirmou galpão fechado;
+    parede é o que dá estrutura pro AMCL. Sem ela o mapa seria quase vazio.
+  - CONE = cilindro r 0.17 (34 cm de largura aparente), altura 0.70. Passa na
+    janela 0.04-0.45 m do cone_detector. É OBJETIVO, não obstáculo.
+  - PLATAFORMA = placa amarela 1.2 x 1.2, **só <visual>, sem <collision>**. É
+    marca de chão: o laser não vê, e o colisao.py (que desde 2026-08-28 só lê
+    <collision>) não a conta como obstáculo. Sem isso, pisar no alvo acusaria
+    "colisão".
+  - BLOCO = 0.80 m de altura (acima de qualquer altura de LiDAR em discussão) e
+    **0.60 m de espessura**. A espessura NÃO é estética: visto de topo, um bloco
+    fino apresentaria uma face de ~0.40 m, que cai dentro da janela 0.04-0.45 do
+    cone_detector e viraria CONE FALSO. Com 0.60 ele fica acima do teto da janela.
+    De quebra, 0.60 de espessura faz a fresta ser um túnel curto, que é o caso
+    realista pro door_crossing.
+  - Cada par de blocos é uma ILHA: a ponta encostada no muro deixa < 0.30 m
+    (vedada) e a outra ponta fica aberta = o contorno.
+
+  DISTÂNCIAS CONFERIDAS (tools/gera_arena_galpao.py (modo conferir)):
+  todo bloco fica a >= 1.7 m do cone mais próximo (não funde cluster no detector
+  nem esconde o alvo) e os cones ficam a >= 3 m entre si.
+
+  ⚠️ COM robot_radius 0.32 O NAV2 FECHA A FRESTA DE 0.60 — isso é ESPERADO, não
+  bug: ela é atalho opcional e o modo conservador contorna. Confirme com
+  tools/mapa_passagens.py com probe local (o percentual do maior componente não basta).
+-->
+<sdf version="1.9">
+  <world name="arena_galpao">
+
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <!-- IMU: sem este system o <sensor type="imu"> do sim_robot fica MUDO e o
+         sim volta a estimar yaw por RODA (o modo degradado do robô real).
+         Ver 2026-08-26, project_sim_imu_yaw. -->
+    <plugin filename="gz-sim-imu-system"
+            name="gz::sim::systems::Imu"></plugin>
+    <plugin filename="gz-sim-sensors-system"
+            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material>
+            <ambient>0.75 0.75 0.72 1</ambient>
+            <diffuse>0.75 0.75 0.72 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+"""
+
+
+def escreve_sdf(destino):
+    open(destino, "w").write(CABECALHO_SDF + corpo_sdf() + "  </world>\n</sdf>\n")
+
+
+def escreve_rota(destino):
+    """Rota da missao: standoff de cada cone + chegada, na ordem.
+
+    O goal do nav2 NAO vai no cone: cone (r 0.17) + robot_radius (0.32) da
+    fronteira letal a 0.49 m, e a inflacao de 0.60 estende o custo ate 0.77 m
+    do centro. Um goal ali nasce dentro de obstaculo/inflacao e o nav2 recusa.
+    Por isso STANDOFF = 1.0 m, no segmento vindo do ponto anterior, com o yaw
+    APONTANDO pro cone — e' dali que a aproximacao final (A2) assume.
+    """
+    import json
+    json.dump({"name": "arena_galpao", "waypoints": rota_waypoints()},
+              open(destino, "w"), indent=2)
+
+
+def rota_waypoints():
+    ordem = ["largada", "cone_1", "cone_2", "cone_3", "cone_4", "chegada"]
+    wps = []
+    for i, nome in enumerate(ordem[1:], 1):
+        ax, ay, _ = PONTOS[ordem[i - 1]]
+        bx, by, tem_cone = PONTOS[nome]
+        rumo = math.atan2(by - ay, bx - ax)
+        if tem_cone:                      # para a STANDOFF do cone, encarando ele
+            d = math.hypot(bx - ax, by - ay)
+            gx = bx - STANDOFF * (bx - ax) / d
+            gy = by - STANDOFF * (by - ay) / d
+        else:                             # chegada nao tem cone: vai no ponto
+            gx, gy = bx, by
+        wps.append({"x": round(gx, 3), "y": round(gy, 3),
+                    "yaw": round(rumo, 4), "alvo": nome})
+    return wps
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--conferir', action='store_true')
+    ap.add_argument('--sdf', metavar='DEST', help='escreve o world COMPLETO (cabeçalho + models)')
+    ap.add_argument('--rota', metavar='DEST', help='escreve a rota da missão (.json do probe.py)')
     ap.add_argument('--corpo-sdf', action='store_true',
                     help='imprime só os <model> (o cabeçalho do world é fixo no .sdf)')
     ap.add_argument('--mapa', metavar='DIR', help='gera arena_galpao.pgm/.yaml em DIR')
@@ -284,6 +445,13 @@ def main():
     a = ap.parse_args()
     if a.conferir:
         raise SystemExit(conferir())
+    if a.sdf:
+        escreve_sdf(a.sdf); print(f'world completo escrito em {a.sdf}'); return
+    if a.rota:
+        escreve_rota(a.rota); print(f'rota escrita em {a.rota}')
+        for w in rota_waypoints():
+            print(f"  {w['alvo']:9s} ({w['x']:6.2f},{w['y']:5.2f}) yaw {math.degrees(w['yaw']):6.1f}°")
+        return
     if a.corpo_sdf:
         print(corpo_sdf(), end='')
         return

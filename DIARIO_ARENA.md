@@ -124,15 +124,29 @@ construção — não há mais ferramenta dentro da pasta de saída.
 
 **`colisao.py` — dois bugs. O primeiro reescreve o passado:**
 
-> `sala_grande.sdf`, o mundo de **todas** as medições de 08-27, tem **25
-> obstáculos**. O oráculo enxergava **20**. Os 5 cilindros eram invisíveis
-> (o parser só procurava `<box><size>`). O *"zero colisões, folga mínima
-> 3,7 cm"* foi concluído com **20% do mundo fora da conta.**
+> `sala_grande.sdf` tem **26 geometrias de colisão** (20 caixas + 4 cilindros
+> isolados + as **2 pernas** do modelo `pessoa`). O oráculo de 08-27 enxergava
+> **20** — só as caixas. O *"zero colisões, folga mínima 3,7 cm"* foi concluído
+> com os cilindros **fora da conta.**
+>
+> ⚠️ **Correção do review 4:** eu primeiro escrevi "25 obstáculos, 5 cilindros".
+> Errado por dois motivos: eu contava MODELOS, não geometrias, e meu parser
+> corrigido ainda pegava **só a primeira `<collision>` de cada modelo, ignorando
+> a pose local** — então as duas pernas da `pessoa` viravam UM cilindro no centro
+> do modelo, que é o espaço **vazio entre as pernas**. Corrigido: todas as
+> `<collision>`, cada uma com sua pose local girada pelo yaw do modelo. As pernas
+> agora aparecem em y 3,65 e 3,35 (modelo em 3,5 ± 0,15).
 
 Segundo bug: lia `<box>` de qualquer lugar, inclusive `<visual>`. Em
 `sala_grande` não havia caso (conferido), mas na arena a plataforma amarela é
 visual pura e viraria obstáculo fantasma — acusaria "colisão" toda vez que o robô
 pisasse no alvo. Agora só `<collision>`.
+
+**E uma precisão de linguagem:** contra CAIXA o **sinal** do SAT é exato (contato
+é contato), mas o **valor positivo** é o maior gap entre os eixos testados — uma
+**cota inferior** da distância euclidiana (com separação diagonal a real é
+`hypot(gx,gy) ≥ max(gx,gy)`). Erra pro lado seguro, mas não é "folga exata".
+Contra CILINDRO o valor é exato.
 
 **`mapa_passagens.py`** media só o **maior componente conectado**: uma fresta
 podia fechar e o percentual continuar 100%. Ganhou `--probe` (A→B) e `--folga`
@@ -204,32 +218,62 @@ do mapa.** Falta provar no sim.
 
 ## 4. Como reproduzir tudo
 
+> ⚠️ **CORRIGIDO 2026-08-28 (review 4).** A versão anterior deste bloco **não
+> rodava a arena**: o `launch.sh` caía nos defaults (`worlds/sala.sdf`,
+> `maps/hotmilk_portas.yaml`, spawn 2.0/2.5) e o A/B usava `maps/routes/rota1.json`,
+> cujos pontos têm **coordenadas negativas** — fora da arena inteira. Os comandos
+> abaixo estão conferidos.
+
+### 4.1 Autotestes (não precisam de ROS nem do robô)
+
 ```bash
-# autotestes (nenhum precisa de ROS nem do robô)
-python3 tools/gera_arena_galpao.py --conferir      # invariantes da arena
+python3 tools/gera_arena_galpao.py --conferir      # invariantes da arena + rota
 python3 tools/mapa_passagens.py   --autoteste      # mapa sintético, vão 0,60
 python3 tools/sim_ab/colisao.py   --autoteste      # 7 casos de geometria
 python3 -m pytest ros2_packages/robot_nav/test/ -q # 393 testes
+```
 
-# regenerar mundo e mapa a partir da tabela
+### 4.2 Regenerar mundo, mapa e rota (tudo da mesma tabela)
+
+```bash
+python3 tools/gera_arena_galpao.py --sdf  worlds/arena_galpao.sdf
 python3 tools/gera_arena_galpao.py --mapa maps/
+python3 tools/gera_arena_galpao.py --rota maps/routes/arena_galpao.json
+```
 
-# validar o mapa com os argumentos gerados pela própria tabela
+### 4.3 Validar o mapa (argumentos gerados pela própria tabela)
+
+```bash
 python3 tools/mapa_passagens.py maps/arena_galpao.yaml \
   $(python3 tools/gera_arena_galpao.py --probes | tr '\n' ' ')
+```
 
-# rodar o perfil da arena
-./launch.sh --sim --nav2 --arena
+### 4.4 Subir a arena no sim
 
-# uma volta A/B no perfil da arena
+O `--arena` escolhe **só o perfil de params**. Mundo, mapa e spawn são
+argumentos à parte — sem eles o launcher abre `sala.sdf` com `hotmilk_portas`:
+
+```bash
+./launch.sh --sim --nav2 --arena \
+  --world=$PWD/worlds/arena_galpao.sdf \
+  --map=$PWD/maps/arena_galpao.yaml \
+  --spawn-x=1.0 --spawn-y=1.0
+```
+
+### 4.5 Uma volta A/B na arena
+
+```bash
 AB_PARAMS=nav2_params_arena.yaml \
 AB_WORLD=$PWD/worlds/arena_galpao.sdf \
 AB_MAP=$PWD/maps/arena_galpao.yaml \
+AB_ROTA=$PWD/maps/routes/arena_galpao.json \
+AB_SX=1.0 AB_SY=1.0 \
 AB_EXTRA_LAUNCH="follow_clear_full:=1.2 follow_clear_min:=0.35" \
   bash tools/sim_ab/run_one.sh robot_nav arena_v1
 ```
 
----
+`AB_SX/AB_SY` = a **largada** (1.0, 1.0). O default do harness é (2.0, **0.0**),
+que na arena fica **em cima do muro sul**.
 
 ## 5. Erros que EU cometi (não podar esta seção)
 
@@ -247,6 +291,11 @@ AB_EXTRA_LAUNCH="follow_clear_full:=1.2 follow_clear_min:=0.35" \
 | 10 | `pinta_caixa` com `floor`/`ceil` + 1 **inflava o bloco** | A fresta de 0,70 media **0,60** no mapa: o validador declarava fechada uma passagem que existe. **Silencioso** | Rasterização tem que medir a mesma largura da geometria contínua, e isso virou invariante conferido |
 | 11 | Mensagem de commit com **crase** foi comida pela shell | `origin: command not found`, e o campo sumiu do texto | Heredoc quoted pra mensagem de commit |
 | 12 | `--probes` gerava **rótulo com espaço** | Quebrava ao expandir na shell | Saída feita pra colar tem que ser colável |
+| 13 | O bloco "Como reproduzir" **não reproduzia** | `--sdf` nem existia; `launch.sh --arena` caía em `sala.sdf`+`hotmilk_portas`; o A/B usava `rota1.json`, com coordenadas **negativas**, fora da arena | Comando publicado tem que ser **executado** antes de publicado |
+| 14 | Parser pegava **só a primeira `<collision>`** e ignorava a pose local | As 2 pernas da `pessoa` viravam 1 cilindro no vazio entre elas | Corrigir um parser pela metade e anunciar "ground truth completo" |
+| 15 | Chamei o valor do SAT de **"folga exata"** | Para caixa é cota inferior, não distância euclidiana | Não superqualificar a métrica |
+| 16 | Probes de A5 **omitiam largada→cone_1** | A conclusão era verdadeira, mas o conjunto reproduzível não a cobria | Prova automática tem que cobrir a perna toda |
+| 17 | Comentários do yaml diziam que o raio **"virou 0,354"** | O valor em vigor é 0,32; 0,354 foi testado e REPROVADO | Ao mudar o valor, varrer os comentários que o citam |
 
 ---
 
