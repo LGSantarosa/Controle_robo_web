@@ -490,24 +490,53 @@ passar por ele. **Apliquei um limitador de outro nó do pipeline.** É a mesma
 família do erro 46 ("o `collision_monitor` a jusante protege"): supor que um
 componente atua onde ele não está.
 
-**Medido, no lugar da conta teórica** (85 zeradas de giro vindas de `rot_min`):
+**Medido, no lugar da conta teórica** — com duas correções do review 13 sobre a
+minha primeira medição:
 
-| grandeza | mediana | p90 | max |
-|---|---|---|---|
-| yaw ADICIONAL depois de zerar o giro (0,15 s) | **1,00°** | 1,30° | 7,00° |
-| entrega do atuador com comando 2,4 rad/s (137°/s) | **17,3 °/s** = 0,30 rad/s | — | — |
+**Saída do modelo do atuador** (`sim_actuator_model.py`: `0,6·(|cmd|−1,7)`, satura
+em 2,5, com assimetria direita):
 
-Ou seja: **~1°, não 17°** — errei por mais de uma ordem de grandeza. E o sim
-aplica uma **curva estática** (2,4 comandado vira 0,30 rad/s), não uma rampa de
-desaceleração partindo de 2,4.
+| comando 2,4 rad/s | saída |
+|---|---|
+| esquerda | **0,420 rad/s = 24,1 °/s** |
+| direita | **0,441 rad/s = 25,3 °/s** |
 
-A guarda **continua sendo contínua e com look-ahead** — isso não muda. O que muda
-é o **tamanho**, agora medido em vez de deduzido:
+⚠️ Eu tinha escrito *"entrega do atuador: 17,3 °/s"*. **Rótulo errado:** 17,3 era
+a taxa de yaw **alcançada** que eu medi da pose, não a saída do modelo. Refazendo
+sem os 3 ticks de arranque: **18,0 °/s (0,314 rad/s)**. Então há **duas
+grandezas**, e elas não batem: o modelo manda 0,42–0,441 e o robô entrega ~0,31.
+A diferença é assunto à parte — o que não vale é chamar a segunda de "entrega do
+atuador".
+
+**Parada do giro** (zeradas vindas de `rot_min`):
+
+| | n | mediana | p90 | max |
+|---|---|---|---|---|
+| todas | 85 | 1,00° | 1,30° | ~~7,00°~~ |
+| **limpas** (giro NÃO recomeça em 0,15 s) | **74** | **1,00°** | **1,20°** | **1,80°** |
+
+⚠️ **Os 7° eram contaminação minha:** em **11 das 85** o giro recomeça dentro da
+janela — no caso dos 7°, o comando volta pra −4,5 rad/s **56 ms depois**. Eu media
+"parada" onde havia inversão. Limpo: **máximo 1,80°**.
+
+A guarda **continua sendo contínua e com look-ahead** — isso não muda. O tamanho,
+com os números limpos:
 
 ```
-Δθ_verificar = giro entre dois scans (até 14°) + parada (até 7°) + folga
-             ≈ 21° no pior caso medido,  NÃO 58°
+Δθ_verificar = giro entre dois scans (até 14,0°)
+             + parada                (até  1,8°)
+             + FOLGA                 (parâmetro, NÃO zero)
 ```
+
+⚠️ **A versão anterior escrevia `14 + 7 + folga ≈ 21`** — repare que 14+7 já dá
+21, ou seja, **a folga sumiu da conta**. Ela é um parâmetro explícito, não um
+enfeite na fórmula.
+
+🔴 **E o mais importante: este número NÃO serve pro robô real.** O
+`sim_actuator_model` é uma **curva estática** — zerou a entrada, zera a saída no
+mesmo tick. Ele não modela inércia nenhuma. Logo os 1,8° medem o **simulador**,
+não a frenagem física. Pro real, a margem tem que vir de **medição no robô** ou
+de um **valor conservador configurável**. ⏳ pendente.
 
 ⛔ **A proposta de capar em `rot_min` CAI** — decisão do dono, review 12:
 
@@ -539,6 +568,7 @@ virar código:
   "setor" — o corpo tem largura, e transladar varre uma faixa, não um raio.
   Faltam ainda: **velocidade**, **distância máxima**, **margem de frenagem** e
   **critério numérico de saída**.
+
 | `PARADO_SEGURO` | nenhum sentido livre **e** nenhuma translação segura | publica zero **e emite estado** | intervenção |
 
 ⚠️ **`PARADO_SEGURO` NÃO é seguro enquanto o `unstuck` puder furá-lo sozinho.**
@@ -550,7 +580,8 @@ nenhum estado de bloqueio do `path_follower`**. Ele só faz standdown para o
 `motion_guard` e para a porta. Depois do timeout ele pode dar ré, avançar ou girar
 por um canal (prio 30) que **ignora o collision monitor**.
 
-Duas saídas, ⏳ **a escolher com o dono** — com a consequência de cada uma:
+**✅ DECIDIDO (dono, review 12): opção 1.** A tabela abaixo fica como registro do
+porquê.
 
 | | **1. `unstuck` RESPEITA o bloqueio** | **2. `unstuck` VIRA o `AFASTA`** |
 |---|---|---|
@@ -650,13 +681,26 @@ Escolhida a opção 1, ela **não é só um `if`**. Precisa de quatro peças, e 
 4. **cauda ao desbloquear**, como já faz com o guard (`_guard_tail_until`, 2,0 s):
    soltar guarda e resgate no mesmo tick é convite pra thrash.
 
+🔴 **O molde do `motion_guard` NÃO basta, e isso é um buraco real** (review 13). O
+standdown dele é `if guard_blocked and self.state == _MONITORING` — e o próprio
+comentário do código diz: *"Manobra JÁ em curso (state != _MONITORING) NÃO é
+abortada"*. Foi decisão consciente lá (a parada era **pessoa**, e abortar ré no
+meio perto de gente tem seus próprios BOs). **Aqui é o oposto:** o bloqueio existe
+porque o corpo está prestes a raspar, e uma ré/avanço/giro já em curso é
+exatamente o que precisa parar.
+
+**Contrato do bloqueio de giro, então:** entra em standdown **e aborta manobra em
+curso publicando zero**, em qualquer estado do unstuck — não só em `monitoring`.
+⏳ desenho a fechar.
+
 #### ⏳ O que falta antes de virar código (lista honesta)
 
 A versão anterior dizia que faltavam só duas coisas. **Era falso.** Falta:
 
 | # | pendência | tipo |
 |---|---|---|
-| 1 | `unstuck` respeita o bloqueio **ou** vira o `AFASTA` | **decisão do dono** |
+| ~~1~~ | ~~`unstuck` respeita **ou** vira o `AFASTA`~~ | ✅ **DECIDIDO: respeita** (opção 1) |
+| 1b | 🔴 **Contrato do bloqueio**: abortar manobra JÁ EM CURSO, não só standdown | desenho |
 | 2 | Arquivar `/scan_safe` (teste integrado) | tarefa |
 | 3 | Valores: folga da margem, `N` ciclos de histerese, TTL do scan | calibração |
 | ~~4~~ | ~~Capar o giro em `rot_min`~~ | **CAIU** (review 12) — os contatos já eram a 2,4 |
@@ -819,10 +863,15 @@ que na arena fica **em cima do muro sul**.
 | 28 | "Chegou a 0,04 m e derivou até 0,59 m" | Os 0,59 são de **antes** da chegada. Depois de entrar na tolerância: min 0,066, max 0,281 | Ancorar "antes/depois" num evento, não na janela inteira |
 | 29 | **"A samba encostou no cone"** dito como conclusão | É hipótese: eu misturei pose do Gazebo (`colisao.csv`) com `dist_goal` do AMCL, e o AMCL erra **24 cm** ali. Co-suspeito não investigado | Não cruzar duas fontes de pose sem medir a diferença entre elas |
 | 30 | Escrevi **"unstuck nunca disparou"** sem qualificar | Vale só pro NOSSO supervisor. O **Nav2** fez 5 recoveries, incluindo o bug que eu chamava de "anterior a esta fase" | Ler o log do nav2, não só os CSVs dos nossos nós |
+| 57 | Chamei de **"entrega do atuador"** a taxa de yaw **alcançada** | O modelo manda **0,420–0,441 rad/s** (24–25 °/s) pra comando 2,4; os 17,3 (refeito: 18,0) eram a taxa medida da pose. São **duas** grandezas, e não batem | Rotular a medida pelo que ela é |
+| 58 | Medi "parada" incluindo **11 casos em que o giro recomeça** | Num deles o comando volta pra −4,5 em **56 ms** — era dali que saía meu "7°". Limpo (74 casos): **max 1,80°** | Definir a janela pelo fenômeno, e excluir quem sai dele |
+| 59 | `14 + 7 + folga ≈ 21` | 14+7 já é 21: **a folga sumiu da conta** | Se a parcela não muda o total, ela não está na conta |
+| 60 | Usei o número do **sim** como margem de segurança | O `sim_actuator_model` é curva **estática**: zerou a entrada, zera a saída. Não modela inércia — os 1,8° medem o simulador, não a frenagem física | Margem de segurança do robô real se mede no robô real |
+| 61 | Disse "copiar o molde do `motion_guard`" pro contrato do bloqueio | O standdown dele só vale em `monitoring`, e o comentário do código **diz explicitamente** que manobra em curso não é abortada. Aqui tem que abortar | Ler o que o molde faz antes de chamá-lo de molde |
 | 55 | Calculei a frenagem com **`max_angular_accel`, que é do `RotationShim`** | O `path_follower` publica `follow_vel` **direto no twist_mux**, sem passar pelo `controller_server`. Medido: o giro para em **~1°**, não 17°. E o comando 2,4 rad/s entrega **0,30** — curva estática, não rampa | Mesma família do erro 46: supor que um componente atua onde ele não está. **Conferir o caminho do dado antes de usar o parâmetro** |
 | 56 | Propus **capar em `rot_min`** como melhoria | Os dois contatos foram com `wz` **já em 2,4**: o cap não mudaria nada no caso a corrigir. E a justificativa dele era a conta que caiu | Otimização se prova contra o caso reproduzido, não contra uma conta |
 | 52 | Desenhei a guarda como **teste de entrada** do giro | Tem que ser **contínua**: o skid desloca o centro, o carrot muda, obstáculo aparece no meio da manobra | Guarda que roda uma vez protege um instante, não uma manobra |
-| 53 | Pensei a margem como **ruído de scan** | É **dinâmica**: medido, o robô varre **17° parando de 2,4 rad/s e 58° de 4,5**, e gira até 14° entre dois scans. O teste geométrico pode ser exato para uma pose já vencida | Margem de guarda se dimensiona pela **frenagem**, não pelo sensor |
+| 53 | Pensei a margem como **ruído de scan** | É **dinâmica**: o robô gira até **14°** entre dois scans, então o teste geométrico pode ser exato para uma pose já vencida. ⚠️ Este mesmo erro dizia "varre 17° parando de 2,4 e 58° de 4,5" — **números falsos, ver erro 55** | Margem de guarda se dimensiona pela dinâmica, não pelo sensor |
 | 54 | Chamei o critério de **O(1)** | O(1) **por feixe**; O(n) pelo scan (~450 feixes). E faltava intervalo **com sinal** e **wrap de ±π** | Dizer a complexidade do que roda, não de um pedaço |
 | 51 | Listei as duas saídas do `unstuck` **sem a consequência de cada uma** | O dono perguntou "anotou isso tudo?" pela terceira vez; o trade-off que eu descrevi no chat (pequena mas perde resgate × maior mas concentra num nó) não estava no arquivo | Opção sem consequência escrita não é decisão apresentada, é lista |
 | 45 | Chamei de **"exato"** um critério **amostrado** | Com passo de 5°, um obstáculo a 0,35 m e 47,5° passa nas pontas (h=0,339) e bate no meio (h=0,354). Faltava ~1,5 cm só de margem de discretização — e nem precisava amostrar: `h` tem máximo analítico em 45°+k·90° | "Exato" é palavra que se prova, não se escreve |
