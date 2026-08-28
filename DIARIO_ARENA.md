@@ -481,28 +481,45 @@ o alvo do carrot muda, e obstáculo pode aparecer no meio da manobra.
 | giro **entre dois scans** (10 Hz) | 2,5° | **5,9°** | **14,0°** |
 | deslocamento do centro girando (por 0,1 s) | — | **~1,6 cm** | — |
 
-E o número que manda em tudo, **a frenagem** (`max_angular_accel: 10.0`):
+⛔ **AQUI EU ERREI FEIO (corrigido no review 12).** Eu escrevi que a frenagem
+varre **17° a 2,4 rad/s e 58° a 4,5**, usando `max_angular_accel: 10.0`. Esse
+parâmetro está **dentro do bloco do `RotationShim`** (`nav2_params_arena.yaml:189`,
+logo abaixo de `rotate_to_heading_angular_vel`), ou seja, é do `controller_server`
+— e o `path_follower` publica **`follow_vel` DIRETO no twist_mux (prio 15)**, sem
+passar por ele. **Apliquei um limitador de outro nó do pipeline.** É a mesma
+família do erro 46 ("o `collision_monitor` a jusante protege"): supor que um
+componente atua onde ele não está.
 
-| parando de | tempo | **ângulo varrido até parar** |
-|---|---|---|
-| `rot_min` 2,4 rad/s | 0,24 s | **17°** |
-| `rot_max` 4,5 rad/s | 0,45 s | **58°** |
+**Medido, no lugar da conta teórica** (85 zeradas de giro vindas de `rot_min`):
 
-**Consequência:** mesmo detectando o bloqueio instantaneamente, o robô ainda varre
-17–58° antes de parar. Então a guarda **não verifica "o giro que vou fazer"** —
-ela verifica **tudo que eu varreria antes de conseguir parar**:
+| grandeza | mediana | p90 | max |
+|---|---|---|---|
+| yaw ADICIONAL depois de zerar o giro (0,15 s) | **1,00°** | 1,30° | 7,00° |
+| entrega do atuador com comando 2,4 rad/s (137°/s) | **17,3 °/s** = 0,30 rad/s | — | — |
+
+Ou seja: **~1°, não 17°** — errei por mais de uma ordem de grandeza. E o sim
+aplica uma **curva estática** (2,4 comandado vira 0,30 rad/s), não uma rampa de
+desaceleração partindo de 2,4.
+
+A guarda **continua sendo contínua e com look-ahead** — isso não muda. O que muda
+é o **tamanho**, agora medido em vez de deduzido:
 
 ```
-Δθ_verificar = giro durante a latência do scan (até 14°)
-             + giro durante a frenagem (17° a 2,4 rad/s, 58° a 4,5)
-             + folga
+Δθ_verificar = giro entre dois scans (até 14°) + parada (até 7°) + folga
+             ≈ 21° no pior caso medido,  NÃO 58°
 ```
 
-⏳ **Proposta que sai daí:** com algo no anel externo, **capar o giro em `rot_min`**
-antes de bloquear. 2,4 rad/s varre 17° até parar contra 58° do `rot_max` — três
-vezes menos setor a verificar, e **2,4 continua acima da zona-morta 1,7**, então
-não cai na armadilha do `approach` (comando morto). Capar é degrau intermediário
-entre girar livre e parar.
+⛔ **A proposta de capar em `rot_min` CAI** — decisão do dono, review 12:
+
+- **os dois contatos aconteceram com `wz` já em 2,4** (na janela do `cone_3`: 325
+  amostras em 2,4). Capar em `rot_min` **não mudaria nada no caso que precisamos
+  corrigir**;
+- a justificativa dela era a conta dos 17°/58°, que acabou de cair;
+- e ela adicionaria um terceiro comportamento, com limiares e chance de chatter,
+  sem resolver a colisão reproduzida.
+
+**Se depois da volta A/B aparecerem muitas paradas falsas**, aí sim: mede-se
+**offline** quantas o cap evitaria, e ele entra como otimização separada.
 
 #### Máquina de estados
 
@@ -607,8 +624,14 @@ v1.** A primeira versão tem **dois estados**:
 
 | estado | ação |
 |---|---|
-| `LIVRE` | gira (⏳ com o cap em `rot_min` sob avaliação) |
-| `PARADO_SEGURO` | para, publica o estado latched e **bloqueia o `unstuck`** |
+| `LIVRE` | gira normalmente |
+| `PARADO_SEGURO` | **zera na hora**, publica bloqueio latched e **bloqueia o `unstuck`** |
+
+Fechada no review 12, **sem cap e sem terceiro estado**:
+
+- guarda **reavaliada continuamente**;
+- **scan mudo → parada segura**;
+- `unstuck`: **standdown + timer zerado + cauda de 2 s**.
 
 Isso já ataca o modo de falha **observado** (canto varrendo o `cone_3`) e é uma
 mudança pequena — o que o projeto manda fazer a 8 dias da prova. `INVERTE` e
@@ -634,15 +657,17 @@ A versão anterior dizia que faltavam só duas coisas. **Era falso.** Falta:
 | # | pendência | tipo |
 |---|---|---|
 | 1 | `unstuck` respeita o bloqueio **ou** vira o `AFASTA` | **decisão do dono** |
-| 2 | Capar o giro em `rot_min` antes de bloquear? (17° × 58° de setor) | ⏳ desenho |
-| 3 | Arquivar `/scan_safe` (teste integrado) | tarefa |
-| 4 | Valores: folga da margem, `N` ciclos de histerese, TTL do scan | calibração |
+| 2 | Arquivar `/scan_safe` (teste integrado) | tarefa |
+| 3 | Valores: folga da margem, `N` ciclos de histerese, TTL do scan | calibração |
+| ~~4~~ | ~~Capar o giro em `rot_min`~~ | **CAIU** (review 12) — os contatos já eram a 2,4 |
 | ~~5~~ | ~~`INVERTE` / `AFASTA`~~ | **fora da v1** (review 11) |
 
 **Decidido no review 10:** critério analítico (sem amostragem) e **scan mudo →
 parada segura**.
-**Decidido no review 11:** guarda **contínua** com look-ahead até a frenagem; v1
-só `LIVRE` + `PARADO_SEGURO`.
+**Decidido no review 11:** guarda **contínua** com look-ahead; v1 só `LIVRE` +
+`PARADO_SEGURO`.
+**Decidido no review 12 (dono):** **só bloquear na v1**, sem cap. Look-ahead
+dimensionado pelo **medido** (~21°), não pela conta com o parâmetro errado.
 
 ## 3. Medições
 
@@ -794,6 +819,8 @@ que na arena fica **em cima do muro sul**.
 | 28 | "Chegou a 0,04 m e derivou até 0,59 m" | Os 0,59 são de **antes** da chegada. Depois de entrar na tolerância: min 0,066, max 0,281 | Ancorar "antes/depois" num evento, não na janela inteira |
 | 29 | **"A samba encostou no cone"** dito como conclusão | É hipótese: eu misturei pose do Gazebo (`colisao.csv`) com `dist_goal` do AMCL, e o AMCL erra **24 cm** ali. Co-suspeito não investigado | Não cruzar duas fontes de pose sem medir a diferença entre elas |
 | 30 | Escrevi **"unstuck nunca disparou"** sem qualificar | Vale só pro NOSSO supervisor. O **Nav2** fez 5 recoveries, incluindo o bug que eu chamava de "anterior a esta fase" | Ler o log do nav2, não só os CSVs dos nossos nós |
+| 55 | Calculei a frenagem com **`max_angular_accel`, que é do `RotationShim`** | O `path_follower` publica `follow_vel` **direto no twist_mux**, sem passar pelo `controller_server`. Medido: o giro para em **~1°**, não 17°. E o comando 2,4 rad/s entrega **0,30** — curva estática, não rampa | Mesma família do erro 46: supor que um componente atua onde ele não está. **Conferir o caminho do dado antes de usar o parâmetro** |
+| 56 | Propus **capar em `rot_min`** como melhoria | Os dois contatos foram com `wz` **já em 2,4**: o cap não mudaria nada no caso a corrigir. E a justificativa dele era a conta que caiu | Otimização se prova contra o caso reproduzido, não contra uma conta |
 | 52 | Desenhei a guarda como **teste de entrada** do giro | Tem que ser **contínua**: o skid desloca o centro, o carrot muda, obstáculo aparece no meio da manobra | Guarda que roda uma vez protege um instante, não uma manobra |
 | 53 | Pensei a margem como **ruído de scan** | É **dinâmica**: medido, o robô varre **17° parando de 2,4 rad/s e 58° de 4,5**, e gira até 14° entre dois scans. O teste geométrico pode ser exato para uma pose já vencida | Margem de guarda se dimensiona pela **frenagem**, não pelo sensor |
 | 54 | Chamei o critério de **O(1)** | O(1) **por feixe**; O(n) pelo scan (~450 feixes). E faltava intervalo **com sinal** e **wrap de ±π** | Dizer a complexidade do que roda, não de um pedaço |
