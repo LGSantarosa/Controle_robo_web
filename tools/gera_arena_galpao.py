@@ -254,6 +254,8 @@ def corpo_sdf():
 # --------------------------------------------------------------------- mapa
 def gera_mapa(destino_pgm, destino_yaml, com_cones=False):
     import numpy as np
+    for d in (destino_pgm, destino_yaml):
+        os.makedirs(os.path.dirname(os.path.abspath(d)), exist_ok=True)
     margem = 0.5
     x0, y0 = -T_MURO - margem, -T_MURO - margem
     W = int(round((GALPAO_X + 2 * T_MURO + 2 * margem) / RES))
@@ -407,6 +409,7 @@ def escreve_rota(destino):
     APONTANDO pro cone — e' dali que a aproximacao final (A2) assume.
     """
     import json
+    os.makedirs(os.path.dirname(os.path.abspath(destino)), exist_ok=True)
     json.dump({"name": "arena_galpao", "waypoints": rota_waypoints()},
               open(destino, "w"), indent=2)
 

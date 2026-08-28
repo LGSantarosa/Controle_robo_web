@@ -75,9 +75,16 @@ def obstaculos_do_mundo(sdf_path):
             if size:
                 sz = [float(v) for v in size.group(1).split()]
                 if abs(myaw) > 1e-9:
-                    print(f'[colisao] AVISO: modelo "{nome}" tem <box> com yaw '
-                          f'{math.degrees(myaw):.1f}° — tratado como AABB, folga '
-                          f'subestimada nesse obstáculo', flush=True)
+                    # NAO dizer "subestimada": ignorar a rotacao pode tanto
+                    # inventar folga que nao existe quanto PERDER contato real,
+                    # dependendo de que lado a caixa girou. O resultado nesse
+                    # obstaculo e' simplesmente NAO CONFIAVEL.
+                    print(f'[colisao] ⚠️ modelo "{nome}" tem <box> com yaw '
+                          f'{math.degrees(myaw):.1f}° e caixa rotacionada NAO e '
+                          f'suportada: a folga E O CONTATO nesse obstáculo sao '
+                          f'NAO CONFIAVEIS (tratado como AABB). Nenhum mundo em '
+                          f'uso hoje cai nisso — se cair, implementar OBB x OBB '
+                          f'antes de usar o resultado.', flush=True)
                 obst.append(('box', nome, cx, cy, sz[0], sz[1]))
             elif raio:
                 obst.append(('cyl', nome, cx, cy, float(raio.group(1))))
@@ -161,14 +168,85 @@ def autoteste():
          ('box', 'b', 1.0, 0.0, 0.4, 2.0), 0, 0, 0, 0.8 - 0.25),
     ]
     ok = True
+    print('  --- geometria ---')
     for desc, obj, rx, ry, yawd, esperado in casos:
         got = sep(obj, rx, ry, math.radians(yawd))
         bom = abs(got - esperado) < 1e-9
         ok &= bom
         print(f"  [{'ok ' if bom else 'ERRO'}] {desc:48s} "
               f"esperado {esperado:+.4f}  obtido {got:+.4f}")
+    ok &= autoteste_parser()
     print("[autoteste] " + ("TUDO CERTO" if ok else "FALHOU"))
     return 0 if ok else 1
+
+
+def autoteste_parser():
+    """Regressao do PARSER XML — a matematica acima nao cobre isto.
+
+    O bug real (2026-08-28): o parser pegava so' a PRIMEIRA <collision> de cada
+    modelo e ignorava a <pose> local, entao um modelo de duas pernas virava UM
+    cilindro no centro — o espaco VAZIO entre elas.
+    """
+    import tempfile
+    sdf = """<sdf version="1.9"><world name="t">
+      <model name="ground_plane"><pose>0 0 0 0 0 0</pose>
+        <link name="l"><collision name="c"><geometry><plane><normal>0 0 1</normal></plane></geometry></collision></link>
+      </model>
+      <model name="duas_pernas"><pose>6.5 3.5 0 0 0 0</pose>
+        <link name="l">
+          <collision name="esq"><pose>0 0.15 0.31 0 0 0</pose>
+            <geometry><cylinder><radius>0.06</radius><length>0.6</length></cylinder></geometry></collision>
+          <visual name="esq_v"><pose>0 0.15 0.31 0 0 0</pose>
+            <geometry><cylinder><radius>0.06</radius><length>0.6</length></cylinder></geometry></visual>
+          <collision name="dir"><pose>0 -0.15 0.31 0 0 0</pose>
+            <geometry><cylinder><radius>0.06</radius><length>0.6</length></cylinder></geometry></collision>
+        </link>
+      </model>
+      <model name="girado"><pose>2.0 0.0 0 0 0 1.5707963267948966</pose>
+        <link name="l">
+          <collision name="c"><pose>0 1.0 0 0 0 0</pose>
+            <geometry><cylinder><radius>0.1</radius><length>1</length></cylinder></geometry></collision>
+        </link>
+      </model>
+      <model name="so_visual"><pose>9.0 9.0 0 0 0 0</pose>
+        <link name="l"><visual name="v"><geometry><box><size>1 1 0.01</size></box></geometry></visual></link>
+      </model>
+    </world></sdf>"""
+    d = tempfile.mkdtemp()
+    caminho = d + '/t.sdf'
+    open(caminho, 'w').write(sdf)
+    obst = obstaculos_do_mundo(caminho)
+    por_nome = {}
+    for o in obst:
+        por_nome.setdefault(o[1], []).append(o)
+
+    ok = True
+
+    def diz(bom, msg):
+        nonlocal ok
+        ok &= bom
+        print(f'  [{"ok " if bom else "ERRO"}] {msg}')
+
+    print('  --- parser XML ---')
+    pernas = sorted(por_nome.get('duas_pernas', []), key=lambda o: o[3])
+    diz(len(pernas) == 2, f'modelo de 2 pernas -> {len(pernas)} geometrias (esperado 2)')
+    if len(pernas) == 2:
+        diz(abs(pernas[0][3] - 3.35) < 1e-9 and abs(pernas[1][3] - 3.65) < 1e-9,
+            f'pose local somada: y = {pernas[0][3]:.2f} e {pernas[1][3]:.2f} '
+            f'(esperado 3.35 e 3.65, NAO 3.50 duas vezes)')
+    # Modelo em (2,0) com yaw 90 graus e offset local (0, +1.0):
+    #   R(90) * (0,1) = (-1,0)  ->  mundo = (2-1, 0+0) = (1.0, 0.0)
+    # (2.0, 1.0) seria o resultado de IGNORAR o yaw — e' exatamente o bug que
+    # este caso existe pra pegar, entao esta' afirmado como NAO-igual.
+    g = por_nome.get('girado', [])
+    obtido = (round(g[0][2], 6), round(g[0][3], 6)) if len(g) == 1 else None
+    diz(obtido == (1.0, 0.0),
+        f'offset local girado pelo yaw do modelo: {obtido} (esperado (1.0, 0.0))')
+    diz(obtido != (2.0, 1.0),
+        'o yaw do modelo NAO foi ignorado (nao caiu em (2.0, 1.0))')
+    diz('so_visual' not in por_nome, 'modelo so <visual> ignorado')
+    diz('ground_plane' not in por_nome, 'ground_plane ignorado')
+    return ok
 
 
 def main():

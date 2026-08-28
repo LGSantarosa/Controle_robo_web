@@ -11,8 +11,16 @@ venv/
 *.log
 controle_web/logs/
 
-# Mapas gerados pelo SLAM
-maps/
+# Mapas gerados pelo SLAM (ignorados por default: sao artefato de campo)
+maps/*
+# ...MENOS os da arena: eles sao GERADOS por tools/gera_arena_galpao.py, sao
+# deterministicos, e a Pi deploya por `git reset --hard` — ela nao roda o
+# gerador. Sem isto, checkout limpo tem o mundo e NAO tem mapa nem rota.
+!maps/arena_galpao.pgm
+!maps/arena_galpao.yaml
+!maps/routes/
+maps/routes/*
+!maps/routes/arena_galpao.json
 
 # Colcon workspace (build artifacts deste repo)
 build/
