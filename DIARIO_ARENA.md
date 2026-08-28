@@ -337,10 +337,13 @@ o AMCL errando 24 cm é co-suspeito e o latch não mexe nele.
 Plano: **teste primeiro** (reproduzir o chatter com a sequência de poses do CSV,
 ver falhar), depois travar, depois **repetir esta mesma volta** e comparar contra
 este baseline — 236,4 s, 13 blocos de `goal_turn` (13,8 s), **2 colisões + 28
-raspões**. Se o contato sobreviver ao latch, o suspeito é a localização.
+raspões**. ~~Se o contato sobreviver ao latch, o suspeito é a localização.~~
+⚠️ **ESTA FRASE CAIU (review 8, ver §2.9):** é binária — sobra também o
+**point-turn sem proteção**, que eu mesmo provei varrer o canto. Dois suspeitos
+provados não viram um por eliminação de um terceiro.
 
-**A proteção genérica de point-turn continua necessária pra fechar A4** — o latch
-não a substitui.
+**A proteção genérica de point-turn continua necessária** — o latch não a
+substitui.
 
 ---
 
@@ -364,9 +367,16 @@ não a substitui.
 
 | estado do seguidor | n | mediana | p90 |
 |---|---|---|---|
-| `driving` | 2914 | **8,2 cm** | 13,5 |
+| `driving` | 2854 | **8,4 cm** | 13,7 |
 | `turning` | 1319 | **10,9 cm** | **22,8** |
-| `goal_turn` | 290 | 9,9 cm | 16,3 |
+| `goal_turn` | 268 | 9,9 cm | **17,5** |
+
+⚠️ **Corrigido no review 9.** A primeira versão dizia 2914 / 1319 / 290 e p90 de
+16,3 para o `goal_turn`. Viés meu: eu usava `searchsorted` **sem recortar o
+intervalo comum**, então **82 amostras** do `colisao.csv` que caem fora da janela
+do seguidor eram grudadas no primeiro/último estado. Contagem crua do CSV do
+seguidor: 2607 / 1217 / 250 (+5 `arrived`). A conclusão — **erro maior girando** —
+sobrevive à correção, e o p90 do `goal_turn` na verdade **piora** (16,3 → 17,5).
 
 Isso casa com algo **já documentado e medido neste repo**: o comentário da IMU em
 `sim_robot.sdf` registra que num skid-steer *"a roda patina no point-turn: medido
@@ -390,9 +400,10 @@ no giro, não cone fora do mapa.
 O fio comum dos dois defeitos provados **e** do crescimento do erro de pose é o
 mesmo: **girar**. Então a ordem muda:
 
-1. **Proteção de point-turn** (anel 0,25–0,36 m antes de girar). É a única das
-   três que **fecha A4**, o mecanismo do contato está provado, e ela não depende
-   de resolver a questão da localização. **Detalhe do plano na §2.10.**
+1. **Proteção de point-turn.** Ataca o **modo de falha observado** (canto varrendo,
+   mecanismo provado) e não depende de resolver a localização. ⚠️ **Não "fecha
+   A4" por si:** quem fecha A4 é uma **volta completa com zero evento**. Ela é a
+   candidata mais direta, não a garantia. **Detalhe na §2.10.**
 2. **Latch da chegada.** Defeito provado por si só, e reduz a exposição: menos
    giro desnecessário colado no alvo. Com teste antes, e repetindo esta volta
    contra o baseline (236,4 s · 13 blocos de `goal_turn` · 2 colisões + 28 raspões).
@@ -402,41 +413,98 @@ mesmo: **girar**. Então a ordem muda:
 
 ⏳ **Aguardando o dono decidir a ordem.**
 
-### 2.10 Plano da proteção de point-turn (⏳ não implementada)
+### 2.10 Proteção de point-turn — desenho (⏳ NÃO implementada, e ainda não pronta)
 
-Registrado aqui porque foi apresentado ao dono no chat e a ordem é que conclusão
-apresentada entra no arquivo.
+> Revisada no review 9. A primeira versão dizia *"olhar o anel 0,25–0,36 e
+> recusar o giro, afastar ou girar pro lado livre"* — **isso não é comportamento,
+> é intenção.** O que faltava está resolvido abaixo; o que continua em aberto está
+> marcado ⏳.
 
-**Onde:** no `path_follower`, **antes de iniciar um giro no lugar**. Não no
-`collision_monitor` — lá a única alavanca é escalar o `wz`, e escalar giro abaixo
-da zona-morta do skid (1,7) é comando morto: o robô patina e **não vira**, justo
-quando girar era a saída. Esse deadlock já foi reproduzido e está documentado no
-`nav2_params_arena.yaml` (o modo `approach` reprovado).
+**Onde:** no `path_follower`, antes de iniciar giro no lugar. **Não** no
+`collision_monitor` — lá a única alavanca é escalar o `wz`, e giro abaixo da
+zona-morta do skid (1,7) é comando morto: o robô patina e **não vira**, justo
+quando girar era a saída. Deadlock já reproduzido (modo `approach` reprovado,
+documentado no `nav2_params_arena.yaml`).
 
-**O quê:** antes de entrar em `turning`/`goal_turn`, olhar no scan o **anel entre
-o raio inscrito (0,25) e o circunscrito (0,354)**. É exatamente a faixa que o
-corpo **não** ocupa parado mas **varre** ao girar. Se houver retorno nesse anel,
-o giro no lugar é inseguro: afastar antes, ou girar para o lado livre.
+#### O critério não é "o anel", é o SETOR VARRIDO
 
-**Teste primeiro, com dado real desta volta.** O caso está gravado em
-`docs/baselines/2026-08-28-arena-baseline1/`:
+Duas correções sobre a primeira versão:
 
-- pose (12,16 · 6,99), yaw varrendo **−37° → −54°**, `cone_3` a **0,51 m** do
-  centro do robô — superfície a 0,34 m, dentro do anel;
-- `colisao_eventos.csv` tem a folga amostra a amostra, mergulhando a **0,0 cm**.
+1. **Retorno abaixo de 0,25 m também bloqueia.** Abaixo do raio inscrito não é
+   "não varre" — é invasão do corpo. A primeira versão só olhava 0,25–0,354 e
+   deixaria passar contato já em curso.
+2. **Usar o anel inteiro gera falso bloqueio.** Algo a 0,30 m atrás não importa
+   se o giro pedido varre só a frente. O critério tem que ser o **setor que o
+   giro pedido realmente varre**.
 
-O teste alimenta essa sequência e exige que a guarda **recuse o giro** antes do
-yaw em que a folga chega a zero. Falha na versão de hoje, por construção — não
-existe guarda nenhuma.
+Teste exato e barato, ponto a ponto do scan `(ρ, β)`, para um giro de `Δθ` no
+sentido pedido — a distância do centro à borda do quadrado na direção `α` é
+`0,25 / max(|cos α|, |sin α|)`:
 
-**O que ela NÃO resolve, dito na frente:**
+```
+atingido(ρ, β)  ⟺  ∃ φ ∈ [0, Δθ] :  ρ ≤ 0,25 / max(|cos(β−φ)|, |sin(β−φ)|) + margem
+```
 
-- usa o **scan ao vivo** (relativo), então **não depende do AMCL** — é por isso
-  que ela é independente da questão do erro de pose. Mas pela mesma razão **não
-  protege do que o laser não vê**;
-- **não** conserta a samba (item 2 da ordem) nem o erro de pose (item 3);
-- fechar A4 exige **repetir esta volta** e comparar contra o baseline: 236,4 s ·
-  2 colisões + 28 raspões · 13 blocos de `goal_turn`.
+Amostrando `φ` em passos de ~5°. Cobre os dois casos: ρ < 0,25 dá verdadeiro em
+qualquer φ (invasão), e o canto (0,354) só bloqueia quando o setor passa por ele.
+
+#### Máquina de estados
+
+| estado | condição de entrada | ação | saída |
+|---|---|---|---|
+| `LIVRE` | nenhum ponto atingido no setor pedido | gira normal | — |
+| `INVERTE` | setor pedido bloqueado **e** sentido oposto livre | gira pro outro lado (custa mais ângulo, é seguro) | quando alinhar |
+| `AFASTA` | os dois sentidos bloqueados | translada pro lado que **aumenta a folga mínima**, com teto de deslocamento, **checando antes o setor de translação** (frente livre pra avançar, trás pra recuar) | folga mínima > limiar + histerese, por N ciclos |
+| `PARADO_SEGURO` | nenhum sentido livre **e** nenhuma translação segura | publica zero **e emite estado** | intervenção |
+
+**`PARADO_SEGURO` não é deadlock silencioso:** ele publica o estado, e o
+`unstuck_supervisor` (prio 30, **a jusante** do collision no mux) e o humano
+continuam podendo furar. Foi por isso que a arquitetura de mux ficou assim.
+
+**Histerese e ruído:** entra com 1 ciclo, **sai só depois de N ciclos** abaixo do
+limiar — mesma lição do `turn_enter`/`turn_exit`, e agora também do latch de
+chegada. Margem configurável sobre os 0,25/0,354 pra absorver ruído de scan.
+
+**Scan velho ou ausente (> TTL):** ⏳ **decisão em aberto.** Bloquear com sensor
+mudo trava o robô; liberar em silêncio anula a guarda. Inclinação atual:
+**degradar pro comportamento de hoje (permite) e LOGAR**, porque o
+`collision_monitor` a jusante ainda protege o avanço — mas isso precisa ser
+decidido pelo dono, não por mim.
+
+#### O teste: scan SINTÉTICO da geometria
+
+⚠️ **A primeira versão prometia um teste que os dados arquivados não permitem.**
+O `colisao_eventos.csv` tem pose verdadeira e folga; o `follow_debug.csv` tem só
+`clear`, um escalar de folga frontal. **Nenhum dos dois tem o LaserScan 360°** que
+a guarda consumiria.
+
+Duas saídas, e escolho a primeira:
+
+1. **Scan sintético calculado da geometria da arena** — o mundo é gerado por
+   `tools/gera_arena_galpao.py` e o `colisao.py` já sabe ler caixas e cilindros,
+   então dá pra fazer raycast exato a partir das poses gravadas. Determinístico,
+   sem depender de gravação, e reusa o oráculo que já existe.
+2. Arquivar `/scan_safe` nas próximas voltas — **passa a ser feito de qualquer
+   jeito**, porque sem isso nenhuma guarda baseada em scan é testável com dado
+   real. ⏳ pendente.
+
+O caso do teste está gravado: pose (12,16 · 6,99), yaw varrendo **−37° → −54°**,
+`cone_3` a **0,51 m** do centro (superfície a 0,34 m), folga mergulhando a
+**0,0 cm** em `colisao_eventos.csv`. A guarda tem que recusar o giro **antes** do
+yaw em que a folga zera. Falha hoje por construção — não existe guarda nenhuma.
+
+#### O que ela NÃO faz
+
+- usa **scan ao vivo** (relativo), então **não depende do AMCL** — é por isso que
+  é independente da questão do erro de pose. Pela mesma razão, **não vê o que o
+  laser não vê**;
+- **não** conserta a samba nem o erro de pose;
+- **não fecha A4 sozinha.** A4 fecha com **volta completa e zero evento**,
+  comparada ao baseline (236,4 s · 2 colisões + 28 raspões · 13 blocos de
+  `goal_turn`).
+
+⏳ **Ainda NÃO pronta pra implementar:** falta o dono decidir o comportamento com
+scan mudo, e falta arquivar `/scan_safe`.
 
 ## 3. Medições
 
@@ -588,6 +656,12 @@ que na arena fica **em cima do muro sul**.
 | 28 | "Chegou a 0,04 m e derivou até 0,59 m" | Os 0,59 são de **antes** da chegada. Depois de entrar na tolerância: min 0,066, max 0,281 | Ancorar "antes/depois" num evento, não na janela inteira |
 | 29 | **"A samba encostou no cone"** dito como conclusão | É hipótese: eu misturei pose do Gazebo (`colisao.csv`) com `dist_goal` do AMCL, e o AMCL erra **24 cm** ali. Co-suspeito não investigado | Não cruzar duas fontes de pose sem medir a diferença entre elas |
 | 30 | Escrevi **"unstuck nunca disparou"** sem qualificar | Vale só pro NOSSO supervisor. O **Nav2** fez 5 recoveries, incluindo o bug que eu chamava de "anterior a esta fase" | Ler o log do nav2, não só os CSVs dos nossos nós |
+| 39 | Prometi um teste que **os dados não permitem** | A guarda consome LaserScan 360°; o arquivado só tem pose, folga e o escalar `clear`. Nunca arquivei `/scan_safe` | Antes de prometer teste, conferir se o dado de entrada dele existe |
+| 40 | *"Recusar o giro, afastar ou girar pro lado livre"* como se fosse desenho | É **intenção**, não comportamento: faltava direção do afastamento, checagem da translação, histerese, saída, scan mudo, ruído e o caso "nenhum lado livre" | Se não dá pra escrever a tabela de estados, não é um plano |
+| 41 | Critério só no **anel 0,25–0,354** | Retorno **abaixo de 0,25** é invasão do corpo e também tem que bloquear; e o anel inteiro gera falso bloqueio — o certo é o **setor varrido** pelo giro pedido | Definir a região pelo movimento pedido, não por um raio fixo |
+| 42 | Tabela de erro por estado **enviesada** | `searchsorted` sem recortar o intervalo comum: **82 amostras** fora da janela do seguidor grudavam no primeiro/último estado. p90 do `goal_turn` saía 16,3 quando é **17,5** | Recortar ao intervalo comum antes de fatiar por estado |
+| 43 | *"É a única das três que fecha A4"* | Ela ataca o **modo de falha observado**; quem fecha A4 é **volta completa com zero evento** — eu mesmo escrevi isso duas linhas depois | Não promover candidata a garantia |
+| 44 | Deixei em §2.8 uma conclusão que a §2.9 já derrubou | *"Se o contato sobreviver ao latch, o suspeito é a localização"* ficou lá sem aviso | Ao derrubar conclusão, marcar **no lugar onde ela foi escrita** |
 | 38 | Levei a conclusão pro chat e **deixei o plano de fora do arquivo** | O dono teve que perguntar "anotou?" pela **segunda vez**. A §2.9 tinha a ordem, mas o *como* do passo 1 (onde vai, o que testa, o que não resolve) só existia na conversa | A regra vale pro parágrafo inteiro que eu mando, não só pra parte tabelada |
 | 32 | Atribuí à **spec** uma frase que é do `HANDOFF_PROVA_REAL.md:42` | Citei documento errado; a frase existe | Conferir a origem antes de citar |
 | 33 | Liguei os **24 cm** direto à fresta e ao A2 | Erro euclidiano perto do cone ≠ erro lateral na fresta; e A2 é medido no **scan relativo**, não na pose absoluta | Não transportar uma métrica pra um contexto onde ela não é a métrica |
