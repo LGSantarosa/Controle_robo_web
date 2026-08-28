@@ -231,6 +231,35 @@ def autoteste():
     return 0 if bom else 1
 
 
+def folgas(dist, res, origin, pontos, raio):
+    """Folga (meia-largura livre) NO ponto — mede a fresta em si, não a rota.
+
+    O probe A->B diz se existe caminho; com contorno disponível ele diz "ligados"
+    mesmo com a fresta fechada. Isto aqui mede o vão: `dist` é a distância até a
+    parede mais próxima, então a passagem tem 2*dist de largura e o robô só cabe
+    se dist >= robot_radius.
+    """
+    altura = dist.shape[0]
+    print()
+    print(f'  FOLGA NO VÃO (o robô passa se folga >= raio {raio:.3f})')
+    for (x, y, rot) in pontos:
+        l, c = mundo_para_celula(x, y, res, origin, altura)
+        if not (0 <= l < altura and 0 <= c < dist.shape[1]):
+            print(f'    {rot}: ⚠️ ({x:.2f},{y:.2f}) fora do mapa')
+            continue
+        d = dist[l, c]
+        passa = d >= raio
+        print(f'    {rot}: folga {d:.3f} m (corredor {2*d:.2f} m) -> '
+              f'{"✓ PASSA" if passa else "✗ FECHADO"}')
+
+
+def ponto_folga(txt):
+    """'x,y[:rotulo]' -> (x, y, rotulo)"""
+    partes = txt.split(':')
+    a = [float(v) for v in partes[0].split(',')]
+    return (a[0], a[1], partes[1] if len(partes) > 1 else partes[0])
+
+
 def par_probe(txt):
     """'x1,y1:x2,y2[:rotulo]' -> (x1,y1,x2,y2,rotulo)"""
     partes = txt.split(':')
@@ -250,6 +279,10 @@ def main():
                     help='conectividade LOCAL entre dois pontos do MUNDO (metros). '
                          'Repetivel. O percentual do maior componente pode dizer '
                          '100%% com uma fresta fechada; isto nao.')
+    ap.add_argument('--folga', action='append', default=[], metavar='X,Y[:rotulo]',
+                    help='mede a folga NO PONTO (a fresta em si). O --probe diz se '
+                         'existe rota; com contorno ele diz "ligados" mesmo com a '
+                         'fresta fechada. Repetivel.')
     ap.add_argument('--autoteste', action='store_true',
                     help='mapa sintetico com fresta de 0.60 m conhecida')
     args = ap.parse_args()
@@ -265,6 +298,8 @@ def main():
     gargalos(dist, livre, res, args.raio)
     if args.probe:
         probes(dist, livre, res, origin, [par_probe(t) for t in args.probe], raios)
+    if args.folga:
+        folgas(dist, res, origin, [ponto_folga(t) for t in args.folga], args.raio)
 
 
 if __name__ == '__main__':
