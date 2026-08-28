@@ -58,23 +58,76 @@ def le_pgm(caminho):
 
 
 def le_yaml(caminho):
-    """resolution + image do .yaml do map_server (sem depender de pyyaml)."""
-    res, img = 0.05, None
+    """resolution + image + origin do .yaml do map_server (sem depender de pyyaml)."""
+    res, img, origin = 0.05, None, (0.0, 0.0)
     for linha in open(caminho):
         linha = linha.split('#')[0].strip()
         if linha.startswith('resolution:'):
             res = float(linha.split(':', 1)[1])
         elif linha.startswith('image:'):
             img = linha.split(':', 1)[1].strip()
+        elif linha.startswith('origin:'):
+            v = linha.split(':', 1)[1].strip().strip('[]').split(',')
+            origin = (float(v[0]), float(v[1]))
     if img is None:
         raise ValueError(f'{caminho}: sem campo "image:"')
     if not os.path.isabs(img):
         img = os.path.join(os.path.dirname(os.path.abspath(caminho)), img)
-    return res, img
+    return res, img, origin
+
+
+def mundo_para_celula(x, y, res, origin, altura):
+    """(x,y) em metros -> (linha, coluna) do PGM.
+
+    Convencao do map_server: `origin` e' o canto INFERIOR-ESQUERDO da imagem, e a
+    linha 0 do PGM e' o TOPO. Por isso o y inverte.
+    """
+    col = int(round((x - origin[0]) / res))
+    lin = int(round((altura - 1) - (y - origin[1]) / res))
+    return lin, col
+
+
+def probes(dist, livre, res, origin, pares, raios):
+    """Conectividade LOCAL: A e B caem no mesmo trecho navegavel, em cada raio?
+
+    O relatorio de cima mede o MAIOR COMPONENTE, que pode continuar em 100%
+    enquanto uma fresta especifica fechou (o pedaco perdido e' pequeno demais pra
+    mover o percentual). Isto aqui responde a pergunta que interessa de verdade:
+    "o robo ainda vai de A ate B com este raio?"
+    """
+    altura = dist.shape[0]
+    print()
+    print('  PROBES LOCAIS (conectividade A->B, o que o percentual acima esconde)')
+    todos_ok = True
+    for (ax, ay, bx, by, rotulo) in pares:
+        la, ca = mundo_para_celula(ax, ay, res, origin, altura)
+        lb, cb = mundo_para_celula(bx, by, res, origin, altura)
+        fora = []
+        for nome, (l, c) in (('A', (la, ca)), ('B', (lb, cb))):
+            if not (0 <= l < altura and 0 <= c < dist.shape[1]):
+                fora.append(nome)
+        print(f'    {rotulo}: ({ax:.2f},{ay:.2f}) -> ({bx:.2f},{by:.2f})')
+        if fora:
+            print(f'       ⚠️ ponto {"/".join(fora)} fora do mapa — probe invalido')
+            todos_ok = False
+            continue
+        for r in raios:
+            nav = livre & (dist >= r)
+            lab, _ = ndimage.label(nav)
+            va, vb = lab[la, ca], lab[lb, cb]
+            if va == 0 or vb == 0:
+                qual = 'A' if va == 0 else ('B' if vb == 0 else 'A e B')
+                print(f'       raio {r:.3f}: ✗ {qual} nao e navegavel '
+                      f'(folga A={dist[la, ca]:.2f} B={dist[lb, cb]:.2f} m)')
+            elif va == vb:
+                print(f'       raio {r:.3f}: ✓ LIGADOS')
+            else:
+                print(f'       raio {r:.3f}: ✗ SEPARADOS (trechos {va} e {vb})')
+    return todos_ok
 
 
 def analisa(yaml_path, raios):
-    res, img = le_yaml(yaml_path)
+    res, img, origin = le_yaml(yaml_path)
     a = le_pgm(img)
     ocupado = a < 100                          # preto = parede
     livre = a > 250                            # branco = livre (cinza = desconhecido)
@@ -104,7 +157,7 @@ def analisa(yaml_path, raios):
     print('  "fresta mín" = corredor mais estreito que o robô ainda atravessa (2·raio).')
     print('  "trechos" alto é normal (ruído/salpico do SLAM); o que importa é o')
     print('  MAIOR TRECHO não desabar quando o raio sobe — isso é passagem fechando.')
-    return dist, livre, res
+    return dist, livre, res, origin
 
 
 def gargalos(dist, livre, res, raio, quantos=8):
@@ -134,19 +187,84 @@ def gargalos(dist, livre, res, raio, quantos=8):
               f'-> corredor de ~{2 * folga:.2f} m')
 
 
+def autoteste():
+    """Mapa sintetico com fresta MEDIDA: prova a conversao mundo->celula e o probe.
+
+    10x10 m @ 0.05, parede vertical no meio com um vao de EXATAMENTE 0.60 m.
+    Com raio 0.25 (precisa 0.50) os dois lados tem que ficar LIGADOS; com 0.32
+    (precisa 0.64) tem que ficar SEPARADOS. E' o caso da arena, em miniatura.
+    """
+    import tempfile
+    res, W, H = 0.05, 200, 200
+    a = np.full((H, W), 255, dtype=np.uint8)
+    a[0, :] = a[-1, :] = a[:, 0] = a[:, -1] = 0          # muros externos
+    col = W // 2
+    a[:, col - 1:col + 1] = 0                            # parede vertical
+    vao = int(round(0.60 / res))                         # 12 celulas = 0.60 m
+    meio = H // 2
+    a[meio - vao // 2:meio - vao // 2 + vao, col - 1:col + 1] = 255
+    d = tempfile.mkdtemp()
+    pgm = os.path.join(d, 'auto.pgm')
+    with open(pgm, 'wb') as f:
+        f.write(b'P5\n%d %d\n255\n' % (W, H)); f.write(a.tobytes())
+    yml = os.path.join(d, 'auto.yaml')
+    open(yml, 'w').write(f'image: auto.pgm\nresolution: {res}\norigin: [0.0, 0.0, 0.0]\n')
+
+    raios = [0.25, 0.32]
+    dist, livre, r_, origin = analisa(yml, raios)
+    # um ponto de cada lado da parede, na altura do vao
+    y_vao = (H - 1 - meio) * res
+    pares = [(1.0, y_vao, 9.0, y_vao, 'atravessa a fresta de 0.60 m')]
+    probes(dist, livre, r_, origin, pares, raios)
+
+    nav25 = livre & (dist >= 0.25); nav32 = livre & (dist >= 0.32)
+    l25, _ = ndimage.label(nav25); l32, _ = ndimage.label(nav32)
+    la, ca = mundo_para_celula(1.0, y_vao, r_, origin, H)
+    lb, cb = mundo_para_celula(9.0, y_vao, r_, origin, H)
+    ok25 = l25[la, ca] != 0 and l25[la, ca] == l25[lb, cb]
+    ok32 = l32[la, ca] != 0 and l32[lb, cb] != 0 and l32[la, ca] != l32[lb, cb]
+    print()
+    print(f'  [{"ok " if ok25 else "ERRO"}] raio 0.25 (precisa 0.50): LIGADOS')
+    print(f'  [{"ok " if ok32 else "ERRO"}] raio 0.32 (precisa 0.64): SEPARADOS')
+    bom = ok25 and ok32
+    print('[autoteste] ' + ('TUDO CERTO' if bom else 'FALHOU'))
+    return 0 if bom else 1
+
+
+def par_probe(txt):
+    """'x1,y1:x2,y2[:rotulo]' -> (x1,y1,x2,y2,rotulo)"""
+    partes = txt.split(':')
+    a = [float(v) for v in partes[0].split(',')]
+    b = [float(v) for v in partes[1].split(',')]
+    rot = partes[2] if len(partes) > 2 else f'{partes[0]} -> {partes[1]}'
+    return (a[0], a[1], b[0], b[1], rot)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('mapa', help='caminho do .yaml do mapa')
+    ap.add_argument('mapa', nargs='?', help='caminho do .yaml do mapa')
     ap.add_argument('--raio', type=float, default=0.32,
                     help='robot_radius do costmap (default 0.32, o do perfil ARENA)')
+    ap.add_argument('--probe', action='append', default=[], metavar='X1,Y1:X2,Y2[:rotulo]',
+                    help='conectividade LOCAL entre dois pontos do MUNDO (metros). '
+                         'Repetivel. O percentual do maior componente pode dizer '
+                         '100%% com uma fresta fechada; isto nao.')
+    ap.add_argument('--autoteste', action='store_true',
+                    help='mapa sintetico com fresta de 0.60 m conhecida')
     args = ap.parse_args()
+    if args.autoteste:
+        sys.exit(autoteste())
+    if not args.mapa:
+        ap.error('falta o mapa (ou use --autoteste)')
     if not os.path.exists(args.mapa):
         sys.exit(f'não achei {args.mapa}')
     raios = sorted({0.25, args.raio, 0.354})
-    dist, livre, res = analisa(args.mapa, raios)
+    dist, livre, res, origin = analisa(args.mapa, raios)
     print()
     gargalos(dist, livre, res, args.raio)
+    if args.probe:
+        probes(dist, livre, res, origin, [par_probe(t) for t in args.probe], raios)
 
 
 if __name__ == '__main__':
