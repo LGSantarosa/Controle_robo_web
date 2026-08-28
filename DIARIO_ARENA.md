@@ -266,6 +266,12 @@ argumentos à parte — sem eles o launcher abre `sala.sdf` com `hotmilk_portas`
 
 ### 4.5 Uma volta A/B na arena
 
+⚠️ **O que esta volta mede, e o que NÃO mede.** A rota para nos **standoffs, 1 m
+antes de cada cone**. Ela mede **navegação, colisão e point-turn** — é o baseline
+do Nav2 até os standoffs. Ela **não** prova A1 (missão completa), **nem** A2
+(chegar a 20 cm), **nem** A3 (LED): esses dependem da aproximação final e do
+executor, que ainda não existem. Não rotular como "missão validada".
+
 ```bash
 AB_PARAMS=nav2_params_arena.yaml \
 AB_WORLD=$PWD/worlds/arena_galpao.sdf \

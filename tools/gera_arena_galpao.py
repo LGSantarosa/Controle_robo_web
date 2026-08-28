@@ -396,6 +396,7 @@ CABECALHO_SDF = r"""<?xml version="1.0"?>
 
 
 def escreve_sdf(destino):
+    os.makedirs(os.path.dirname(os.path.abspath(destino)), exist_ok=True)
     open(destino, "w").write(CABECALHO_SDF + corpo_sdf() + "  </world>\n</sdf>\n")
 
 
