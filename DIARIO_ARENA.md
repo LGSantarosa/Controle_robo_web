@@ -7,6 +7,13 @@
 > Registrar o que foi **medido**, não o que se espera. Erro meu entra igual a
 > erro achado — a §5 existe pra isso e não deve ser podada.
 >
+> **Ordem do dono (2026-08-28, segunda):** *"Sempre que tirar essas conclusões e
+> trazer pra mim, anota no arquivo"*. Ou seja: **conclusão, diagnóstico ou
+> recomendação que eu apresento no chat entra AQUI no mesmo momento** — não só o
+> que foi rodado. Se o dono leu, o arquivo tem que ter. Inclusive a conclusão que
+> depois se mostrar errada: ela fica, com a correção do lado (foi o que aconteceu
+> com "a samba encostou no cone", §2.8).
+>
 > Documentos irmãos: `docs/superpowers/specs/2026-08-28-arena-galpao-design.md`
 > (o desenho) e `ESTADO_PROJETO.md` (estado geral do projeto).
 
@@ -321,6 +328,41 @@ raspões**. Se o contato sobreviver ao latch, o suspeito é a localização.
 não a substitui.
 
 ---
+
+### 2.9 Conclusão da sessão e ordem recomendada (apresentada ao dono 08-28)
+
+Com o baseline medido, **dois defeitos estão provados e um terceiro apareceu**:
+
+| # | o que é | estado da prova |
+|---|---|---|
+| 1 | **Samba no goal** — limiar de chegada sem histerese (`path_follower.py:295`) | ✅ **provado**: troca de estado e inversão de giro no CSV |
+| 2 | **Canto varre no giro** — 0,354 m sem proteção nenhuma | ✅ **provado**: posição parada, yaw varrendo, folga a 0,0 cm |
+| 3 | **AMCL erra 24 cm nos contatos** (mediana 9,0 na volta) | ✅ **medido**, causa ⏳ não investigada |
+
+**O que eu recomendo, e por quê:**
+
+O latch da chegada (item 1) **continua valendo por si só** — é defeito real e a
+cura já existe neste arquivo pro outro limiar. Mas **eu não apostaria nele pra
+fechar A4**, porque o contato tem co-suspeito: com 24 cm de erro de pose, o robô
+pode encostar sem nenhuma samba.
+
+**O erro de pose parece o problema maior e é o mais barato de atacar primeiro:**
+existe uma hipótese concreta e testável — o mapa não tem os cones (decisão minha,
+§2.7), então os 4 cones que o laser vê são obstáculos **não-mapeados** que o AMCL
+tem que engolir. Testar é regenerar o mapa com `--com-cones`, repetir a MESMA
+volta e comparar o erro de pose contra este baseline. Uma variável, uma medição.
+
+Ordem proposta:
+
+1. **Medir o erro de pose com `--com-cones`** — barato, uma variável, e decide se
+   a localização é o vilão. ⚠️ Custo conhecido: com os cones no mapa estático, o
+   goal a 1 m pode cair na inflação deles (foi por isso que ficaram fora) — se o
+   nav2 recusar goal, isso já é a resposta e o caminho vira outro.
+2. **Latch da chegada** — com teste antes, e repetir a volta contra o baseline.
+3. **Proteção de point-turn** (anel 0,25–0,36 m) — **é ela que fecha A4**, e
+   nenhum dos dois acima a substitui.
+
+⏳ **Aguardando o dono decidir a ordem.**
 
 ## 3. Medições
 
