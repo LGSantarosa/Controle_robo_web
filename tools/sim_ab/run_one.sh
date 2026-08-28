@@ -17,7 +17,30 @@ set +u
 PKG="$1"; TAG="$2"
 REPO=/home/rbe-luis/Workspace/Controle_robo_web
 SP=${SIM_AB_DIR:-/home/rbe-luis/Workspace/Controle_robo_web/log/sim_ab}
-OUT="$SP/$TAG"; rm -rf "$OUT"; mkdir -p "$OUT"
+# 2026-08-28: os SCRIPTS agora saem do repo (TOOLS = a pasta deste arquivo), nao
+# de $SIM_AB_DIR. Antes o run_n chamava "$TOOLS/run_one.sh" e log/sim_ab/ guardava
+# COPIAS do harness inteiro — que e' gitignore'd (.gitignore:20). Resultado: o
+# codigo que rodava nao era o do git, correcao no repo nao chegava na execucao, e
+# o `rm -rf "$OUT"` podia apagar as proprias ferramentas. $SP agora e' SO' saida.
+TOOLS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ---- GUARDA ANTES DO rm -rf ------------------------------------------------
+# 2026-08-28: com `set +u`, chamar sem <tag> fazia OUT virar o PROPRIO $SP e o
+# `rm -rf` levava log/sim_ab/ inteiro — que guarda as voltas E as ferramentas
+# (kill_all.sh, colisao.py, consolida.py), inclusive a que este script executa
+# logo abaixo. Um argumento esquecido apagava o harness.
+if [ $# -ne 2 ] || [ -z "$PKG" ] || [ -z "$TAG" ]; then
+    echo "USO: run_one.sh <pacote> <tag>   (os DOIS obrigatorios e nao vazios)" >&2
+    exit 2
+fi
+case "$TAG" in
+    */*|.|..|-*) echo "SETUP: tag invalida: '$TAG' (sem '/', '.', '..' ou '-' no inicio)" >&2; exit 2 ;;
+esac
+OUT="$SP/$TAG"
+# cinto e suspensorio: OUT tem que ser ESTRITAMENTE mais fundo que SP
+case "$OUT" in
+    "$SP"|"$SP"/) echo "SETUP: OUT colapsou em SP ($SP) — abortando antes do rm" >&2; exit 2 ;;
+esac
+rm -rf "$OUT"; mkdir -p "$OUT"
 WORLD="${AB_WORLD:-$REPO/worlds/sala_grande.sdf}"
 MAP="${AB_MAP:-$REPO/maps/sala_grande.yaml}"
 ROTA="${AB_ROTA:-$REPO/maps/routes/rota1.json}"
@@ -31,14 +54,14 @@ cd "$REPO" || exit 2          # cwd fixo: os CSVs dos nós vão pro controle_web
 source /opt/ros/jazzy/setup.bash
 source "$REPO/install/setup.bash"
 
-cleanup() { bash "$SP/kill_all.sh" >> "$OUT/cleanup.log" 2>&1; }
+cleanup() { bash "$TOOLS/kill_all.sh" >> "$OUT/cleanup.log" 2>&1; }
 trap cleanup EXIT INT TERM
 
 # --- SETUP com retry: boot do nav2 falha de vez em quando (bond/lifecycle) e
 #     isso NÃO é resultado do robô. Tenta 3x antes de desistir.
 for BOOT in 1 2 3; do
     echo "=== [$TAG] boot $BOOT/3 (pacote=$PKG) ==="
-    bash "$SP/kill_all.sh" || { echo "[$TAG] ambiente sujo, abortando"; exit 2; }
+    bash "$TOOLS/kill_all.sh" || { echo "[$TAG] ambiente sujo, abortando"; exit 2; }
     sleep 2
 
     setsid ros2 launch "$PKG" sim.launch.py world:="$WORLD" \
@@ -82,11 +105,11 @@ done
 # é proxy: o laser fica no centro do robô, então 0.25 m tanto pode ser "passei
 # raspando" quanto "já encostei". Aqui a conta é geométrica (OBB do robô x AABB
 # das paredes) e diz em metros se ENCOSTOU.
-setsid python3 "$SP/colisao.py" "$WORLD" "$OUT/colisao.csv" > "$OUT/colisao.log" 2>&1 &
+setsid python3 "$TOOLS/colisao.py" "$WORLD" "$OUT/colisao.csv" > "$OUT/colisao.log" 2>&1 &
 sleep 2
 
 echo "[$TAG] rodando a rota..."
-timeout 6000 python3 "$SP/probe.py" "$ROTA" "$OUT/result.json" 600 2>&1 | tee "$OUT/probe.log"
+timeout 6000 python3 "$TOOLS/probe.py" "$ROTA" "$OUT/result.json" 600 2>&1 | tee "$OUT/probe.log"
 # os nós gravam em controle_web/logs e SOBRESCREVEM a cada launch: arquiva já.
 for c in follow_debug freeze_capture unstuck follow_plan_last; do
     [ -f "$REPO/controle_web/logs/$c.csv" ] && cp "$REPO/controle_web/logs/$c.csv" "$OUT/$c.csv"

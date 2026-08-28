@@ -72,9 +72,9 @@ o `0,50` da "bitola" é a medida **externa** usada como se fosse centro-a-centro
 do "entre-eixos" é o mesmo 37 da linha de cima, o comprimento da **estrutura interna**.
 
 O `sim_robot.sdf` usa rodas em ±0,22 e ±0,165, resultando em envelope 0,50 × 0,50 e
-coincidindo com a medida externa declarada. A alteração da URDF deve ser feita nas duas
-duas cópias da URDF (`robot_nav/urdf/`) **somente após confirmar no robô as
-distâncias centro-a-centro**.
+coincidindo com a medida externa declarada. A alteração deve ser feita na URDF
+(`robot_nav/urdf/robot.urdf.xacro` — depois que o fork foi dissolvido, ela é
+ÚNICA) **somente após confirmar no robô as distâncias centro-a-centro**.
 
 Isso é uma correção da geometria visual/TF. **Não trocar automaticamente o
 `wheel_base = 0.50` usado por `cmd_vel_to_wheels.py` e pelo launch:** ali o valor é a
@@ -113,7 +113,7 @@ conjunto; não basta apertar um parâmetro.
 
 ---
 
-## 4. Arquitetura — modo seguro obrigatório e bônus isolado
+## 4. Arquitetura — modo conservador obrigatório e bônus isolado
 
 ### Nível 1 — perfil `--arena` (`robot_radius: 0.32`) = MODO CONSERVADOR
 
@@ -323,7 +323,9 @@ Depende do atalho de fresta estar pronto (a janela é a mesma fresta de 60, por�
 
 | # | passo | entrega |
 |---|---|---|
-| 1 | ✅ **FEITO** (`1f08a60`): `nav2_trekking` dissolvido no `robot_nav`, geometria vira `--arena` (falha fechada), harness `run_one.sh` parametrizado | um pacote só, perfil testável |
+| 1 | ✅ **FEITO** (`1f08a60`): `nav2_trekking` dissolvido no `robot_nav`, geometria vira o perfil `--arena` | um pacote só |
+| 1a | ✅ **FEITO** (`f24158b`): `--arena` falha fechada, `speed_for_clearance` isolado atrás de launch arg, harness parametrizado por env | perfil testável, sem vazamento |
+| 1d | ✅ **FEITO**: harness roda os scripts do REPO (não as cópias em `log/sim_ab/`) e valida args antes do `rm -rf` | o que roda é o que está no git |
 | 1b | ⏳ Medir no robô: bitola, entre-eixos e altura do LiDAR | premissa de geometria |
 | 1c | 🔴 **Proteger o point-turn** (anel 0,25–0,36 m no `path_follower`) | **bloqueador do A4** |
 | 2 | Corrigir as duas URDFs visuais conforme a medição, sem alterar a bitola efetiva do drive sem calibração | TF/modelo coerentes |

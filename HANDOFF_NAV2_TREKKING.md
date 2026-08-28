@@ -186,7 +186,10 @@ dente-de-serra (sair torto → anda em diagonal → estoura o enter → mais gir
 export SIM_AB_DIR=~/Workspace/Controle_robo_web/log/sim_ab   # onde caem as voltas
 mkdir -p $SIM_AB_DIR
 cd ~/Workspace/Controle_robo_web
-bash tools/sim_ab/run_n.sh nav2_trekking <prefixo> 3     # 3 voltas, desanexado
+# 2026-08-28: o pacote e' robot_nav; a geometria entra pelo AB_PARAMS.
+AB_PARAMS=nav2_params_arena.yaml \
+AB_EXTRA_LAUNCH="follow_clear_full:=1.2 follow_clear_min:=0.35" \
+  bash tools/sim_ab/run_n.sh robot_nav <prefixo> 3      # 3 voltas, desanexado
 python3 tools/sim_ab/consolida.py <rotulo> <prefixo>1 <prefixo>2 <prefixo>3
 ```
 
