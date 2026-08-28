@@ -46,11 +46,13 @@ OBST = [
 ]
 
 # Probes de conectividade: um por perna, com o ponto antes e depois do obstáculo.
+# Rotulos SEM espaco: a saida de --probes/--folgas e' pra ser colada direto na
+# shell, e espaco no rotulo vira argumento solto.
 PROBES = [
-    (4.5, 1.5, 11.5, 1.8, 'cone1->cone2 (fresta 0.90)'),
-    (11.5, 1.8, 12.2, 7.5, 'cone2->cone3 (fresta 0.70)'),
-    (12.2, 7.5, 5.0, 7.8, 'cone3->cone4 (fresta 0.60)'),
-    (5.0, 7.8, 1.5, 2.5, 'cone4->chegada (fresta 0.80)'),
+    (4.5, 1.5, 11.5, 1.8, 'cone1->cone2_fresta0.90'),
+    (11.5, 1.8, 12.2, 7.5, 'cone2->cone3_fresta0.70'),
+    (12.2, 7.5, 5.0, 7.8, 'cone3->cone4_fresta0.60'),
+    (5.0, 7.8, 1.5, 2.5, 'cone4->chegada_fresta0.80'),
 ]
 
 
@@ -288,6 +290,10 @@ def main():
     if a.probes:
         for x1, y1, x2, y2, rot in PROBES:
             print(f'--probe {x1},{y1}:{x2},{y2}:{rot}')
+        for nome, eixo, coord, faixas, esperada, _c in OBST:
+            meio = (faixas[0][1] + faixas[1][0]) / 2
+            px, py = (coord, meio) if eixo == 'x' else (meio, coord)
+            print(f'--folga {px},{py}:{nome}_esperado{esperada:.2f}')
         return
     if a.mapa:
         W, H, o = gera_mapa(os.path.join(a.mapa, 'arena_galpao.pgm'),
