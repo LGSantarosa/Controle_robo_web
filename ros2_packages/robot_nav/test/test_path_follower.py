@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from robot_nav.path_follower import (
+from robot_nav.path_follower import (speed_for_clearance,
     wrap,
     closest_index,
     carrot_point,
@@ -401,3 +401,64 @@ def test_goal_turn_then_arrived():
     cmd = f.update((0.0, 0.0, math.pi / 2), path, goal_active=True,
                    goal_yaw=math.pi / 2)
     assert cmd.state == 'arrived' and (cmd.vx, cmd.wz) == (0.0, 0.0)
+
+
+def _cfg_vel(**kw):
+    base = dict(forward_speed=0.60, min_speed=0.22,
+                clear_full=1.2, clear_min=0.35)
+    base.update(kw)
+    return FollowConfig(**base)
+
+
+def test_velocidade_cheia_com_a_frente_livre():
+    c = _cfg_vel()
+    assert speed_for_clearance(c, float('inf')) == pytest.approx(0.60)
+    assert speed_for_clearance(c, 5.0) == pytest.approx(0.60)
+    assert speed_for_clearance(c, 1.2) == pytest.approx(0.60)
+
+
+def test_velocidade_cai_quando_a_folga_encolhe():
+    c = _cfg_vel()
+    # no meio da faixa (0.775 m) -> meio caminho entre min_speed e forward_speed
+    v = speed_for_clearance(c, (1.2 + 0.35) / 2)
+    assert 0.22 < v < 0.60
+    assert v == pytest.approx(0.22 + (0.60 - 0.22) * 0.5, abs=0.02)
+    # monotônica: menos folga => menos velocidade
+    assert (speed_for_clearance(c, 1.0) > speed_for_clearance(c, 0.7)
+            > speed_for_clearance(c, 0.45))
+
+
+def test_folga_minima_nao_derruba_abaixo_do_piso():
+    # nunca abaixo de min_speed: abaixo da zona-morta o robô não anda, e parar
+    # quem decide é o collision_monitor/unstuck, não este ajuste.
+    c = _cfg_vel()
+    assert speed_for_clearance(c, 0.35) == pytest.approx(0.22)
+    assert speed_for_clearance(c, 0.10) == pytest.approx(0.22)
+    assert speed_for_clearance(c, 0.0) == pytest.approx(0.22)
+
+
+def test_a_quina_do_BO_desacelera_de_verdade():
+    # o caso medido: front_clear 0.41 m a 0.60 m/s raspou a quina da wall_12.
+    c = _cfg_vel()
+    v = speed_for_clearance(c, 0.41)
+    assert v < 0.30, f"a 0.41 m de folga ainda andaria a {v:.2f} m/s"
+
+
+def test_desligavel_por_parametro():
+    # clear_full <= 0 desliga o ajuste (volta ao comportamento antigo)
+    c = _cfg_vel(clear_full=0.0)
+    assert speed_for_clearance(c, 0.41) == pytest.approx(0.60)
+
+def test_default_da_arena_tambem_modula():
+    """A arena mantem forward_speed 0.30 (a fase de velocidade saiu de escopo).
+
+    Pinado de proposito: o speed_for_clearance foi medido a 0.60 m/s, entao
+    este teste garante que ele continua modulando no cruzeiro que vamos usar
+    de verdade, e nao vira no-op.
+    """
+    c = FollowConfig()                       # defaults do robot_nav
+    assert c.forward_speed == pytest.approx(0.30)
+    assert speed_for_clearance(c, float('inf')) == pytest.approx(0.30)
+    assert speed_for_clearance(c, 0.35) == pytest.approx(c.min_speed)
+    meio = speed_for_clearance(c, (1.2 + 0.35) / 2)
+    assert c.min_speed < meio < 0.30

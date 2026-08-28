@@ -34,6 +34,7 @@ WEB_TELEOP="off"                  # off = web só visualização; --web-teleop r
 MAP_FILE="$SCRIPT_DIR/maps/hotmilk_portas.yaml"
 PI_PROFILE=false
 SIM=false
+ARENA=false                       # --arena: perfil da prova do galpao (05/09)
 WORLD_FILE="$SCRIPT_DIR/worlds/sala.sdf"   # default: sala c/ paredes+obstáculos+porta 0.93m (empty.sdf = template vazio)
 SPAWN_X="2.0"
 SPAWN_Y="2.5"
@@ -59,11 +60,15 @@ for arg in "$@"; do
         --lidar-port=*)    LIDAR_PORT="${arg#*=}" ;;
         --pi)              PI_PROFILE=true ;;
         --no-pi)           PI_PROFILE=false ;;
+        --arena)           ARENA=true ;;
         --flash-mega)      FLASH_MEGA="force" ;;
         --no-flash-mega)   FLASH_MEGA="off" ;;
         --help|-h)
-            echo "Uso: $0 [--teleop|--slam|--nav2|--trekking] [--sim] [--web-teleop] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
+            echo "Uso: $0 [--teleop|--slam|--nav2|--trekking] [--sim] [--arena] [--web-teleop] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
             echo ""
+            echo "  --arena          perfil da prova do galpao (05/09): robot_radius 0.32,"
+            echo "                   inflacao maior, PolygonFront unico. Vao < 0.64 m vira PAREDE"
+            echo "                   — proposital: a fresta apertada e atalho OPCIONAL."
             echo "  --web-teleop     reativa o controle de movimento pela web (default: off — use PS4/WASD)"
             echo "  --flash-mega     força \`pio run -t upload\` mesmo sem mudança"
             echo "  --no-flash-mega  pula o flash da MEGA sempre"
@@ -525,14 +530,20 @@ case "$MODE" in
         # roda no robô). Sem isto o sim caía no nav2_params.yaml antigo (DWB puro,
         # sem RotationShim, max_vel_theta 0.8) → outro nav, resultado que não vale
         # pro real. Ver ESTADO_PROJETO.md (análise de lacunas sim vs real).
-        if [ "$PI_PROFILE" = true ] || [ "$SIM" = true ]; then
-            PI_YAML="$(ros2 pkg prefix robot_nav 2>/dev/null)/share/robot_nav/config/nav2_params_pi.yaml"
+        if [ "$PI_PROFILE" = true ] || [ "$SIM" = true ] || [ "$ARENA" = true ]; then
+            _PARAMS_NAME="nav2_params_pi.yaml"
+            # 2026-08-28: perfil ARENA (galpao 05/09). Mesma stack; so a geometria
+            # muda — ver config/nav2_params_arena.yaml e
+            # docs/superpowers/specs/2026-08-28-arena-galpao-design.md
+            [ "$ARENA" = true ] && _PARAMS_NAME="nav2_params_arena.yaml"
+            PI_YAML="$(ros2 pkg prefix robot_nav 2>/dev/null)/share/robot_nav/config/$_PARAMS_NAME"
             if [ -f "$PI_YAML" ]; then
                 NAV2_PARAMS_ARG="params_file:=$PI_YAML"
                 _perfil="PI"; [ "$SIM" = true ] && _perfil="SIM=REAL"
+                [ "$ARENA" = true ] && _perfil="ARENA"
                 echo "[3/4] Modo NAV2 (perfil $_perfil) — params: $PI_YAML"
             else
-                echo "[3/4] Modo NAV2 — aviso: nav2_params_pi.yaml não encontrado, usando defaults"
+                echo "[3/4] Modo NAV2 — aviso: $_PARAMS_NAME não encontrado, usando defaults"
             fi
         else
             echo "[3/4] Modo NAV2 — subindo Nav2 com mapa $MAP_FILE..."

@@ -206,6 +206,37 @@ class FollowConfig:
     # isso o sim não pegava esse trava.)
     min_speed: float = 0.22         # m/s — avanço mínimo (acima da zona-morta)
 
+    # VELOCIDADE POR FOLGA (medido em 2026-08-27, trazido pro robot_nav em 08-28).
+    # Até aqui a velocidade no reto era FIXA em forward_speed, e a única redução
+    # era o slow_radius — que só age perto do GOAL. Medido por ground truth do
+    # Gazebo: o robô RASPAVA quina com front_clear=0.41 m. Não é medo: ele não
+    # para nem desvia mais longe; só anda mais devagar quando a folga à frente
+    # encolhe, o que dá tempo do controlador fechar o rumo antes da quina.
+    # 2026-08-28 (ARENA): na fase de velocidade isto era CUSTO (28,6% do tempo de
+    # condução virava rastejo) e estava na fila pra ser afrouxado. A arena não tem
+    # limite de tempo e cobra precisão -> o custo sumiu e sobrou só o benefício.
+    # clear_full <= 0 desliga (volta ao comportamento de velocidade fixa).
+    clear_full: float = 1.2         # m — folga a partir da qual anda a plena
+    clear_min: float = 0.35         # m — folga em que já está no min_speed
+
+
+def speed_for_clearance(c: 'FollowConfig', front_clear: float) -> float:
+    """Velocidade de cruzeiro em função da folga à frente.
+
+    Interpola linear entre `min_speed` (folga <= clear_min) e `forward_speed`
+    (folga >= clear_full). NUNCA desce abaixo de min_speed: abaixo da zona-morta
+    o robô não anda, e quem decide PARAR é o collision_monitor / unstuck — não
+    este ajuste, que só modula o cruzeiro.
+    """
+    if c.clear_full <= 0.0:          # desligado
+        return c.forward_speed
+    if not math.isfinite(front_clear) or front_clear >= c.clear_full:
+        return c.forward_speed
+    if front_clear <= c.clear_min:
+        return c.min_speed
+    frac = (front_clear - c.clear_min) / (c.clear_full - c.clear_min)
+    return c.min_speed + (c.forward_speed - c.min_speed) * frac
+
 
 @dataclass
 class Cmd:
@@ -336,10 +367,12 @@ class DecisiveFollower:
         if self.state == 'turning':
             return Cmd(0.0, self._turn_cmd(herr), 'turning')
 
-        # 4) de frente -> anda RETO (wz=0). Freia perto do goal.
-        speed = c.forward_speed
+        # 4) de frente -> anda RETO (wz=0). Freia perto do goal E perto de
+        # obstáculo: vence a MENOR das duas (a mais conservadora).
+        speed = speed_for_clearance(c, front_clear)
         if dist_goal < c.slow_radius:
-            speed = max(c.min_speed, c.forward_speed * dist_goal / c.slow_radius)
+            speed = min(speed,
+                        max(c.min_speed, c.forward_speed * dist_goal / c.slow_radius))
         return Cmd(speed, 0.0, 'driving')
 
 
@@ -382,6 +415,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
                 ('slow_radius', 0.4), ('min_speed', 0.22), ('rate_hz', 20.0),
+                ('clear_full', 1.2), ('clear_min', 0.35),
                 ('turn_stop_tau', 0.10), ('aim_tau', 2.0),
                 ('aim_tau_short', 0.8),
             ):
@@ -399,6 +433,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 goal_yaw_tol=math.radians(g['goal_yaw_tol_deg']),
                 rot_k=g['rot_k'], rot_min=g['rot_min'], rot_max=g['rot_max'],
                 slow_radius=g['slow_radius'], min_speed=g['min_speed'],
+                clear_full=g['clear_full'], clear_min=g['clear_min'],
                 turn_stop_tau=g['turn_stop_tau'], aim_tau=g['aim_tau'],
                 aim_tau_short=g['aim_tau_short'],
                 tick_dt=1.0 / g['rate_hz'])

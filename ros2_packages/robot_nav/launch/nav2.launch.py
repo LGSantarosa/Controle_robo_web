@@ -265,7 +265,19 @@ def generate_launch_description():
                 # ré se o vão cair < margem.
                 'rear_lidar_x': 0.0,
                 'rear_tail_x': -0.25,
-                'rear_half_width': 0.30,
+                # 2026-08-27 (medido no sim, rota1/sala_grande), trazido pro
+                # robot_nav em 08-28: 0.30 -> 0.26. Esta meia-largura define o
+                # CORREDOR que o unstuck considera "à minha frente" (front_min_gap:
+                # pontos com x>head_x e |y|<=half_width). Com 0.30 uma parede
+                # LATERAL a 0.275 m caía dentro da faixa -> o unstuck lia
+                # "front_gap = 0.05 m" sem ter NADA na frente, e escolhia GIRAR pro
+                # lado aberto — a pior manobra ali, porque o canto do robô varre
+                # 0.354 m contra uma parede a 0.275. MEDIDO: 26 disparos, 21
+                # 'turning' com front_gap 0.00-0.09 enquanto o scan não via nada a
+                # menos de 0.41 m à frente. Com 0.26 (1 cm além do corpo) a parede
+                # a 0.275 não entra mais na faixa e vale a regra que já existia
+                # ("frente livre = o caminho"). Reverter = 0.30.
+                'rear_half_width': 0.26,
                 # 2026-06-15: 0.10 -> 0.20. Bateu numa lata de lixo dando ré:
                 # lê vão 0.20m, recua e PARA em 0.08m -> com lata afunilada (o
                 # LiDAR pega o topo, a base é mais perto) + overshoot a 0.25 m/s,

@@ -139,7 +139,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('mapa', help='caminho do .yaml do mapa')
     ap.add_argument('--raio', type=float, default=0.32,
-                    help='robot_radius do costmap (default 0.32, o do nav2_trekking)')
+                    help='robot_radius do costmap (default 0.32, o do perfil ARENA)')
     args = ap.parse_args()
     if not os.path.exists(args.mapa):
         sys.exit(f'não achei {args.mapa}')

@@ -1,5 +1,11 @@
 # HANDOFF — PROVA REAL do nav2_trekking (a partir de 2026-08-27)
 
+> **⚠️ 2026-08-28 — o pacote `nav2_trekking` NÃO EXISTE MAIS.** Ele foi dissolvido de
+> volta no `robot_nav` (branch `arena-galpao`): a geometria virou o perfil
+> `config/nav2_params_arena.yaml`, selecionável por `./launch.sh --nav2 --arena`.
+> O fork nunca rodou pelo `launch.sh` nem no robô. Ver
+> `docs/superpowers/specs/2026-08-28-arena-galpao-design.md`.
+
 > **Para o Claude que pegar esta sessão no robô.** Leia isto ANTES de tocar em
 > qualquer coisa. O dono chega no robô, liga, e quer rodar a prova.
 >

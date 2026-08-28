@@ -1,3 +1,19 @@
+# ============================================================================
+# PERFIL ARENA (2026-08-28) — galpao da prova de 05/09.
+#
+# Base: nav2_params_pi.yaml + a GEOMETRIA medida na fase de 2026-08-27
+# (que vivia no pacote nav2_trekking, agora dissolvido de volta no robot_nav).
+#
+# O que este perfil muda em relacao ao nav2_params_pi.yaml:
+#   - costmaps: footprint quadrado +-0.25  ->  robot_radius 0.32
+#   - inflacao: local 0.35->0.45, global 0.50->0.60
+#   - collision_monitor: PolygonSlow+PolygonStop -> PolygonFront unico, "limit"
+#   - velocidade: MANTIDA em 0.35 (a fase de velocidade saiu de escopo)
+#
+# CUSTO CONHECIDO do robot_radius 0.32: o nav2 trata vao < 0.64 m como PAREDE.
+# Na arena isso e' INTENCIONAL — a fresta de 0.60 m e' atalho OPCIONAL, e o
+# modo seguro contorna. Ver docs/superpowers/specs/2026-08-28-arena-galpao-design.md
+# ============================================================================
 # Parâmetros Nav2 — variante para Raspberry Pi 4 4GB.
 #
 # Mantém a estrutura do nav2_params.yaml (notebook), com os seguintes ajustes
@@ -199,7 +215,12 @@ controller_server:
       # do path_follower. Este teto só morde quando o controller_server assume
       # (o path_follower fura o DWB pelo mux), mas deixá-lo baixo faria o
       # fallback andar na metade da velocidade sem ninguém entender por quê.
-      max_vel_x: 0.60
+      # 2026-08-28 ARENA: 0.60 -> 0.35 (de volta ao valor do nav2_params_pi.yaml).
+      # O 0.60 veio da fase VELOCIDADE (2026-08-27), que SAIU de escopo: a meta da
+      # arena e' "sem medo de movimento e MUITO preciso", sem limite de tempo.
+      # Velocidade menor so' ajuda o criterio de zero contato, e o PolygonFront
+      # abaixo foi dimensionado PARA 0.60 m/s -> a 0.35 sobra margem de frenagem.
+      max_vel_x: 0.35
       min_vel_y: 0.0
       max_vel_y: 0.0
       # 2.5 → 6.0: idem ao shim — o chassi precisa de ~6.0 p/ rotacionar de fato.
@@ -207,7 +228,12 @@ controller_server:
       # foi subido p/ 6.0, senão corta aqui).
       max_vel_theta: 6.0
       min_speed_xy: 0.0
-      max_speed_xy: 0.60
+      # 2026-08-28 ARENA: 0.60 -> 0.35 (de volta ao valor do nav2_params_pi.yaml).
+      # O 0.60 veio da fase VELOCIDADE (2026-08-27), que SAIU de escopo: a meta da
+      # arena e' "sem medo de movimento e MUITO preciso", sem limite de tempo.
+      # Velocidade menor so' ajuda o criterio de zero contato, e o PolygonFront
+      # abaixo foi dimensionado PARA 0.60 m/s -> a 0.35 sobra margem de frenagem.
+      max_speed_xy: 0.35
       min_speed_theta: 0.0
       acc_lim_x: 1.0
       acc_lim_theta: 10.0
@@ -544,7 +570,8 @@ velocity_smoother:
     # 2026-08-27 (fase VELOCIDADE): linear 0.35 -> 0.60 (casa com DWB e
     # path_follower). O smoother corta o que o controller_server manda; o
     # follow_vel do path_follower não passa por aqui.
-    max_velocity: [0.60, 0.0, 6.0]
+    # 2026-08-28 ARENA: 0.60 -> 0.35, mesmo motivo do max_vel_x do DWB.
+    max_velocity: [0.35, 0.0, 6.0]
     # Smoother fica PERMISSIVO em -0.1 de propósito: o DWB virou min_vel_x: 0.0
     # (não atravessa porta de costas), mas o BackUp recovery, se rotear por aqui,
     # ainda precisa da folga de ré. O smoother não INVENTA ré — só passa o que o
