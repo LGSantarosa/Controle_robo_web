@@ -489,14 +489,24 @@ nenhum estado de bloqueio do `path_follower`**. Ele só faz standdown para o
 `motion_guard` e para a porta. Depois do timeout ele pode dar ré, avançar ou girar
 por um canal (prio 30) que **ignora o collision monitor**.
 
-Duas saídas, ⏳ **a escolher com o dono**:
+Duas saídas, ⏳ **a escolher com o dono** — com a consequência de cada uma:
 
-1. o `unstuck` passa a **respeitar** este bloqueio (novo standdown, como já faz
-   com guard e porta); ou
-2. o `unstuck` **vira formalmente a implementação do `AFASTA`**, usando exatamente
-   as mesmas verificações da guarda.
+| | **1. `unstuck` RESPEITA o bloqueio** | **2. `unstuck` VIRA o `AFASTA`** |
+|---|---|---|
+| tamanho | **pequeno**: mais uma fonte de standdown, mesmo padrão já usado pro `motion_guard` e pra porta | **grande**: as manobras do unstuck passam a validar volume varrido |
+| o que ganha | a guarda deixa de ser furada por recovery automático | uma coisa só sabe "como sair", sem lógica duplicada nem competindo |
+| **o que perde** | **nessa situação o robô perde o resgate automático.** Se a guarda errar (bloqueio falso), ele fica parado até intervenção humana | nada de função — mas mexe num nó com história |
+| risco | a guarda vira **ponto único de travamento** | o `unstuck` fura o collision monitor **de propósito** (prio 30); ensiná-lo a respeitar geometria muda o caráter dele e pode regredir os resgates que hoje funcionam |
+| prazo (05/09) | **cabe** | não cabe com folga |
 
-**Override humano consciente continua. Recovery automático independente, não.**
+**Override humano consciente continua nas duas. Recovery automático independente,
+não.**
+
+**Minha recomendação:** **opção 1 agora**, opção 2 depois do prazo. Sem limite de
+tempo na prova, "ficar parado esperando intervenção" é um custo aceitável; furar a
+guarda e bater não é. E a opção 2 é reescrita de um nó validado em campo, o que
+contraria o *"1 mudança pequena por vez"* a 8 dias da prova.
+⏳ **Decisão do dono.**
 
 **Histerese e ruído:** entra com 1 ciclo, **sai só depois de N ciclos** abaixo do
 limiar — mesma lição do `turn_enter`/`turn_exit`, e agora também do latch de
@@ -711,6 +721,7 @@ que na arena fica **em cima do muro sul**.
 | 28 | "Chegou a 0,04 m e derivou até 0,59 m" | Os 0,59 são de **antes** da chegada. Depois de entrar na tolerância: min 0,066, max 0,281 | Ancorar "antes/depois" num evento, não na janela inteira |
 | 29 | **"A samba encostou no cone"** dito como conclusão | É hipótese: eu misturei pose do Gazebo (`colisao.csv`) com `dist_goal` do AMCL, e o AMCL erra **24 cm** ali. Co-suspeito não investigado | Não cruzar duas fontes de pose sem medir a diferença entre elas |
 | 30 | Escrevi **"unstuck nunca disparou"** sem qualificar | Vale só pro NOSSO supervisor. O **Nav2** fez 5 recoveries, incluindo o bug que eu chamava de "anterior a esta fase" | Ler o log do nav2, não só os CSVs dos nossos nós |
+| 51 | Listei as duas saídas do `unstuck` **sem a consequência de cada uma** | O dono perguntou "anotou isso tudo?" pela terceira vez; o trade-off que eu descrevi no chat (pequena mas perde resgate × maior mas concentra num nó) não estava no arquivo | Opção sem consequência escrita não é decisão apresentada, é lista |
 | 45 | Chamei de **"exato"** um critério **amostrado** | Com passo de 5°, um obstáculo a 0,35 m e 47,5° passa nas pontas (h=0,339) e bate no meio (h=0,354). Faltava ~1,5 cm só de margem de discretização — e nem precisava amostrar: `h` tem máximo analítico em 45°+k·90° | "Exato" é palavra que se prova, não se escreve |
 | 46 | Ia **permitir giro com scan mudo**, alegando que o `collision_monitor` protege | **Circular:** ele bebe da mesma fonte (`source_timeout: 1.0`). Scan mudo cega os dois, e permitir ali reativa a colisão que a guarda existe pra impedir | Antes de contar com proteção a jusante, conferir se ela sobrevive à mesma falha |
 | 47 | Vendi como **feature** o `unstuck` poder furar o `PARADO_SEGURO` | É o perigo: recovery **automático** dirigindo na situação que a guarda bloqueou. E ele **não assina** estado nenhum do `path_follower` — só faz standdown pra guard e porta | Distinguir override **humano** de recovery **automático** |
