@@ -437,39 +437,78 @@ Duas correções sobre a primeira versão:
    se o giro pedido varre só a frente. O critério tem que ser o **setor que o
    giro pedido realmente varre**.
 
-Teste exato e barato, ponto a ponto do scan `(ρ, β)`, para um giro de `Δθ` no
-sentido pedido — a distância do centro à borda do quadrado na direção `α` é
-`0,25 / max(|cos α|, |sin α|)`:
+A distância do centro à borda do quadrado na direção `α` é
+`h(α) = 0,25 / max(|cos α|, |sin α|)`, e o ponto é atingido se
+`∃ φ ∈ [0, Δθ] : ρ ≤ h(β−φ) + margem`.
+
+⚠️ **A primeira versão mandava amostrar `φ` de 5 em 5° e chamava isso de "exato".
+Não é.** Contraexemplo do review 10: obstáculo a **ρ = 0,35 m, β = 47,5°**, giro
+de 5°. Nas pontas (φ=0 e φ=5°) `h` vale **0,339** e parece seguro; **no meio
+(φ=2,5°, α=45°) `h` = 0,354 e bate.** Com passo de 5° faltariam ~1,5 cm de margem
+só pra cobrir a discretização.
+
+**Não precisa amostrar — dá pra resolver analiticamente.** `h` é máxima
+(**0,354**) em `α ≡ 45° (mod 90°)` e mínima (**0,25**) em `α ≡ 0° (mod 90°)`.
+Então, no intervalo `[β−Δθ, β]`:
 
 ```
-atingido(ρ, β)  ⟺  ∃ φ ∈ [0, Δθ] :  ρ ≤ 0,25 / max(|cos(β−φ)|, |sin(β−φ)|) + margem
+se o intervalo contém algum 45° + k·90°  ->  max h = 0,354
+senão                                    ->  max h = max(h(extremo1), h(extremo2))
 ```
 
-Amostrando `φ` em passos de ~5°. Cobre os dois casos: ρ < 0,25 dá verdadeiro em
-qualquer φ (invasão), e o canto (0,354) só bloqueia quando o setor passa por ele.
+Exato, O(1), sem passo de amostragem e sem margem de discretização. Cobre os dois
+casos: `ρ < 0,25` é invasão (verdadeiro em qualquer φ) e o canto só bloqueia
+quando o setor passa por 45°+k·90°.
 
 #### Máquina de estados
 
 | estado | condição de entrada | ação | saída |
 |---|---|---|---|
 | `LIVRE` | nenhum ponto atingido no setor pedido | gira normal | — |
-| `INVERTE` | setor pedido bloqueado **e** sentido oposto livre | gira pro outro lado (custa mais ângulo, é seguro) | quando alinhar |
-| `AFASTA` | os dois sentidos bloqueados | translada pro lado que **aumenta a folga mínima**, com teto de deslocamento, **checando antes o setor de translação** (frente livre pra avançar, trás pra recuar) | folga mínima > limiar + histerese, por N ciclos |
+| `INVERTE` | setor pedido bloqueado **e** arco oposto livre | gira pelo **arco complementar** | quando alinhar |
+| `AFASTA` | os dois arcos bloqueados | translada pro lado que **aumenta a folga mínima** | folga > limiar + histerese, por N ciclos |
+
+⏳ **Os dois ainda estão subdefinidos** (review 10), e isto é o que falta antes de
+virar código:
+
+- **`INVERTE`:** o outro caminho pro MESMO yaw é o **arco complementar**
+  (`Δθ ∓ 2π`), **não** `−Δθ`. Girar `−Δθ` chega noutro lugar. O setor a verificar
+  é o complementar inteiro, que é maior — logo bloqueia mais fácil.
+- **`AFASTA`:** validar o **volume varrido pelo retângulo** na translação, não um
+  "setor" — o corpo tem largura, e transladar varre uma faixa, não um raio.
+  Faltam ainda: **velocidade**, **distância máxima**, **margem de frenagem** e
+  **critério numérico de saída**.
 | `PARADO_SEGURO` | nenhum sentido livre **e** nenhuma translação segura | publica zero **e emite estado** | intervenção |
 
-**`PARADO_SEGURO` não é deadlock silencioso:** ele publica o estado, e o
-`unstuck_supervisor` (prio 30, **a jusante** do collision no mux) e o humano
-continuam podendo furar. Foi por isso que a arquitetura de mux ficou assim.
+⚠️ **`PARADO_SEGURO` NÃO é seguro enquanto o `unstuck` puder furá-lo sozinho.**
+Eu tinha escrito isso como *feature* ("não é deadlock silencioso, o unstuck fura")
+— é o contrário: recovery **automático** dirigindo justamente na situação que a
+guarda bloqueou é o perigo. Conferido: o `unstuck_supervisor` assina
+`motion_guard/state`, `door_zone`, `map`, `plan`, `scan`, `odom`, `nav_vel` — **e
+nenhum estado de bloqueio do `path_follower`**. Ele só faz standdown para o
+`motion_guard` e para a porta. Depois do timeout ele pode dar ré, avançar ou girar
+por um canal (prio 30) que **ignora o collision monitor**.
+
+Duas saídas, ⏳ **a escolher com o dono**:
+
+1. o `unstuck` passa a **respeitar** este bloqueio (novo standdown, como já faz
+   com guard e porta); ou
+2. o `unstuck` **vira formalmente a implementação do `AFASTA`**, usando exatamente
+   as mesmas verificações da guarda.
+
+**Override humano consciente continua. Recovery automático independente, não.**
 
 **Histerese e ruído:** entra com 1 ciclo, **sai só depois de N ciclos** abaixo do
 limiar — mesma lição do `turn_enter`/`turn_exit`, e agora também do latch de
 chegada. Margem configurável sobre os 0,25/0,354 pra absorver ruído de scan.
 
-**Scan velho ou ausente (> TTL):** ⏳ **decisão em aberto.** Bloquear com sensor
-mudo trava o robô; liberar em silêncio anula a guarda. Inclinação atual:
-**degradar pro comportamento de hoje (permite) e LOGAR**, porque o
-`collision_monitor` a jusante ainda protege o avanço — mas isso precisa ser
-decidido pelo dono, não por mim.
+**Scan velho ou ausente (> TTL): PARADA SEGURA.** ⚠️ Minha inclinação anterior
+era *"permite e loga, porque o `collision_monitor` a jusante ainda protege o
+avanço"*. **Raciocínio circular, e falso:** o `collision_monitor` bebe da MESMA
+fonte (`source_timeout: 1.0`, `nav2_params_arena.yaml:633`). Scan mudo cega os
+dois. Permitir giro ali reativa exatamente a colisão que a guarda existe pra
+impedir. Para autonomia e para A4, **scan mudo → para**. Override humano
+consciente segue podendo furar.
 
 #### O teste: scan SINTÉTICO da geometria
 
@@ -484,9 +523,13 @@ Duas saídas, e escolho a primeira:
    `tools/gera_arena_galpao.py` e o `colisao.py` já sabe ler caixas e cilindros,
    então dá pra fazer raycast exato a partir das poses gravadas. Determinístico,
    sem depender de gravação, e reusa o oráculo que já existe.
-2. Arquivar `/scan_safe` nas próximas voltas — **passa a ser feito de qualquer
-   jeito**, porque sem isso nenhuma guarda baseada em scan é testável com dado
-   real. ⏳ pendente.
+2. Arquivar `/scan_safe` nas próximas voltas — **obrigatório, não alternativa.**
+   ⏳ pendente.
+
+⚠️ **O scan sintético é teste UNITÁRIO da geometria, e só isso.** Ele não exercita
+`/scan_safe` de verdade: não pega **discretização angular**, **sanitização**
+(o filtro de 0,23 m), **atraso** nem **perda de mensagem**. O teste integrado
+exige o scan gravado — por isso o item 2 é obrigatório.
 
 O caso do teste está gravado: pose (12,16 · 6,99), yaw varrendo **−37° → −54°**,
 `cone_3` a **0,51 m** do centro (superfície a 0,34 m), folga mergulhando a
@@ -503,8 +546,20 @@ yaw em que a folga zera. Falha hoje por construção — não existe guarda nenh
   comparada ao baseline (236,4 s · 2 colisões + 28 raspões · 13 blocos de
   `goal_turn`).
 
-⏳ **Ainda NÃO pronta pra implementar:** falta o dono decidir o comportamento com
-scan mudo, e falta arquivar `/scan_safe`.
+#### ⏳ O que falta antes de virar código (lista honesta)
+
+A versão anterior dizia que faltavam só duas coisas. **Era falso.** Falta:
+
+| # | pendência | tipo |
+|---|---|---|
+| 1 | `unstuck` respeita o bloqueio **ou** vira o `AFASTA` | **decisão do dono** |
+| 2 | `INVERTE` pelo arco complementar (`Δθ ∓ 2π`), com o setor maior | desenho |
+| 3 | `AFASTA`: volume varrido do retângulo + velocidade, distância máx., margem de frenagem, saída numérica | desenho |
+| 4 | Arquivar `/scan_safe` (teste integrado) | tarefa |
+| 5 | Valores: `margem`, `N` ciclos de histerese, TTL do scan | calibração |
+
+**Decidido no review 10:** critério analítico (sem amostragem) e **scan mudo →
+parada segura**.
 
 ## 3. Medições
 
@@ -656,6 +711,12 @@ que na arena fica **em cima do muro sul**.
 | 28 | "Chegou a 0,04 m e derivou até 0,59 m" | Os 0,59 são de **antes** da chegada. Depois de entrar na tolerância: min 0,066, max 0,281 | Ancorar "antes/depois" num evento, não na janela inteira |
 | 29 | **"A samba encostou no cone"** dito como conclusão | É hipótese: eu misturei pose do Gazebo (`colisao.csv`) com `dist_goal` do AMCL, e o AMCL erra **24 cm** ali. Co-suspeito não investigado | Não cruzar duas fontes de pose sem medir a diferença entre elas |
 | 30 | Escrevi **"unstuck nunca disparou"** sem qualificar | Vale só pro NOSSO supervisor. O **Nav2** fez 5 recoveries, incluindo o bug que eu chamava de "anterior a esta fase" | Ler o log do nav2, não só os CSVs dos nossos nós |
+| 45 | Chamei de **"exato"** um critério **amostrado** | Com passo de 5°, um obstáculo a 0,35 m e 47,5° passa nas pontas (h=0,339) e bate no meio (h=0,354). Faltava ~1,5 cm só de margem de discretização — e nem precisava amostrar: `h` tem máximo analítico em 45°+k·90° | "Exato" é palavra que se prova, não se escreve |
+| 46 | Ia **permitir giro com scan mudo**, alegando que o `collision_monitor` protege | **Circular:** ele bebe da mesma fonte (`source_timeout: 1.0`). Scan mudo cega os dois, e permitir ali reativa a colisão que a guarda existe pra impedir | Antes de contar com proteção a jusante, conferir se ela sobrevive à mesma falha |
+| 47 | Vendi como **feature** o `unstuck` poder furar o `PARADO_SEGURO` | É o perigo: recovery **automático** dirigindo na situação que a guarda bloqueou. E ele **não assina** estado nenhum do `path_follower` — só faz standdown pra guard e porta | Distinguir override **humano** de recovery **automático** |
+| 48 | `INVERTE` como `−Δθ` | O outro caminho pro mesmo yaw é o **arco complementar** (`Δθ ∓ 2π`); `−Δθ` chega noutro lugar | Ângulo tem topologia; não tratar como número |
+| 49 | `AFASTA` validando um **"setor"** | O corpo tem largura: transladar varre um **volume**, não um raio | Usar a geometria do corpo, não a do sensor |
+| 50 | Escrevi que faltavam **duas** coisas pra implementar | Faltam cinco, sendo uma decisão de segurança do dono | Não subdimensionar o que falta |
 | 39 | Prometi um teste que **os dados não permitem** | A guarda consome LaserScan 360°; o arquivado só tem pose, folga e o escalar `clear`. Nunca arquivei `/scan_safe` | Antes de prometer teste, conferir se o dado de entrada dele existe |
 | 40 | *"Recusar o giro, afastar ou girar pro lado livre"* como se fosse desenho | É **intenção**, não comportamento: faltava direção do afastamento, checagem da translação, histerese, saída, scan mudo, ruído e o caso "nenhum lado livre" | Se não dá pra escrever a tabela de estados, não é um plano |
 | 41 | Critério só no **anel 0,25–0,354** | Retorno **abaixo de 0,25** é invasão do corpo e também tem que bloquear; e o anel inteiro gera falso bloqueio — o certo é o **setor varrido** pelo giro pedido | Definir a região pelo movimento pedido, não por um raio fixo |
