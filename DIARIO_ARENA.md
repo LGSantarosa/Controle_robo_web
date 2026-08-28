@@ -329,38 +329,61 @@ não a substitui.
 
 ---
 
-### 2.9 Conclusão da sessão e ordem recomendada (apresentada ao dono 08-28)
+### 2.9 Conclusão da sessão e ordem recomendada (revisada 08-28, review 8)
 
-Com o baseline medido, **dois defeitos estão provados e um terceiro apareceu**:
+> ⚠️ A primeira versão desta seção tinha **sete conclusões fortes demais**. O que
+> caiu está marcado; o que sobreviveu está com a evidência do lado.
 
-| # | o que é | estado da prova |
+#### O que está PROVADO
+
+| # | defeito | prova |
 |---|---|---|
-| 1 | **Samba no goal** — limiar de chegada sem histerese (`path_follower.py:295`) | ✅ **provado**: troca de estado e inversão de giro no CSV |
-| 2 | **Canto varre no giro** — 0,354 m sem proteção nenhuma | ✅ **provado**: posição parada, yaw varrendo, folga a 0,0 cm |
-| 3 | **AMCL erra 24 cm nos contatos** (mediana 9,0 na volta) | ✅ **medido**, causa ⏳ não investigada |
+| 1 | **Samba no goal** — limiar de chegada sem histerese (`path_follower.py:295`) | troca de estado `goal_turn`↔`turning` com inversão de giro, no CSV |
+| 2 | **O canto varre no giro** — 0,354 m, sem proteção nenhuma | posição parada (12,16→12,14), yaw varrendo (−37°→−54°), folga a 0,0 cm |
 
-**O que eu recomendo, e por quê:**
+#### O que está MEDIDO, mas com causa em aberto
 
-O latch da chegada (item 1) **continua valendo por si só** — é defeito real e a
-cura já existe neste arquivo pro outro limiar. Mas **eu não apostaria nele pra
-fechar A4**, porque o contato tem co-suspeito: com 24 cm de erro de pose, o robô
-pode encostar sem nenhuma samba.
+**Erro de pose AMCL × Gazebo:** mediana 9,0 cm na volta, 24,1 cm nos 30 eventos.
 
-**O erro de pose parece o problema maior e é o mais barato de atacar primeiro:**
-existe uma hipótese concreta e testável — o mapa não tem os cones (decisão minha,
-§2.7), então os 4 cones que o laser vê são obstáculos **não-mapeados** que o AMCL
-tem que engolir. Testar é regenerar o mapa com `--com-cones`, repetir a MESMA
-volta e comparar o erro de pose contra este baseline. Uma variável, uma medição.
+**E ele cresce no giro** — que é a pista mais forte:
 
-Ordem proposta:
+| estado do seguidor | n | mediana | p90 |
+|---|---|---|---|
+| `driving` | 2914 | **8,2 cm** | 13,5 |
+| `turning` | 1319 | **10,9 cm** | **22,8** |
+| `goal_turn` | 290 | 9,9 cm | 16,3 |
 
-1. **Medir o erro de pose com `--com-cones`** — barato, uma variável, e decide se
-   a localização é o vilão. ⚠️ Custo conhecido: com os cones no mapa estático, o
-   goal a 1 m pode cair na inflação deles (foi por isso que ficaram fora) — se o
-   nav2 recusar goal, isso já é a resposta e o caminho vira outro.
-2. **Latch da chegada** — com teste antes, e repetir a volta contra o baseline.
-3. **Proteção de point-turn** (anel 0,25–0,36 m) — **é ela que fecha A4**, e
-   nenhum dos dois acima a substitui.
+Isso casa com algo **já documentado e medido neste repo**: o comentário da IMU em
+`sim_robot.sdf` registra que num skid-steer *"a roda patina no point-turn: medido
+com verdade-terreno, a odom girava 7,8° no primeiro tick de cada giro enquanto o
+robô girava 0,5°"*. **Hipótese melhor sustentada que a minha:** erro de odometria
+no giro, não cone fora do mapa.
+
+#### ❌ O que eu afirmei e NÃO se sustenta
+
+| eu escrevi | por que cai |
+|---|---|
+| *"a spec dizia que no sim o erro de pose é zero"* | A frase existe, mas em **`HANDOFF_PROVA_REAL.md:42`** — citei o documento errado |
+| *"com 24 cm a fresta de 0,60 é impossível"* | Os 24 cm são erro **euclidiano perto do `cone_3`**, não erro **lateral dentro de uma fresta**. E o costmap **local** roda em `odom` com o laser ao vivo — o desvio de obstáculo não depende da pose absoluta do mesmo jeito |
+| *"o critério A2 é menor que o erro de pose"* | A2 é medido pelo **`cone_detector`, na distância relativa do scan** (spec §4), não pela pose absoluta do AMCL |
+| *"testar `--com-cones` muda uma variável"* | O **mesmo mapa** alimenta AMCL **e** costmap global: muda localização **e** planejamento. É experimento exploratório, não teste causal |
+| *"os standoffs podem cair na inflação dos cones"* | **Medido, falso:** gerando com `--com-cones`, os goals ficam com **0,85–0,90 m** de folga contra inflação de 0,60. Pior: eu me contradisse — o `STANDOFF = 1,0 m` foi escolhido justamente pra ficar fora dos 0,77 m |
+| *"se o contato sobreviver ao latch, o suspeito é a localização"* | Binário demais. Sobra também o **point-turn sem proteção**, que eu mesmo provei varrer o canto |
+
+#### Ordem recomendada (revisada)
+
+O fio comum dos dois defeitos provados **e** do crescimento do erro de pose é o
+mesmo: **girar**. Então a ordem muda:
+
+1. **Proteção de point-turn** (anel 0,25–0,36 m antes de girar). É a única das
+   três que **fecha A4**, o mecanismo do contato está provado, e ela não depende
+   de resolver a questão da localização.
+2. **Latch da chegada.** Defeito provado por si só, e reduz a exposição: menos
+   giro desnecessário colado no alvo. Com teste antes, e repetindo esta volta
+   contra o baseline (236,4 s · 13 blocos de `goal_turn` · 2 colisões + 28 raspões).
+3. **Investigar o erro de pose** — **exploratório**, sem decidir nada sozinho.
+   Primeiro a hipótese barata e já documentada (odometria no point-turn); o
+   `--com-cones` fica como experimento, ciente de que mexe em duas coisas.
 
 ⏳ **Aguardando o dono decidir a ordem.**
 
@@ -514,6 +537,12 @@ que na arena fica **em cima do muro sul**.
 | 28 | "Chegou a 0,04 m e derivou até 0,59 m" | Os 0,59 são de **antes** da chegada. Depois de entrar na tolerância: min 0,066, max 0,281 | Ancorar "antes/depois" num evento, não na janela inteira |
 | 29 | **"A samba encostou no cone"** dito como conclusão | É hipótese: eu misturei pose do Gazebo (`colisao.csv`) com `dist_goal` do AMCL, e o AMCL erra **24 cm** ali. Co-suspeito não investigado | Não cruzar duas fontes de pose sem medir a diferença entre elas |
 | 30 | Escrevi **"unstuck nunca disparou"** sem qualificar | Vale só pro NOSSO supervisor. O **Nav2** fez 5 recoveries, incluindo o bug que eu chamava de "anterior a esta fase" | Ler o log do nav2, não só os CSVs dos nossos nós |
+| 32 | Atribuí à **spec** uma frase que é do `HANDOFF_PROVA_REAL.md:42` | Citei documento errado; a frase existe | Conferir a origem antes de citar |
+| 33 | Liguei os **24 cm** direto à fresta e ao A2 | Erro euclidiano perto do cone ≠ erro lateral na fresta; e A2 é medido no **scan relativo**, não na pose absoluta | Não transportar uma métrica pra um contexto onde ela não é a métrica |
+| 34 | Chamei `--com-cones` de **"uma variável"** | O mesmo mapa alimenta AMCL **e** costmap global | "Uma variável" é sobre o que o experimento MEXE, não sobre quantos flags eu passo |
+| 35 | Avisei que os standoffs cairiam na **inflação dos cones** | **Medido falso**: 0,85–0,90 m contra inflação 0,60. E contradizia meu próprio `STANDOFF = 1,0` | Medir antes de avisar — inclusive contra o que eu mesmo já tinha calculado |
+| 36 | *"Se sobreviver ao latch, o suspeito é a localização"* | Binário: sobra o point-turn sem proteção, que eu mesmo provei | Dois suspeitos provados não viram um por eliminação de um terceiro |
+| 37 | Ignorei a hipótese mais sustentada pelo repo | O erro de pose **cresce no giro** (8,2→10,9 cm; p90 13,5→22,8) e `sim_robot.sdf` já documenta odom patinando 7,8° por tick no point-turn | Procurar no repo se o fenômeno já foi medido antes de inventar hipótese nova |
 | 31 | A evidência versionada tinha **`colisao.log` fora do git** (`*.log`) e **CSV com CRLF** | O README listava um arquivo que sumia em checkout limpo; `git diff --check` reprovava toda linha | Conferir `git ls-files` e `git diff --check` do que se declara versionado |
 | 25 | Reportei **"2 contatos"** olhando só o resumo do `colisao.log` | O CSV tinha **30 eventos**: 2 colisões + **28 raspões**. O resumo imprime só as colisões | Ler o CSV, não o resumo — foi a lição do "média esconde bimodal" outra vez |
 | 24 | **Rodei a volta e não anotei** | O dono teve que perguntar "anotou isso tudo?". Pior: os CSVs de `controle_web/logs/` são sobrescritos a cada launch — quase perdi o `follow_debug` que sustenta o diagnóstico | Arquivar CSV e escrever o diário fazem parte da run, não são pós-jogo |
