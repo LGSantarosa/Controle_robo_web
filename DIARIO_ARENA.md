@@ -691,7 +691,13 @@ exatamente o que precisa parar.
 
 **Contrato do bloqueio de giro, então:** entra em standdown **e aborta manobra em
 curso publicando zero**, em qualquer estado do unstuck — não só em `monitoring`.
-⏳ desenho a fechar.
+
+⚠️ **Corrigido em 2026-08-31 (achado do dono, revisando o diário):** aqui estava
+escrito *"⏳ desenho a fechar"* logo depois de enunciar o contrato — as duas
+frases se contradiziam. O contrato **está fechado** (é a frase acima). O que não
+existe é **código**: nem a publicação do bloqueio pelo `path_follower`, nem a
+assinatura dele pelo `unstuck_supervisor`. É passo 4 da ordem da §2B.1, e o
+estado certo é "decidido, não implementado".
 
 #### ⏳ O que falta antes de virar código (lista honesta)
 
@@ -700,7 +706,7 @@ A versão anterior dizia que faltavam só duas coisas. **Era falso.** Falta:
 | # | pendência | tipo |
 |---|---|---|
 | ~~1~~ | ~~`unstuck` respeita **ou** vira o `AFASTA`~~ | ✅ **DECIDIDO: respeita** (opção 1) |
-| 1b | 🔴 **Contrato do bloqueio**: abortar manobra JÁ EM CURSO, não só standdown | desenho |
+| 1b | **Contrato do bloqueio**: abortar manobra JÁ EM CURSO, não só standdown | ✅ **decidido** (08-31) — falta **código**, nos dois nós |
 | 2 | Arquivar `/scan_safe` (teste integrado) | tarefa |
 | 3 | Valores: folga da margem, `N` ciclos de histerese, TTL do scan | calibração |
 | ~~4~~ | ~~Capar o giro em `rot_min`~~ | **CAIU** (review 12) — os contatos já eram a 2,4 |
@@ -826,6 +832,89 @@ a máquina de estados parou de alternar na geometria do CSV, **não** que o cont
 no `cone_3` sumiu. Quem responde isso é o passo 3, contra o baseline (236,4 s ·
 13 blocos de `goal_turn` (13,8 s) · 2 colisões + 28 raspões).
 
+### 2B.4 Passo 3 — a volta com o latch (`log/sim_ab/arena_latch1/`)
+
+Comando: o mesmo da §4.5, tag `arena_latch1`. ⚠️ Antes de rodar, `colcon build`:
+o `install/` é egg-link pro `build/`, onde `path_follower.py` é **hardlink** do
+fonte (mesmo inode). Deu certo por acaso — editei truncando no lugar, o que
+preserva o inode. Ferramenta que **substitua** o arquivo (`sed -i`, editor que
+escreve em temporário e renomeia) quebra o hardlink em silêncio e a volta roda
+código velho **sem avisar**. Mesma família do BO do §2.2 ("o código que rodava
+não era o do git").
+
+#### Resultado, contra o baseline
+
+| | baseline 08-28 | **latch 08-31** |
+|---|---|---|
+| goals | 5/5 | **5/5** |
+| tempo total | 236,4 s | **222,8 s** (−5,7%) |
+| **COLISÃO** | **2** | **0** |
+| **raspão** | **28** | **0** |
+| folga mínima | **−0,0000 m** (`cone_3`) | **+0,0741 m** (`A_fresta90_1`) |
+| blocos de `goal_turn` | 13 (13,8 s) | 6 (9,6 s) |
+| **`goal_turn`→`turning` no MESMO goal** | **7** | **0** |
+| recoveries do Nav2 | 5 | 2 |
+| unstuck (nosso) | nunca disparou | **2 disparos, 1,3 s** |
+
+**O defeito que o latch atacava morreu:** 7 → 0 saídas da chegada de volta pro
+carrot. E **zero contato** nesta volta, contra 2 colisões + 28 raspões — o
+`cone_3`, que concentrava os 30 eventos, passou limpo.
+
+⚠️ **Isso NÃO fecha A4, e não é taxa de sucesso.** É **uma** volta contra **uma**
+volta (n=1 de cada lado). Este repo já tem a lição registrada de medir taxa e não
+média/amostra única (2026-08-26, reverti uma correção certa por isso). A4 pede
+volta completa com zero evento — e pede **repetição**.
+
+⚠️ **Também não prova que o latch é a causa do zero contato.** A hipótese
+continua hipótese: o §2.9 já registra que o `cone_3` tinha DOIS suspeitos (samba e
+point-turn sem proteção) mais um co-suspeito (erro de pose). Tirei um; os outros
+dois seguem lá e podem simplesmente não ter se alinhado nesta volta.
+
+#### 🔴 ACHADO NOVO: com a samba morta, o robô PARA — e parar acorda o unstuck
+
+O goal 4 custou **61 s** (os outros: 41/34/46/41) com **10,8 s parado**. O CSV
+conta a história inteira, e ela **não** é o limiar de yaw:
+
+| t (s) | o que aconteceu |
+|---|---|
+| 157,0 | trava a chegada, gira 116° → 6,2° de erro de yaw |
+| 160,6 | `arrived`, publica zero — **e fica parado, correto** |
+| ~165,4 | **`unstuck` dispara** (`reason=timeout`, `stuck_s=5,06`, `ang=4,2`) e **gira o robô ~17°** |
+| 165,9 | erro de yaw estourou a tolerância → `goal_turn` **desfaz** o giro do unstuck |
+| 167,0 | `arrived` de novo. Para. |
+| ~173,3 | **`unstuck` dispara de novo** (`stuck_s=5,1`), mesma dança |
+| 174,1 | goal 4 enfim completa; entra o goal 5 |
+
+Confirmado com **verdade-terreno do Gazebo** (alinhamento por yaw, erro médio
+1,17°): entre 165,4 e 165,9 o yaw do Gazebo vai de **182,5° a 199,2°** com x,y
+parados — **o robô girou de verdade**, não foi salto de pose. E o `unstuck.csv`
+mostra `nav_wants=1` nos dois disparos: o Nav2 ainda queria movimento.
+
+**A causa raiz é outra, e é geométrica:** o follower travou a chegada com
+`dist_goal = 0,147`, girou pro yaw do goal, e o giro do skid o deixou em
+**0,166 m** — onde ele **para**. O `xy_goal_tolerance` do Nav2
+(`nav2_params_arena.yaml:151`) é **0,15**. O robô estaciona **fora da tolerância
+de quem julga a chegada**, a ação nunca completa, e 5 s parado é exatamente o
+gatilho do `unstuck`.
+
+Pior: pela verdade-terreno o robô estava a **27,7 cm** do goal (AMCL dizia 16,6) —
+o erro de pose da §2.8 aparecendo de novo, agora decidindo se um goal completa.
+
+**Antes o defeito existia igual, escondido:** a samba mantinha o robô se mexendo, e
+o vaivém acabava caindo dentro dos 15 cm. Matar a samba **expôs** isso — é
+regressão de sintoma no goal 4 (10,8 s parados), não regressão do latch.
+
+⏳ **Não corrigi.** As duas saídas óbvias (apertar o `goal_xy_tol` do follower pra
+**abaixo** do checker do Nav2, ou continuar aproximando enquanto o Nav2 ainda quer
+movimento) mudam comportamento de chegada e o dono decide. **Registrado, não
+implementado.**
+
+**Isto reforça o passo 4 e muda o alvo dele:** o contrato do unstuck não é só
+"não atrapalhar o point-turn" — é **não empurrar um robô que já chegou**. O
+`unstuck` não tem como saber que o follower está em `arrived`, porque
+[o supervisor não assina nenhum estado do `path_follower`](#) (§2.10, peça 2).
+O mesmo tópico de bloqueio resolve os dois casos.
+
 
 ## 3. Medições
 
@@ -891,7 +980,7 @@ do mapa.** Falta provar no sim.
 python3 tools/gera_arena_galpao.py --conferir      # invariantes da arena + rota
 python3 tools/mapa_passagens.py   --autoteste      # mapa sintético, vão 0,60
 python3 tools/sim_ab/colisao.py   --autoteste      # 7 casos de geometria
-python3 -m pytest ros2_packages/robot_nav/test/ -q # 393 testes
+python3 -m pytest ros2_packages/robot_nav/test/ -q # 397 testes (08-31: +4 do latch)
 ```
 
 ### 4.2 Regenerar mundo, mapa e rota (tudo da mesma tabela)
