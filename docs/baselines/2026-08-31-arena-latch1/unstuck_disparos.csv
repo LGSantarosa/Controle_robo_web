@@ -1,0 +1,8 @@
+t,state,reason,active,lin,ang,nav_wants,stuck_s,x,y
+14.445,monitoring,,0,0.0,0.0,0,,0.0,0.0
+174.3,turning,timeout,1,0.0,4.2,1,5.06,5.095,6.946
+174.6,grace,timeout,1,0.0,0.0,1,5.4,5.095,6.946
+176.5,monitoring,timeout,0,0.0,0.0,1,,5.095,6.946
+181.1,turning,timeout,1,0.0,4.2,1,5.1,5.095,6.946
+181.3,grace,timeout,1,0.0,0.0,1,5.34,5.095,6.946
+182.9,monitoring,timeout,0,0.0,0.0,1,,5.095,6.946

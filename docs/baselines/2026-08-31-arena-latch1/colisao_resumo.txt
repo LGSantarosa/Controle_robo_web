@@ -1,0 +1,18 @@
+volta arena_latch1 (2026-08-31, path_follower c/ latch da chegada)
+amostras: 4369
+eventos: NENHUM   <- baseline 08-28: 2 COLISAO + 28 raspao, todos no cone_3
+folga minima: 0.0741 m em A_fresta90_1 (t=46.13, pose 7.401,2.204 yaw -23.8)
+
+por objeto, a menor folga vista:
+  A_fresta90_1       0.0741 m
+  cone_4             0.0886 m
+  cone_3             0.0939 m
+  A_fresta90_2       0.1229 m
+  cone_2             0.1750 m
+  B_fresta70_1       0.1933 m
+  C_fresta60_1       0.2190 m
+  cone_1             0.2680 m
+  D_fresta80_2       0.4357 m
+  muro_sul           0.7052 m
+  muro_oeste         0.7500 m
+  D_fresta80_1       1.7333 m
