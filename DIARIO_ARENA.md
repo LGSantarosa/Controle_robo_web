@@ -1041,6 +1041,58 @@ que o status vira `PRESO` sem passar por esse mapa: então, na prática, **todo
 cosmética — "cancelado" se lê como *o harness desistiu*, "abortado" é *o robô
 falhou*. Corrigido.
 
+### 2B.6 Passo 2b — aproximação final (`4da6eb4`). ⏳ 3 voltas rodando
+
+Executa a decisão da §2B.4: **enquanto o Nav2 ainda quiser movimento, aproximar**.
+
+**Onde:** dentro do bloco do latch, **antes** do yaw. A ordem é o desenho:
+**posição primeiro, yaw depois**. Entrou fora do que o Nav2 aceita → volta a
+avançar pro **ponto do goal**, reto, **sem carrot** — o carrot é justamente quem
+brigava com o yaw do goal e produzia a samba.
+
+| knob | valor | por quê |
+|---|---|---|
+| `approach_enter` | 0,10 m | acima disso volta a aproximar |
+| `approach_exit` | 0,06 m | abaixo disso para. **Dois limiares diferentes de propósito**: foi um limiar pelado que criou a samba |
+| folga até o Nav2 | 0,15 − 0,06 = **9 cm** | cabe a deriva de ~2 cm do giro seguinte |
+
+**Goal pra trás:** avançar afastaria. Gira no lugar pra encarar o goal — este robô
+não faz arco (`arc_calib`), então é point-turn ou nada. ⚠️ Isso **soma giro perto
+do goal**, que é onde o canto varre; é mais um motivo pra guarda de point-turn
+(passo 5) e um item a olhar nos CSVs destas voltas.
+
+#### Os 5 testes, e o que quase passou vazio
+
+O que protege a correção é o **microsim de laço fechado**: aproxima, fecha o yaw
+(que **desloca** o robô, como o skid faz), e exige terminar em `arrived`
+**dentro dos 0,15 do Nav2**, sem nunca voltar pro carrot.
+
+⚠️ **A primeira versão dele passava sem a correção.** Eu modelei a deriva do
+point-turn empurrando o robô **em direção** ao goal; o medido é o contrário
+(0,147 → 0,166, **afastando**). Com o sinal certo ele falha com a mensagem
+exata — *"parou fora do checker do Nav2"*. **Teste que não falha não prova nada**,
+e este passou perto de ir pro repo como prova de coisa nenhuma (BO 56).
+
+Também errei a geometria de um teste (BO 22 de novo): afirmei `vx > 0` numa pose
+em que o goal está a **90° do nariz** — ali girar pra encarar é o certo, e o
+código estava certo. Trocado por uma pose com o goal à frente.
+
+**402 testes passam** (397 + 5).
+
+#### O que esta correção NÃO faz
+
+- **não** conserta o `unstuck` empurrando quem chegou (§6 item 2f): ela remove a
+  *causa* mais provável (ficar 5 s parado fora da tolerância), não o mecanismo. O
+  contrato do passo 4 continua de pé;
+- **não** protege o canto no giro (passo 5) — e ainda **acrescenta** giro perto do
+  goal no caso "goal pra trás";
+- **não** mexe no erro de pose do AMCL, que é quem faz o `dist_goal` do seguidor
+  discordar da verdade-terreno (16,6 contra 27,7 cm, §2B.4).
+
+⏳ **3 voltas rodando** (`aprox1..3`). O critério de aceite, escrito antes de
+medir: `goal_turn → turning` no mesmo goal continua **0**, o tempo parado por
+volta cai dos 10,8–19,1 s, e contato continua **0**.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -1238,6 +1290,7 @@ que na arena fica **em cima do muro sul**.
 | 53 | *"A perda do goal NÃO é do latch"* | Demonstrei o **mecanismo imediato** (planner recusou start/goal), não a **independência**: ninguém isolou se a pose onde o latch para o robô afeta o start do plano seguinte | Mecanismo observado ≠ causa isolada. Escrever "falha direta do X, em modo já observado antes de Y" |
 | 54 | O gerador de evidência **truncava o destino antes de validar a entrada** | Ele abria `colisao_3voltas.csv` em `'w'` e só falhava depois, dentro do `_ler()`. Num clone limpo, o comando que **o próprio README manda rodar** apagava a evidência boa pra descobrir que não podia gerar a nova; falha no meio deixava extratos pela metade. Eu tinha escrito no docstring que ele "falha sem inventar dado" — não inventava, **apagava**. Achado pelo revisor | Validar TUDO antes de abrir qualquer destino; gerar em temporário e trocar com `os.replace` só no fim. E: uma promessa no docstring que nenhum teste cobre é decoração |
 | 55 | O `finally` de limpeza **não pegava o temporário do gerador que falha** | O `tmps.append()` vinha **depois** do `fn(tmp, tags)`, então o arquivo que explodia no meio vazava na pasta. ⚠️ Quem pegou foi **o autoteste que eu tinha acabado de escrever** pro BO 54 — na primeira execução | Registro o acerto junto: o teste do BO anterior pegou o BO seguinte. É o argumento inteiro a favor de teste em vez de lição escrita |
+| 56 | O microsim da aproximação **passava sem a correção** | Modelei a deriva do point-turn empurrando o robô **em direção** ao goal; o medido é o contrário (0,147 → 0,166, afastando). Com o sinal errado o laço convergia sozinho e o teste aprovava o código quebrado. Percebi porque **estranhei 2 dos 5 testes novos passarem de primeira** | Teste novo que passa antes da correção é suspeito, não alívio: rodar a suíte ANTES de implementar e exigir a falha com a mensagem certa |
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
 
 ---
