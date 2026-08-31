@@ -292,6 +292,7 @@ class DecisiveFollower:
         self._arrival_latched = False  # travado na fase de chegada deste goal
         self._latch_goal = None        # (x,y) do goal em que a trava fechou
         self._approaching = False      # aproximação final em curso (histerese)
+        self._approach_aiming = False  # mirando o goal dentro da aproximação
         self.dbg = {}        # diagnóstico do último update (logado pelo nó)
 
     def _turn_cmd(self, herr: float) -> float:
@@ -315,6 +316,7 @@ class DecisiveFollower:
             self._arrival_latched = False
             self._latch_goal = None
             self._approaching = False
+            self._approach_aiming = False
             return Cmd(0.0, 0.0, 'idle')
 
         x, y, yaw = pose
@@ -338,9 +340,11 @@ class DecisiveFollower:
             if math.hypot(gx - lx, gy - ly) > c.goal_moved_tol:
                 self._arrival_latched = False   # goal novo
                 self._approaching = False
+                self._approach_aiming = False
             elif dist_goal > c.unlatch_dist:
                 self._arrival_latched = False   # empurraram o robô pra longe
                 self._approaching = False
+                self._approach_aiming = False
         if dist_goal <= c.goal_xy_tol:
             self._arrival_latched = True
             self._latch_goal = (gx, gy)
@@ -351,6 +355,7 @@ class DecisiveFollower:
             if self._approaching:
                 if dist_goal <= c.approach_exit:
                     self._approaching = False
+                    self._approach_aiming = False
             elif dist_goal > c.approach_enter:
                 self._approaching = True
             if self._approaching:
@@ -361,7 +366,16 @@ class DecisiveFollower:
                             'dist_goal': dist_goal}
                 # goal pra trás: avançar AFASTA. Gira no lugar pra encará-lo —
                 # este robô não faz arco (arc_calib), então é point-turn ou nada.
-                if abs(aerr) >= c.turn_enter:
+                # HISTERESE, igual ao resto do seguidor (turn_enter/turn_exit):
+                # a 1a versão usava só o `turn_enter` dos dois lados — limiar
+                # pelado, a MESMA doença que criou a samba, num código escrito
+                # pra curá-la. Achado no review de 08-31.
+                if self._approach_aiming:
+                    if abs(aerr) <= c.turn_exit:
+                        self._approach_aiming = False
+                elif abs(aerr) >= c.turn_enter:
+                    self._approach_aiming = True
+                if self._approach_aiming:
                     return Cmd(0.0, self._turn_cmd(aerr), 'goal_approach')
                 return Cmd(c.min_speed, 0.0, 'goal_approach')
             # 1b) só então o YAW do goal

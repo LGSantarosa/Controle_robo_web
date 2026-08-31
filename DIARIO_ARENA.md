@@ -754,7 +754,7 @@ implementada sobre uma planta mais estável.
 | # | passo | estado |
 |---|---|---|
 | 1 | teste que reproduz `goal_turn` ↔ `turning` | ✅ `c85a8d8` (§2B.3) |
-| 2 | implementar latch/histerese da chegada | ✅ `c85a8d8` — **samba 7 → 0, em 7 voltas** |
+| 2 | implementar latch/histerese da chegada | ✅ `c85a8d8` — **samba 8 → 0, em 7 voltas** |
 | 3 | repetir a volta e medir contato no `cone_3` | ✅ §2B.4 (1 volta) + §2B.5 (3 voltas) |
 | 2b | *(surgiu no caminho)* aproximação final — o robô parava fora da tolerância do Nav2 | 🟡 `4da6eb4` (§2B.6): goals completam a **3–9 cm** (era 11–15), mas com churn de mira. **Item 2e não fechado** |
 | 4 | fechar o contrato do bloqueio (aborto imediato do unstuck) | ⏳ — menos urgente: a interferência do unstuck caiu pra 0,0–3,0 s com a aproximação |
@@ -853,12 +853,20 @@ não era o do git").
 | **raspão** | **28** | **0** |
 | folga mínima | **−0,0000 m** (`cone_3`) | **+0,0741 m** (`A_fresta90_1`) |
 | blocos de `goal_turn` | 13 (13,8 s) | 6 (9,6 s) |
-| **`goal_turn`→`turning` no MESMO goal** | **7** | **0** |
+| **saídas da chegada pro carrot** (samba) | **8** | **0** |
 | recoveries do Nav2 | 5 | 2 |
 | unstuck (nosso) | nunca disparou | **2 disparos, 1,3 s** |
 
-**O defeito que o latch atacava morreu:** 7 → 0 saídas da chegada de volta pro
-carrot. E **zero contato** nesta volta, contra 2 colisões + 28 raspões — o
+**O defeito que o latch atacava morreu:** 8 → 0 saídas da chegada de volta pro
+carrot.
+
+⚠️ **Era "7 → 0" até 08-31 (review do dono).** O critério original só contava
+`goal_turn → turning`; quando a aproximação criou o `goal_approach` eu ampliei o
+`conta_samba()` pra `{goal_approach, goal_turn} → {turning, driving}` — e o
+baseline passou a somar **8**, porque tem uma saída `goal_turn → driving` a
+`dist_goal 0,15` (t=122,2 s, dentro da janela da samba) que a métrica estreita
+não via. **O número certo do baseline é 8**, e o diário ficou três commits
+dizendo 7 enquanto a ferramenta dizia 8. E **zero contato** nesta volta, contra 2 colisões + 28 raspões — o
 `cone_3`, que concentrava os 30 eventos, passou limpo.
 
 ⚠️ **Isso NÃO fecha A4, e não é taxa de sucesso.** É **uma** volta contra **uma**
@@ -891,12 +899,25 @@ Confirmado com **verdade-terreno do Gazebo** (alinhamento por yaw, erro médio
 parados — **o robô girou de verdade**, não foi salto de pose. E o `unstuck.csv`
 mostra `nav_wants=1` nos dois disparos: o Nav2 ainda queria movimento.
 
-**A causa raiz é outra, e é geométrica:** o follower travou a chegada com
-`dist_goal = 0,147`, girou pro yaw do goal, e o giro do skid o deixou em
-**0,166 m** — onde ele **para**. O `xy_goal_tolerance` do Nav2
-(`nav2_params_arena.yaml:151`) é **0,15**. O robô estaciona **fora da tolerância
-de quem julga a chegada**, a ação nunca completa, e 5 s parado é exatamente o
-gatilho do `unstuck`.
+**A geometria, medida:** o follower travou a chegada com `dist_goal = 0,147`,
+girou pro yaw do goal, e o giro do skid o deixou em **0,166 m** — onde ele
+**para**. O `xy_goal_tolerance` do Nav2 (`nav2_params_arena.yaml:151`) é **0,15**.
+
+🔴 **RETRATAÇÃO (review do dono, 08-31).** Eu escrevi aqui que *"o robô estaciona
+fora da tolerância de quem julga a chegada, **a ação nunca completa**"* — e isso
+**não está demonstrado**. O mesmo bloco do yaml tem **`stateful: true`**
+(linha 153): o `SimpleGoalChecker` do Nav2, uma vez satisfeito o XY, **para de
+reconferir XY** e passa a olhar só o yaw. Como o robô ENTROU a 0,147 (dentro dos
+0,15), o XY provavelmente já estava travado — então "parou a 0,166, logo o Nav2
+recusa" é **inferência minha, não medição**.
+
+**O que continua medido e de pé:** o robô ficou parado em `arrived`, o
+`unstuck.csv` mostra `nav_wants=1` (o Nav2 ainda queria movimento) e o resgate
+disparou por `timeout` aos ~5 s. **O que não sei é POR QUE o Nav2 ainda queria
+movimento.** Hipótese alternativa que o próprio log sugere: os
+`Failed to make progress` (3 no goal da samba) disparam recovery, e recovery
+**reseta** o goal checker — o que zeraria o latch do XY e voltaria a exigir os
+0,15. ⏳ Não investigado; item 2i.
 
 Pior: pela verdade-terreno o robô estava a **27,7 cm** do goal (AMCL dizia 16,6) —
 o erro de pose da §2.8 aparecendo de novo, agora decidindo se um goal completa.
@@ -963,7 +984,7 @@ Comando: `tools/sim_ab/run_n.sh robot_nav latchN 3`, mesmas env vars da §4.5.
 
 #### ✅ O que a repetição CONFIRMA
 
-- **Samba: 0 em 4 de 4 voltas** (baseline 7). O defeito que o latch atacava está
+- **Samba: 0 em 4 de 4 voltas** (baseline 8). O defeito que o latch atacava está
   morto, agora com taxa e não com amostra.
 - **Contato: 0 colisão e 0 raspão em 4 de 4** — contra 2 + 28 do baseline. A folga
   mínima ficou entre **6,2 e 10,1 cm**, sempre positiva.
@@ -1100,8 +1121,16 @@ código estava certo. Trocado por uma pose com o goal à frente.
 | **`aprox2`** | **328,6** | 5/5 | 0 | **4** | **0,0083** | 0 | 3,0 s | **56,6 s** |
 | **`aprox3`** | 254,3 | 5/5 | 0 | 0 | 0,0893 | 0 | 1,4 s | 15,4 s |
 
-**✅ A correção FAZ o que foi desenhada pra fazer.** A medida direta é a distância
-do goal no instante em que ele completa — que é o que o checker do Nav2 julga:
+**✅ A correção FAZ o que foi desenhada pra fazer.** A medida é a distância do goal
+no **último tick antes de o plano apontar pro goal seguinte**:
+
+⚠️ **Duas ressalvas do review, ambas procedentes.** (a) Isso **não é** a pose no
+instante exato da conclusão: a 20 Hz e 0,22 m/s cabem **~1,1 cm entre amostras**,
+então um valor de 0,156 pode ter cruzado os 0,15 entre ticks. (b) Com
+`stateful: true` **não é verdade em geral** que "a distância no fim é o que o
+checker julgou" — ele pode ter travado o XY bem antes. O que a tabela mede
+honestamente é **onde o robô estava quando o goal acabou**, que é o número que
+importa pro defeito, com resolução de ~1 cm:
 
 | | distâncias finais, por goal | pior |
 |---|---|---|
@@ -1115,7 +1144,9 @@ do goal no instante em que ele completa — que é o que o checker do Nav2 julga
 **Ele chega a 3–9 cm onde antes parava a 11–15.** E a interferência do `unstuck`
 caiu (0,0 / 3,0 / 1,4 s contra 1,3 a 6,2). ⚠️ Sobra um teimoso: **o goal 2 termina
 a 0,156–0,160 nas TRÊS voltas** — o único que a aproximação não puxa pra dentro,
-e sempre o mesmo. Não investigado.
+e sempre o mesmo. **Não é prova de que ele termina fora da tolerância** (ver as
+duas ressalvas acima: ~1 cm de resolução e o checker stateful). Não investigado;
+item 2h.
 
 **❌ Mas o item 2e não fechou, e um critério meu estava mal escolhido.**
 
@@ -1146,7 +1177,14 @@ t=117.00  raspao  cone_3  folga 0.0120 | state=turning  dist_goal=6.150  wz=-3.3
 
 `dist_goal = 6,15 m`: **longe de qualquer chegada**. É o carrot girando no meio do
 caminho e o **canto varrendo o `cone_3`** — o item 1 dos abertos, o mesmo
-mecanismo provado na §2.9. A aproximação não tem parte nisso.
+mecanismo provado na §2.9.
+
+⚠️ **Não escrever "a aproximação não tem parte nisso"** (a primeira versão
+escrevia; é o BO 53 outra vez). O demonstrado é o **mecanismo imediato**: o
+contato aconteceu **durante um point-turn de rota, modo de falha já observado
+antes da aproximação existir**. O que **não** foi isolado é se a aproximação do
+goal anterior mudou pose ou rumo de um jeito que tornou aquele giro mais
+provável.
 
 ⚠️ **E isso derruba a leitura otimista do "zero contato em 4/4"**: com 3 voltas a
 mais, apareceu 1 volta com contato. **7 voltas com latch: 6 limpas, 1 com 4
@@ -1363,6 +1401,10 @@ que na arena fica **em cima do muro sul**.
 | 56 | O microsim da aproximação **passava sem a correção** | Modelei a deriva do point-turn empurrando o robô **em direção** ao goal; o medido é o contrário (0,147 → 0,166, afastando). Com o sinal errado o laço convergia sozinho e o teste aprovava o código quebrado. Percebi porque **estranhei 2 dos 5 testes novos passarem de primeira** | Teste novo que passa antes da correção é suspeito, não alívio: rodar a suíte ANTES de implementar e exigir a falha com a mensagem certa |
 | 57 | Escrevi o critério de aceite **cego pro estado que eu tinha acabado de criar** | O aceite era "`goal_turn → turning` continua 0", e o `goal_approach` nasceu no mesmo commit: samba pela porta nova passaria batido. Não houve nenhuma, mas a métrica **estava cega** | Criou estado novo, revise as métricas que classificam estado — no mesmo commit |
 | 58 | Usei **"tempo parado"** pra julgar uma correção que ADICIONA giro | O `parado` do probe é deslocamento nulo, e point-turn conta como parado. A `aprox2` marcou 56,6 s "parada" com só 7,4 s de robô genuinamente imóvel; o resto era churn de mira | Escolher a métrica pelo mecanismo que ela precisa distinguir. A boa aqui era a **distância final no goal**, que mede o defeito direto |
+| 59 | **Limiar pelado dentro do código escrito pra curar limiar pelado** | Na aproximação, o giro de mira usava `turn_enter` dos **dois** lados: ≥16° gira, <16° avança. Chattering possível em torno de 16°, e **o microsim não pegava porque começa apontado pro goal**. Achado no review | Ao criar uma decisão liga/desliga, perguntar qual é o **par** de limiares. E teste de laço fechado tem que começar na condição RUIM, não na boa |
+| 60 | Afirmei que **"a ação nunca completa"** por causa dos 0,15 | O `goal_checker` é **`stateful: true`**: satisfeito o XY uma vez, ele só reconfere yaw — e o robô ENTROU dentro dos 0,15. A cadeia causal do item 2e era **inferência minha**, não medição. O que está medido é robô parado + `nav_wants=1` + unstuck por timeout | Ler os parâmetros do componente que eu estou acusando **antes** de escrever a cadeia causal. `stateful` estava a 2 linhas do `xy_goal_tolerance` que eu citei |
+| 61 | Tratei **"último tick antes da troca de goal"** como "pose no instante da conclusão" | A 20 Hz e 0,22 m/s há **~1,1 cm entre amostras**; os 0,156 do goal 2 podem ter cruzado 0,15 entre ticks. O 2h não está provado | Declarar a **resolução** da medida junto com o número, sempre que ela for da ordem do efeito |
+| 62 | Deixei o diário dizendo **7** enquanto minha própria ferramenta dizia **8** | Ampliei o `conta_samba()` pra cobrir `goal_approach` e `driving`, o baseline passou a somar 8 (tem uma saída `goal_turn → driving` a 0,15 que a métrica estreita não via) — e não varri o texto. Ficou 3 commits assim | Mudou o critério de uma métrica: **regerar e reconciliar todo número já publicado com ela**, no mesmo commit |
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
 
 ---
@@ -1373,13 +1415,14 @@ que na arena fica **em cima do muro sul**.
 |---|---|---|
 | 1 | **Proteção de point-turn** (anel 0,25–0,36 m no `path_follower`) | 🔴🔴 **bloqueador de A4, agora MEDIDO como o que falta**: a `aprox2` raspou o `cone_3` 4× com o seguidor em `turning` a **6,15 m do goal** (§2B.6). 7 voltas com latch: 6 limpas, 1 com contato — a causa nunca foi corrigida, só não tinha se alinhado. **Desenho fechado** (§2.10), zero código. **Não é** no collision monitor: lá a única alavanca é escalar o `wz`, que trava o robô (deadlock já reproduzido) |
 | 2 | Baseline Nav2 até os standoffs | ✅ **FEITO 08-28** — 5/5 goals, 236,4 s, 2 colisões + 28 raspões no cone (§2.8). Evidência em `docs/baselines/2026-08-28-arena-baseline1/` |
-| 2b | Travar a chegada (mata a samba — defeito provado) | ✅ **FEITO 08-31** (`c85a8d8`) — saídas da chegada pro carrot **7 → 0**; volta em `docs/baselines/2026-08-31-arena-latch1/` (§2B.4) |
+| 2b | Travar a chegada (mata a samba — defeito provado) | ✅ **FEITO 08-31** (`c85a8d8`) — saídas da chegada pro carrot **8 → 0**; volta em `docs/baselines/2026-08-31-arena-latch1/` (§2B.4) |
 | 2e | 🟡 **O robô ESTACIONA fora do `xy_goal_tolerance` do Nav2** | **ATACADO 08-31, não fechado** (`4da6eb4`, §2B.6). Era sistemático em 4/4 voltas (§2B.5). Com a aproximação final os goals completam a **3–9 cm** (era 11–15) e o `unstuck` caiu pra 0,0–3,0 s — mas sobra **churn de mira** (a `aprox2` gastou ~54 s girando perto dos goals) e **o goal 2 continua terminando a 0,16 nas 3 voltas** (item 2h) |
 | 2f | **`unstuck` empurra robô que JÁ CHEGOU** | ⏳ **novo 08-31, menos urgente depois de `4da6eb4`**: os disparos caíram de 1,3–6,2 s para **0,0 / 3,0 / 1,4 s** — a aproximação removeu a *causa* mais comum (ficar 5 s parado fora da tolerância), **não o mecanismo**. O supervisor segue sem assinar estado nenhum do `path_follower`, então continua sem distinguir "encalhado" de "chegou e parou". Passo 4 |
 | 2c | 🔴🔴 **AMCL erra 24 cm na arena** (mediana 9, p90 16, max 27) | ⏳ **novo, 08-28.** Maior que a tolerância de A2 (20 cm) e muito maior que os ±3 cm da fresta de 0,60. Suspeita: arena pobre em feature + os 4 cones não estão no mapa |
 | 2d | Bug `start/goal is an obstacle` **reproduzido nesta arena** | ⏳ disparou dentro da fresta A (0,90 m), indo pro goal 2 |
 | 2g | **16 s em `idle`** entre dois goals (`aprox3`) | ⏳ **novo, 08-31.** Sem goal ativo — não é o seguidor. Buraco entre a conclusão de um goal e o próximo ser aceito; não investigado |
 | 2h | **Goal 2 termina a 0,156–0,160 nas 3 voltas com aproximação** | ⏳ **novo, 08-31.** É o único goal que a aproximação não puxa pra dentro, e é sempre o mesmo. Suspeita não verificada: algo bloqueia o avanço ali (é o goal cujo caminho passa pela fresta A) |
+| 2i | **Por que o Nav2 ainda queria movimento com o robô já chegado?** | ⏳ **novo, 08-31.** A explicação que eu tinha dado (parou fora dos 0,15) **caiu**: o checker é `stateful` e o robô entrou dentro. Hipótese do próprio log: `Failed to make progress` → recovery → **reset do goal checker** → o XY volta a ser exigido. Medir antes de afirmar |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |

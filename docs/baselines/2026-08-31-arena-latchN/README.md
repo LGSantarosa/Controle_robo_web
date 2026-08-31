@@ -43,7 +43,7 @@ código** da volta `arena_latch1` (commit `c85a8d8`) — nenhuma mudança entre 
 
 ## O que estas 3 voltas mudaram na conclusão
 
-**Confirmam** (agora com taxa, não amostra): samba **0 em 4/4** (baseline 7) e
+**Confirmam** (agora com taxa, não amostra): samba **0 em 4/4** (baseline 8) e
 contato **0 em 4/4** (baseline 2 colisões + 28 raspões), folga mínima sempre
 positiva (6,2 a 10,1 cm).
 

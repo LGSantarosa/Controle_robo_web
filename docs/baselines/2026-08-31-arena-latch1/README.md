@@ -12,7 +12,7 @@ Aqui ficam **só os arquivos pequenos**; os CSVs completos ficam em
 | `result.json` | 5/5 goals, 222,8 s, tempo por goal (goal 4 = 61 s, 10,8 s parado) |
 | `probe_volta.txt` | a volta como o `ab_probe` a viu, goal a goal. **Era `probe.log` e não entrava no git** — `*.log` no `.gitignore:11`, exatamente o BO #31 da §5, repetido |
 | `colisao_resumo.txt` | **zero evento** e a menor folga por objeto (mín. 7,4 cm na fresta A) |
-| `transicoes_goal_turn.csv` | **as DUAS voltas lado a lado**: toda troca de/para `goal_turn`. É a prova do 7 → 0 |
+| `transicoes_goal_turn.csv` | **as DUAS voltas lado a lado**: toda troca de/para `goal_turn`. É a prova do 8 → 0 |
 | `goal4_parou_fora_da_tolerancia.csv` | a janela 155–176 s com AMCL **e verdade-terreno do Gazebo** na mesma linha |
 | `unstuck_disparos.csv` | os 2 disparos (`reason=timeout`, `stuck_s≈5,1`, `nav_wants=1`) |
 

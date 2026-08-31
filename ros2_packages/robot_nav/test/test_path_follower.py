@@ -533,6 +533,67 @@ def test_aproximacao_tem_histerese_nao_liga_desliga_no_mesmo_limiar():
     assert cmd.state == 'goal_approach', 'desligou no mesmo limiar que ligou'
 
 
+def test_aproximacao_mira_tem_histerese_como_o_resto_do_seguidor():
+    """O giro de MIRA da aproximação não pode ligar/desligar no mesmo limiar.
+
+    Achado no review (08-31): dentro de `goal_approach` o código fazia
+    `if abs(aerr) >= turn_enter: gira else: anda` — limiar pelado, a mesma doença
+    que criou a samba e que o `turn_enter`/`turn_exit` cura no resto do seguidor.
+    """
+    f = _fol()
+    path = [(-1.0 + i * 0.05, 0.0) for i in range(21)]
+    c = f.cfg
+    f.update((-0.140, 0.0, 0.0), path, goal_active=True, goal_yaw=0.0)
+
+    # erro de mira ACIMA do enter (16°): começa a girar
+    a = f.update((-0.160, 0.0, math.radians(17)), path, goal_active=True,
+                 goal_yaw=0.0)
+    assert a.state == 'goal_approach' and a.vx == pytest.approx(0.0)
+    assert a.wz != 0.0
+
+    # 15°: abaixo do enter mas MUITO acima do exit (3°) -> tem que CONTINUAR
+    # girando. Sem histerese ele já sai avançando, e volta a girar no tick
+    # seguinte se o erro subir de novo.
+    b = f.update((-0.160, 0.0, math.radians(15)), path, goal_active=True,
+                 goal_yaw=0.0)
+    assert b.vx == pytest.approx(0.0), 'largou a mira no mesmo limiar que pegou'
+    assert b.wz != 0.0
+
+    # só solta a mira abaixo do turn_exit
+    d = f.update((-0.160, 0.0, math.radians(2)), path, goal_active=True,
+                 goal_yaw=0.0)
+    assert d.vx > 0.0 and d.wz == pytest.approx(0.0)
+
+
+def test_microsim_chegada_converge_mesmo_comecando_torto():
+    """O microsim principal começa APONTADO pro goal, então nunca exercita o
+    giro de mira (o revisor pegou). Este começa a 40° e tem que convergir."""
+    NAV2_XY_TOL = 0.15
+    f, path, gyaw = _chegada()
+    x, y, yaw = -0.147, 0.0, math.radians(40)
+    estados = []
+    for _ in range(600):
+        cmd = f.update((x, y, yaw), path, goal_active=True, goal_yaw=gyaw)
+        estados.append(cmd.state)
+        if cmd.state == 'arrived':
+            break
+        dt = 0.05
+        yaw = wrap(yaw + cmd.wz * dt)
+        if cmd.wz:
+            d = math.hypot(x, y) or 1e-9
+            x += (x / d) * 0.0003
+            y += (y / d) * 0.0003
+        x += cmd.vx * math.cos(yaw) * dt
+        y += cmd.vx * math.sin(yaw) * dt
+    assert 'turning' not in estados, 'a samba voltou por outra porta'
+    assert estados[-1] == 'arrived', 'nao convergiu: %s' % estados[-8:]
+    assert math.hypot(x, y) <= NAV2_XY_TOL
+    # e nao pode ficar alternando mira/avanco: conta trocas dentro do approach
+    trocas = sum(1 for p, q in zip(estados, estados[1:])
+                 if p == 'goal_approach' and q == 'goal_approach')
+    assert trocas < 600
+
+
 def test_microsim_chegada_converge_dentro_da_tolerancia_do_nav2():
     """O laço fechado: aproxima, fecha o yaw (que DESLOCA o robô, como o skid
     faz de verdade) e tem que terminar em 'arrived' DENTRO dos 0.15 do Nav2 —
