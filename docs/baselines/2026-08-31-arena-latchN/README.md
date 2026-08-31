@@ -18,6 +18,18 @@ código** da volta `arena_latch1` (commit `c85a8d8`) — nenhuma mudança entre 
 > desta pasta arquivava só o **resumo derivado**, então as conclusões centrais
 > (zero contato, samba zero) não eram auditáveis a partir do repo — os CSVs
 > brutos vivem em `log/sim_ab/`, que é `gitignore`d.
+>
+> **Como foram derivados** (segunda rodada do review: extrato sem script é
+> número que ninguém refaz):
+>
+> ```
+> python3 tools/sim_ab/extrai_evidencia.py \
+>     docs/baselines/2026-08-31-arena-latchN latchN1 latchN2 latchN3
+> ```
+>
+> O script é versionado, tem autoteste do critério da samba, e **falha** se os
+> CSVs brutos não estiverem em `log/sim_ab/` — ele não inventa dado. Rodá-lo por
+> cima desta pasta reproduz os três arquivos byte a byte.
 
 ## O que estas 3 voltas mudaram na conclusão
 

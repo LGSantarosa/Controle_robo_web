@@ -92,10 +92,17 @@ def confere(pasta, trk, problemas):
                 problemas.append('%s: espaco no fim de linha' % rel)
 
 
-def _e2e(tmp, problemas_esperados):
-    """Roda o `confere()` de verdade contra uma pasta montada na hora."""
+def _e2e(tmp, problemas_esperados, trk=None):
+    """Roda o `confere()` de verdade contra uma pasta montada na hora.
+
+    `trk` permite injetar um conjunto de rastreados FALSO. Sem isso o caso feliz
+    não é feliz: um arquivo temporário nunca está no git, e a primeira versão
+    deste teste filtrava justamente esse erro pra fingir que passava — o revisor
+    pegou. Filtrar o erro que o teste deveria provar ausente é teste decorativo.
+    """
     achados = []
-    confere(os.path.relpath(tmp, RAIZ), rastreados(), achados)
+    confere(os.path.relpath(tmp, RAIZ),
+            rastreados() if trk is None else trk, achados)
     faltou = [e for e in problemas_esperados
               if not any(e in a for a in achados)]
     return achados, faltou
@@ -148,18 +155,19 @@ def autoteste_confere():
             ruim += not ok
             print('%s e2e: %-52s %s' % ('ok  ' if ok else 'FALHA', nome,
                                         '' if ok else 'NAO pegou: %s' % faltou))
-        # e o caso feliz: pasta correta NAO pode gerar problema
+        # o caso feliz, agora PURO: pasta correta com os arquivos declarados
+        # rastreados -> ZERO achado, sem filtrar nada.
         d = tempfile.mkdtemp(dir=base)
         open(os.path.join(d, 'README.md'), 'w').write(
             '| arquivo | x |\n|---|---|\n| `ok.csv` | y |\n')
         open(os.path.join(d, 'ok.csv'), 'w').write('a,b\n1,2\n')
-        achados, _ = _e2e(d, [])
-        # 'ok.csv' nao esta no git (e' temporario), entao so' esse achado e' esperado
-        sobrou = [a for a in achados if 'NAO ESTA NO GIT' not in a]
-        ruim += bool(sobrou)
-        print('%s e2e: %-52s %s' % ('ok  ' if not sobrou else 'FALHA',
-                                    'pasta correta nao gera falso positivo',
-                                    '' if not sobrou else sobrou))
+        rel = os.path.relpath(d, RAIZ)
+        trk_falso = {os.path.join(rel, 'README.md'), os.path.join(rel, 'ok.csv')}
+        achados, _ = _e2e(d, [], trk=trk_falso)
+        ruim += bool(achados)
+        print('%s e2e: %-52s %s' % ('ok  ' if not achados else 'FALHA',
+                                    'pasta correta: ZERO achado (trk injetado)',
+                                    '' if not achados else achados))
     finally:
         shutil.rmtree(base, ignore_errors=True)
     return ruim
