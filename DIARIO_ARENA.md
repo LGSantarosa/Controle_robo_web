@@ -923,6 +923,23 @@ processo **já contaminou uma medição inteira** (2026-08-27).
 movimento) mudam comportamento de chegada e o dono decide. **Registrado, não
 implementado.**
 
+#### ✅ Decisões do dono (2026-08-31), sobre as duas perguntas em aberto
+
+| pergunta | decisão |
+|---|---|
+| como consertar a chegada | **seguir aproximando**: enquanto o Nav2 ainda quiser movimento, o follower volta a avançar em direção ao **ponto do goal** (reto, sem carrot) e refecha o yaw. Descartado apertar o `goal_xy_tol` — é margem fixa contra uma deriva medida **uma** vez (0,02 m) |
+| medir antes de seguir | **3 voltas agora**, com o latch **sozinho**, antes de mexer na chegada |
+
+A ordem importa: as 3 voltas medem **o latch**, não o latch+chegada. Se eu
+consertasse a chegada antes, nunca saberia o que o latch valia sozinho — e este
+repo já registra (08-26) uma correção certa revertida por medir amostra única.
+
+⚠️ Nota sobre a solução escolhida: ela reintroduz movimento perto do goal, que é
+de onde veio a samba. **Não é a mesma coisa** — a samba era carrot × yaw-do-goal
+brigando; aqui o avanço é dirigido **ao goal**. Mas é exatamente o tipo de coisa
+que o `transicoes_goal_turn.csv` tem que reprovar depois: a checagem do conserto é
+"saídas da chegada pro carrot continuam **0**".
+
 **Isto reforça o passo 4 e muda o alvo dele:** o contrato do unstuck não é só
 "não atrapalhar o point-turn" — é **não empurrar um robô que já chegou**. O
 `unstuck` não tem como saber que o follower está em `arrived`, porque
