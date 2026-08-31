@@ -904,6 +904,20 @@ o erro de pose da §2.8 aparecendo de novo, agora decidindo se um goal completa.
 o vaivém acabava caindo dentro dos 15 cm. Matar a samba **expôs** isso — é
 regressão de sintoma no goal 4 (10,8 s parados), não regressão do latch.
 
+#### 🧹 Furo de higiene no harness (achado pelo revisor, corrigido)
+
+O `colisao.py` abre o subscriber de pose do Gazebo como **processo filho**. O
+`kill_all.sh` mata o `colisao.py` com `kill -9` — o que **não** mata o filho — e o
+padrão dele não casava com o binário real
+(`.../gz_transport_vendor/libexec/gz/transport13/gz-transport-topic`): tinha
+`gz sim` e `ruby.*gz`, nenhum dos dois pega. Resultado: o subscriber ficou
+**17 min** vivo depois da volta, assinando a pose de um mundo que não existe mais.
+
+Corrigido no padrão do `kill_all.sh` (`gz-transport-topic|gz topic`), com a
+verificação de que o padrão **antigo não pegava** e o novo pega. Isso importa
+além da limpeza: o comentário do próprio `kill_all.sh` registra que sobra de
+processo **já contaminou uma medição inteira** (2026-08-27).
+
 ⏳ **Não corrigi.** As duas saídas óbvias (apertar o `goal_xy_tol` do follower pra
 **abaixo** do checker do Nav2, ou continuar aproximando enquanto o Nav2 ainda quer
 movimento) mudam comportamento de chegada e o dono decide. **Registrado, não
@@ -1100,6 +1114,7 @@ que na arena fica **em cima do muro sul**.
 | 25 | Reportei **"2 contatos"** olhando só o resumo do `colisao.log` | O CSV tinha **30 eventos**: 2 colisões + **28 raspões**. O resumo imprime só as colisões | Ler o CSV, não o resumo — foi a lição do "média esconde bimodal" outra vez |
 | 24 | **Rodei a volta e não anotei** | O dono teve que perguntar "anotou isso tudo?". Pior: os CSVs de `controle_web/logs/` são sobrescritos a cada launch — quase perdi o `follow_debug` que sustenta o diagnóstico | Arquivar CSV e escrever o diário fazem parte da run, não são pós-jogo |
 | 45 | **REINCIDÊNCIA do #31**: o README da evidência de 08-31 listava `probe.log`, que o `.gitignore:11` (`*.log`) mantém **fora do git** | Achado pelo revisor, não por mim. Os outros 6 arquivos estavam certos; esse existia só no meu checkout e sumiria num clone limpo — o revisor leria a linha e não acharia o arquivo. Virou `probe_volta.txt` | O #31 já tinha a lição escrita (**"conferir `git ls-files` do que se declara versionado"**) e eu li a seção inteira sem aplicá-la. Lição que não vira **passo executado** não protege nada: conferir `git ls-files` **do diretório** é parte de arquivar evidência, não uma boa intenção |
+| 46 | Declarei **"sim parado, nada órfão"** com um `ps` que não cobria o que sobrou | Grepei `gz sim`, mas o subscriber de pose do `colisao.py` é um **processo filho** cujo binário é `.../transport13/gz-transport-topic`. Sobreviveu ao `kill -9` do pai e ficou **17 min** assinando a pose de um mundo morto. Achado pelo revisor. O `kill_all.sh` tinha o mesmo furo no padrão | Higiene de sim se confere com `ps` **amplo** (`grep -i gz`), não com a lista do que eu **espero** que esteja rodando. E `kill -9` no pai não mata o filho |
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
 
 ---
