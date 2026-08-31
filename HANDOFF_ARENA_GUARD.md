@@ -63,6 +63,17 @@ publisher na entrada** e a autonomia inteira emudece. São duas metades:
 
 **Default é `true`.** Fora da arena nada muda: o robô de sempre segue com guard.
 
+### 🔴 Leia isto antes de rodar no robô FÍSICO
+
+`--arena` **também vale no real**. Tudo que mediu esta decisão foi **sim**, e a
+ausência de `<actor>` prova só que o **mundo simulado** não tem gente.
+`./launch.sh --nav2 --arena` **sem** `--sim` sobe o robô físico **sem o vigia de
+pessoa**. Só é aceitável com **pista controlada, gente fora da área e E-STOP
+humano na mão**. O `collision_monitor` continua ligado, mas é reflexo
+**geométrico** de obstáculo — não substitui vigia de coisa que se **move**. O
+`launch.sh` avisa na tela nesse caso. Pra ligar de volta: rode sem `--arena`, ou
+passe `motion_guard:=true`.
+
 Verificação feita: injetei o defeito (mux fixo em `auto_vel_pre`) e **falhou
 exatamente `test_sem_guard_o_mux_publica_direto_no_raw`, e mais nenhum**. Suíte
 do `robot_nav`: **410 passando**.
@@ -78,8 +89,10 @@ do `robot_nav`: **410 passando**.
 | **`noguard2`** | **221,0** | 5/5 | 0 | 0 | **0,0** |
 | `noguard3` | 245,4 | 5/5 | **9** | **48** | 3,6 |
 
-**✅** `parado` = **0,0 s em 14 dos 15 goals**. `noguard2` é a volta mais rápida
-das 14, `noguard1` a segunda. A assinatura de ~27 s sumiu.
+**✅** `parado` = **0,0 s em 14 dos 15 goals**. `noguard2` é a volta **completa**
+mais rápida das 14, `noguard1` a segunda. A assinatura de ~27 s sumiu.
+⚠️ A `latchN1` marcou 219,8 s, mais rápido no relógio, mas fez **4/5 goals** —
+volta incompleta não compete por tempo.
 
 **🔴 A `noguard3` bateu:** 9 COLISÃO + 48 raspões, folga **0,0000**
 (penetração), 58 eventos entre t=60,7 e 63,6 — todos na **`A_fresta90_2`**. Pior
@@ -106,12 +119,16 @@ Evidência: `docs/baselines/2026-08-31-arena-sem-guard/`.
 
 ## 5. O que fazer a seguir (minha ordem)
 
-1. **Mais 3 voltas sem guard** (~13 min, comando na §6). É a única forma de saber
-   se a batida da fresta é **taxa** ou **azar**. Prazo 05/09 com meta "MUITO
-   preciso": uma colisão custa mais que 25 s.
-2. **Item 2k — a fresta sem correção de rumo.** A rota atravessa um vão de 90 cm
-   com 4–21 cm de folga e **nada alinha o robô antes de entrar**. Um dia o rumo
-   ia estar 15° fora; foi na `noguard3`.
+1. **Corrigir a entrada torta na fresta A (item 2k) ANTES de repetir as voltas.**
+   ⚠️ Esta ordem mudou no review, e o revisor tem razão: uma configuração que já
+   produziu 9 COLISÃO + 48 raspões **falhou** o critério de zero contato, e mais
+   voltas só estimam recorrência — não consertam nem validam nada. Rodar as
+   voltas **depois** da correção, como verificação dela.
+2. **Aí sim mais 3 voltas** (~13 min, comando na §6), pra ver se a fresta ainda
+   cobra. Prazo 05/09 com meta "MUITO preciso": uma colisão custa mais que 25 s.
+   Contexto do 2k: a rota atravessa um vão de 90 cm com 4–21 cm de folga e **nada
+   alinha o robô antes de entrar**. Um dia o rumo ia estar 15° fora; foi na
+   `noguard3`.
 3. **Item 2g** — 16 s em `idle` entre dois goals (`aprox3`), sem goal ativo. Não
    é o seguidor. Não investigado.
 4. Os travamentos de **11–17 s sem guard nenhum** (`hist2` 2×, `aprox3`,
@@ -159,7 +176,18 @@ em `docs/baselines/` sobrevive ao clone.
 
 ---
 
-## 7. Erro meu que vale registrar (BO 65 do diário)
+## 6.1 Depois de gerar evidência
+
+```bash
+python3 tools/confere_evidencia.py     # sai 0 se está tudo certo
+```
+
+Ele existe porque a evidência arquivada já quebrou 3× do mesmo jeito (BOs 31,
+45, 50) — e eu **não o rodei** nas duas pastas que criei hoje (BO 67).
+
+---
+
+## 7. Erros meus que valem registrar (BOs 65, 66, 67, 68 do diário)
 
 Atribuí as paradas longas ao churn da mira **sem ler o pipeline**. A histerese
 cortou o churn 3–5× e o tempo parado não caiu. A causa era um nó que eu nunca
@@ -169,3 +197,18 @@ itens abertos** (item 7: os números de 08-27 vieram do fork *sem* `motion_guard
 **Lição:** quando o robô não se move, ler o **pipeline inteiro** — o
 `freeze_capture.csv` tem todos os estágios — antes de acusar o nó que acabei de
 mexer.
+
+**BOs 66, 67 e 68 vieram do review deste trabalho, não meus:**
+
+- **66 — asserção VAZIA outra vez.** `test_collision_monitor_le_sempre_o_raw`
+  achava o nó e só reafirmava que a saída do mux era um dos dois valores
+  possíveis: nunca olhava o collision. Passava com o pipeline quebrado. É o BO 63
+  na íntegra, dois commits depois, **no mesmo arquivo** em que eu tinha acabado
+  de provar outro teste sensível injetando defeito. Provar sensível é **teste a
+  teste**, não uma vez por arquivo.
+- **67 — não rodei `tools/confere_evidencia.py`,** a ferramenta escrita
+  exatamente pra essa falha (BOs 31/45/50). Ela achou em 0,2 s um CSV arquivado e
+  não citado no README novo.
+- **68 — "volta mais rápida das 14" comparando só o relógio.** A `latchN1` fez
+  219,8 s com **4/5 goals**. Tempo só compara entre voltas com o mesmo número de
+  goals cumpridos.

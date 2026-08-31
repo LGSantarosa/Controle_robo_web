@@ -1332,7 +1332,15 @@ metades, e as duas moram no `nav2.launch.py`:
 | `auto_mux_out` | o `twist_mux_auto` publica **direto** em `auto_vel_raw` |
 
 Default é `true` — fora da arena **nada muda**, o guard segue ligado no robô de
-sempre. Quem desliga é o `--arena` do `launch.sh` (junto do
+sempre.
+
+🔴 **Mas `--arena` também vale no ROBÔ REAL** (achado do review): tudo o que
+mediu isto foi **sim**, e a ausência de `<actor>` prova só que o **mundo
+simulado** não tem gente. `./launch.sh --nav2 --arena` **sem** `--sim` sobe o
+robô físico **sem o vigia de pessoa**. Só é aceitável com **pista controlada,
+gente fora da área e E-STOP humano na mão**. O `collision_monitor` segue ligado,
+mas ele é reflexo **geométrico** de obstáculo — não substitui vigia de coisa que
+se **move**. O `launch.sh` agora **avisa na tela** quando é real + arena. Quem desliga é o `--arena` do `launch.sh` (junto do
 `follow_clear_full:=1.2`, mesmo padrão), e o harness do sim pelo
 `AB_EXTRA_LAUNCH` (a §4.5 abaixo já traz o comando atualizado).
 
@@ -1369,7 +1377,10 @@ Comando da §4.5 com `motion_guard:=false`. Conferido em 3/3:
 | **`noguard3`** | 245,4 | 5/5 | **9** | **48** | **0,0000** | 0 | 1,5 | 3,6 |
 
 **✅ O que melhorou:** `parado` = **0,0 s em 14 dos 15 goals**. A `noguard2`
-(221,0 s) é a **volta mais rápida das 14**, e a `noguard1` a segunda. Nenhuma
+(221,0 s) é a **volta COMPLETA mais rápida das 14**, e a `noguard1` a segunda.
+⚠️ A `latchN1` marcou 219,8 s — mais rápido em relógio, mas com **4/5 goals**
+(achado do review): tempo de volta incompleta não compete com tempo de volta
+inteira. Nenhuma
 parada longa em nenhuma das três — a assinatura de ~27 s sumiu, como esperado.
 
 **🔴 O que piorou: a `noguard3` bateu.** 9 COLISÃO + 48 raspões, folga
@@ -1525,6 +1536,14 @@ AB_EXTRA_LAUNCH="follow_clear_full:=1.2 follow_clear_min:=0.35 motion_guard:=fal
 `AB_SX/AB_SY` = a **largada** (1.0, 1.0). O default do harness é (2.0, **0.0**),
 que na arena fica **em cima do muro sul**.
 
+**Gerou pasta em `docs/baselines/`? Roda o conferidor ANTES do commit** (BO 67 —
+eu não rodei, e ele acha em 0,2 s o arquivo arquivado que o README esqueceu de
+citar):
+
+```bash
+python3 tools/confere_evidencia.py     # sai 0 se está tudo certo
+```
+
 ⚠️ **`motion_guard:=false` é obrigatório aqui, e é fácil de esquecer.** Este
 harness **não passa pelo `--arena`** do `launch.sh` — ele monta os argumentos do
 launch na mão. O `--arena` desliga o guard sozinho; o `AB_EXTRA_LAUNCH`, não. Um
@@ -1616,6 +1635,9 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 62 | Deixei o diário dizendo **7** enquanto minha própria ferramenta dizia **8** | Ampliei o `conta_samba()` pra cobrir `goal_approach` e `driving`, o baseline passou a somar 8 (tem uma saída `goal_turn → driving` a 0,15 que a métrica estreita não via) — e não varri o texto. Ficou 3 commits assim | Mudou o critério de uma métrica: **regerar e reconciliar todo número já publicado com ela**, no mesmo commit |
 | 63 | Asserção **VAZIA** no microsim novo — no teste escrito pra responder o review anterior | `trocas = sum(... if p == q == 'goal_approach')` comparado com `< 600`, num laço de no máximo 599 pares: **não podia falhar**. E contava pares de estados IGUAIS, não alternâncias; o nome do estado nem distingue mirar de avançar — quem distingue é o `vx`. É o BO 56 outra vez, dois commits depois | Toda asserção numérica nova tem que ser **provada sensível**: agora há um teste que roda o microsim com `turn_exit == turn_enter` (o defeito) e exige alternância MAIOR — 1 com histerese, 5 sem |
 | 64 | Anunciei retratações e **não as propaguei** | Retratei no corpo da §2B.6 e deixei: o título absoluto *"NÃO são da aproximação"*, o README repetindo as duas conclusões retiradas, a coluna `dentro_do_checker_0.15` afirmando o julgamento do checker, e os itens 2e/2f/2h repetindo a causalidade caída | Retratação não é parágrafo, é **varredura**: título, README, nome de coluna, itens abertos. O mesmo erro do BO 48, agora com retratação em vez de fato |
+| 68 | Chamei a `noguard2` de "**volta mais rápida das 14**" comparando só o relógio | A `latchN1` fez **219,8 s**, mais rápido — com **4/5 goals**. Comparei tempo de volta incompleta com tempo de volta inteira, o que infla o ganho que eu estava anunciando | Tempo só compara entre voltas com o **mesmo número de goals cumpridos**; a coluna `goals_ok` entra na frase, não no rodapé |
+| 67 | Não rodei `tools/confere_evidencia.py` — a ferramenta que existe **exatamente** pra isso | Deixei `guard_bloqueio.csv` arquivado e **não citado** no README da pasta nova. O conferidor pega isso em 0,2 s, foi escrito depois dos BOs 31/45/50 (a mesma falha 3×) e eu não o executei nas duas pastas que criei hoje | Gerou pasta em `docs/baselines/` → **roda o conferidor no mesmo comando**, antes do commit. Está na §4.5 agora |
+| 66 | 🔁 **Asserção VAZIA outra vez** — no commit em que eu comemorava ter provado outro teste sensível | `test_collision_monitor_le_sempre_o_raw` achava o nó e depois só afirmava que a saída do mux era **um dos dois valores possíveis**: nunca olhava o `collision_monitor`. Passava com o pipeline quebrado. É o BO 63 **na íntegra**, dois commits depois, no mesmo arquivo em que eu tinha acabado de provar sensibilidade injetando defeito | Provar sensível **teste a teste**, não uma vez por arquivo: o teste que eu injetei defeito pra ver falhar era o *outro*. Agora o do collision lê o `cmd_vel_in_topic` dos dois YAMLs, e falha se apontarem pro `auto_vel_pre` |
 | 65 | Atribuí as paradas longas ao **churn da mira** sem medir o pipeline | A histerese cortou o chattering 3–5× e o tempo parado **não caiu**. A causa dos piores casos era o `motion_guard` zerando o giro — um nó que eu nem tinha olhado, e cuja volta ao caminho está registrada no item 7 dos meus próprios abertos | Quando o robô não se move, ler o **pipeline inteiro** (`freeze_capture` tem todos os estágios) antes de acusar o nó que eu acabei de mexer |
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
 
@@ -1636,7 +1658,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 2h | **Goal 2: última amostra a 0,156–0,160 nas 3 voltas** | ⏳ **novo, 08-31.** Único goal que a aproximação não puxa pra dentro, e sempre o mesmo. ⚠️ **NÃO é prova de que termina fora da tolerância** (BO 61: ~1,1 cm entre amostras a 20 Hz, e o checker é `stateful`). Suspeita não verificada: algo bloqueia o avanço ali (é o goal cujo caminho passa pela fresta A) |
 | 2i | **Por que o Nav2 ainda queria movimento com o robô já chegado?** | ⏳ **novo, 08-31.** A explicação que eu tinha dado (parou fora dos 0,15) **caiu**: o checker é `stateful` e o robô entrou dentro. Hipótese do próprio log: `Failed to make progress` → recovery → **reset do goal checker** → o XY volta a ser exigido. Medir antes de afirmar |
 | 2k | 🔴 **Fresta A é passagem no fio, sem correção de rumo** | ⏳ **novo, 08-31 (§2B.9).** Nas 14 voltas a folga mínima na `A_fresta90_2` foi 0,045–0,212 m; a `noguard3` entrou com yaw **−5,4°** (as outras 13: −13° a −26°) e **bateu** (9 COLISÃO + 48 raspões). Nada alinha o robô antes do vão. ⚠️ n=3 sem guard: **não** está provado que tirar o guard causou — o guard estava `idle` na fresta em 11/11 voltas — mas também não está provado que não |
-| 2j | 🔴🔴 **`motion_guard` bloqueia o robô na arena** | ⏳ **novo, 08-31 (§2B.7).** Vigia de PESSOA ligado numa prova **sem pessoa**; zera o giro entre `auto_vel_pre` e `auto_vel_raw`. Medido: **26,9 s** (`hist3`) e **52,1 s** (`aprox2`); nos episódios, ~505 comandos entraram e **1** saiu. Os 3 episódios duram 25,7–26,9 s = `hold_still_max` 20 + `clear_time` 5 + settle, sempre com um **cone** como único vizinho — a vigília roda até o teto em cima do cone. Só dispara nas voltas com aproximação (que adiciona point-turn perto de cone). ✅ **DESLIGADO na arena por decisão do dono 08-31** (`motion_guard:=false`, §2B.8); 3 voltas sem ele na §2B.9 — parado 0,0 s em 14/15 goals, mas **1 das 3 bateu na fresta A** (item 2k), então **não** está validado |
+| 2j | 🔴🔴 **`motion_guard` bloqueia o robô na arena** | ⏳ **novo, 08-31 (§2B.7).** Vigia de PESSOA ligado numa prova **sem pessoa**; zera o giro entre `auto_vel_pre` e `auto_vel_raw`. Medido: **26,9 s** (`hist3`) e **52,1 s** (`aprox2`); nos episódios, ~505 comandos entraram e **1** saiu. Os 3 episódios duram 25,7–26,9 s = `hold_still_max` 20 + `clear_time` 5 + settle, sempre com um **cone** como único vizinho — a vigília roda até o teto em cima do cone. Só dispara nas voltas com aproximação (que adiciona point-turn perto de cone). ✅ **DESLIGADO na arena por decisão do dono 08-31** (`motion_guard:=false`, §2B.8); 3 voltas sem ele na §2B.9 — parado 0,0 s em 14/15 goals, mas **1 das 3 bateu na fresta A** (item 2k), então **não** está validado. 🔴 **`--arena` vale no REAL também**: sem `--sim` o robô físico sobe sem vigia de pessoa — exige pista controlada + E-STOP na mão |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |

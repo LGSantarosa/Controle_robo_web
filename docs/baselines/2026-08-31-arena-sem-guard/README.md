@@ -17,12 +17,15 @@ grep -c motion_guard log/sim_ab/noguard1/nav2.log
 | `transicoes_goal_turn_3voltas.csv` | toda troca de/para as fases de chegada |
 | `unstuck_disparos_3voltas.csv` | os disparos do unstuck — inclui o `near` aos 50,8 s da `noguard3` |
 | `churn_mira.csv` | alternâncias mira↔avanço (5 / 5 / 11) |
+| `guard_bloqueio.csv` | as paradas longas **destas 3 voltas** — sem nenhuma linha `guard_blocked`, porque o guard não subiu; sobra a pose congelada do ground truth |
 | `guard_bloqueio_14voltas.csv` | as paradas longas nas **14** voltas: nenhuma linha `guard_blocked` nas `noguard*`, porque não há guard |
 
 ## O que estas 3 voltas dizem
 
 **✅ O ganho é real e grande.** `parado` = **0,0 s em 14 dos 15 goals**. A
-`noguard2` (221,0 s) é a **volta mais rápida das 14** e a `noguard1` a segunda.
+`noguard2` (221,0 s) é a **volta COMPLETA mais rápida das 14** e a `noguard1` a
+segunda. ⚠️ A `latchN1` fez 219,8 s, mais rápido no relógio, mas com **4/5
+goals** — não é comparável (achado do review).
 A assinatura de parada de ~27 s da §2B.7 sumiu.
 
 **🔴 E a `noguard3` BATEU.** 9 COLISÃO + 48 raspões, folga **0,0000**

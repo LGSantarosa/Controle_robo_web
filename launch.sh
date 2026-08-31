@@ -574,8 +574,23 @@ case "$MODE" in
         # PESSOA; a arena da prova nao tem pessoa, tem CONE — e a vigilia fechava
         # em cima do cone e ZERAVA o comando por ~27 s (3 episodios em 11 voltas,
         # DIARIO_ARENA §2B.7). Fora da arena ele continua ligado por default.
+        #
+        # ⚠️ ISTO VALE PARA O ROBO REAL TAMBEM (achado do review 2026-08-31): a
+        # medicao que justificou desligar foi feita no SIM, e a ausencia de
+        # <actor> no mundo so prova que o MUNDO SIMULADO nao tem gente. No real,
+        # `--arena` sem `--sim` sobe o robo SEM o vigia de pessoa. So' e'
+        # aceitavel com arena controlada, gente fora da pista e E-STOP humano na
+        # mao. O collision_monitor continua ligado, mas ele e' reflexo geometrico
+        # de obstaculo — nao substitui o vigia de coisa que se MOVE.
         ARENA_GUARD_ARG=""
-        [ "$ARENA" = true ] && ARENA_GUARD_ARG="motion_guard:=false"
+        if [ "$ARENA" = true ]; then
+            ARENA_GUARD_ARG="motion_guard:=false"
+            if [ "$SIM" != true ]; then
+                echo "      ⚠️  ARENA no ROBO REAL: motion_guard DESLIGADO (vigia de pessoa)."
+                echo "          Exija pista sem gente e E-STOP na mao. Ligar de volta:"
+                echo "          rode sem --arena, ou passe motion_guard:=true no launch."
+            fi
+        fi
         ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG $INIT_POSE_ARG $ARENA_FOLLOW_ARG $ARENA_GUARD_ARG > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"

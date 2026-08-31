@@ -13,6 +13,8 @@ import importlib.util
 import os
 import unittest
 
+import yaml
+
 from launch import LaunchContext
 from launch.utilities import perform_substitutions
 
@@ -82,13 +84,33 @@ class TestGuardLaunch(unittest.TestCase):
         self.assertFalse(guard.condition.evaluate(_ctx('false')))
 
     def test_collision_monitor_le_sempre_o_raw(self):
-        """A entrada do collision NÃO muda — quem muda de lado é o mux. Se um
-        dia alguém 'consertar' isto mexendo no collision, o teste avisa."""
-        for valor in ('true', 'false'):
-            cm = _no(_ld(), 'collision_monitor')
-            self.assertIsNotNone(cm)
-            saida = _saida_do_mux(_ld(), valor)
-            self.assertIn(saida, ('auto_vel_pre', 'auto_vel_raw'))
+        """A entrada do collision NÃO muda — quem muda de lado é o mux.
+
+        ⚠️ A primeira versão deste teste era VAZIA (BO 66, achada no review):
+        achava o nó e depois só reafirmava que a saída do mux era um dos dois
+        valores possíveis — nunca olhava o collision_monitor. Agora ele lê o
+        `cmd_vel_in_topic` DOS YAMLs que o launch entrega ao nó. Se alguém
+        "consertar" a religação mexendo no collision (apontando a entrada dele
+        pro auto_vel_pre), aí sim o pipeline quebra nos dois perfis — e este
+        teste falha.
+        """
+        cm = _no(_ld(), 'collision_monitor')
+        self.assertIsNotNone(cm, 'o collision_monitor tem que estar na descrição')
+        for nome in ('nav2_params_pi.yaml', 'nav2_params_arena.yaml'):
+            cfg = os.path.join(RAIZ, 'ros2_packages', 'robot_nav', 'config', nome)
+            with open(cfg) as f:
+                params = yaml.safe_load(f)
+            cm_params = params['collision_monitor']['ros__parameters']
+            self.assertEqual(cm_params['cmd_vel_in_topic'], 'auto_vel_raw',
+                             '%s: a entrada do collision tem que ser o auto_vel_raw '
+                             '— e o mux e o guard e que se viram pra publicar la' % nome)
+            self.assertEqual(cm_params['cmd_vel_out_topic'], 'auto_vel', nome)
+
+    def test_o_par_do_default_e_do_arena(self):
+        """`--arena` desliga o guard; qualquer outro perfil o mantém. O par que
+        prova o teste acima ser sensível ao valor, e não constante."""
+        self.assertNotEqual(_saida_do_mux(_ld(), 'true'),
+                            _saida_do_mux(_ld(), 'false'))
 
 
 if __name__ == '__main__':
