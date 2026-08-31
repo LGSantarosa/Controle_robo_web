@@ -27,9 +27,19 @@ código** da volta `arena_latch1` (commit `c85a8d8`) — nenhuma mudança entre 
 >     docs/baselines/2026-08-31-arena-latchN latchN1 latchN2 latchN3
 > ```
 >
-> O script é versionado, tem autoteste do critério da samba, e **falha** se os
-> CSVs brutos não estiverem em `log/sim_ab/` — ele não inventa dado. Rodá-lo por
-> cima desta pasta reproduz os três arquivos byte a byte.
+> E o `resumo_4_voltas.csv` (a coluna `samba` era conta **manual** até o segundo
+> review):
+>
+> ```
+> python3 tools/sim_ab/extrai_evidencia.py --resumo \
+>     docs/baselines/2026-08-31-arena-latchN/resumo_4_voltas.csv \
+>     arena_baseline1 arena_latch1 latchN1 latchN2 latchN3
+> ```
+>
+> O script é versionado, tem autoteste, e **não escreve nada** se algum CSV bruto
+> faltar: confere todos antes, gera em temporários e só troca os destinos quando
+> todos derem certo. Rodá-lo por cima desta pasta reproduz os **quatro** arquivos
+> byte a byte.
 
 ## O que estas 3 voltas mudaram na conclusão
 
