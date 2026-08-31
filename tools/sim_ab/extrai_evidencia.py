@@ -63,11 +63,21 @@ def confere_bruto(tags):
                          'DIARIO_ARENA §4.5)' % '\n  '.join(faltam))
 
 
+# As fases da chegada e os estados que são "voltar pro carrot". Em 2026-08-31 a
+# aproximação final criou o `goal_approach`, e o critério antigo só olhava
+# `goal_turn` -> `turning`: uma samba pela porta nova passaria batido. As voltas
+# `aprox1..3` não tiveram nenhuma (as 2 saídas de `goal_approach` foram com
+# dist_goal > 6 m = goal novo), mas a métrica estava cega, o que é diferente de
+# estar certa.
+CHEGADA = ('goal_approach', 'goal_turn')
+CARROT = ('turning', 'driving')
+
+
 def conta_samba(rows):
     """Quantas vezes o seguidor SAIU da chegada de volta pro carrot, no MESMO
     goal. É o número que a §2B.4/§2B.5 chama de samba."""
     return sum(1 for a, b in zip(rows, rows[1:])
-               if a['state'] == 'goal_turn' and b['state'] == 'turning'
+               if a['state'] in CHEGADA and b['state'] in CARROT
                and float(b['dist_goal']) < SAMBA_DIST_MAX)
 
 
@@ -153,7 +163,27 @@ def resumo(saida, tags):
                 ' '.join('g%d:%.1f' % (g['goal'], g['parado']) for g in r['goals'])])
 
 
-ARQUIVOS = (('colisao_3voltas.csv', colisao),
+def dist_final(saida, tags):
+    """A que distância do goal a ação COMPLETOU — a medida direta do defeito
+    2e (o robô estacionando fora do `xy_goal_tolerance` do Nav2, 0,15).
+
+    O fim de um goal é o tick em que `dist_goal` salta de centímetros pra metros
+    (o plano passa a apontar pro goal seguinte)."""
+    with open(saida, 'w', newline='') as f:
+        w = _w(f)
+        w.writerow(['volta', 'goal_n', 'dist_final_m', 'dentro_do_checker_0.15'])
+        for tag in tags:
+            fd = _ler(tag, 'follow_debug.csv')
+            finais = [float(a['dist_goal']) for a, b in zip(fd, fd[1:])
+                      if float(a['dist_goal']) < 0.5 and float(b['dist_goal']) > 2.0]
+            if fd and float(fd[-1]['dist_goal']) < 0.5:
+                finais.append(float(fd[-1]['dist_goal']))
+            for i, d in enumerate(finais, 1):
+                w.writerow([tag, i, '%.3f' % d, 'sim' if d <= 0.15 else 'NAO'])
+
+
+ARQUIVOS = (('dist_final_por_goal.csv', dist_final),
+            ('colisao_3voltas.csv', colisao),
             ('transicoes_goal_turn_3voltas.csv', transicoes),
             ('unstuck_disparos_3voltas.csv', unstuck))
 
@@ -192,6 +222,18 @@ def _autoteste_samba():
         ([{'state': 'goal_turn', 'dist_goal': '0.16'},
           {'state': 'turning', 'dist_goal': '0.17'}], 1,
          'saiu da chegada com o MESMO goal = samba'),
+        ([{'state': 'goal_approach', 'dist_goal': '0.16'},
+          {'state': 'turning', 'dist_goal': '0.17'}], 1,
+         'samba pela porta NOVA (goal_approach) tambem conta'),
+        ([{'state': 'goal_approach', 'dist_goal': '0.12'},
+          {'state': 'driving', 'dist_goal': '0.13'}], 1,
+         'voltar pro carrot em driving tambem e samba'),
+        ([{'state': 'goal_approach', 'dist_goal': '0.15'},
+          {'state': 'turning', 'dist_goal': '6.32'}], 0,
+         'goal_approach -> turning com metros = goal novo'),
+        ([{'state': 'goal_approach', 'dist_goal': '0.12'},
+          {'state': 'goal_turn', 'dist_goal': '0.11'}], 0,
+         'approach -> goal_turn e a sequencia normal'),
         ([{'state': 'goal_turn', 'dist_goal': '0.15'},
           {'state': 'turning', 'dist_goal': '6.81'}], 0,
          'dist_goal de metros = GOAL NOVO, o latch soltando'),
