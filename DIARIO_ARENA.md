@@ -1076,6 +1076,8 @@ do mapa.** Falta provar no sim.
 ```bash
 python3 tools/gera_arena_galpao.py --conferir      # invariantes da arena + rota
 python3 tools/mapa_passagens.py   --autoteste      # mapa sintético, vão 0,60
+python3 tools/confere_evidencia.py --autoteste    # o conferidor de evidência
+python3 tools/confere_evidencia.py                # docs/baselines/: git + CRLF + README
 python3 tools/sim_ab/colisao.py   --autoteste      # 7 casos de geometria
 python3 -m pytest ros2_packages/robot_nav/test/ -q # 397 testes (08-31: +4 do latch)
 ```
@@ -1201,6 +1203,7 @@ que na arena fica **em cima do muro sul**.
 | 47 | Publiquei **"−5,7% de tempo"** com n=1 | Com 4 voltas: 219,8 / 222,8 / 251,2 / 254,7 — média **237,1** contra 236,4 do baseline. **Era ruído.** Eu tinha escrito a ressalva do n=1 duas linhas acima e mesmo assim pus o número na tabela | Ressalva **ao lado** de um número não impede o número de ser lido. Se n=1, o campo não recebe percentual — recebe "medido 1×" |
 | 48 | Disse **"o goal 4 trava"** | São 4 voltas, 4 travadas, em **goals diferentes** (g4, g4, g5, g5). O defeito é sistemático, não do goal 4 | Não batizar um defeito com o nome da primeira amostra onde ele apareceu |
 | 49 | `probe.py` mapeava **`5:'ABORTADO', 6:'CANCELADO'`** — invertido | `GoalStatus` é 5=CANCELED, 6=ABORTED. Como o probe só cancela via timeout (→ `PRESO`), **todo "CANCELADO" já impresso por este harness era ABORT do Nav2**. "Cancelado" se lê como *o harness desistiu*; "abortado" é *o robô falhou* | Constante de mensagem ROS se confere no runtime, não de memória — foi o que fiz só depois de estranhar o rótulo |
+| 50 | **REINCIDÊNCIA do #31 (a outra metade)**: os 4 CSVs de evidência que escrevi hoje saíram com **CRLF** | `csv.writer` termina linha com `\r\n` por **default**, e o `newline=''` que a doc do módulo manda usar **preserva** isso. `git diff --check` reprovava toda linha. Os CSVs do baseline (sessão anterior, pós-#31) estão LF; os meus, não. Achado pela **pergunta** do dono ("anotou tudo pro codex?"), não por mim | O #31 tinha DUAS metades (arquivo fora do git **e** CRLF). No BO #45 eu repeti a primeira; aqui repeti a segunda — **na mesma sessão em que escrevi que a lição vira passo executado**. Virou `tools/confere_evidencia.py`, com autoteste. Lição que eu preciso lembrar não é controle |
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
 
 ---

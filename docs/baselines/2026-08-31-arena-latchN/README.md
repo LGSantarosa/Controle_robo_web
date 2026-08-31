@@ -7,7 +7,7 @@ código** da volta `arena_latch1` (commit `c85a8d8`) — nenhuma mudança entre 
 | arquivo | o que sustenta |
 |---|---|
 | `resumo_4_voltas.csv` | a tabela da §2B.5: baseline + as 4 voltas com latch, lado a lado |
-| `result_latchN{1,2,3}.json` | tempo e status por goal de cada volta |
+| `result_latchN1.json`, `result_latchN2.json`, `result_latchN3.json` | tempo e status por goal de cada volta |
 
 ## O que estas 3 voltas mudaram na conclusão
 
