@@ -52,7 +52,7 @@
 | A1 | visita 4 cones + chegada, na ordem, sem pular após falha | ⏳ falta executor |
 | A2 | para a ≤ 20 cm do cone | ⏳ falta aproximação final |
 | A3 | LED acende em cada ponto | ⏳ falta nó |
-| A4 | **zero contato** com bloco, cone ou parede | 🟡 **1 volta limpa, ainda NÃO fechado** — baseline 08-28: 2 colisões + 28 raspões, todos no `cone_3`. Com o latch (08-31): **zero evento, folga mínima +7,4 cm** (§2B.4). Mas é **n=1**: A4 pede repetição, e o point-turn sem proteção + o erro de pose seguem de pé |
+| A4 | **zero contato** com bloco, cone ou parede | 🔴 **NÃO fechado, e a causa está identificada.** Baseline 08-28: 2 colisões + 28 raspões. Com o latch, **7 voltas: 6 limpas, 1 com 4 raspões** (`aprox2`, folga 8 mm) — e os 4 estão em `turning` a **6,15 m do goal**, ou seja **point-turn de rota sem guarda** (§2B.6), não chegada. Fecha com o passo 5 + volta completa sem evento |
 | A5 | completa a missão **sem** atravessar fresta | ✅ no mapa; ✅ **no sim** — baseline fez 5/5 goals em 236,4 s sem depender da fresta de 0,60 |
 
 ---
@@ -753,11 +753,12 @@ implementada sobre uma planta mais estável.
 
 | # | passo | estado |
 |---|---|---|
-| 1 | teste que reproduz `goal_turn` ↔ `turning` | ⏳ |
-| 2 | implementar latch/histerese da chegada | ⏳ |
-| 3 | repetir a volta e medir contato no `cone_3` | ⏳ |
-| 4 | fechar o contrato do bloqueio (aborto imediato do unstuck) | ⏳ |
-| 5 | proteção contínua de point-turn | ⏳ |
+| 1 | teste que reproduz `goal_turn` ↔ `turning` | ✅ `c85a8d8` (§2B.3) |
+| 2 | implementar latch/histerese da chegada | ✅ `c85a8d8` — **samba 7 → 0, em 7 voltas** |
+| 3 | repetir a volta e medir contato no `cone_3` | ✅ §2B.4 (1 volta) + §2B.5 (3 voltas) |
+| 2b | *(surgiu no caminho)* aproximação final — o robô parava fora da tolerância do Nav2 | 🟡 `4da6eb4` (§2B.6): goals completam a **3–9 cm** (era 11–15), mas com churn de mira. **Item 2e não fechado** |
+| 4 | fechar o contrato do bloqueio (aborto imediato do unstuck) | ⏳ — menos urgente: a interferência do unstuck caiu pra 0,0–3,0 s com a aproximação |
+| 5 | proteção contínua de point-turn | ⏳ 🔴 **virou o bloqueador medido de A4** (§2B.6: 4 raspões no `cone_3` a 6,15 m do goal) |
 
 ⚠️ O passo 3 **não fecha A4 por si** — vale a mesma ressalva da §2.9: A4 fecha com
 volta completa e zero evento. O passo 3 mede **quanto** da falha era samba.
@@ -1373,8 +1374,8 @@ que na arena fica **em cima do muro sul**.
 | 1 | **Proteção de point-turn** (anel 0,25–0,36 m no `path_follower`) | 🔴🔴 **bloqueador de A4, agora MEDIDO como o que falta**: a `aprox2` raspou o `cone_3` 4× com o seguidor em `turning` a **6,15 m do goal** (§2B.6). 7 voltas com latch: 6 limpas, 1 com contato — a causa nunca foi corrigida, só não tinha se alinhado. **Desenho fechado** (§2.10), zero código. **Não é** no collision monitor: lá a única alavanca é escalar o `wz`, que trava o robô (deadlock já reproduzido) |
 | 2 | Baseline Nav2 até os standoffs | ✅ **FEITO 08-28** — 5/5 goals, 236,4 s, 2 colisões + 28 raspões no cone (§2.8). Evidência em `docs/baselines/2026-08-28-arena-baseline1/` |
 | 2b | Travar a chegada (mata a samba — defeito provado) | ✅ **FEITO 08-31** (`c85a8d8`) — saídas da chegada pro carrot **7 → 0**; volta em `docs/baselines/2026-08-31-arena-latch1/` (§2B.4) |
-| 2e | 🔴 **O robô ESTACIONA fora do `xy_goal_tolerance` do Nav2** | ⏳ **novo, 08-31. SISTEMÁTICO: 4 de 4 voltas** (§2B.5), em goals diferentes, com o tempo parado crescendo 10,8 → 19,1 s.| Trava a chegada a 0,147, gira pro yaw do goal, para em **0,166** — o checker do Nav2 é **0,15** (`nav2_params_arena.yaml:151`). A ação não completa, 5 s parado acorda o `unstuck`, que gira o robô 17°, e o seguidor desfaz. **Custou 14 s no goal 4.** Existia antes, escondido pela samba. Duas saídas propostas na §2B.4, **nenhuma decidida** |
-| 2f | **`unstuck` empurra robô que JÁ CHEGOU** | ⏳ **novo, 08-31.** Caso irmão do item 1: o supervisor não assina estado nenhum do `path_follower`, então não sabe distinguir "encalhado" de "chegou e parou". O mesmo tópico de bloqueio do passo 4 resolve os dois |
+| 2e | 🟡 **O robô ESTACIONA fora do `xy_goal_tolerance` do Nav2** | **ATACADO 08-31, não fechado** (`4da6eb4`, §2B.6). Era sistemático em 4/4 voltas (§2B.5). Com a aproximação final os goals completam a **3–9 cm** (era 11–15) e o `unstuck` caiu pra 0,0–3,0 s — mas sobra **churn de mira** (a `aprox2` gastou ~54 s girando perto dos goals) e **o goal 2 continua terminando a 0,16 nas 3 voltas** (item 2h) |
+| 2f | **`unstuck` empurra robô que JÁ CHEGOU** | ⏳ **novo 08-31, menos urgente depois de `4da6eb4`**: os disparos caíram de 1,3–6,2 s para **0,0 / 3,0 / 1,4 s** — a aproximação removeu a *causa* mais comum (ficar 5 s parado fora da tolerância), **não o mecanismo**. O supervisor segue sem assinar estado nenhum do `path_follower`, então continua sem distinguir "encalhado" de "chegou e parou". Passo 4 |
 | 2c | 🔴🔴 **AMCL erra 24 cm na arena** (mediana 9, p90 16, max 27) | ⏳ **novo, 08-28.** Maior que a tolerância de A2 (20 cm) e muito maior que os ±3 cm da fresta de 0,60. Suspeita: arena pobre em feature + os 4 cones não estão no mapa |
 | 2d | Bug `start/goal is an obstacle` **reproduzido nesta arena** | ⏳ disparou dentro da fresta A (0,90 m), indo pro goal 2 |
 | 2g | **16 s em `idle`** entre dois goals (`aprox3`) | ⏳ **novo, 08-31.** Sem goal ativo — não é o seguidor. Buraco entre a conclusão de um goal e o próximo ser aceito; não investigado |
