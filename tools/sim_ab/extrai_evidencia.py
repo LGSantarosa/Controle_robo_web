@@ -164,14 +164,18 @@ def resumo(saida, tags):
 
 
 def dist_final(saida, tags):
-    """A que distância do goal a ação COMPLETOU — a medida direta do defeito
-    2e (o robô estacionando fora do `xy_goal_tolerance` do Nav2, 0,15).
+    """Onde o robô estava no ÚLTIMO TICK antes de o plano apontar pro goal
+    seguinte. É o indicador do defeito 2e (o robô parando longe do goal).
 
-    O fim de um goal é o tick em que `dist_goal` salta de centímetros pra metros
-    (o plano passa a apontar pro goal seguinte)."""
+    ⚠️ **Não é** "a pose no instante da conclusão" nem "o que o checker julgou"
+    (review 08-31, BO 61): a 20 Hz e 0,22 m/s há **~1,1 cm entre amostras**, e o
+    `goal_checker` é `stateful: true` — satisfeito o XY uma vez, ele só reconfere
+    yaw, então pode ter aceitado bem antes e em outra posição. Por isso a coluna
+    se chama `ultima_amostra_le_0.15`, e não "dentro do checker"."""
     with open(saida, 'w', newline='') as f:
         w = _w(f)
-        w.writerow(['volta', 'goal_n', 'dist_final_m', 'dentro_do_checker_0.15'])
+        w.writerow(['volta', 'goal_n', 'dist_ultima_amostra_m',
+                    'ultima_amostra_le_0.15'])
         for tag in tags:
             fd = _ler(tag, 'follow_debug.csv')
             finais = [float(a['dist_goal']) for a, b in zip(fd, fd[1:])

@@ -565,16 +565,55 @@ def test_aproximacao_mira_tem_histerese_como_o_resto_do_seguidor():
     assert d.vx > 0.0 and d.wz == pytest.approx(0.0)
 
 
+def _microsim_torto(turn_exit=None):
+    """Roda a chegada começando 40° torto. Devolve (alternancias, estados, pose)."""
+    cfg = FollowConfig() if turn_exit is None else FollowConfig(turn_exit=turn_exit)
+    f = DecisiveFollower(cfg)
+    path = [(-1.0 + i * 0.05, 0.0) for i in range(21)]
+    x, y, yaw, gyaw = -0.147, 0.0, math.radians(40), math.pi / 2
+    estados, modo = [], []
+    for _ in range(600):
+        cmd = f.update((x, y, yaw), path, goal_active=True, goal_yaw=gyaw)
+        estados.append(cmd.state)
+        modo.append((cmd.state, cmd.vx))
+        if cmd.state == 'arrived':
+            break
+        dt = 0.05
+        yaw = wrap(yaw + cmd.wz * dt)
+        if cmd.wz:                       # a deriva do point-turn AFASTA
+            d = math.hypot(x, y) or 1e-9
+            x += (x / d) * 0.0003
+            y += (y / d) * 0.0003
+        x += cmd.vx * math.cos(yaw) * dt
+        y += cmd.vx * math.sin(yaw) * dt
+    fases = [v > 0.0 for st, v in modo if st == 'goal_approach']
+    return sum(1 for p, q in zip(fases, fases[1:]) if p != q), estados, (x, y)
+
+
+def test_asercao_de_alternancia_PEGA_o_limiar_pelado():
+    """Prova que o número que o microsim afirma é SENSÍVEL ao defeito.
+
+    Sem isto a asserção `alternancias <= 4` é fé: a primeira versão dela contava
+    pares de estados IGUAIS contra um teto de 600 e não podia falhar (BO 56).
+    Aqui `turn_exit == turn_enter` reproduz o limiar pelado que o review pegou.
+    """
+    com, _, _ = _microsim_torto()
+    sem, _, _ = _microsim_torto(turn_exit=math.radians(16))
+    assert com <= 4, 'com histerese deveria alternar pouco (deu %d)' % com
+    assert sem > 4, 'o limiar pelado deveria chatterar (deu %d)' % sem
+
+
 def test_microsim_chegada_converge_mesmo_comecando_torto():
     """O microsim principal começa APONTADO pro goal, então nunca exercita o
     giro de mira (o revisor pegou). Este começa a 40° e tem que convergir."""
     NAV2_XY_TOL = 0.15
     f, path, gyaw = _chegada()
     x, y, yaw = -0.147, 0.0, math.radians(40)
-    estados = []
+    estados, modo = [], []
     for _ in range(600):
         cmd = f.update((x, y, yaw), path, goal_active=True, goal_yaw=gyaw)
         estados.append(cmd.state)
+        modo.append((cmd.state, cmd.vx))
         if cmd.state == 'arrived':
             break
         dt = 0.05
@@ -586,12 +625,19 @@ def test_microsim_chegada_converge_mesmo_comecando_torto():
         x += cmd.vx * math.cos(yaw) * dt
         y += cmd.vx * math.sin(yaw) * dt
     assert 'turning' not in estados, 'a samba voltou por outra porta'
-    assert estados[-1] == 'arrived', 'nao convergiu: %s' % estados[-8:]
+    assert [e for e, _ in [(s_, 0) for s_ in estados]][-1] == 'arrived', \
+        'nao convergiu: %s' % estados[-8:]
     assert math.hypot(x, y) <= NAV2_XY_TOL
-    # e nao pode ficar alternando mira/avanco: conta trocas dentro do approach
-    trocas = sum(1 for p, q in zip(estados, estados[1:])
-                 if p == 'goal_approach' and q == 'goal_approach')
-    assert trocas < 600
+
+    # ALTERNÂNCIA mira <-> avanço dentro da aproximação. A 1a versao desta
+    # asserção era VAZIA (contava pares de estados IGUAIS e comparava com 600,
+    # sendo que o laço tem no máximo 599 pares — não podia falhar). O revisor
+    # pegou; é o BO 56 de novo, no teste escrito PRA responder o review anterior.
+    # O que distingue mirar de avançar não é o nome do estado, é o `vx`.
+    fases = [v > 0.0 for st, v in modo if st == 'goal_approach']
+    alternancias = sum(1 for p, q in zip(fases, fases[1:]) if p != q)
+    assert alternancias <= 4, ('mira e avanco alternando %d vezes = chattering'
+                               % alternancias)
 
 
 def test_microsim_chegada_converge_dentro_da_tolerancia_do_nav2():
