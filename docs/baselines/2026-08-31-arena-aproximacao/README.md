@@ -14,6 +14,8 @@ código sem histerese. Voltas novas necessárias pra dizer se ele melhorou.
 | `colisao_3voltas.csv` | contato por objeto e por volta — inclui os **4 raspões da `aprox2`** |
 | `transicoes_goal_turn_3voltas.csv` | toda troca de/para as fases de chegada; é onde se lê o churn e a ausência de samba |
 | `unstuck_disparos_3voltas.csv` | os disparos do unstuck (caíram: 0,0 / 3,0 / 1,4 s) |
+| `churn_mira.csv` | 🆕 alternâncias mira↔avanço dentro de `goal_approach` (28 / 90 / 37) — a métrica que a histerese depois derrubou |
+| `guard_bloqueio.csv` | 🆕 as paradas longas: os **2 episódios de `motion_guard` blocked** da `aprox2` (26,2 s e 25,8 s), ~500 comandos zerados em cada |
 
 Gerados por (o script é versionado, tem autoteste e não escreve nada se faltar
 bruto):
@@ -38,9 +40,18 @@ coluna **não prova** onde o checker aceitou, só onde o robô estava no último
 
 **Mas o item 2e não fechou.** A `aprox2` levou 328,6 s com ~54 s de giro perto dos
 goals — *churn* de mira (aproxima, fecha o yaw, a deriva tira, re-aproxima),
-bounded em 3 re-entradas, nunca laço infinito. E o `parado` do probe **conta
-point-turn como parado**, então ele mede duas coisas juntas: a métrica boa é o
-`dist_final_por_goal.csv`.
+bounded em 3 re-entradas, nunca laço infinito.
+
+🔻 **RETRATAÇÃO (§2B.7, mesmo dia):** eu tratei esse churn como a causa das
+paradas longas da `aprox2`. **Não é.** Dos 328,6 s dela, **52,1 s** são o
+`motion_guard` em `blocked` zerando o comando (ver `guard_bloqueio.csv`) — com a
+pose do ground truth congelada ao lado de um cone. A histerese depois cortou o
+churn 3–5× e o tempo parado **não caiu**.
+
+E o `parado` do probe **conta point-turn como parado**, então ele soma coisas
+diferentes num número só — point-turn de mira **e** bloqueio do guard. Pra
+chegada, a métrica boa é o `dist_final_por_goal.csv`; pra parada, o
+`guard_bloqueio.csv`.
 
 **Os 4 raspões da `aprox2`: contato durante point-turn de ROTA.** Estão em
 `state=turning` a **6,15 m do goal** — o canto varrendo o `cone_3`, modo de falha

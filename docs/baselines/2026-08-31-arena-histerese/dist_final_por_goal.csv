@@ -1,0 +1,16 @@
+volta,goal_n,dist_ultima_amostra_m,ultima_amostra_le_0.15
+hist1,1,0.063,sim
+hist1,2,0.153,NAO
+hist1,3,0.011,sim
+hist1,4,0.078,sim
+hist1,5,0.042,sim
+hist2,1,0.037,sim
+hist2,2,0.146,sim
+hist2,3,0.040,sim
+hist2,4,0.019,sim
+hist2,5,0.038,sim
+hist3,1,0.034,sim
+hist3,2,0.146,sim
+hist3,3,0.145,sim
+hist3,4,0.046,sim
+hist3,5,0.044,sim

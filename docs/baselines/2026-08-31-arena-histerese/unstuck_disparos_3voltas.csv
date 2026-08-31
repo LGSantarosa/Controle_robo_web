@@ -1,0 +1,13 @@
+volta,t,state,reason,ang,nav_wants,stuck_s,x,y
+hist1,17.008,monitoring,,0.0,0,,0.0,0.0
+hist2,15.583,monitoring,,0.0,0,,0.0,0.0
+hist2,196.8,advancing,timeout,0.0,1,15.03,5.552,7.386
+hist2,197.9,grace,timeout,0.0,1,16.23,5.443,7.578
+hist2,199.8,monitoring,timeout,0.0,1,,5.44,7.583
+hist3,15.41,monitoring,,0.0,0,,0.0,0.0
+hist3,133.8,advancing,near,0.0,1,3.0,10.984,4.909
+hist3,134.9,grace,near,0.0,1,4.21,10.829,5.066
+hist3,136.8,monitoring,near,0.0,1,,10.826,5.069
+hist3,170.6,reversing,near,0.0,1,2.01,10.856,5.048
+hist3,171.9,grace,near,0.0,1,3.44,10.778,4.742
+hist3,173.8,monitoring,near,0.0,1,,10.81,4.948

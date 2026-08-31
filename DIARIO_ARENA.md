@@ -1201,6 +1201,121 @@ Escrevi o aceite como *"`goal_turn → turning` continua 0"* — e criei o
 estar certa**. `conta_samba()` agora cobre `{goal_approach, goal_turn} →
 {turning, driving}`, com 5 casos de autoteste.
 
+### 2B.7 3 voltas com a histerese (`hist1..3`) — e o achado que muda o quadro
+
+Rodadas depois de `6f707a3`, porque as `aprox1..3` validavam `4da6eb4` (o revisor
+apontou; o README delas já diz isso).
+
+| volta | tempo | goals | COLISÃO | raspão | folga mín | samba | unstuck | parado |
+|---|---|---|---|---|---|---|---|---|
+| `aprox1` | 250,4 | 5/5 | 0 | 0 | 0,0483 | 0 | 0,0 | 0,1 |
+| `aprox2` | 328,6 | 5/5 | 0 | 4 | 0,0083 | 0 | 3,0 | 56,6 |
+| `aprox3` | 254,3 | 5/5 | 0 | 0 | 0,0893 | 0 | 1,4 | 15,4 |
+| **`hist1`** | **230,3** | 5/5 | 0 | 0 | 0,0776 | 0 | 0,0 | **1,0** |
+| **`hist2`** | 269,1 | 5/5 | 0 | 0 | 0,0630 | 0 | 1,5 | 26,7 |
+| **`hist3`** | 265,6 | 5/5 | 0 | 0 | 0,0451 | 0 | 3,2 | 30,7 |
+
+**✅ A histerese fez o que foi desenhada pra fazer, na métrica dela.** Alternâncias
+mira↔avanço dentro de `goal_approach` (a mesma conta do teste unitário):
+
+| | `aprox` | `hist` |
+|---|---|---|
+| alternâncias | 28 / 90 / 37 | **7 / 17 / 11** |
+| ticks em `goal_approach` | 379 / 780 / 401 | 264 / 498 / 849 |
+
+Corte de **3 a 5×**. Contato **0 em 3/3**, samba 0.
+
+**❌ Mas o tempo parado NÃO caiu** (26,7 e 30,7 s). Então o chattering da mira
+**não era** a causa das paradas longas — eu tinha atribuído a ele.
+
+#### 🔴🔴 A causa dos piores casos: o `motion_guard` bloqueia o robô na arena
+
+Na `hist3`, 26 s com o seguidor mandando `wz = 2,4` e a **pose congelada em
+(11.961, 6.520)**, `herr` travado em 31,0°. O `freeze_capture` mostra o pipeline:
+
+```
+t=116.0  follow_vel    wz=2.4000     <- o seguidor manda girar
+t=116.0  auto_vel_pre  wz=2.4000     <- passou pelo twist_mux
+t=116.0  auto_vel_raw  wz=0.0000     <- ZERADO aqui
+```
+
+O estágio entre `auto_vel_pre` e `auto_vel_raw` é o **`motion_guard`**
+(`nav2_params_arena.yaml:616` documenta a cadeia). E o estado dele:
+
+```
+t=  0.0  guard_state: idle
+t=115.7  guard_state: blocked      <- 0,1 s depois de a aproximação começar
+t=142.6  guard_state: idle
+```
+
+**26,9 s bloqueado.** Na janela, **505** comandos entraram no `motion_guard`
+(`auto_vel_pre`, todos `wz = 2,4`) e **1** saiu. A pose do seguidor andou
+**1,7 cm** em 26,9 s; `herr` foi de 29,5° a 31,0° — ou seja, **piorou**.
+
+| volta | tempo com `guard` BLOCKED |
+|---|---|
+| baseline, `arena_latch1`, `latchN1..3`, `aprox1`, `aprox3`, `hist1` | **0,0 s** |
+| `hist2` | 0,1 s |
+| **`hist3`** | **26,9 s** (1 episódio) |
+| **`aprox2`** | **52,1 s** (2 episódios) |
+
+(O extrato `guard_bloqueio_11voltas.csv` lista episódios **≥ 1 s** — o de 0,1 s
+da `hist2` fica de fora de propósito: é transitório, não parada.)
+
+**O `motion_guard` é o vigia de PESSOA** — a §2.7 do `project_motion_guard`
+descreve: detector de movimento semeia "gente aqui", vulto tamanho-de-gente
+carrega parada. **A arena não tem pessoa nenhuma: tem CONE.** E ele só disparou
+nas voltas com aproximação, que é o que adicionou point-turn perto de cone.
+
+#### A vigília fechou em cima de um CONE — isto agora está MEDIDO
+
+Os 3 episódios de bloqueio das 11 voltas têm a **mesma assinatura de tempo** e o
+**mesmo tipo de vizinho** (pose e folga do ground truth do Gazebo, `colisao.csv`):
+
+| volta | episódio | duração | comandos in→out | objeto mais próximo | folga |
+|---|---|---|---|---|---|
+| `hist3` | 120,1 → 147,0 | **26,9 s** | 505 → **1** | `cone_3` | 0,312 m |
+| `aprox2` | 120,3 → 146,5 | **26,2 s** | 502 → **1** | `cone_3` | 0,115 m |
+| `aprox2` | 201,0 → 226,7 | **25,7 s** | 505 → **1** | `cone_4` | 0,405 m |
+
+(A pose é a do **ground truth** do Gazebo e fica **idêntica** o episódio inteiro
+— 521 amostras iguais na `hist3`. Na `aprox2` o comando zerado era `vx = 0,30`
+reto, não giro: o guard zera os dois.)
+
+Duas coisas fecham o caso:
+
+1. **A duração é a soma dos tetos do próprio vigia:** `hold_still_max` **20 s**
+   (vigília segurando presença **parada**) + `clear_time` **5 s** (decaimento) +
+   `settle` (≤ 4 s) → 25–29 s. Os três episódios caem em **25,7–26,9 s**. Não é
+   flicker de detecção: é a vigília **rodando até o teto** em cima de algo que
+   não sai do lugar.
+2. **Não há o que confundir com gente:** `worlds/arena_galpao.sdf` tem 23 modelos
+   e **nenhum `<actor>`** — muros, frestas, plataformas e 4 cones, tudo estático.
+   Nos três episódios o único objeto ao alcance era um cone.
+
+O elo que **continua sem log**: o centróide da vigília (`_watch`) não é
+publicado, então não posso exibir a coordenada vigiada. O que posso exibir é que
+o vizinho era cone em **3/3** e que pessoa não existe nesse mundo.
+
+**Por que só nas voltas com aproximação** (leitura de código
+`motion_guard.py:265-275`, ⚠️ não medida): o `wz_gate` faz o `observe()` **não
+avaliar nem snapshotar** enquanto o robô gira; a referência "old" logo após o
+point-turn é o último snapshot **pré-giro**, de outra pose. E a aproximação é
+exatamente o que passou a fazer point-turn a ~0,3 m de um cone.
+
+**Isto explica os piores casos, não todos.** A mesma extração acha travamentos
+de 11–17 s **sem guard nenhum**: `hist2` (14,9 s e 11,3 s), `aprox3` (14,9 s),
+`latchN3` (17,1 s). Ou seja, há pelo menos **duas** causas de parada longa — o
+guard é a nova e a maior. ⚠️ Detalhe que eu não sei explicar e não investiguei:
+**três dos quatro** travamentos sem guard também estão parados ao lado do
+`cone_4` (folga 0,30–0,48 m).
+
+**Contexto que eu devia ter olhado antes:** o item 7 dos abertos diz que os
+números de 08-27 vieram do fork **sem `motion_guard`** — a §2.2 unificou os
+pacotes e o guard voltou pro caminho. Um nó feito pra não atropelar gente está
+ligado numa prova onde não há gente, e ele **zera o giro**, que é exatamente o
+comando de que o robô precisa pra sair.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -1407,6 +1522,7 @@ que na arena fica **em cima do muro sul**.
 | 62 | Deixei o diário dizendo **7** enquanto minha própria ferramenta dizia **8** | Ampliei o `conta_samba()` pra cobrir `goal_approach` e `driving`, o baseline passou a somar 8 (tem uma saída `goal_turn → driving` a 0,15 que a métrica estreita não via) — e não varri o texto. Ficou 3 commits assim | Mudou o critério de uma métrica: **regerar e reconciliar todo número já publicado com ela**, no mesmo commit |
 | 63 | Asserção **VAZIA** no microsim novo — no teste escrito pra responder o review anterior | `trocas = sum(... if p == q == 'goal_approach')` comparado com `< 600`, num laço de no máximo 599 pares: **não podia falhar**. E contava pares de estados IGUAIS, não alternâncias; o nome do estado nem distingue mirar de avançar — quem distingue é o `vx`. É o BO 56 outra vez, dois commits depois | Toda asserção numérica nova tem que ser **provada sensível**: agora há um teste que roda o microsim com `turn_exit == turn_enter` (o defeito) e exige alternância MAIOR — 1 com histerese, 5 sem |
 | 64 | Anunciei retratações e **não as propaguei** | Retratei no corpo da §2B.6 e deixei: o título absoluto *"NÃO são da aproximação"*, o README repetindo as duas conclusões retiradas, a coluna `dentro_do_checker_0.15` afirmando o julgamento do checker, e os itens 2e/2f/2h repetindo a causalidade caída | Retratação não é parágrafo, é **varredura**: título, README, nome de coluna, itens abertos. O mesmo erro do BO 48, agora com retratação em vez de fato |
+| 65 | Atribuí as paradas longas ao **churn da mira** sem medir o pipeline | A histerese cortou o chattering 3–5× e o tempo parado **não caiu**. A causa dos piores casos era o `motion_guard` zerando o giro — um nó que eu nem tinha olhado, e cuja volta ao caminho está registrada no item 7 dos meus próprios abertos | Quando o robô não se move, ler o **pipeline inteiro** (`freeze_capture` tem todos os estágios) antes de acusar o nó que eu acabei de mexer |
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
 
 ---
@@ -1425,6 +1541,7 @@ que na arena fica **em cima do muro sul**.
 | 2g | **16 s em `idle`** entre dois goals (`aprox3`) | ⏳ **novo, 08-31.** Sem goal ativo — não é o seguidor. Buraco entre a conclusão de um goal e o próximo ser aceito; não investigado |
 | 2h | **Goal 2: última amostra a 0,156–0,160 nas 3 voltas** | ⏳ **novo, 08-31.** Único goal que a aproximação não puxa pra dentro, e sempre o mesmo. ⚠️ **NÃO é prova de que termina fora da tolerância** (BO 61: ~1,1 cm entre amostras a 20 Hz, e o checker é `stateful`). Suspeita não verificada: algo bloqueia o avanço ali (é o goal cujo caminho passa pela fresta A) |
 | 2i | **Por que o Nav2 ainda queria movimento com o robô já chegado?** | ⏳ **novo, 08-31.** A explicação que eu tinha dado (parou fora dos 0,15) **caiu**: o checker é `stateful` e o robô entrou dentro. Hipótese do próprio log: `Failed to make progress` → recovery → **reset do goal checker** → o XY volta a ser exigido. Medir antes de afirmar |
+| 2j | 🔴🔴 **`motion_guard` bloqueia o robô na arena** | ⏳ **novo, 08-31 (§2B.7).** Vigia de PESSOA ligado numa prova **sem pessoa**; zera o giro entre `auto_vel_pre` e `auto_vel_raw`. Medido: **26,9 s** (`hist3`) e **52,1 s** (`aprox2`); nos episódios, ~505 comandos entraram e **1** saiu. Os 3 episódios duram 25,7–26,9 s = `hold_still_max` 20 + `clear_time` 5 + settle, sempre com um **cone** como único vizinho — a vigília roda até o teto em cima do cone. Só dispara nas voltas com aproximação (que adiciona point-turn perto de cone). **Decisão pendente do dono: desligar na arena?** Ver item 7 — os números de 08-27 vieram do fork SEM guard |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |

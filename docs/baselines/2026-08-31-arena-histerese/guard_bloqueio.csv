@@ -1,0 +1,5 @@
+volta,fonte,t_ini,t_fim,dur_s,detalhe
+hist2,pose_congelada,174.1,189.1,14.9,obj=cone_4 folga_min=0.3001
+hist2,pose_congelada,206.8,218.1,11.3,obj=cone_4 folga_min=0.4750
+hist3,guard_blocked,135.1,162.0,26.9,cmd_entrou=505 cmd_saiu=1
+hist3,pose_congelada,120.1,147.0,26.9,obj=cone_3 folga_min=0.3123

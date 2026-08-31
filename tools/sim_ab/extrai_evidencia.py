@@ -12,6 +12,7 @@ os inventa, e **não escreve nada** se algum faltar (ver `confere_bruto`).
 Uso:
     python3 tools/sim_ab/extrai_evidencia.py <destino> <tag> [<tag> ...]
     python3 tools/sim_ab/extrai_evidencia.py --resumo <arquivo.csv> <tag> ...
+    python3 tools/sim_ab/extrai_evidencia.py --guard  <arquivo.csv> <tag> ...
     python3 tools/sim_ab/extrai_evidencia.py --autoteste
 
 Exemplo (o que gerou a evidência das 3 voltas de repetição):
@@ -27,7 +28,8 @@ import tempfile
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BRUTO = os.path.join(RAIZ, 'log', 'sim_ab')
-PRECISA = ('colisao.csv', 'follow_debug.csv', 'unstuck.csv', 'result.json')
+PRECISA = ('colisao.csv', 'follow_debug.csv', 'unstuck.csv', 'result.json',
+           'freeze_capture.csv')
 
 # O critério da "samba", num lugar só: sair de `goal_turn` de volta pro carrot
 # COM O MESMO GOAL. A mesma transição com dist_goal de metros é goal novo — o
@@ -186,10 +188,131 @@ def dist_final(saida, tags):
                 w.writerow([tag, i, '%.3f' % d, 'sim' if d <= 0.15 else 'NAO'])
 
 
+# Dentro de `goal_approach` o estado NÃO distingue mirar de avançar — quem
+# distingue é o `vx` (foi o BO 63). Uma alternância é uma troca mira<->avanço.
+MIRA_VX_MIN = 0.01
+
+
+def conta_churn(rows):
+    """(ticks em goal_approach, alternâncias mira<->avanço)."""
+    modo = [abs(float(r['vx'])) > MIRA_VX_MIN
+            for r in rows if r['state'] == 'goal_approach']
+    return len(modo), sum(1 for a, b in zip(modo, modo[1:]) if a != b)
+
+
+def churn(saida, tags):
+    """O número que a histerese foi feita pra derrubar (§2B.7). Era um
+    one-liner de shell — o mesmo defeito que este script existe pra corrigir."""
+    with open(saida, 'w', newline='') as f:
+        w = _w(f)
+        w.writerow(['volta', 'ticks_goal_approach', 'alternancias_mira_avanco'])
+        for tag in tags:
+            n, alt = conta_churn(_ler(tag, 'follow_debug.csv'))
+            w.writerow([tag, n, alt])
+
+
+# Bloqueio longo pelo `motion_guard` tem duração de assinatura: `hold_still_max`
+# (20s, vigília em cima de presença PARADA) + `clear_time` (5s) + settle (<=4s).
+# Ver DIARIO_ARENA §2B.7.
+GUARD_MIN_S = 1.0           # episódio menor que isso é transitório, não parada
+CONGELADO_MIN_S = 10.0      # pose IDÊNTICA por mais que isso = robô travado
+
+
+def episodios_guard(rows):
+    """Trechos em que o `motion_guard` esteve `blocked`, com os ticks de giro
+    que entraram nele (`auto_vel_pre`) e os que saíram (`auto_vel_raw`).
+
+    `t` é RELATIVO à primeira linha do `freeze_capture.csv` — base de tempo
+    diferente da do `colisao.csv`, que começa antes (ver o README do baseline).
+    """
+    t0 = None
+    ini = None
+    eps = []
+    for r in rows:
+        try:
+            t = float(r['t_wall'])
+        except (TypeError, ValueError):
+            continue
+        if t0 is None:
+            t0 = t
+        if r['topic'] != 'guard_state':
+            continue
+        if r['extra'] == 'blocked' and ini is None:
+            ini = t
+        elif r['extra'] != 'blocked' and ini is not None:
+            eps.append((ini, t))
+            ini = None
+    if ini is not None:                 # bloqueado até o fim do log
+        eps.append((ini, float(rows[-1]['t_wall'])))
+    saida = []
+    for a, b in eps:
+        if b - a < GUARD_MIN_S:
+            continue
+        # o guard zera vx E wz (parada total), então contar só o giro
+        # sub-reporta: na `aprox2` o seguidor mandava vx=0.30 reto, e a conta
+        # de giro dava zero — parecia que ninguém queria andar.
+        entrou = saiu = 0
+        for r in rows:
+            try:
+                t = float(r['t_wall'])
+            except (TypeError, ValueError):
+                continue
+            if not a <= t <= b or r['topic'] not in ('auto_vel_pre', 'auto_vel_raw'):
+                continue
+            vx = float(r['vx']) if r['vx'] else 0.0
+            wz = float(r['wz']) if r['wz'] else 0.0
+            if abs(vx) <= 0.02 and abs(wz) <= 0.05:
+                continue
+            if r['topic'] == 'auto_vel_pre':
+                entrou += 1
+            else:
+                saiu += 1
+        saida.append((a - t0, b - t0, 'cmd_entrou=%d cmd_saiu=%d'
+                      % (entrou, saiu)))
+    return saida
+
+
+def episodios_congelado(rows):
+    """Trechos com a pose do GROUND TRUTH idêntica (robô parado de fato), com o
+    objeto mais próximo durante o trecho. `t` é o do `colisao.csv`."""
+    eps = []
+    i = 0
+    while i < len(rows):
+        j = i
+        while (j + 1 < len(rows)
+               and (rows[j + 1]['x'], rows[j + 1]['y']) == (rows[i]['x'], rows[i]['y'])):
+            j += 1
+        a, b = float(rows[i]['t']), float(rows[j]['t'])
+        if b - a >= CONGELADO_MIN_S:
+            perto = min(rows[i:j + 1], key=lambda r: float(r['folga_min']))
+            eps.append((a, b, 'obj=%s folga_min=%s' % (perto['obj'],
+                                                       perto['folga_min'])))
+        i = j + 1
+    return eps
+
+
+def guard(saida, tags):
+    """As paradas longas, pelas DUAS fontes independentes: o estado do
+    `motion_guard` e a pose do ground truth. Elas não compartilham base de
+    tempo — o que as liga é a DURAÇÃO (§2B.7)."""
+    with open(saida, 'w', newline='') as f:
+        w = _w(f)
+        w.writerow(['volta', 'fonte', 't_ini', 't_fim', 'dur_s', 'detalhe'])
+        for tag in tags:
+            for fonte, eps in (
+                    ('guard_blocked', episodios_guard(_ler(tag, 'freeze_capture.csv'))),
+                    ('pose_congelada', episodios_congelado(_ler(tag, 'colisao.csv')))):
+                for a, b, det in eps:
+                    w.writerow([tag, fonte, '%.1f' % a, '%.1f' % b,
+                                '%.1f' % (b - a), det])
+
+
 ARQUIVOS = (('dist_final_por_goal.csv', dist_final),
             ('colisao_3voltas.csv', colisao),
             ('transicoes_goal_turn_3voltas.csv', transicoes),
-            ('unstuck_disparos_3voltas.csv', unstuck))
+            ('unstuck_disparos_3voltas.csv', unstuck),
+            ('guard_bloqueio.csv', guard),
+            ('churn_mira.csv', churn))
 
 
 def gerar(destino, tags, arquivos=ARQUIVOS):
@@ -257,6 +380,103 @@ def _autoteste_samba():
     return ruim
 
 
+def _autoteste_churn():
+    """Prova SENSÍVEL: o defeito é contar estados iguais (BO 63) em vez de
+    trocas mira<->avanço, ou deixar outro estado entrar na conta."""
+    def fd(seq):    # (state, vx)
+        return [{'state': st, 'vx': '%.3f' % vx} for st, vx in seq]
+
+    A = 'goal_approach'
+    casos = [
+        ('mira->avanco->mira = 2 alternancias',
+         conta_churn(fd([(A, 0.0), (A, 0.2), (A, 0.0)])), (3, 2)),
+        ('avanco continuo = 0 alternancias',
+         conta_churn(fd([(A, 0.2), (A, 0.2), (A, 0.2)])), (3, 0)),
+        ('so mira = 0 alternancias (o estado repetido NAO conta)',
+         conta_churn(fd([(A, 0.0), (A, 0.0), (A, 0.0)])), (3, 0)),
+        ('fora de goal_approach nao entra',
+         conta_churn(fd([('driving', 0.0), ('driving', 0.3), (A, 0.0)])), (1, 0)),
+        ('estado que sai e volta nao inventa alternancia',
+         conta_churn(fd([(A, 0.0), ('turning', 2.4), (A, 0.0)])), (2, 0)),
+    ]
+    ruim = 0
+    for nome, got, esperado in casos:
+        ok = got == esperado
+        ruim += not ok
+        print('%s %-52s %s' % ('ok  ' if ok else 'FALHA', nome,
+                               '' if ok else 'got=%r esperado=%r' % (got, esperado)))
+    return ruim
+
+
+def _autoteste_guard():
+    """Prova SENSÍVEL (BO 63): cada caso tem um par que o defeito produziria.
+
+    O defeito plausível aqui é somar transitório de guard como parada, ou
+    chamar de "congelado" qualquer pausa curta — os dois inflariam o número
+    que sustenta a §2B.7.
+    """
+    def fc(pares, ticks=()):
+        rows = [{'t_wall': '1000.0', 'topic': 'odom', 'vx': '', 'wz': '',
+                 'extra': ''}]
+        for t, e in pares:
+            rows.append({'t_wall': '%.3f' % (1000.0 + t), 'topic': 'guard_state',
+                         'vx': '', 'wz': '', 'extra': e})
+        for t, top, vx, wz in ticks:
+            rows.append({'t_wall': '%.3f' % (1000.0 + t), 'topic': top,
+                         'vx': '%.3f' % vx, 'wz': '%.3f' % wz, 'extra': ''})
+        return sorted(rows, key=lambda r: float(r['t_wall']))
+
+    def col(seq):
+        # seq: (t, x, y, folga, obj)
+        return [{'t': '%.2f' % t, 'x': x, 'y': y, 'folga_min': '%.4f' % fo,
+                 'obj': o, 'yaw_deg': '0.0', 'evento': ''}
+                for t, x, y, fo, o in seq]
+
+    ruim = 0
+    casos = [
+        ('bloqueio de 26.9s vira 1 episodio',
+         len(episodios_guard(fc([(5, 'idle'), (10, 'blocked'), (36.9, 'idle')]))), 1),
+        ('duracao do episodio e a medida',
+         round(episodios_guard(fc([(10, 'blocked'), (36.9, 'idle')]))[0][1]
+               - episodios_guard(fc([(10, 'blocked'), (36.9, 'idle')]))[0][0], 1), 26.9),
+        ('transitorio de 0.1s NAO conta',
+         len(episodios_guard(fc([(10, 'blocked'), (10.1, 'idle')]))), 0),
+        ('volta sem blocked da 0 episodios',
+         len(episodios_guard(fc([(5, 'idle')]))), 0),
+        ('conta comando que ENTRA e o que SAI',
+         episodios_guard(fc([(10, 'blocked'), (36.9, 'idle')],
+                            [(20, 'auto_vel_pre', 0.0, 2.4),
+                             (21, 'auto_vel_pre', 0.0, 2.4),
+                             (22, 'auto_vel_raw', 0.0, 0.0)]))[0][2],
+         'cmd_entrou=2 cmd_saiu=0'),
+        ('avanco reto zerado tambem conta (BO da aprox2)',
+         episodios_guard(fc([(10, 'blocked'), (36.9, 'idle')],
+                            [(20, 'auto_vel_pre', 0.3, 0.0),
+                             (21, 'auto_vel_raw', 0.0, 0.0)]))[0][2],
+         'cmd_entrou=1 cmd_saiu=0'),
+        ('pose identica por 26.9s e episodio',
+         len(episodios_congelado(col([(100, '1.0', '2.0', 0.9, 'muro_sul'),
+                                      (120, '3.0', '4.0', 0.31, 'cone_3'),
+                                      (146.9, '3.0', '4.0', 0.35, 'cone_3'),
+                                      (150, '5.0', '6.0', 0.9, 'muro_sul')]))), 1),
+        ('reporta o objeto MAIS PROXIMO do trecho',
+         episodios_congelado(col([(120, '3.0', '4.0', 0.31, 'cone_3'),
+                                  (146.9, '3.0', '4.0', 0.35, 'cone_3'),
+                                  (150, '5.0', '6.0', 0.9, 'muro_sul')]))[0][2],
+         'obj=cone_3 folga_min=0.3100'),
+        ('pausa de 2s NAO e congelamento',
+         len(episodios_congelado(col([(120, '3.0', '4.0', 0.31, 'cone_3'),
+                                      (122, '3.0', '4.0', 0.31, 'cone_3'),
+                                      (130, '5.0', '6.0', 0.9, 'muro_sul')]))), 0),
+    ]
+    for nome, got, esperado in casos:
+        ok = got == esperado
+        ruim += not ok
+        print('%s %-52s %s' % ('ok  ' if ok else 'FALHA', nome,
+                               '' if ok else 'got=%r esperado=%r' % (got, esperado)))
+    return ruim
+
+
 def _autoteste_atomico():
     """O BO do revisor: bruto faltando não pode ENCOSTAR no destino."""
     import shutil
@@ -311,16 +531,19 @@ def _autoteste_atomico():
 
 def main():
     if '--autoteste' in sys.argv:
-        return 1 if (_autoteste_samba() + _autoteste_atomico()) else 0
-    if '--resumo' in sys.argv:
-        i = sys.argv.index('--resumo')
+        return 1 if (_autoteste_samba() + _autoteste_churn()
+                     + _autoteste_guard() + _autoteste_atomico()) else 0
+    for flag, fn in (('--resumo', resumo), ('--guard', guard)):
+        if flag not in sys.argv:
+            continue
+        i = sys.argv.index(flag)
         saida, tags = sys.argv[i + 1], sys.argv[i + 2:]
         if not tags:
-            raise SystemExit('USO: --resumo <arquivo.csv> <tag> [<tag> ...]')
+            raise SystemExit('USO: %s <arquivo.csv> <tag> [<tag> ...]' % flag)
         confere_bruto(tags)
         gerar(os.path.dirname(os.path.abspath(saida)), tags,
-              arquivos=((os.path.basename(saida), resumo),))
-        print('resumo de %s -> %s' % (', '.join(tags), saida))
+              arquivos=((os.path.basename(saida), fn),))
+        print('%s de %s -> %s' % (flag[2:], ', '.join(tags), saida))
         return 0
     if len(sys.argv) < 3:
         raise SystemExit('USO: extrai_evidencia.py <destino> <tag> [<tag> ...]')
