@@ -1316,6 +1316,93 @@ pacotes e o guard voltou pro caminho. Um nó feito pra não atropelar gente est�
 ligado numa prova onde não há gente, e ele **zera o giro**, que é exatamente o
 comando de que o robô precisa pra sair.
 
+### 2B.8 Guard DESLIGADO na arena — o que mudou no código
+
+**Decisão do dono (08-31), depois da §2B.7:** desligar o `motion_guard` na
+arena. Ele é o vigia de PESSOA; a prova não tem pessoa.
+
+⚠️ **Não dá pra só não lançar o nó.** O guard é um estágio da artéria
+(`auto_vel_pre` → `auto_vel_raw`): tirando ele, o `collision_monitor` fica **sem
+publisher na entrada** e a autonomia inteira emudece. Então a mudança tem duas
+metades, e as duas moram no `nav2.launch.py`:
+
+| | o que faz |
+|---|---|
+| `motion_guard:=false` | o nó **não sobe** (`condition=IfCondition`) |
+| `auto_mux_out` | o `twist_mux_auto` publica **direto** em `auto_vel_raw` |
+
+Default é `true` — fora da arena **nada muda**, o guard segue ligado no robô de
+sempre. Quem desliga é o `--arena` do `launch.sh` (junto do
+`follow_clear_full:=1.2`, mesmo padrão), e o harness do sim pelo
+`AB_EXTRA_LAUNCH` (a §4.5 abaixo já traz o comando atualizado).
+
+**Uma ferramenta minha ia passar a mentir.** O `pause_budget.py` classifica
+segundo parado por causa, e uma delas é `mux_gap` = *"o seguidor comandava e o
+`auto_vel_pre` estava zerado"*. Sem guard o `auto_vel_pre` fica **mudo a run
+inteira** — todo segundo parado viraria `mux_gap`, uma causa que não existe.
+Corrigido: sem `auto_vel_pre`, a saída do mux lida passa a ser o `auto_vel_raw`,
+e o relatório diz na cara que a stack está sem guard.
+
+De brinde, o `pause_budget` é uma **terceira fonte independente** confirmando a
+§2B.7 na `hist3` — ele não sabe nada de cone nem de ground truth:
+
+```
+== ORÇAMENTO (quem segura o robô) ==
+  guard_hold                     26.8s  (52.1%)
+  follower_off[idle]             21.6s  (42.0%)
+```
+
+**Metade do tempo parado da `hist3` era o guard.**
+
+### 2B.9 3 voltas SEM guard (`noguard1..3`) — ganho grande e **um BO que não posso esconder**
+
+Comando da §4.5 com `motion_guard:=false`. Conferido em 3/3:
+`grep -c motion_guard log/sim_ab/noguard*/nav2.log` = **0**.
+
+| volta | tempo | goals | COLISÃO | raspão | folga mín | samba | unstuck | parado |
+|---|---|---|---|---|---|---|---|---|
+| `hist1` | 230,3 | 5/5 | 0 | 0 | 0,0776 | 0 | 0,0 | 1,0 |
+| `hist2` | 269,1 | 5/5 | 0 | 0 | 0,0630 | 0 | 1,5 | 26,7 |
+| `hist3` | 265,6 | 5/5 | 0 | 0 | 0,0451 | 0 | 3,2 | 30,7 |
+| **`noguard1`** | **227,6** | 5/5 | 0 | 0 | 0,0827 | 0 | 0,0 | **0,0** |
+| **`noguard2`** | **221,0** | 5/5 | 0 | 0 | 0,0667 | 0 | 0,0 | **0,0** |
+| **`noguard3`** | 245,4 | 5/5 | **9** | **48** | **0,0000** | 0 | 1,5 | 3,6 |
+
+**✅ O que melhorou:** `parado` = **0,0 s em 14 dos 15 goals**. A `noguard2`
+(221,0 s) é a **volta mais rápida das 14**, e a `noguard1` a segunda. Nenhuma
+parada longa em nenhuma das três — a assinatura de ~27 s sumiu, como esperado.
+
+**🔴 O que piorou: a `noguard3` bateu.** 9 COLISÃO + 48 raspões, folga
+**0,0000** (penetração), tudo na **`A_fresta90_2`** — 58 eventos entre t=60,7 e
+t=63,6. É o pior contato desde o `arena_baseline1`, e o **segundo** contato em 14
+voltas.
+
+#### Isso foi eu que causei tirando o guard?
+
+**O que está medido, e vai contra essa hipótese:**
+
+1. **A fresta A sempre foi a passagem no fio.** Folga mínima nela, nas 14 voltas:
+   0,045 a 0,212 m. O robô **sempre** passou a menos de 21 cm, e em 4 voltas a
+   menos de 8 cm. A `noguard3` não estreou o risco — cobrou ele.
+2. **O guard nunca atuou ali.** Nas 11 voltas com guard, o estado dele na
+   travessia da fresta foi `idle` em **todas**. Os únicos `slowing` do histórico
+   somam ~6 s e aconteceram longe: muro oeste (1,29 m), `C_fresta60_1` (0,95 m),
+   `cone_4` (0,48 m). Não havia proteção ali pra eu ter removido.
+3. **A `noguard3` chegou na fresta ERRADA, e atrasada.** Nas outras 13 voltas ela
+   é cruzada em t=35–45 s com yaw entre **−13° e −26°**. A `noguard3` cruzou em
+   **t=60,9** com yaw **−5,4°** — quase de frente pro batente. Antes disso, o
+   `unstuck` disparou (`reason=near`) aos 50,8 s lá atrás no goal 1, que levou
+   59,5 s (contra 42–46 s das outras duas).
+
+**⚠️ O que isso NÃO prova:** são **3 voltas**. Não dá pra tirar taxa de contato
+de n=3, e "o guard não atuava ali" não é o mesmo que "tirar o guard não muda
+nada em lugar nenhum" — o guard estava na artéria, e a religação do mux é
+mudança de caminho de dado. **Não vou registrar guard-off como validado.**
+
+**O que a `noguard3` provavelmente escancarou é um defeito que já estava lá:** a
+rota passa por um vão de 90 cm com folga de 4–21 cm, sem nada que corrija o rumo
+antes de entrar. Um dia o rumo ia estar 15° fora. Item novo nos abertos.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -1431,12 +1518,19 @@ AB_WORLD=$PWD/worlds/arena_galpao.sdf \
 AB_MAP=$PWD/maps/arena_galpao.yaml \
 AB_ROTA=$PWD/maps/routes/arena_galpao.json \
 AB_SX=1.0 AB_SY=1.0 \
-AB_EXTRA_LAUNCH="follow_clear_full:=1.2 follow_clear_min:=0.35" \
+AB_EXTRA_LAUNCH="follow_clear_full:=1.2 follow_clear_min:=0.35 motion_guard:=false" \
   bash tools/sim_ab/run_one.sh robot_nav arena_v1
 ```
 
 `AB_SX/AB_SY` = a **largada** (1.0, 1.0). O default do harness é (2.0, **0.0**),
 que na arena fica **em cima do muro sul**.
+
+⚠️ **`motion_guard:=false` é obrigatório aqui, e é fácil de esquecer.** Este
+harness **não passa pelo `--arena`** do `launch.sh` — ele monta os argumentos do
+launch na mão. O `--arena` desliga o guard sozinho; o `AB_EXTRA_LAUNCH`, não. Um
+comando sem essa linha volta a rodar com o guard e traz de volta as paradas de
+~27 s da §2B.7, sem avisar. Conferência barata: `grep -c motion_guard
+log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 
 ## 5. Erros que EU cometi (não podar esta seção)
 
@@ -1541,7 +1635,8 @@ que na arena fica **em cima do muro sul**.
 | 2g | **16 s em `idle`** entre dois goals (`aprox3`) | ⏳ **novo, 08-31.** Sem goal ativo — não é o seguidor. Buraco entre a conclusão de um goal e o próximo ser aceito; não investigado |
 | 2h | **Goal 2: última amostra a 0,156–0,160 nas 3 voltas** | ⏳ **novo, 08-31.** Único goal que a aproximação não puxa pra dentro, e sempre o mesmo. ⚠️ **NÃO é prova de que termina fora da tolerância** (BO 61: ~1,1 cm entre amostras a 20 Hz, e o checker é `stateful`). Suspeita não verificada: algo bloqueia o avanço ali (é o goal cujo caminho passa pela fresta A) |
 | 2i | **Por que o Nav2 ainda queria movimento com o robô já chegado?** | ⏳ **novo, 08-31.** A explicação que eu tinha dado (parou fora dos 0,15) **caiu**: o checker é `stateful` e o robô entrou dentro. Hipótese do próprio log: `Failed to make progress` → recovery → **reset do goal checker** → o XY volta a ser exigido. Medir antes de afirmar |
-| 2j | 🔴🔴 **`motion_guard` bloqueia o robô na arena** | ⏳ **novo, 08-31 (§2B.7).** Vigia de PESSOA ligado numa prova **sem pessoa**; zera o giro entre `auto_vel_pre` e `auto_vel_raw`. Medido: **26,9 s** (`hist3`) e **52,1 s** (`aprox2`); nos episódios, ~505 comandos entraram e **1** saiu. Os 3 episódios duram 25,7–26,9 s = `hold_still_max` 20 + `clear_time` 5 + settle, sempre com um **cone** como único vizinho — a vigília roda até o teto em cima do cone. Só dispara nas voltas com aproximação (que adiciona point-turn perto de cone). **Decisão pendente do dono: desligar na arena?** Ver item 7 — os números de 08-27 vieram do fork SEM guard |
+| 2k | 🔴 **Fresta A é passagem no fio, sem correção de rumo** | ⏳ **novo, 08-31 (§2B.9).** Nas 14 voltas a folga mínima na `A_fresta90_2` foi 0,045–0,212 m; a `noguard3` entrou com yaw **−5,4°** (as outras 13: −13° a −26°) e **bateu** (9 COLISÃO + 48 raspões). Nada alinha o robô antes do vão. ⚠️ n=3 sem guard: **não** está provado que tirar o guard causou — o guard estava `idle` na fresta em 11/11 voltas — mas também não está provado que não |
+| 2j | 🔴🔴 **`motion_guard` bloqueia o robô na arena** | ⏳ **novo, 08-31 (§2B.7).** Vigia de PESSOA ligado numa prova **sem pessoa**; zera o giro entre `auto_vel_pre` e `auto_vel_raw`. Medido: **26,9 s** (`hist3`) e **52,1 s** (`aprox2`); nos episódios, ~505 comandos entraram e **1** saiu. Os 3 episódios duram 25,7–26,9 s = `hold_still_max` 20 + `clear_time` 5 + settle, sempre com um **cone** como único vizinho — a vigília roda até o teto em cima do cone. Só dispara nas voltas com aproximação (que adiciona point-turn perto de cone). ✅ **DESLIGADO na arena por decisão do dono 08-31** (`motion_guard:=false`, §2B.8); 3 voltas sem ele na §2B.9 — parado 0,0 s em 14/15 goals, mas **1 das 3 bateu na fresta A** (item 2k), então **não** está validado |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |

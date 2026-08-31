@@ -12,7 +12,8 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterValue
 
@@ -67,6 +68,25 @@ def generate_launch_description():
     follow_clear_min_arg = DeclareLaunchArgument(
         'follow_clear_min', default_value='0.35',
         description='m — folga em que o path_follower ja esta no min_speed')
+
+    # motion_guard LIGADO por default (é o vigia de pessoa do robô no galpão/sala).
+    # `--arena` DESLIGA (dono, 2026-08-31): a arena da prova não tem pessoa
+    # nenhuma — tem CONE — e a vigília do guard fechava em cima do cone e ZERAVA
+    # o comando por ~27 s (medido: 3 episódios em 11 voltas, DIARIO_ARENA §2B.7).
+    # Isto também restaura a condição em que os números de 08-27 foram medidos:
+    # o fork nav2_trekking não tinha o guard.
+    motion_guard_arg = DeclareLaunchArgument(
+        'motion_guard', default_value='true',
+        description='false = NÃO sobe o motion_guard e o mux de autonomia '
+                    'publica direto em auto_vel_raw (perfil ARENA)')
+    guard_on = LaunchConfiguration('motion_guard')
+    # Com o guard fora, o estágio auto_vel_pre->auto_vel_raw some: sem religar a
+    # saída do mux, o collision_monitor fica SEM PUBLISHER na entrada e a
+    # autonomia inteira emudece. Este é o mesmo encadeamento de antes do guard
+    # existir (ver o comentário de pipeline em nav2_params_pi.yaml).
+    auto_mux_out = PythonExpression(
+        ["'auto_vel_pre' if '", guard_on, "'.lower() in ('true', '1') "
+         "else 'auto_vel_raw'"])
 
     map_yaml = LaunchConfiguration('map')
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -216,7 +236,7 @@ def generate_launch_description():
             package='twist_mux', executable='twist_mux',
             name='twist_mux_auto', output=nav_output,
             parameters=[twist_mux_auto_cfg, sim_time_param],
-            remappings=[('cmd_vel_out', 'auto_vel_pre')],
+            remappings=[('cmd_vel_out', auto_mux_out)],
         ),
         # Cautela com objeto EM MOVIMENTO (2026-07-02): diff temporal do
         # /scan_safe no frame odom -> móvel perto = desacelera; móvel no
@@ -233,6 +253,9 @@ def generate_launch_description():
             name='motion_guard', output=nav_output,
             parameters=[sim_time_param],
             respawn=True, respawn_delay=1.0,
+            # motion_guard:=false (perfil ARENA) tira o nó do caminho; o mux
+            # passa a publicar direto em auto_vel_raw (ver auto_mux_out).
+            condition=IfCondition(guard_on),
         ),
         # Collision Monitor: lê /scan_safe (sanitizado acima) e freia
         # auto_vel_raw -> auto_vel ANTES do mux FINAL. Agora protege TODA a
@@ -334,4 +357,5 @@ def generate_launch_description():
     return LaunchDescription([map_arg, use_sim_time_arg, params_arg,
                               init_pose_arg, init_x_arg, init_y_arg, init_yaw_arg,
                               follow_clear_full_arg, follow_clear_min_arg,
+                              motion_guard_arg,
                               *nodes])

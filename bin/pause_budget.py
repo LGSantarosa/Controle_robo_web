@@ -64,7 +64,14 @@ class Track:
 def classify(tr, states, t):
     """causa do instante parado t (precedência: mais a jusante primeiro)."""
     fv_x, fv_w = tr['follow_vel'].at(t)
-    pre_x, pre_w = tr['auto_vel_pre'].at(t)
+    # SEM motion_guard (perfil ARENA, 2026-08-31: `motion_guard:=false`) o
+    # estágio auto_vel_pre->auto_vel_raw não existe — o mux publica DIRETO em
+    # auto_vel_raw e `auto_vel_pre` fica mudo a run inteira. Sem esta troca, todo
+    # segundo parado com o seguidor comandando cairia em `mux_gap` ("o mux não
+    # repassa"), que é falso: não há mux nenhum engolindo. A saída do mux passa a
+    # ser o auto_vel_raw.
+    pre = tr['auto_vel_raw'] if tr['auto_vel_pre'].t == -math.inf else tr['auto_vel_pre']
+    pre_x, pre_w = pre.at(t)
     raw_x, raw_w = tr['auto_vel_raw'].at(t)
     av_x, av_w = tr['auto_vel'].at(t)
     cv_x, cv_w = tr['cmd_vel'].at(t)
@@ -161,6 +168,10 @@ def main(path):
     print('tempo com goal ativo: %.0fs' % total_goal)
     print('PARADO com goal     : %.0fs (%.0f%% do tempo de missão)'
           % (tot_stop, 100 * tot_stop / total_goal if total_goal else 0))
+    if tr['auto_vel_pre'].t == -math.inf:
+        print('NOTA: `auto_vel_pre` mudo a run inteira -> stack SEM motion_guard '
+              '(perfil arena). `guard_hold` nao pode aparecer, e a saida do mux '
+              'lida e o auto_vel_raw.')
     print('\n== ORÇAMENTO (quem segura o robô) ==')
     for cause, s in sorted(budget.items(), key=lambda kv: -kv[1]):
         print('  %-28s %6.1fs  (%4.1f%%)'

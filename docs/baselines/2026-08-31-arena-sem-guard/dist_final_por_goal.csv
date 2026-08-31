@@ -1,0 +1,16 @@
+volta,goal_n,dist_ultima_amostra_m,ultima_amostra_le_0.15
+noguard1,1,0.154,NAO
+noguard1,2,0.160,NAO
+noguard1,3,0.027,sim
+noguard1,4,0.030,sim
+noguard1,5,0.020,sim
+noguard2,1,0.161,NAO
+noguard2,2,0.148,sim
+noguard2,3,0.079,sim
+noguard2,4,0.081,sim
+noguard2,5,0.074,sim
+noguard3,1,0.088,sim
+noguard3,2,0.141,sim
+noguard3,3,0.033,sim
+noguard3,4,0.048,sim
+noguard3,5,0.049,sim

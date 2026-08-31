@@ -570,7 +570,13 @@ case "$MODE" in
         # nao le' ele) — entra por launch arg, so' no perfil ARENA.
         ARENA_FOLLOW_ARG=""
         [ "$ARENA" = true ] && ARENA_FOLLOW_ARG="follow_clear_full:=1.2 follow_clear_min:=0.35"
-        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG $INIT_POSE_ARG $ARENA_FOLLOW_ARG > "$NAV2_LOG" 2>&1 &
+        # motion_guard DESLIGADO na arena (dono, 2026-08-31). Ele e' o vigia de
+        # PESSOA; a arena da prova nao tem pessoa, tem CONE — e a vigilia fechava
+        # em cima do cone e ZERAVA o comando por ~27 s (3 episodios em 11 voltas,
+        # DIARIO_ARENA §2B.7). Fora da arena ele continua ligado por default.
+        ARENA_GUARD_ARG=""
+        [ "$ARENA" = true ] && ARENA_GUARD_ARG="motion_guard:=false"
+        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG $INIT_POSE_ARG $ARENA_FOLLOW_ARG $ARENA_GUARD_ARG > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
         # Nav2 demora pra ativar todos os lifecycle nodes; espera o costmap global.

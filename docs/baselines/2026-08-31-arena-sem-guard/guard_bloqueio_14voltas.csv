@@ -1,0 +1,11 @@
+volta,fonte,t_ini,t_fim,dur_s,detalhe
+latchN3,pose_congelada,219.2,236.3,17.1,obj=muro_oeste folga_min=1.0128
+aprox2,guard_blocked,137.9,164.2,26.2,cmd_entrou=502 cmd_saiu=1
+aprox2,guard_blocked,218.6,244.5,25.8,cmd_entrou=505 cmd_saiu=1
+aprox2,pose_congelada,120.3,146.5,26.2,obj=cone_3 folga_min=0.1154
+aprox2,pose_congelada,201.0,226.7,25.7,obj=cone_4 folga_min=0.4049
+aprox3,pose_congelada,156.6,171.5,14.9,obj=cone_4 folga_min=0.3408
+hist2,pose_congelada,174.1,189.1,14.9,obj=cone_4 folga_min=0.3001
+hist2,pose_congelada,206.8,218.1,11.3,obj=cone_4 folga_min=0.4750
+hist3,guard_blocked,135.1,162.0,26.9,cmd_entrou=505 cmd_saiu=1
+hist3,pose_congelada,120.1,147.0,26.9,obj=cone_3 folga_min=0.3123

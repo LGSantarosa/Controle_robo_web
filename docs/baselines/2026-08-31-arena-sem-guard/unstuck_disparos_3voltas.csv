@@ -1,0 +1,7 @@
+volta,t,state,reason,ang,nav_wants,stuck_s,x,y
+noguard1,15.194,monitoring,,0.0,0,,-0.0,-0.0
+noguard2,14.316,monitoring,,0.0,0,,-0.0,-0.0
+noguard3,16.112,monitoring,,0.0,0,,0.0,0.0
+noguard3,50.8,advancing,near,0.0,1,3.03,2.554,0.357
+noguard3,51.9,grace,near,0.0,1,4.16,2.712,0.512
+noguard3,53.9,monitoring,near,0.0,1,,2.715,0.515
