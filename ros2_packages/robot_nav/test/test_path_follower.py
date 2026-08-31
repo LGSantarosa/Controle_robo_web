@@ -403,6 +403,83 @@ def test_goal_turn_then_arrived():
     assert cmd.state == 'arrived' and (cmd.vx, cmd.wz) == (0.0, 0.0)
 
 
+# --- Latch da chegada (samba do goal, DIARIO_ARENA §2.8 / §2B.2) ------------
+#
+# Baseline da arena 08-28: 13 blocos de `goal_turn` numa volta, 7 só no goal 3,
+# com INVERSÃO de giro na troca de estado. Mecanismo do CSV:
+#
+#    4.0  driving    dist 0.166
+#    4.3  goal_turn  dist 0.153  wz +4.50   <- cruza a tolerância, mira o yaw do goal
+#    6.3  goal_turn  dist 0.161  wz +2.40   <- girando no lugar, o skid DESLOCA
+#    6.6  turning    dist 0.174  wz -4.50   <- saiu da tolerância: mira o carrot e INVERTE
+#
+# `goal_turn` gira pro yaw do GOAL, `turning` gira pro CARROT — lados opostos.
+# Quem arbitra é `dist_goal <= goal_xy_tol` pelado, sem histerese.
+
+
+def _chegada():
+    """Robô chegando no goal (0,0) por -x, com o yaw do goal a +90°.
+    O carrot aponta pra +x (bearing 0) e o goal_yaw pra +y: lados OPOSTOS,
+    que é a condição que faz a troca de estado inverter o giro."""
+    path = [(-1.0 + i * 0.05, 0.0) for i in range(21)]   # (-1,0) .. (0,0)
+    return _fol(), path, math.pi / 2
+
+
+def test_chegada_nao_alterna_para_turning_quando_o_giro_desloca():
+    f, path, gyaw = _chegada()
+
+    a = f.update((-0.166, 0.0, 0.0), path, goal_active=True, goal_yaw=gyaw)
+    assert a.state == 'driving'
+
+    b = f.update((-0.140, 0.0, 0.0), path, goal_active=True, goal_yaw=gyaw)
+    assert b.state == 'goal_turn' and b.wz > 0.0
+
+    # o giro no lugar do skid empurrou o robô pra fora da tolerância (0.161) e
+    # já rodou 34°, então a mira do carrot pede giro pro outro lado.
+    c = f.update((-0.161, 0.0, 0.6), path, goal_active=True, goal_yaw=gyaw)
+    assert c.state == 'goal_turn', 'saiu da chegada e voltou pro carrot'
+    assert c.wz > 0.0, 'inverteu o sinal do giro (a samba)'
+
+    # e continua fechando o yaw até chegar, sem nunca voltar pro carrot
+    d = f.update((-0.170, 0.0, 1.2), path, goal_active=True, goal_yaw=gyaw)
+    assert d.state == 'goal_turn' and d.wz > 0.0
+    e = f.update((-0.170, 0.0, gyaw), path, goal_active=True, goal_yaw=gyaw)
+    assert e.state == 'arrived' and (e.vx, e.wz) == (0.0, 0.0)
+
+
+def test_latch_da_chegada_solta_com_goal_novo():
+    f, path, gyaw = _chegada()
+    assert f.update((-0.140, 0.0, 0.0), path, goal_active=True,
+                    goal_yaw=gyaw).state == 'goal_turn'
+
+    # goal novo: o plano agora termina longe -> tem que voltar a dirigir
+    novo = [(0.0, j * 0.05) for j in range(41)]          # (0,0) .. (0,2.0)
+    cmd = f.update((0.0, 0.0, math.pi / 2), novo, goal_active=True, goal_yaw=0.0)
+    assert cmd.state == 'driving' and cmd.vx > 0.0
+
+
+def test_latch_da_chegada_solta_se_algo_empurra_o_robo():
+    f, path, gyaw = _chegada()
+    assert f.update((-0.140, 0.0, 0.0), path, goal_active=True,
+                    goal_yaw=gyaw).state == 'goal_turn'
+
+    # unstuck/colisão jogou o robô pra 0.6 m (> 3x a tolerância): insistir em
+    # girar pro yaw do goal a essa distância é pior que voltar a dirigir.
+    cmd = f.update((-0.60, 0.0, 0.0), path, goal_active=True, goal_yaw=gyaw)
+    assert cmd.state == 'driving' and cmd.vx > 0.0
+
+
+def test_latch_zerado_quando_o_goal_some():
+    f, path, gyaw = _chegada()
+    assert f.update((-0.140, 0.0, 0.0), path, goal_active=True,
+                    goal_yaw=gyaw).state == 'goal_turn'
+    assert f.update((-0.140, 0.0, 0.0), path, goal_active=False,
+                    goal_yaw=gyaw).state == 'idle'
+    # goal novo depois do idle: dirige (não ressuscita a chegada travada)
+    cmd = f.update((-0.60, 0.0, 0.0), path, goal_active=True, goal_yaw=gyaw)
+    assert cmd.state == 'driving'
+
+
 def _cfg_vel(**kw):
     base = dict(forward_speed=0.60, min_speed=0.22,
                 clear_full=1.2, clear_min=0.35)

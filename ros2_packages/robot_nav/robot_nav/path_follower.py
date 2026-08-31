@@ -16,6 +16,11 @@ com cantos) com lógica DETERMINÍSTICA + 2 truques que faltavam:
      mas só PARA de girar quando cai abaixo de `turn_exit` (bem menor). Sem isso
      ele girava e parava no MESMO limiar -> limite-ciclo = "pulinhos". Com
      histerese: gira decidido até alinhar, anda comprometido, re-gira só no canto.
+  3. LATCH DA CHEGADA (2026-08-31): o mesmo remédio no limiar de CHEGADA, que
+     tinha ficado de fora. Cruzou `goal_xy_tol` -> trava em `goal_turn` até o yaw
+     fechar; o carrot não retoma o controle. Sem isso os dois controladores
+     giravam pra lados opostos e o próprio giro do skid cruzava o limiar de volta
+     (a "samba" do goal, medida na arena — DIARIO_ARENA §2.8).
 
 Estados: idle | turning | driving | goal_turn | arrived.
 Publica `follow_vel` (twist_mux prio 15 > nav_vel 10 = ignora controller_server;
@@ -190,6 +195,20 @@ class FollowConfig:
                                     # 1/rate_hz); usado só pra derivar o yaw.
     goal_xy_tol: float = 0.15       # m — chegou no goal (casa c/ goal_checker do nav2)
     goal_yaw_tol: float = 0.10      # rad (~6°) — encarou o yaw do goal
+    # LATCH DA CHEGADA (2026-08-31, arena §2.8/§2B.2). O limiar de chegada
+    # arbitrava dois controladores que giram pra lados OPOSTOS (`goal_turn` mira
+    # o yaw do goal, `turning` mira o carrot) — e o giro no lugar do skid
+    # DESLOCA o robô, então ele mesmo cruzava o limiar de volta: oscilador. É a
+    # mesma doença que o turn_enter/turn_exit curou no limiar de HEADING (ver
+    # docstring); o de CHEGADA nunca tinha recebido o remédio. Baseline da arena:
+    # 13 blocos de goal_turn numa volta, 7 num goal só, com inversão de giro.
+    # Cruzou goal_xy_tol -> TRAVA na chegada e não volta mais pro carrot.
+    goal_moved_tol: float = 0.30    # m — fim do plano mudou mais que isso = GOAL
+                                    # NOVO, solta a trava. Replan pro mesmo goal
+                                    # mexe poucos cm; goals ficam a metros.
+    unlatch_dist: float = 0.45      # m (3x goal_xy_tol) — algo EMPURROU o robô
+                                    # pra longe (unstuck/colisão): insistir em
+                                    # girar pro yaw do goal daqui é pior.
     rot_k: float = 3.0              # ganho P do giro (rad/s por rad)
     rot_min: float = 2.4            # rad/s — piso do giro (2.0 dava ~10°/s real =
                                     # rastejo na zona-morta 1.7; 2.4 ≈ 25°/s,
@@ -257,6 +276,8 @@ class DecisiveFollower:
         self._prev_yaw = None     # p/ derivar a taxa de giro medida
         self._yaw_rate = 0.0      # rad/s, EMA (ruído de pose não vira taxa)
         self._aim_filt = None     # bearing (map) filtrado da mira (só esticado)
+        self._arrival_latched = False  # travado na fase de chegada deste goal
+        self._latch_goal = None        # (x,y) do goal em que a trava fechou
         self.dbg = {}        # diagnóstico do último update (logado pelo nó)
 
     def _turn_cmd(self, herr: float) -> float:
@@ -277,6 +298,8 @@ class DecisiveFollower:
             self._prev_yaw = None
             self._yaw_rate = 0.0
             self._aim_filt = None
+            self._arrival_latched = False
+            self._latch_goal = None
             return Cmd(0.0, 0.0, 'idle')
 
         x, y, yaw = pose
@@ -291,8 +314,20 @@ class DecisiveFollower:
         gx, gy = path[-1]
         dist_goal = math.hypot(gx - x, gy - y)
 
-        # 1) chegou no goal (xy) -> encara o yaw do goal, depois para
+        # 1) chegou no goal (xy) -> encara o yaw do goal, depois para.
+        #    TRAVADO (ver goal_moved_tol): uma vez dentro da tolerância, a fase
+        #    de chegada não devolve o controle pro carrot — só sai por goal novo,
+        #    empurrão ou fim do goal. Sem isso os dois controladores brigam.
+        if self._arrival_latched:
+            lx, ly = self._latch_goal
+            if math.hypot(gx - lx, gy - ly) > c.goal_moved_tol:
+                self._arrival_latched = False   # goal novo
+            elif dist_goal > c.unlatch_dist:
+                self._arrival_latched = False   # empurraram o robô pra longe
         if dist_goal <= c.goal_xy_tol:
+            self._arrival_latched = True
+            self._latch_goal = (gx, gy)
+        if self._arrival_latched:
             if goal_yaw is not None:
                 yerr = wrap(goal_yaw - yaw)
                 if abs(yerr) > c.goal_yaw_tol:
@@ -417,6 +452,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 ('stretch_clearance', 0.55), ('clear_sector_deg', 40.0),
                 ('turn_enter_deg', 16.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
+                ('goal_moved_tol', 0.30), ('unlatch_dist', 0.45),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
                 ('slow_radius', 0.4), ('min_speed', 0.22), ('rate_hz', 20.0),
                 ('clear_full', 0.0), ('clear_min', 0.35),
@@ -435,6 +471,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 turn_exit=math.radians(g['turn_exit_deg']),
                 goal_xy_tol=g['goal_xy_tol'],
                 goal_yaw_tol=math.radians(g['goal_yaw_tol_deg']),
+                goal_moved_tol=g['goal_moved_tol'],
+                unlatch_dist=g['unlatch_dist'],
                 rot_k=g['rot_k'], rot_min=g['rot_min'], rot_max=g['rot_max'],
                 slow_radius=g['slow_radius'], min_speed=g['min_speed'],
                 clear_full=g['clear_full'], clear_min=g['clear_min'],

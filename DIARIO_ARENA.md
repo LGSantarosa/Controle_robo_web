@@ -713,6 +713,120 @@ parada segura**.
 **Decidido no review 12 (dono):** **só bloquear na v1**, sem cap. Look-ahead
 dimensionado pelo **medido** (~21°), não pela conta com o parâmetro errado.
 
+---
+
+## 2B. Sessão 2026-08-31
+
+> Numerada `2B` de propósito: as seções §3–§6 são de **referência** e são citadas
+> por número no corpo do texto (§2.8, §3.2, §4.5...). Renumerar pra encaixar uma
+> sessão nova quebraria todas essas referências. Sessões futuras seguem 2C, 2D...
+
+### 2B.1 O dono escolheu a ordem (e ela é o INVERSO da minha recomendação)
+
+Na §2.9 eu recomendei **proteção de point-turn primeiro**, com o argumento de que
+ela ataca o modo de falha observado. O dono decidiu o contrário, e o argumento
+dele é melhor:
+
+> *"Eu começaria pelo 2, latch de chegada: é uma correção menor, bem delimitada e
+> elimina giros contraditórios que contaminam o diagnóstico. Depois repetiria o
+> baseline; com a 'samba' removida, implementaria a proteção de point-turn sobre
+> um comportamento mais estável."*
+
+**Por que ele está certo e eu não estava:** os dois defeitos provados se
+manifestam no MESMO lugar (giro no lugar, colado no `cone_3`) e no MESMO instante.
+Enquanto a samba estiver viva, qualquer medição da proteção de point-turn mede as
+duas coisas somadas — e eu já queimei uma sessão inteira (§2.9) tirando conclusão
+binária de dois suspeitos sobrepostos. Tirar o **defeito menor e provado** primeiro
+não é ordem de conveniência: é **desacoplar as variáveis** antes de medir a grande.
+
+O ganho colateral que ele aponta: menos giro desnecessário colado no alvo = menos
+exposição ao modo de falha do canto, então a proteção de point-turn depois é
+implementada sobre uma planta mais estável.
+
+**Ordem acordada:**
+
+| # | passo | estado |
+|---|---|---|
+| 1 | teste que reproduz `goal_turn` ↔ `turning` | ⏳ |
+| 2 | implementar latch/histerese da chegada | ⏳ |
+| 3 | repetir a volta e medir contato no `cone_3` | ⏳ |
+| 4 | fechar o contrato do bloqueio (aborto imediato do unstuck) | ⏳ |
+| 5 | proteção contínua de point-turn | ⏳ |
+
+⚠️ O passo 3 **não fecha A4 por si** — vale a mesma ressalva da §2.9: A4 fecha com
+volta completa e zero evento. O passo 3 mede **quanto** da falha era samba.
+
+### 2B.2 Desenho do latch (antes de virar código)
+
+**Onde:** `path_follower.py:295`, o `if dist_goal <= c.goal_xy_tol:` pelado.
+
+**O defeito, em uma frase:** o limiar de chegada arbitra entre dois controladores
+que giram para **lados opostos** (`goal_turn` mira o yaw do goal; `turning` mira o
+carrot), e o giro no lugar do skid **desloca** o robô o bastante pra cruzar o
+limiar de volta. Sem histerese, isso é um oscilador — e a doença já foi curada uma
+vez neste mesmo arquivo, pro limiar de HEADING (`turn_enter`/`turn_exit`, docstring
+linhas 15-18). **O limiar de CHEGADA nunca recebeu o remédio.**
+
+**Comportamento novo:** ao cruzar `goal_xy_tol` pela primeira vez naquele goal,
+entra em fase de chegada e **não volta mais pro carrot** — só `goal_turn` até o yaw
+fechar, depois `arrived`.
+
+**O que solta a trava (as três saídas, explícitas):**
+
+| gatilho | valor | por quê |
+|---|---|---|
+| goal inativo / sem plano | `goal_active=False` | já zera tudo pro `idle` hoje |
+| **goal novo** | ponto final do plano move > `goal_moved_tol` | replan pro MESMO goal mantém o fim a poucos cm; goals da arena estão a metros |
+| **empurrão** | `dist_goal > unlatch_dist` | unstuck/colisão tirou o robô de perto; insistir em `goal_turn` a meio metro é pior |
+
+Valores propostos: `goal_moved_tol = 0.30 m` (2× a tolerância) e
+`unlatch_dist = 3 × goal_xy_tol = 0.45 m` — o "~3× a tolerância" da §2.8.
+
+**O que o latch NÃO faz** (mesma disciplina da §2.10): não conserta o erro de pose
+do AMCL, não protege o canto no giro, e **não** garante que o contato no `cone_3`
+some. Que ele elimine o contato é **hipótese** — o passo 3 é quem responde.
+
+**Risco conhecido:** com a trava, um goal cujo yaw nunca fecha vira `goal_turn`
+eterno. Hoje a samba disfarça isso saindo pro carrot. Mitigação: o gatilho de
+empurrão. Se aparecer giro eterno parado no passo 3, é achado novo e entra aqui.
+
+### 2B.3 Passos 1 e 2 ✅ — teste vermelho, depois latch (`path_follower.py`)
+
+**Passo 1 — o teste reproduz o defeito.** `test_chegada_nao_alterna_para_turning_quando_o_giro_desloca`
+monta a geometria exata do CSV: goal em (0,0), robô chegando por −x (carrot com
+bearing 0) e `goal_yaw` a +90° — **lados opostos**, que é a condição que faz a
+troca de estado inverter o giro. Três ticks: 0,166 m `driving` → 0,140 m
+`goal_turn` → e o terceiro com o robô deslocado pra 0,161 m já com 34° rodados.
+
+Vermelho antes do fix, com a mensagem certa:
+
+```
+E       AssertionError: saiu da chegada e voltou pro carrot
+E       assert 'turning' == 'goal_turn'
+```
+
+Mais três testes fecham as saídas da trava (goal novo, empurrão, goal perdido) —
+esses **passavam antes** por vacuidade; existem pra impedir que o latch vire
+prisão.
+
+**Passo 2 — o latch.** `dist_goal <= goal_xy_tol` deixou de ser o árbitro por
+tick: cruzou uma vez, `_arrival_latched` fecha e a fase de chegada só devolve o
+controle ao carrot por **goal novo** (fim do plano move > `goal_moved_tol` 0,30 m),
+**empurrão** (`dist_goal > unlatch_dist` 0,45 m = 3× a tolerância) ou goal inativo.
+Dois parâmetros ROS novos, com os mesmos nomes.
+
+| | |
+|---|---|
+| testes do `path_follower` | 43 passam (39 antes + 4) |
+| suíte do pacote | **397 passam** |
+| linhas de lógica | ~10 (o resto é comentário e fiação de parâmetro) |
+
+⚠️ **Isto não é evidência de campo.** É teste de unidade da lógica pura: prova que
+a máquina de estados parou de alternar na geometria do CSV, **não** que o contato
+no `cone_3` sumiu. Quem responde isso é o passo 3, contra o baseline (236,4 s ·
+13 blocos de `goal_turn` (13,8 s) · 2 colisões + 28 raspões).
+
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
