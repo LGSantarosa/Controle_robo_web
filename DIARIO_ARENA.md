@@ -947,6 +947,72 @@ que o `transicoes_goal_turn.csv` tem que reprovar depois: a checagem do conserto
 O mesmo tópico de bloqueio resolve os dois casos.
 
 
+### 2B.5 Passo 3b — 3 voltas de repetição (`latchN1..3`). **Duas coisas que eu disse caem.**
+
+Decisão do dono da §2B.4: medir o latch **sozinho** antes de mexer na chegada.
+Comando: `tools/sim_ab/run_n.sh robot_nav latchN 3`, mesmas env vars da §4.5.
+
+| volta | tempo | goals | COLISÃO | raspão | folga mín | samba | unstuck |
+|---|---|---|---|---|---|---|---|
+| baseline 08-28 | 236,4 s | 5/5 | **2** | **28** | −0,0000 | **7** | 0,0 s |
+| `arena_latch1` | 222,8 s | 5/5 | 0 | 0 | 0,0741 | 0 | 1,3 s |
+| `latchN1` | 219,8 s | **4/5** | 0 | 0 | 0,0620 | 0 | 2,9 s |
+| `latchN2` | 251,2 s | 5/5 | 0 | 0 | 0,0749 | 0 | 5,8 s |
+| `latchN3` | 254,7 s | 5/5 | 0 | 0 | 0,1014 | 0 | 6,2 s |
+
+#### ✅ O que a repetição CONFIRMA
+
+- **Samba: 0 em 4 de 4 voltas** (baseline 7). O defeito que o latch atacava está
+  morto, agora com taxa e não com amostra.
+- **Contato: 0 colisão e 0 raspão em 4 de 4** — contra 2 + 28 do baseline. A folga
+  mínima ficou entre **6,2 e 10,1 cm**, sempre positiva.
+
+#### ❌ O que a repetição DERRUBA (eu afirmei, e não se sustenta)
+
+**1. "222,8 s contra 236,4 s: −5,7%".** Com n=4 os tempos são **219,8 / 222,8 /
+251,2 / 254,7** — média **237,1 s**, mediana 237,0, contra 236,4 do baseline.
+**O ganho de tempo era ruído de amostra única.** O latch **não** acelerou a volta;
+ele parou de bater. Eu tinha escrito a ressalva do n=1 na §2B.4 e mesmo assim
+publiquei o "−5,7%" na tabela como se fosse resultado — ressalva ao lado de um
+número não impede o número de ser lido.
+
+**2. "o goal 4 travou".** Não é o goal 4: é **um goal por volta, e muda de goal**
+— g4 (10,8 s), g4 (16,4 s), **g5** (16,5 s), **g5** (19,1 s, mais g3 com 6,3 s).
+O defeito de estacionar fora da tolerância (§6 item 2e) é **sistemático: 4 de 4
+voltas**, e o tempo parado **cresce** (10,8 → 19,1 s), como cresce o unstuck
+(1,3 → 6,2 s). Não é peculiaridade de um ponto da rota.
+
+#### 🔴 `latchN1` perdeu o goal 2 — e NÃO é do latch
+
+O probe registrou `CANCELADO em 25s`. **O rótulo estava errado** (ver abaixo): é
+**ABORTADO** — o Nav2 desistiu. O `nav2.log` dá a causa, com 0,4 s entre as duas
+linhas e 0,05 s até o probe registrar:
+
+```
+1788183683.62 [planner_server] GridBased plugin failed to plan
+              from (7.90, 2.12) to (10.50, 1.76):
+              "Either of the start or goal pose are an obstacle! "
+1788183684.05 [controller_server] Could not find a legal trajectory:
+              No valid trajectories out of 35!
+1788183684.10 [ab_probe] goal 2: ABORTADO em 25s
+```
+
+É o **bug já aberto** (§6 itens 2d e 8), no **mesmo lugar da §2.8**: partindo de
+dentro da **fresta A (0,90 m)**, indo pro goal 2. O que mudou é a gravidade —
+antes aparecia como recovery, agora **custou um goal**. Taxa de goals com o latch:
+**19 de 20**, com a única perda atribuída a um defeito que é anterior ao latch e
+independente dele.
+
+#### 🐞 BO do harness: o probe trocava ABORTADO por CANCELADO
+
+`tools/sim_ab/probe.py` mapeava `{4:'OK', 5:'ABORTADO', 6:'CANCELADO'}`. O
+`action_msgs/GoalStatus` do jazzy (conferido em runtime) é **4=SUCCEEDED,
+5=CANCELED, 6=ABORTED** — invertido. E o probe **só** cancela no timeout, caso em
+que o status vira `PRESO` sem passar por esse mapa: então, na prática, **todo
+`CANCELADO` que esse harness já imprimiu era o Nav2 ABORTANDO**. A diferença não é
+cosmética — "cancelado" se lê como *o harness desistiu*, "abortado" é *o robô
+falhou*. Corrigido.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -1132,6 +1198,9 @@ que na arena fica **em cima do muro sul**.
 | 24 | **Rodei a volta e não anotei** | O dono teve que perguntar "anotou isso tudo?". Pior: os CSVs de `controle_web/logs/` são sobrescritos a cada launch — quase perdi o `follow_debug` que sustenta o diagnóstico | Arquivar CSV e escrever o diário fazem parte da run, não são pós-jogo |
 | 45 | **REINCIDÊNCIA do #31**: o README da evidência de 08-31 listava `probe.log`, que o `.gitignore:11` (`*.log`) mantém **fora do git** | Achado pelo revisor, não por mim. Os outros 6 arquivos estavam certos; esse existia só no meu checkout e sumiria num clone limpo — o revisor leria a linha e não acharia o arquivo. Virou `probe_volta.txt` | O #31 já tinha a lição escrita (**"conferir `git ls-files` do que se declara versionado"**) e eu li a seção inteira sem aplicá-la. Lição que não vira **passo executado** não protege nada: conferir `git ls-files` **do diretório** é parte de arquivar evidência, não uma boa intenção |
 | 46 | Declarei **"sim parado, nada órfão"** com um `ps` que não cobria o que sobrou | Grepei `gz sim`, mas o subscriber de pose do `colisao.py` é um **processo filho** cujo binário é `.../transport13/gz-transport-topic`. Sobreviveu ao `kill -9` do pai e ficou **17 min** assinando a pose de um mundo morto. Achado pelo revisor. O `kill_all.sh` tinha o mesmo furo no padrão | Higiene de sim se confere com `ps` **amplo** (`grep -i gz`), não com a lista do que eu **espero** que esteja rodando. E `kill -9` no pai não mata o filho |
+| 47 | Publiquei **"−5,7% de tempo"** com n=1 | Com 4 voltas: 219,8 / 222,8 / 251,2 / 254,7 — média **237,1** contra 236,4 do baseline. **Era ruído.** Eu tinha escrito a ressalva do n=1 duas linhas acima e mesmo assim pus o número na tabela | Ressalva **ao lado** de um número não impede o número de ser lido. Se n=1, o campo não recebe percentual — recebe "medido 1×" |
+| 48 | Disse **"o goal 4 trava"** | São 4 voltas, 4 travadas, em **goals diferentes** (g4, g4, g5, g5). O defeito é sistemático, não do goal 4 | Não batizar um defeito com o nome da primeira amostra onde ele apareceu |
+| 49 | `probe.py` mapeava **`5:'ABORTADO', 6:'CANCELADO'`** — invertido | `GoalStatus` é 5=CANCELED, 6=ABORTED. Como o probe só cancela via timeout (→ `PRESO`), **todo "CANCELADO" já impresso por este harness era ABORT do Nav2**. "Cancelado" se lê como *o harness desistiu*; "abortado" é *o robô falhou* | Constante de mensagem ROS se confere no runtime, não de memória — foi o que fiz só depois de estranhar o rótulo |
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
 
 ---
@@ -1143,7 +1212,7 @@ que na arena fica **em cima do muro sul**.
 | 1 | **Proteção de point-turn** (anel 0,25–0,36 m no `path_follower`) | 🔴 bloqueador de A4, **desenho fechado** (§2.10), zero código. **Não é** no collision monitor: lá a única alavanca é escalar o `wz`, que trava o robô (deadlock já reproduzido) |
 | 2 | Baseline Nav2 até os standoffs | ✅ **FEITO 08-28** — 5/5 goals, 236,4 s, 2 colisões + 28 raspões no cone (§2.8). Evidência em `docs/baselines/2026-08-28-arena-baseline1/` |
 | 2b | Travar a chegada (mata a samba — defeito provado) | ✅ **FEITO 08-31** (`c85a8d8`) — saídas da chegada pro carrot **7 → 0**; volta em `docs/baselines/2026-08-31-arena-latch1/` (§2B.4) |
-| 2e | 🔴 **O robô ESTACIONA fora do `xy_goal_tolerance` do Nav2** | ⏳ **novo, 08-31.** Trava a chegada a 0,147, gira pro yaw do goal, para em **0,166** — o checker do Nav2 é **0,15** (`nav2_params_arena.yaml:151`). A ação não completa, 5 s parado acorda o `unstuck`, que gira o robô 17°, e o seguidor desfaz. **Custou 14 s no goal 4.** Existia antes, escondido pela samba. Duas saídas propostas na §2B.4, **nenhuma decidida** |
+| 2e | 🔴 **O robô ESTACIONA fora do `xy_goal_tolerance` do Nav2** | ⏳ **novo, 08-31. SISTEMÁTICO: 4 de 4 voltas** (§2B.5), em goals diferentes, com o tempo parado crescendo 10,8 → 19,1 s.| Trava a chegada a 0,147, gira pro yaw do goal, para em **0,166** — o checker do Nav2 é **0,15** (`nav2_params_arena.yaml:151`). A ação não completa, 5 s parado acorda o `unstuck`, que gira o robô 17°, e o seguidor desfaz. **Custou 14 s no goal 4.** Existia antes, escondido pela samba. Duas saídas propostas na §2B.4, **nenhuma decidida** |
 | 2f | **`unstuck` empurra robô que JÁ CHEGOU** | ⏳ **novo, 08-31.** Caso irmão do item 1: o supervisor não assina estado nenhum do `path_follower`, então não sabe distinguir "encalhado" de "chegou e parou". O mesmo tópico de bloqueio do passo 4 resolve os dois |
 | 2c | 🔴🔴 **AMCL erra 24 cm na arena** (mediana 9, p90 16, max 27) | ⏳ **novo, 08-28.** Maior que a tolerância de A2 (20 cm) e muito maior que os ±3 cm da fresta de 0,60. Suspeita: arena pobre em feature + os 4 cones não estão no mapa |
 | 2d | Bug `start/goal is an obstacle` **reproduzido nesta arena** | ⏳ disparou dentro da fresta A (0,90 m), indo pro goal 2 |
@@ -1152,4 +1221,4 @@ que na arena fica **em cima do muro sul**.
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |
 | 6 | Medir no robô: bitola, entre-eixos, altura do LiDAR | ⏳ trena |
 | 7 | Refazer os números de 08-27 | ⏳ os antigos vieram do fork **sem `motion_guard`** e com oráculo cego a 5 obstáculos |
-| 8 | Bug `"start/goal is an obstacle"` | ⏳ **não é mais só "anterior a esta fase"** — reproduzido no baseline de 08-28 (§2.8) |
+| 8 | Bug `"start/goal is an obstacle"` | 🔴 **AGRAVADO 08-31**: em `latchN1` ele **custou o goal 2** (Nav2 abortou), no mesmo ponto da §2.8 — partindo de dentro da fresta A. Saiu de "recovery" para "goal perdido". É a **única** perda em 20 goals com o latch (§2B.5) |

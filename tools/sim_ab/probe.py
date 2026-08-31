@@ -133,7 +133,13 @@ class Probe(Node):
                     rclpy.spin_once(self, timeout_sec=0.1)
                 st = 'PRESO'
             else:
-                st = {4: 'OK', 5: 'ABORTADO', 6: 'CANCELADO'}.get(
+                # 2026-08-31: o mapeamento estava INVERTIDO. action_msgs/GoalStatus:
+                # 4=SUCCEEDED, 5=CANCELED, 6=ABORTED (conferido no jazzy). Como o
+                # probe so' cancela no timeout — e ai' o status vira PRESO, sem
+                # passar por aqui — na pratica todo 6 (Nav2 DESISTIU do goal) era
+                # relatado como "CANCELADO", que se le como "o harness desistiu".
+                # Trocou a leitura de uma volta inteira: latchN1 goal 2.
+                st = {4: 'OK', 5: 'CANCELADO', 6: 'ABORTADO'}.get(
                     rf.result().status, f'status_{rf.result().status}')
             dur = self.now() - ini
             r = dict(goal=i, alvo=[round(wp['x'], 2), round(wp['y'], 2)], status=st,
