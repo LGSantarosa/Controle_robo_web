@@ -92,6 +92,79 @@ def confere(pasta, trk, problemas):
                 problemas.append('%s: espaco no fim de linha' % rel)
 
 
+def _e2e(tmp, problemas_esperados):
+    """Roda o `confere()` de verdade contra uma pasta montada na hora."""
+    achados = []
+    confere(os.path.relpath(tmp, RAIZ), rastreados(), achados)
+    faltou = [e for e in problemas_esperados
+              if not any(e in a for a in achados)]
+    return achados, faltou
+
+
+def autoteste_confere():
+    """PONTA-A-PONTA: monta pastas de mentira e roda o `confere()`.
+
+    A primeira versão deste autoteste cobria só o `citados()` — a extração de
+    nomes — e eu ainda assim chamei de "ponta-a-ponta" (o revisor pegou). É o
+    BO 20 outra vez: autoteste que cobre a metade fácil não protege a metade que
+    falha. Cada caso abaixo é uma das promessas do script.
+    """
+    import shutil
+    import tempfile
+    base = tempfile.mkdtemp(dir=os.path.join(RAIZ, BASE), prefix='_autoteste_')
+    ruim = 0
+    try:
+        casos = [
+            ('arquivo citado que NAO existe',
+             {'README.md': '| arquivo | x |\n|---|---|\n| `sumiu.csv` | y |\n'},
+             ['sumiu.csv: README cita, mas NAO EXISTE']),
+            ('arquivo citado que existe mas o git IGNORA (BO 31/45)',
+             {'README.md': '| arquivo | x |\n|---|---|\n| `x.log` | y |\n',
+              'x.log': 'sou ignorado pelo *.log\n'},
+             ['x.log: README cita, mas NAO ESTA NO GIT']),
+            ('CRLF (BO 31/50)',
+             {'README.md': '| arquivo | x |\n|---|---|\n| `a.csv` | y |\n',
+              'a.csv': 'a,b\r\n1,2\r\n'},
+             ['a.csv: CRLF']),
+            ('espaco no fim de linha',
+             {'README.md': '| arquivo | x |\n|---|---|\n| `b.csv` | y |\n',
+              'b.csv': 'a,b \n1,2\n'},
+             ['b.csv: espaco no fim de linha']),
+            ('arquivo na pasta que o README NAO cita',
+             {'README.md': '| arquivo | x |\n|---|---|\n',
+              'orfao.csv': 'a\n'},
+             ['orfao.csv: existe, mas o README nao cita']),
+            ('sem README',
+             {'so_isso.csv': 'a\n'},
+             ['sem README.md']),
+        ]
+        for nome, arquivos, esperado in casos:
+            d = tempfile.mkdtemp(dir=base)
+            for f, conteudo in arquivos.items():
+                with open(os.path.join(d, f), 'w', newline='') as fh:
+                    fh.write(conteudo)
+            achados, faltou = _e2e(d, esperado)
+            ok = not faltou
+            ruim += not ok
+            print('%s e2e: %-52s %s' % ('ok  ' if ok else 'FALHA', nome,
+                                        '' if ok else 'NAO pegou: %s' % faltou))
+        # e o caso feliz: pasta correta NAO pode gerar problema
+        d = tempfile.mkdtemp(dir=base)
+        open(os.path.join(d, 'README.md'), 'w').write(
+            '| arquivo | x |\n|---|---|\n| `ok.csv` | y |\n')
+        open(os.path.join(d, 'ok.csv'), 'w').write('a,b\n1,2\n')
+        achados, _ = _e2e(d, [])
+        # 'ok.csv' nao esta no git (e' temporario), entao so' esse achado e' esperado
+        sobrou = [a for a in achados if 'NAO ESTA NO GIT' not in a]
+        ruim += bool(sobrou)
+        print('%s e2e: %-52s %s' % ('ok  ' if not sobrou else 'FALHA',
+                                    'pasta correta nao gera falso positivo',
+                                    '' if not sobrou else sobrou))
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+    return ruim
+
+
 def autoteste():
     """Prova que o conferidor REPROVA o que ele promete pegar — senão ele é
     decoração. Cada caso é o BO que ele existe pra impedir."""
@@ -120,7 +193,7 @@ def autoteste():
 
 def main():
     if '--autoteste' in sys.argv:
-        return 1 if autoteste() else 0
+        return 1 if (autoteste() + autoteste_confere()) else 0
     base = os.path.join(RAIZ, BASE)
     if not os.path.isdir(base):
         print('sem %s — nada a conferir' % BASE)

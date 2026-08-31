@@ -7,7 +7,17 @@ código** da volta `arena_latch1` (commit `c85a8d8`) — nenhuma mudança entre 
 | arquivo | o que sustenta |
 |---|---|
 | `resumo_4_voltas.csv` | a tabela da §2B.5: baseline + as 4 voltas com latch, lado a lado |
-| `result_latchN1.json`, `result_latchN2.json`, `result_latchN3.json` | tempo e status por goal de cada volta |
+| `result_latchN1.json` | tempo e status por goal — ⚠️ o `status` do goal 2 diz `CANCELADO`, rótulo do bug corrigido em 08-31: **leia ABORTADO** (ver abaixo) |
+| `result_latchN2.json` | tempo e status por goal |
+| `result_latchN3.json` | tempo e status por goal |
+| `colisao_3voltas.csv` | **contato**: a menor folga por objeto e a contagem de eventos, por volta. É o que sustenta "zero contato em 4/4" |
+| `transicoes_goal_turn_3voltas.csv` | **samba**: toda transição de/para `goal_turn` nas 3 voltas. É o que sustenta "samba 0" |
+| `unstuck_disparos_3voltas.csv` | **unstuck**: cada troca de estado, com `reason`, `stuck_s` e `nav_wants` |
+
+> Estes três últimos entraram **depois**, no review do dono: a primeira versão
+> desta pasta arquivava só o **resumo derivado**, então as conclusões centrais
+> (zero contato, samba zero) não eram auditáveis a partir do repo — os CSVs
+> brutos vivem em `log/sim_ab/`, que é `gitignore`d.
 
 ## O que estas 3 voltas mudaram na conclusão
 
@@ -30,5 +40,21 @@ data). Era **ABORT do Nav2**, 0,4 s depois de
 `"Either of the start or goal pose are an obstacle!"` partindo de dentro da
 **fresta A** — o bug já aberto nos itens **2d/8** da §6, no mesmo ponto onde a
 §2.8 o viu. Taxa de goals com o latch: **19/20**.
+
+## ⚠️ O `CANCELADO` dentro do `result_latchN1.json` é rótulo errado
+
+O harness mapeava `GoalStatus` invertido (5/6 trocados) — corrigido em
+`tools/sim_ab/probe.py` nesta mesma data. **O JSON aqui é a saída bruta daquela
+volta e fica como está**: reescrever registro gravado pra ficar bonito é pior que
+o rótulo errado. Quem consumir este arquivo por script tem que saber: neste
+arquivo (e em qualquer saída deste harness anterior a 2026-08-31),
+**`CANCELADO` = status 6 = ABORTED**, o Nav2 desistiu do goal.
+
+## Correção de método (review do dono, 08-31)
+
+A média de tempo das voltas com latch é **242,9 s** — só as **completas** (5/5):
+222,8 / 251,2 / 254,7. A `latchN1` (4/5) **não entra**: ela perdeu o goal 2 e não
+percorreu o mesmo caminho. Contra o baseline de 236,4 s (n=1), o defensável é
+**"não há evidência de que o latch acelerou"**, não "o ganho era ruído".
 
 ⚠️ Voltas até os **STANDOFFS**. Não provam A1, A2 nem A3.

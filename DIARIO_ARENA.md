@@ -969,20 +969,41 @@ Comando: `tools/sim_ab/run_n.sh robot_nav latchN 3`, mesmas env vars da §4.5.
 
 #### ❌ O que a repetição DERRUBA (eu afirmei, e não se sustenta)
 
-**1. "222,8 s contra 236,4 s: −5,7%".** Com n=4 os tempos são **219,8 / 222,8 /
-251,2 / 254,7** — média **237,1 s**, mediana 237,0, contra 236,4 do baseline.
-**O ganho de tempo era ruído de amostra única.** O latch **não** acelerou a volta;
-ele parou de bater. Eu tinha escrito a ressalva do n=1 na §2B.4 e mesmo assim
-publiquei o "−5,7%" na tabela como se fosse resultado — ressalva ao lado de um
-número não impede o número de ser lido.
+**1. "222,8 s contra 236,4 s: −5,7%".** Não se sustenta.
 
-**2. "o goal 4 travou".** Não é o goal 4: é **um goal por volta, e muda de goal**
-— g4 (10,8 s), g4 (16,4 s), **g5** (16,5 s), **g5** (19,1 s, mais g3 com 6,3 s).
-O defeito de estacionar fora da tolerância (§6 item 2e) é **sistemático: 4 de 4
-voltas**, e o tempo parado **cresce** (10,8 → 19,1 s), como cresce o unstuck
-(1,3 → 6,2 s). Não é peculiaridade de um ponto da rota.
+⚠️ **Corrigido no review do dono (08-31).** A primeira versão deste parágrafo
+dizia *"com n=4 a média é 237,1 s ... o ganho era ruído"* — e tinha **um erro de
+método dentro da correção**: os 237,1 s **incluíam a `latchN1`, que fez 4/5
+goals**. Uma volta que perde um goal **não percorre o mesmo caminho**, então o
+tempo dela não entra na mesma média (a `latchN1` perdeu justamente o goal 2, o
+mais distante do trecho inicial).
 
-#### 🔴 `latchN1` perdeu o goal 2 — e NÃO é do latch
+**Só as voltas COMPLETAS (5/5):** 222,8 / 251,2 / 254,7 → média **242,9 s**,
+contra **236,4 s** do baseline.
+
+E o que dá pra afirmar é menos do que eu afirmei: **o baseline continua sendo
+n=1**, então "era ruído" é conclusão estatística que estes dados não pagam. O
+defensável é: **não há evidência de que o latch tenha acelerado a missão** — a
+faixa das voltas completas (222,8–254,7) contém o baseline. O que o latch fez,
+com taxa, foi parar de bater.
+
+**2. "o goal 4 travou".** Não é o goal 4 — e também não é "um goal por volta",
+como a primeira versão desta linha dizia (o revisor pegou): a `latchN3` travou em
+**dois** (g3 com 6,3 s e g5 com 19,1 s).
+
+| volta | onde travou |
+|---|---|
+| `arena_latch1` | g4 (10,8 s) |
+| `latchN1` | g4 (16,4 s) |
+| `latchN2` | **g5** (16,5 s) |
+| `latchN3` | **g3** (6,3 s) **e g5** (19,1 s) |
+
+O defeito de estacionar fora da tolerância (§6 item 2e) é **sistemático: aparece
+nas 4 voltas**, em goals diferentes, e o pior caso por volta **cresce**
+(10,8 → 19,1 s), como cresce o unstuck (1,3 → 6,2 s). Não é peculiaridade de um
+ponto da rota.
+
+#### 🔴 `latchN1` perdeu o goal 2 — falha direta do PLANNER, em modo já observado antes do latch
 
 O probe registrou `CANCELADO em 25s`. **O rótulo estava errado** (ver abaixo): é
 **ABORTADO** — o Nav2 desistiu. O `nav2.log` dá a causa, com 0,4 s entre as duas
@@ -1000,8 +1021,15 @@ linhas e 0,05 s até o probe registrar:
 É o **bug já aberto** (§6 itens 2d e 8), no **mesmo lugar da §2.8**: partindo de
 dentro da **fresta A (0,90 m)**, indo pro goal 2. O que mudou é a gravidade —
 antes aparecia como recovery, agora **custou um goal**. Taxa de goals com o latch:
-**19 de 20**, com a única perda atribuída a um defeito que é anterior ao latch e
-independente dele.
+**19 de 20**.
+
+⚠️ **Não escrever "não é do latch"** (a primeira versão escrevia; o revisor
+pegou). O que está demonstrado é o **mecanismo imediato**: o planner recusou o
+par start/goal, num modo de falha **já observado antes do latch existir**. O que
+**não** está demonstrado é que a pose em que o latch deixa o robô ao fim de cada
+goal não influencia a chance de o próximo plano nascer com o start em obstáculo —
+ninguém isolou isso. A formulação honesta é a do título: **falha direta do
+planner, em modo já observado antes do latch**.
 
 #### 🐞 BO do harness: o probe trocava ABORTADO por CANCELADO
 
@@ -1204,6 +1232,9 @@ que na arena fica **em cima do muro sul**.
 | 48 | Disse **"o goal 4 trava"** | São 4 voltas, 4 travadas, em **goals diferentes** (g4, g4, g5, g5). O defeito é sistemático, não do goal 4 | Não batizar um defeito com o nome da primeira amostra onde ele apareceu |
 | 49 | `probe.py` mapeava **`5:'ABORTADO', 6:'CANCELADO'`** — invertido | `GoalStatus` é 5=CANCELED, 6=ABORTED. Como o probe só cancela via timeout (→ `PRESO`), **todo "CANCELADO" já impresso por este harness era ABORT do Nav2**. "Cancelado" se lê como *o harness desistiu*; "abortado" é *o robô falhou* | Constante de mensagem ROS se confere no runtime, não de memória — foi o que fiz só depois de estranhar o rótulo |
 | 50 | **REINCIDÊNCIA do #31 (a outra metade)**: os 4 CSVs de evidência que escrevi hoje saíram com **CRLF** | `csv.writer` termina linha com `\r\n` por **default**, e o `newline=''` que a doc do módulo manda usar **preserva** isso. `git diff --check` reprovava toda linha. Os CSVs do baseline (sessão anterior, pós-#31) estão LF; os meus, não. Achado pela **pergunta** do dono ("anotou tudo pro codex?"), não por mim | O #31 tinha DUAS metades (arquivo fora do git **e** CRLF). No BO #45 eu repeti a primeira; aqui repeti a segunda — **na mesma sessão em que escrevi que a lição vira passo executado**. Virou `tools/confere_evidencia.py`, com autoteste. Lição que eu preciso lembrar não é controle |
+| 51 | Misturei uma volta **incompleta** na média de tempo | Os "237,1 s" incluíam a `latchN1`, que fez **4/5** goals — ela não percorre o mesmo caminho. Só as completas: **242,9 s**. Pior: o erro estava **dentro de uma correção** que eu escrevi justamente pra consertar rigor de amostra | Antes de tirar média, conferir que as amostras são da **mesma coisa**. Corrigir um viés não imuniza o parágrafo contra outro |
+| 52 | Chamei de **"ponta-a-ponta"** um autoteste que só cobria a extração de nomes | O `--autoteste` do `confere_evidencia.py` testava o `citados()` e **nada** do `confere()` — nem arquivo ausente, nem fora do git, nem CRLF. A prova ponta-a-ponta que eu rodei foi **manual, no shell, e não ficou no repo**. É o BO 20 de novo | Se a prova não está no autoteste, ela não existe pro próximo. Agora são 7 casos que montam pasta de mentira e rodam o `confere()` |
+| 53 | *"A perda do goal NÃO é do latch"* | Demonstrei o **mecanismo imediato** (planner recusou start/goal), não a **independência**: ninguém isolou se a pose onde o latch para o robô afeta o start do plano seguinte | Mecanismo observado ≠ causa isolada. Escrever "falha direta do X, em modo já observado antes de Y" |
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
 
 ---
