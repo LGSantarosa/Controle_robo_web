@@ -22,7 +22,7 @@ com cantos) com lógica DETERMINÍSTICA + 2 truques que faltavam:
      giravam pra lados opostos e o próprio giro do skid cruzava o limiar de volta
      (a "samba" do goal, medida na arena — DIARIO_ARENA §2.8).
 
-Estados: idle | turning | driving | goal_turn | arrived.
+Estados: idle | turning | driving | goal_approach | goal_turn | arrived.
 Publica `follow_vel` (twist_mux prio 15 > nav_vel 10 = ignora controller_server;
 < door 20 < unstuck 30). Enquanto há goal ativo SEMPRE publica (segura o mux).
 
@@ -209,6 +209,18 @@ class FollowConfig:
     unlatch_dist: float = 0.45      # m (3x goal_xy_tol) — algo EMPURROU o robô
                                     # pra longe (unstuck/colisão): insistir em
                                     # girar pro yaw do goal daqui é pior.
+    # APROXIMAÇÃO FINAL (2026-08-31, arena §2B.4 item 2e). Medido em 4 voltas: o
+    # latch trava a chegada dentro de goal_xy_tol, o giro pro yaw do goal desloca
+    # o skid, e o robô PARA a ~0.166 m. O xy_goal_tolerance do Nav2 é 0.15 —
+    # então ele estaciona FORA da tolerância de quem julga a chegada, a ação
+    # nunca completa, e 5 s parado acordam o unstuck (10,8 a 19,1 s por volta).
+    # Enquanto o Nav2 ainda quer movimento, aproximar: reto pro PONTO DO GOAL,
+    # sem carrot. Posição primeiro, yaw depois. Os dois limiares são diferentes
+    # de propósito — foi um limiar pelado que criou a samba.
+    approach_enter: float = 0.10    # m — acima disso volta a aproximar
+    approach_exit: float = 0.06     # m — abaixo disso para de aproximar
+                                    # (folga de 9 cm até o checker do Nav2: cabe
+                                    # a deriva de ~2 cm do giro seguinte)
     rot_k: float = 3.0              # ganho P do giro (rad/s por rad)
     rot_min: float = 2.4            # rad/s — piso do giro (2.0 dava ~10°/s real =
                                     # rastejo na zona-morta 1.7; 2.4 ≈ 25°/s,
@@ -265,7 +277,8 @@ def speed_for_clearance(c: 'FollowConfig', front_clear: float) -> float:
 class Cmd:
     vx: float
     wz: float
-    state: str          # idle | turning | driving | goal_turn | arrived
+    state: str          # idle | turning | driving | goal_approach |
+                        # goal_turn | arrived
 
 
 class DecisiveFollower:
@@ -278,6 +291,7 @@ class DecisiveFollower:
         self._aim_filt = None     # bearing (map) filtrado da mira (só esticado)
         self._arrival_latched = False  # travado na fase de chegada deste goal
         self._latch_goal = None        # (x,y) do goal em que a trava fechou
+        self._approaching = False      # aproximação final em curso (histerese)
         self.dbg = {}        # diagnóstico do último update (logado pelo nó)
 
     def _turn_cmd(self, herr: float) -> float:
@@ -300,6 +314,7 @@ class DecisiveFollower:
             self._aim_filt = None
             self._arrival_latched = False
             self._latch_goal = None
+            self._approaching = False
             return Cmd(0.0, 0.0, 'idle')
 
         x, y, yaw = pose
@@ -322,12 +337,34 @@ class DecisiveFollower:
             lx, ly = self._latch_goal
             if math.hypot(gx - lx, gy - ly) > c.goal_moved_tol:
                 self._arrival_latched = False   # goal novo
+                self._approaching = False
             elif dist_goal > c.unlatch_dist:
                 self._arrival_latched = False   # empurraram o robô pra longe
+                self._approaching = False
         if dist_goal <= c.goal_xy_tol:
             self._arrival_latched = True
             self._latch_goal = (gx, gy)
         if self._arrival_latched:
+            # 1a) POSIÇÃO primeiro: se ficou fora do que o Nav2 aceita, volta a
+            #     avançar pro PONTO DO GOAL (sem carrot — o carrot é que brigava
+            #     com o yaw do goal e fazia a samba). Histerese própria.
+            if self._approaching:
+                if dist_goal <= c.approach_exit:
+                    self._approaching = False
+            elif dist_goal > c.approach_enter:
+                self._approaching = True
+            if self._approaching:
+                aerr = wrap(math.atan2(gy - y, gx - x) - yaw)
+                self.dbg = {'i0': len(path) - 1, 'ci': len(path) - 1,
+                            'n': len(path), 'ax': gx, 'ay': gy,
+                            'herr_deg': math.degrees(aerr), 'dist_aim': dist_goal,
+                            'dist_goal': dist_goal}
+                # goal pra trás: avançar AFASTA. Gira no lugar pra encará-lo —
+                # este robô não faz arco (arc_calib), então é point-turn ou nada.
+                if abs(aerr) >= c.turn_enter:
+                    return Cmd(0.0, self._turn_cmd(aerr), 'goal_approach')
+                return Cmd(c.min_speed, 0.0, 'goal_approach')
+            # 1b) só então o YAW do goal
             if goal_yaw is not None:
                 yerr = wrap(goal_yaw - yaw)
                 if abs(yerr) > c.goal_yaw_tol:
@@ -453,6 +490,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 ('turn_enter_deg', 16.0), ('turn_exit_deg', 3.0),
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('goal_moved_tol', 0.30), ('unlatch_dist', 0.45),
+                ('approach_enter', 0.10), ('approach_exit', 0.06),
                 ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
                 ('slow_radius', 0.4), ('min_speed', 0.22), ('rate_hz', 20.0),
                 ('clear_full', 0.0), ('clear_min', 0.35),
@@ -473,6 +511,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 goal_yaw_tol=math.radians(g['goal_yaw_tol_deg']),
                 goal_moved_tol=g['goal_moved_tol'],
                 unlatch_dist=g['unlatch_dist'],
+                approach_enter=g['approach_enter'],
+                approach_exit=g['approach_exit'],
                 rot_k=g['rot_k'], rot_min=g['rot_min'], rot_max=g['rot_max'],
                 slow_radius=g['slow_radius'], min_speed=g['min_speed'],
                 clear_full=g['clear_full'], clear_min=g['clear_min'],

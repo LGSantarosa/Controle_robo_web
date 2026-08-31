@@ -432,25 +432,27 @@ def test_chegada_nao_alterna_para_turning_quando_o_giro_desloca():
     assert a.state == 'driving'
 
     b = f.update((-0.140, 0.0, 0.0), path, goal_active=True, goal_yaw=gyaw)
-    assert b.state == 'goal_turn' and b.wz > 0.0
+    assert b.state in ('goal_approach', 'goal_turn'), 'nao entrou na chegada'
 
     # o giro no lugar do skid empurrou o robô pra fora da tolerância (0.161) e
     # já rodou 34°, então a mira do carrot pede giro pro outro lado.
     c = f.update((-0.161, 0.0, 0.6), path, goal_active=True, goal_yaw=gyaw)
-    assert c.state == 'goal_turn', 'saiu da chegada e voltou pro carrot'
-    assert c.wz > 0.0, 'inverteu o sinal do giro (a samba)'
+    assert c.state != 'turning', 'saiu da chegada e voltou pro carrot'
 
-    # e continua fechando o yaw até chegar, sem nunca voltar pro carrot
+    # e nunca volta pro carrot enquanto a chegada estiver travada
     d = f.update((-0.170, 0.0, 1.2), path, goal_active=True, goal_yaw=gyaw)
-    assert d.state == 'goal_turn' and d.wz > 0.0
-    e = f.update((-0.170, 0.0, gyaw), path, goal_active=True, goal_yaw=gyaw)
+    assert d.state != 'turning'
+    e = f.update((-0.050, 0.0, gyaw), path, goal_active=True, goal_yaw=gyaw)
     assert e.state == 'arrived' and (e.vx, e.wz) == (0.0, 0.0)
+
+
+FASES_DA_CHEGADA = ('goal_approach', 'goal_turn', 'arrived')
 
 
 def test_latch_da_chegada_solta_com_goal_novo():
     f, path, gyaw = _chegada()
     assert f.update((-0.140, 0.0, 0.0), path, goal_active=True,
-                    goal_yaw=gyaw).state == 'goal_turn'
+                    goal_yaw=gyaw).state in FASES_DA_CHEGADA
 
     # goal novo: o plano agora termina longe -> tem que voltar a dirigir
     novo = [(0.0, j * 0.05) for j in range(41)]          # (0,0) .. (0,2.0)
@@ -461,7 +463,7 @@ def test_latch_da_chegada_solta_com_goal_novo():
 def test_latch_da_chegada_solta_se_algo_empurra_o_robo():
     f, path, gyaw = _chegada()
     assert f.update((-0.140, 0.0, 0.0), path, goal_active=True,
-                    goal_yaw=gyaw).state == 'goal_turn'
+                    goal_yaw=gyaw).state in FASES_DA_CHEGADA
 
     # unstuck/colisão jogou o robô pra 0.6 m (> 3x a tolerância): insistir em
     # girar pro yaw do goal a essa distância é pior que voltar a dirigir.
@@ -472,12 +474,93 @@ def test_latch_da_chegada_solta_se_algo_empurra_o_robo():
 def test_latch_zerado_quando_o_goal_some():
     f, path, gyaw = _chegada()
     assert f.update((-0.140, 0.0, 0.0), path, goal_active=True,
-                    goal_yaw=gyaw).state == 'goal_turn'
+                    goal_yaw=gyaw).state in FASES_DA_CHEGADA
     assert f.update((-0.140, 0.0, 0.0), path, goal_active=False,
                     goal_yaw=gyaw).state == 'idle'
     # goal novo depois do idle: dirige (não ressuscita a chegada travada)
     cmd = f.update((-0.60, 0.0, 0.0), path, goal_active=True, goal_yaw=gyaw)
     assert cmd.state == 'driving'
+
+
+# --- Aproximação final (DIARIO_ARENA §2B.4 item 2e) ------------------------
+#
+# Medido em 4 voltas: o follower trava a chegada dentro de goal_xy_tol (0.15),
+# gira pro yaw do goal, e o giro do skid o deixa em ~0.166 m — onde ele PARA.
+# O `xy_goal_tolerance` do Nav2 é 0.15: o robô estaciona FORA da tolerância de
+# quem julga a chegada, a ação nunca completa, e 5 s parado acordam o unstuck,
+# que gira o robô 17° e o seguidor desfaz. Custou 10,8 a 19,1 s por volta.
+#
+# Decisão do dono: enquanto o Nav2 ainda quiser movimento, APROXIMAR — reto pro
+# ponto do goal, sem carrot. Posição primeiro, yaw depois.
+
+
+def test_aproxima_quando_para_fora_da_tolerancia_do_nav2():
+    # aqui o yaw do goal é 0 = a MESMA direção do goal: com o yaw fechado e o
+    # goal à frente, sem a aproximação o seguidor diria 'arrived' parado a
+    # 0.16 m — fora dos 0.15 do checker do Nav2.
+    f = _fol()
+    path = [(-1.0 + i * 0.05, 0.0) for i in range(21)]
+    f.update((-0.140, 0.0, 0.0), path, goal_active=True, goal_yaw=0.0)
+    cmd = f.update((-0.160, 0.0, 0.0), path, goal_active=True, goal_yaw=0.0)
+    assert cmd.state == 'goal_approach', 'parou fora da tolerancia do Nav2'
+    assert cmd.vx > 0.0 and cmd.wz == pytest.approx(0.0)
+
+
+def test_aproximacao_gira_no_lugar_se_o_goal_ficou_para_tras():
+    f, path, gyaw = _chegada()
+    f.update((-0.140, 0.0, 0.0), path, goal_active=True, goal_yaw=gyaw)
+    # goal a +x, robô olhando -x: avançar seria AFASTAR
+    cmd = f.update((-0.160, 0.0, math.pi), path, goal_active=True, goal_yaw=gyaw)
+    assert cmd.state == 'goal_approach'
+    assert cmd.vx == pytest.approx(0.0) and cmd.wz != 0.0
+
+
+def test_aproximacao_solta_dentro_do_exit_e_fecha_o_yaw():
+    f, path, gyaw = _chegada()
+    f.update((-0.140, 0.0, 0.0), path, goal_active=True, goal_yaw=gyaw)
+    f.update((-0.160, 0.0, gyaw), path, goal_active=True, goal_yaw=gyaw)
+    # entrou bem para dentro: para de aproximar e volta a fechar o yaw
+    cmd = f.update((-0.050, 0.0, 0.0), path, goal_active=True, goal_yaw=gyaw)
+    assert cmd.state == 'goal_turn' and cmd.wz > 0.0
+
+
+def test_aproximacao_tem_histerese_nao_liga_desliga_no_mesmo_limiar():
+    f, path, gyaw = _chegada()
+    f.update((-0.140, 0.0, 0.0), path, goal_active=True, goal_yaw=gyaw)
+    f.update((-0.160, 0.0, gyaw), path, goal_active=True, goal_yaw=gyaw)
+    # 0.09: JÁ passou do enter (0.10) mas ainda não do exit -> continua aproximando
+    cmd = f.update((-0.090, 0.0, gyaw), path, goal_active=True, goal_yaw=gyaw)
+    assert cmd.state == 'goal_approach', 'desligou no mesmo limiar que ligou'
+
+
+def test_microsim_chegada_converge_dentro_da_tolerancia_do_nav2():
+    """O laço fechado: aproxima, fecha o yaw (que DESLOCA o robô, como o skid
+    faz de verdade) e tem que terminar em 'arrived' DENTRO dos 0.15 do Nav2 —
+    sem nunca voltar pro carrot."""
+    NAV2_XY_TOL = 0.15          # nav2_params_arena.yaml:151
+    f, path, gyaw = _chegada()
+    x, y, yaw = -0.147, 0.0, 0.0
+    estados = []
+    for _ in range(400):
+        cmd = f.update((x, y, yaw), path, goal_active=True, goal_yaw=gyaw)
+        estados.append(cmd.state)
+        if cmd.state == 'arrived':
+            break
+        dt = 0.05
+        yaw = wrap(yaw + cmd.wz * dt)
+        # o giro no lugar do skid NÃO é puro: AFASTA do goal. Medido na arena:
+        # entrou a 0.147 e parou a 0.166 num giro só (~3 s) = ~0.3 mm/tick.
+        # A 1a versao deste microsim empurrava o robo PRA DENTRO do goal, e por
+        # isso passava sem a correcao — teste que nao falha nao prova nada.
+        if cmd.wz:
+            d = math.hypot(x, y) or 1e-9
+            x += (x / d) * 0.0003
+            y += (y / d) * 0.0003
+        x += cmd.vx * math.cos(yaw) * dt
+        y += cmd.vx * math.sin(yaw) * dt
+    assert 'turning' not in estados, 'a samba voltou por outra porta'
+    assert estados[-1] == 'arrived', 'nao convergiu: %s' % estados[-6:]
+    assert math.hypot(x, y) <= NAV2_XY_TOL, 'parou fora do checker do Nav2'
 
 
 def _cfg_vel(**kw):
