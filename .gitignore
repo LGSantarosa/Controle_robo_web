@@ -18,6 +18,12 @@ maps/*
 # gerador. Sem isto, checkout limpo tem o mundo e NAO tem mapa nem rota.
 !maps/arena_galpao.pgm
 !maps/arena_galpao.yaml
+# Mapa TAMPADO da prova (fresta A fechada so' no .pgm; o SDF/mundo NAO muda).
+# E' o mapa que o `--arena` carrega desde 2026-09-01 — tem que existir na Pi,
+# que deploya por `git reset --hard` e nao roda o gerador. Regerar:
+#   python3 tools/gera_arena_galpao.py --mapa maps/ --fecha-fresta A
+!maps/arena_galpao_semA.pgm
+!maps/arena_galpao_semA.yaml
 !maps/routes/
 maps/routes/*
 !maps/routes/arena_galpao.json

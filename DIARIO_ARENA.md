@@ -1839,6 +1839,54 @@ contorno.
   estreito. Se a fresta voltar para a rota (ou se aparecer outro vão apertado),
   o problema volta inteiro.
 
+### 2G.7 Decisão do dono 09-01: o contorno virou o OFICIAL da prova
+
+Perguntado com os números da §2G na mão, o dono escolheu **adotar o contorno** e
+**corrigir o item 2l agora**. O que mudou no código (commit único):
+
+| mudança | onde | por quê |
+|---|---|---|
+| `--arena` passou a carregar **mapa + mundo + spawn** da prova | `launch.sh` (bloco entre os marcadores `PERFIL_ARENA_DEFAULTS`) | era **só** o perfil de params: mundo/mapa/spawn caíam nos defaults (`sala.sdf`, `hotmilk_portas`, spawn 2.0/2.5 = **em cima do muro sul** da arena). Isso já tinha feito um bloco inteiro da §4 "rodar a arena" sem rodar a arena |
+| mapa da prova = o **tampado** (`arena_galpao_semA.yaml`) | idem | a rede de segurança. `--map=...` na mão continua vencendo, pra rodar pela fresta |
+| **falha fechada** se o mapa tampado não existir | idem | cair no mapa aberto em silêncio mandaria o robô pela fresta — o oposto da decisão |
+| mapa tampado **versionado** | `.gitignore` | a Pi deploya por `git reset --hard` e **não roda o gerador** |
+| `default_server_timeout` **200 → 1000 ms** | `config/nav2_params_arena.yaml` (só o perfil da arena) | item 2l. O perfil `pi` fica em 200, com teste-par pra ninguém subir junto por acidente |
+
+**9 testes novos** (`test_arena_perfil_prova.py`), e a sensibilidade foi
+conferida por mutação, não assumida:
+
+- apontei o launch pro mapa **aberto** → `test_arena_carrega_o_mapa_TAMPADO` falha;
+- commitei um `semA.pgm` **desatualizado** (cópia do aberto) → falham os dois
+  testes do artefato.
+
+O teste do launch **executa o bloco real** do `launch.sh` (extraído entre os
+marcadores) em vez de reconstruir a lógica — reconstruir seria o BO 63 de novo.
+
+#### A prova de integração (teste unitário não cobre isto)
+
+`./launch.sh --sim --nav2 --arena`, **sem mais nenhum argumento**:
+
+| conferência | resultado |
+|---|---|
+| `map_server` carregou | `maps/arena_galpao_semA.{yaml,pgm}` |
+| mundo | `worlds/arena_galpao.sdf` |
+| AMCL nasce em | `(1.0, 1.0, yaw 0)` |
+| `ros2 param get /bt_navigator default_server_timeout` | **1000** |
+| `ros2 param get /global_costmap/global_costmap robot_radius` | **0,32** |
+| `grep -c motion_guard` no `nav2.log` | **0** |
+| lifecycle | `Managed nodes are active` |
+
+⚠️ **Pegadinha de ambiente, não do perfil:** a primeira tentativa saiu com
+`ERRO: pacote ros_gz_sim não encontrado`. O `launch.sh:176` checa o `ros_gz_sim`
+com `ros2 pkg list` **antes** de sourcear qualquer `setup.bash` — ele assume que
+o shell de quem chama já tem o ROS no ambiente. Vale pra quem for chamar o
+`launch.sh` de dentro de script/cron: `source /opt/ros/jazzy/setup.bash` e
+`source install/setup.bash` antes.
+
+⏳ **O que este boot NÃO cobre:** ele sobe e carrega o certo — **não** roda a
+rota. As 4 voltas da §2G.2 foram pelo harness A/B, que monta os argumentos do
+launch na mão. Uma volta completa pelo `launch.sh --arena` ainda não foi rodada.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -1942,15 +1990,22 @@ python3 tools/mapa_passagens.py maps/arena_galpao.yaml \
 
 ### 4.4 Subir a arena no sim
 
-O `--arena` escolhe **só o perfil de params**. Mundo, mapa e spawn são
-argumentos à parte — sem eles o launcher abre `sala.sdf` com `hotmilk_portas`:
+⚠️ **MUDOU 09-01 (§2G.7).** O `--arena` agora carrega a prova inteira — mundo,
+mapa (o **tampado**), spawn, params e guard desligado. O bloco abaixo era o
+comando antigo, quando `--arena` era só o perfil de params:
 
 ```bash
-./launch.sh --sim --nav2 --arena \
-  --world=$PWD/worlds/arena_galpao.sdf \
-  --map=$PWD/maps/arena_galpao.yaml \
-  --spawn-x=1.0 --spawn-y=1.0
+./launch.sh --sim --nav2 --arena       # é só isto
 ```
+
+O que ele resolve sozinho: `worlds/arena_galpao.sdf`, `maps/arena_galpao_semA.yaml`
+(fresta A fechada só no mapa), spawn (1.0, 1.0), `nav2_params_arena.yaml`,
+`motion_guard:=false`. Cada peça continua sobrescritível na mão — pra rodar
+**pela** fresta A, `--map=$PWD/maps/arena_galpao.yaml`.
+
+⚠️ O `launch.sh` **não** sourceia o ROS: chamar de script exige
+`source /opt/ros/jazzy/setup.bash && source install/setup.bash` antes, senão ele
+para em `ERRO: pacote ros_gz_sim não encontrado`.
 
 ### 4.5 Uma volta A/B na arena
 

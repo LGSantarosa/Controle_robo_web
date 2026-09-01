@@ -42,6 +42,10 @@ SPAWN_Z="0.2"
 # Firmware MEGA: 'auto' = flasheia só se hash de firmware/mega_bridge mudou.
 # --flash-mega força; --no-flash-mega pula sempre.
 FLASH_MEGA="auto"
+# O operador passou o argumento na mao? So' entao o --arena NAO sobrescreve.
+MAP_EXPLICITO=false
+WORLD_EXPLICITO=false
+SPAWN_EXPLICITO=false
 
 for arg in "$@"; do
     case $arg in
@@ -51,10 +55,10 @@ for arg in "$@"; do
         --trekking)        MODE="trekking" ;;
         --web-teleop)      WEB_TELEOP="on" ;;
         --sim)             SIM=true ;;
-        --world=*)         WORLD_FILE="${arg#*=}" ;;
-        --map=*)           MAP_FILE="${arg#*=}" ;;
-        --spawn-x=*)       SPAWN_X="${arg#*=}" ;;
-        --spawn-y=*)       SPAWN_Y="${arg#*=}" ;;
+        --world=*)         WORLD_FILE="${arg#*=}"; WORLD_EXPLICITO=true ;;
+        --map=*)           MAP_FILE="${arg#*=}";   MAP_EXPLICITO=true ;;
+        --spawn-x=*)       SPAWN_X="${arg#*=}";    SPAWN_EXPLICITO=true ;;
+        --spawn-y=*)       SPAWN_Y="${arg#*=}";    SPAWN_EXPLICITO=true ;;
         --spawn-z=*)       SPAWN_Z="${arg#*=}" ;;
         --no-lidar)        NO_LIDAR=true ;;
         --lidar-port=*)    LIDAR_PORT="${arg#*=}" ;;
@@ -66,7 +70,10 @@ for arg in "$@"; do
         --help|-h)
             echo "Uso: $0 [--teleop|--slam|--nav2|--trekking] [--sim] [--arena] [--web-teleop] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
             echo ""
-            echo "  --arena          perfil da prova do galpao (05/09): robot_radius 0.32,"
+            echo "  --arena          perfil da prova do galpao (05/09): mundo arena_galpao.sdf,"
+            echo "                   mapa arena_galpao_semA.yaml (fresta A FECHADA so' no mapa ->"
+            echo "                   o robo contorna), spawn 1.0/1.0, motion_guard OFF,"
+            echo "                   robot_radius 0.32,"
             echo "                   inflacao maior, PolygonFront unico. Na geometria continua"
             echo "                   isso fecha vao < 0.64 m — CONFIRME no mapa rasterizado com"
             echo "                   tools/mapa_passagens.py. NAO cobre raspao em point-turn."
@@ -84,6 +91,40 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# --- PERFIL ARENA: mapa/mundo/spawn da prova de 05/09 ------------------------
+# 2026-09-01 (decisao do dono, DIARIO_ARENA §2G): `--arena` era SO' o perfil de
+# params — mundo, mapa e spawn ficavam nos defaults (sala.sdf + hotmilk_portas +
+# spawn 2.0/2.5, que na arena cai EM CIMA do muro sul). Isso ja' tinha feito um
+# bloco inteiro da §4 do diario "rodar a arena" sem rodar a arena. Agora o
+# --arena carrega a prova inteira, e cada peca so' e' sobrescrita se o operador
+# passou o argumento na mao.
+#
+# O MAPA e' o TAMPADO (`arena_galpao_semA.yaml`): a fresta A de 0,90 m aparece
+# FECHADA pro planejador, embora o vao esteja fisicamente aberto no mundo. E' a
+# rede de seguranca da prova — 4 voltas medidas com 0 colisao e 0 raspao contra
+# 1 volta em 3 batendo quando a rota usava o vao (docs/baselines/
+# 2026-09-01-arena-contorno-fresta-A/). Para rodar PELA fresta, passe
+# `--map=$PWD/maps/arena_galpao.yaml` explicitamente.
+# O test_arena_perfil_prova.py EXECUTA o bloco entre os marcadores abaixo (em vez
+# de reconstruir a logica, que seria tautologia). Nao renomeie os marcadores sem
+# ajustar o teste, e mantenha cada um sozinho na sua linha.
+# >>> PERFIL_ARENA_DEFAULTS
+if [ "$ARENA" = true ]; then
+    [ "$MAP_EXPLICITO"   = false ] && MAP_FILE="$SCRIPT_DIR/maps/arena_galpao_semA.yaml"
+    [ "$WORLD_EXPLICITO" = false ] && WORLD_FILE="$SCRIPT_DIR/worlds/arena_galpao.sdf"
+    if [ "$SPAWN_EXPLICITO" = false ]; then SPAWN_X="1.0"; SPAWN_Y="1.0"; fi
+    # FALHA FECHADA, igual ao params: mapa tampado ausente NAO pode virar
+    # "roda com o mapa aberto em silencio" — isso mandaria o robo pela fresta.
+    if [ "$MAP_EXPLICITO" = false ] && [ ! -f "$MAP_FILE" ]; then
+        echo "ERRO: --arena pedido, mas o mapa da prova nao existe:"
+        echo "      $MAP_FILE"
+        echo "      Gere com: python3 tools/gera_arena_galpao.py --mapa maps/ --fecha-fresta A"
+        echo "      Abortando (nao vou subir com o mapa da fresta ABERTA por acidente)."
+        exit 1
+    fi
+fi
+# <<< PERFIL_ARENA_DEFAULTS
 
 # Auto-detecta Pi (arm64) se o usuário não passou --pi explicitamente.
 if [ "$PI_PROFILE" = false ] && [ "$(uname -m)" = "aarch64" ]; then

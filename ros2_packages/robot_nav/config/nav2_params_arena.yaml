@@ -523,7 +523,17 @@ bt_navigator:
     # while waiting for action server to acknowledge goal request" → Goal failed
     # ("girou um pouco e desistiu"). 200 ms dá folga p/ o planner_server aceitar
     # sem largar a navegação. NÃO é o tempo de planejar (esse é outro) — só o ack.
-    default_server_timeout: 200
+    # ARENA 2026-09-01 (item 2l, DIARIO_ARENA §2G.4): 200 -> 1000 ms. Na
+    # `contornoA3` o PRIMEIRO goal da volta morreu assim, no SIM, com o robo
+    # parado na largada em espaco livre:
+    #   "Timed out while waiting for action server to acknowledge goal request
+    #    for compute_path_to_pose" -> Goal failed
+    # Nao e' o `start/goal is an obstacle` (item 8): o planner_server nem chegou
+    # a responder o handshake — 14 s depois do lifecycle ativar, ainda montando
+    # costmap. Perder o 1o goal na prova = perder um cone. 1000 ms continua
+    # MUITO menor que o tempo de planejar (que e' outro parametro): se o ack
+    # demorar 1 s, a navegacao ja' esta' degradada de qualquer jeito.
+    default_server_timeout: 1000
 
 waypoint_follower:
   ros__parameters:
