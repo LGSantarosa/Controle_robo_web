@@ -7,6 +7,38 @@
 > Branch: `arena-galpao`. Prazo da prova: **05/09**. Tudo abaixo foi medido **no
 > simulador**; nada foi ao robô real.
 
+> ---
+>
+> 🔴 **RETRATAÇÃO (2026-09-01, review do Codex) — leia antes de usar este
+> documento.** Quatro afirmações abaixo estão **erradas** e uma quinta é
+> imprecisa. Elas descrevem o `door_crossing` de **12/06**, não o código em vigor
+> (que mudou em **19/06**). Detalhe e conferência em `DIARIO_ARENA.md` §2D;
+> BOs 70–73 na §5. Resumo do que **não** vale:
+>
+> 1. **§3, diagrama** — não existe `IDLE → STAGING`. O arme vai **direto para
+>    `rotating`** (`door_crossing.py:381`).
+> 2. **§2 ("argumento decisivo") e §4.3, linha "entra em CROSSING"** —
+>    `align_lat = 0.08` **não participa de nenhuma decisão** (única ocorrência:
+>    string de log, `:613`). O gate real é `|yaw| < 3°` **+** `will_clear()`
+>    (`fit = 0,15 m`). A pose de `+0,120` que eu apresentei como barrada **passa**
+>    (projeção 0,039); a do 1º raspão (`+0,259`) é que reprova (0,178 > 0,15).
+> 3. **§4.9 e §4.10-item-2** — o teste "não pode estar em `crossing`" **não é
+>    vermelho** (passa com o nó `idle`), e "não entra com `|lat| > align_lat`"
+>    não é critério de coisa nenhuma.
+> 4. **§4.4-(a), os 18,7 cm** — descrevem o giro no **ponto de preparação**, que
+>    o arme direto **não usa**. O point-turn inicial acontece onde o robô entrar
+>    na zona (raio 1,1 m); há posições de arme em que o círculo varrido
+>    (r = 0,354) **invade o bloco**.
+> 5. **§5.2, "o bloqueador de integração"** — são **dois**. O outro:
+>    `_pick_door` exige a porta em `_cleared`, que só é populado por um goal
+>    **SUCCEEDED com o robô na zona** (`:330`, `:359-367`). A rota da arena não
+>    tem esse goal → o nó **nunca arma**.
+>
+> **Nada foi implementado. O desenho precisa voltar à prancheta antes de virar
+> código.**
+>
+> ---
+
 ---
 
 ## 0. Como ler este documento

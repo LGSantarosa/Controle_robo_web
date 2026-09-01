@@ -1512,6 +1512,65 @@ handoffs — o `HANDOFF_NAV2_TREKKING.md` tinha o **mesmo defeito não apontado*
 
 Working tree limpo, `origin/arena-galpao` = HEAD (nada parado no dev).
 
+## 2D. Sessão 2026-09-01 — review do Codex ao desenho da fresta A (nada mudou no código)
+
+O dono trouxe o review do Codex ao
+`docs/superpowers/specs/2026-09-01-fresta-a-door-crossing-design.md`. **Confiro
+cada ponto no código antes de aceitar** — e o resultado é que **4 dos 5 procedem,
+e um deles derruba o argumento central do desenho.**
+
+| # | apontamento | veredito | como conferi |
+|---|---|---|---|
+| 1 | O nó **não arma** na rota da arena: `_pick_door` exige a porta em `_cleared`, e `_cleared` só recebe id quando um goal termina **SUCCEEDED com o robô na zona** | ✅ **procede, e é decisivo** | `door_crossing.py:330` (`if d['id'] not in self._cleared: continue`) e `:359-367`. `maps/routes/arena_galpao.json` tem 5 waypoints (4 cones + chegada), **nenhum** na frente da fresta. Contrato coberto por teste: `test_door_crossing.py:529-572` |
+| 2 | O argumento *"0,120 > 0,080 → não atravessaria"* **está errado**: `align_lat` não decide nada | ✅ **procede** | `grep cfg.align_lat` → **uma** ocorrência, `:613`, dentro de uma **string de log**. O arme vai `idle → rotating` DIRETO (`:381`, comentário de 19/06 diz explicitamente *"NÃO faz staging"*), e `rotating` só exige `abs(yaw_err) <= align_yaw` **e** `will_clear()` |
+| 3 | Os testes propostos em §4.9 **não são vermelhos** | ✅ **procede** | Sem `_cleared`, o estado fica `idle` para sempre → *"não pode estar em crossing"* passa com a máquina desligada. É o BO 56/63/66 outra vez, agora **no desenho** |
+| 4 | O fallback é **fail-open** e o *"pior caso = comportamento atual"* é impreciso | 🟡 **parcialmente** | `_abort` (`:275`) devolve ao Nav2 — e é literalmente o estado de hoje. Mas **antes** de abortar a máquina pode ter girado ou dado ré: ela entrega ao Nav2 uma **pose diferente**, não a mesma. Essa metade procede. Ver a ressalva abaixo |
+| 5 | A garantia do point-turn (18,7 cm) está incompleta | ✅ **procede — e é pior do que o review diz** | O Codex desconta `stage_tol = 0.10` (`:183`) e chega a ~8,7 cm. Mas com o arme **direto em `rotating`** (ponto 2) o giro inicial **não acontece no ponto de preparação**: acontece onde o robô entrar na zona (raio `1,1 m`, `bearing ≤ 70°`). Ex.: armando em (7,00; 1,99) a distância ao canto (7,20; 1,80) é **0,276 m < 0,354 m** de raio circunscrito → o círculo varrido **invade o bloco**. A conta da §4.4-(a) descreve um lugar que a máquina não usa |
+
+### O que sobra do desenho (e o que não sobra)
+
+**Não sobra:** o §3 (diagrama `IDLE → STAGING`), a linha *"entra em CROSSING
+|lat| < 0,08"* da tabela §4.3, o "argumento decisivo" do §2, o critério 2 do §4.10
+e a justificativa do teste do §4.9. **Todos descrevem o desenho de 12/06, não o
+código em vigor depois de 19/06.** Eu li o `door_crossing.py` inteiro e mesmo
+assim copiei a docstring do topo do arquivo (`:9-14`) — que também está
+desatualizada (é o BO da docstring `|yaw|<5°` que eu **já tinha anotado** na
+§5.4, sem perceber que o diagrama ao lado tinha o mesmo defeito).
+
+**Sobra, com a mecânica corrigida:** o discriminante real é `will_clear()`
+(`:72-91`), com `fit = 0,45 − 0,25 − 0,05 = 0,15 m`, e ele **é** sensível à pose
+ruim. Refazendo a conta com a amostra do 1º raspão da `noguard3`
+(`d = +0,259`, `yaw_err = −7,7°`, `s ≈ −0,6`, `side = −1`):
+
+```
+lat = d + s·side·tan(yaw_err) = 0,259 + (−0,6)(−1)(−0,135) = 0,178 m  >  0,15  → REPROVA → re-estagia
+```
+
+E com o `d = +0,120` que eu usei no §2:
+
+```
+lat = 0,120 − 0,081 = 0,039 m  ≤  0,15  → APROVA → entra em crossing
+```
+
+Ou seja: **a máquina provavelmente pega a pose do raspão, mas pela trava
+`will_clear`, não pelo `align_lat`; e a pose de 0,120 que eu apresentei como "a
+que ela teria barrado" ela deixa passar.** A conclusão do desenho pode continuar
+de pé — o argumento que a sustentava, não.
+
+### Ressalva ao ponto 4 (onde eu discordo do remédio, não do diagnóstico)
+
+O Codex propõe *"manter zero/standdown até condição explícita de liberação"* em
+scan velho / vão bloqueado. **Isso é um freeze com prioridade 20 no mux** — e o
+projeto já reverteu exatamente essa troca: `align_timeout` 15 → 600 virou *"um
+FREEZE de 10 min"* e foi desfeito (`door_crossing.py:189-193`). Numa prova
+cronometrada, robô parado para sempre é volta perdida, não é o lado seguro.
+O que aceito e corrijo é a **frase**: o pior caso não é "o comportamento atual
+mais tempo", é *"o comportamento atual, a partir de uma pose que a máquina pode
+ter mexido"*.
+
+**Nada foi implementado, nada foi decidido.** O desenho leva um aviso de
+retratação no topo apontando para cá; a direção do conserto é decisão do dono.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -1739,6 +1798,10 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 66 | 🔁 **Asserção VAZIA outra vez** — no commit em que eu comemorava ter provado outro teste sensível | `test_collision_monitor_le_sempre_o_raw` achava o nó e depois só afirmava que a saída do mux era **um dos dois valores possíveis**: nunca olhava o `collision_monitor`. Passava com o pipeline quebrado. É o BO 63 **na íntegra**, dois commits depois, no mesmo arquivo em que eu tinha acabado de provar sensibilidade injetando defeito | Provar sensível **teste a teste**, não uma vez por arquivo: o teste que eu injetei defeito pra ver falhar era o *outro*. Agora o do collision lê o `cmd_vel_in_topic` dos dois YAMLs, e falha se apontarem pro `auto_vel_pre` |
 | 65 | Atribuí as paradas longas ao **churn da mira** sem medir o pipeline | A histerese cortou o chattering 3–5× e o tempo parado **não caiu**. A causa dos piores casos era o `motion_guard` zerando o giro — um nó que eu nem tinha olhado, e cuja volta ao caminho está registrada no item 7 dos meus próprios abertos | Quando o robô não se move, ler o **pipeline inteiro** (`freeze_capture` tem todos os estágios) antes de acusar o nó que eu acabei de mexer |
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
+| 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
+| 71 | Construí o **argumento decisivo** do desenho em cima de uma comparação que a máquina não faz | *"0,120 > 0,080 → ela não teria deixado atravessar"*. O discriminante real é `will_clear` com `fit = 0,15 m`, e ele **aprova** 0,120 com aquele yaw (projeção 0,039). A conclusão pode sobreviver — via a outra trava, com a pose de 0,259 — mas o número que eu publiquei como prova prova o contrário | Antes de chamar um número de "argumento decisivo", achar a **linha que compara esse número**. Sem uso, é declaração |
+| 72 | 🔁 **Teste vermelho que não é vermelho** — no documento escrito para ser revisado | O teste do §4.9 (*"com a pose ruim, não pode estar em `crossing`"*) passa com o nó em `idle` para sempre, que é justamente o estado real (o contrato `_cleared` nunca é cumprido na rota da arena). É o BO 56/63/66 pela **quarta** vez, agora antes de existir código | Um teste de "não faz X" só é sensível se o **par positivo** ("faz X nesta condição") rodar no mesmo caminho de arme. Escrever os dois juntos, sempre |
+| 73 | Chamei o `/doors` de **"o bloqueador de integração"** (singular) | Havia um segundo, decisivo e testado: `_pick_door` exige `_cleared`, populado só por um goal **SUCCEEDED dentro da zona** (`:330`, `:359-367`, `test_door_crossing.py:529`). Com `doors_file` e o launch ligado, o nó ainda ficaria `idle` a volta inteira — e eu poderia ler a volta como "a máquina não achou necessário atuar". Achado pelo revisor | Antes de declarar UM bloqueador, percorrer **todos** os `continue`/`return` do caminho de arme e checar cada pré-condição contra a rota real |
 
 ---
 
