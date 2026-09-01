@@ -1438,6 +1438,8 @@ dizem que ele foi **apagado**. Nenhum caminho do `launch.sh` o carrega (o ramo
 sem `--pi/--sim/--arena` não passa `params_file` nenhum), então é arquivo morto
 + doc desencontrada, não risco de subir com a geometria errada.
 
+Suíte completa depois de restaurar o yaml: **411 passam** (`python3 -m pytest ros2_packages/robot_nav/test -q`).
+
 Working tree limpo, `origin/arena-galpao` = HEAD (nada parado no dev).
 
 ## 3. Medições
@@ -1691,3 +1693,4 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 6 | Medir no robô: bitola, entre-eixos, altura do LiDAR | ⏳ trena |
 | 7 | Refazer os números de 08-27 | ⏳ os antigos vieram do fork **sem `motion_guard`** e com oráculo cego a 5 obstáculos |
 | 8 | Bug `"start/goal is an obstacle"` | 🔴 **AGRAVADO 08-31**: em `latchN1` ele **custou o goal 2** (Nav2 abortou), no mesmo ponto da §2.8 — partindo de dentro da fresta A. Saiu de "recovery" para "goal perdido". É a **única** perda em 20 goals com o latch (§2B.5) |
+| 9 | `nav2_params_legacy.yaml` existe, mas os docs dizem que foi apagado | ⏳ **novo, 09-01.** `ESTADO_PROJETO.md:37` e `HANDOFF_NAV2_TREKKING.md:95` afirmam que o arquivo foi **apagado**; ele está no `config/`. Nenhum ramo do `launch.sh` o carrega (sem `--pi/--sim/--arena` não passa `params_file`), então é arquivo morto + doc desencontrada — **não** risco de geometria errada. Apagar o arquivo ou corrigir os dois docs |
