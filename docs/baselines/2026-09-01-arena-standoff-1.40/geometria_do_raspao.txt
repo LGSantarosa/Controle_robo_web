@@ -1,0 +1,12 @@
+POR QUE a nominal1 raspou e as std14_* nao (mesma conta, duas posicoes)
+  varredura do canto do robo (0,5x0,5): 0.3536 m
+  raio do cone:                         0.17 m
+  soma (distancia minima p/ girar):     0.5236 m
+
+  standoff 1,0 m (o que o AMCL via)        dist 1.000 -> margem +0.4764 m
+  nominal1: onde o robo REALMENTE girou    dist 0.523 -> margem -0.0006 m
+  standoff 1,4 m (novo)                    dist 1.400 -> margem +0.8764 m
+
+  erro de pose medido na arena: mediana ~8 cm, p90 ~17, max 49
+  -> com 1,0 a margem (0,4764) e MENOR que o erro maximo: contato por sorteio
+  -> com 1,4 a margem (0,8764) e MAIOR: a std14_1 teve erro max 49,1 cm e nao encostou

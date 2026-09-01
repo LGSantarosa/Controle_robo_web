@@ -26,7 +26,7 @@ T_MURO, H_MURO = 0.10, 1.5
 ESP_BLOCO, H_BLOCO = 0.60, 0.80      # espessura 0.60: ver nota no SDF
 R_CONE, H_CONE = 0.17, 0.70
 PLAT = 1.2
-STANDOFF = 1.0        # m do centro do cone ate o goal do nav2 (ver escreve_rota)
+STANDOFF = 1.4        # m do centro do cone ate o goal do nav2 (ver escreve_rota)
 RES = 0.05                            # m/célula do mapa
 
 PONTOS = {                            # nome: (x, y, tem_cone)
@@ -442,8 +442,22 @@ def escreve_rota(destino):
     O goal do nav2 NAO vai no cone: cone (r 0.17) + robot_radius (0.32) da
     fronteira letal a 0.49 m, e a inflacao de 0.60 estende o custo ate 0.77 m
     do centro. Um goal ali nasce dentro de obstaculo/inflacao e o nav2 recusa.
-    Por isso STANDOFF = 1.0 m, no segmento vindo do ponto anterior, com o yaw
-    APONTANDO pro cone — e' dali que a aproximacao final (A2) assume.
+    O goal fica no segmento vindo do ponto anterior, com o yaw APONTANDO pro
+    cone — e' dali que a aproximacao final (A2) assume.
+
+    STANDOFF 1.0 -> 1.4 em 2026-09-01 (DIARIO_ARENA §2G.8/§2G.9). O que manda
+    aqui NAO e' so' "o goal ser planejavel": e' o POINT-TURN que o seguidor faz
+    ao concluir o goal, girando NO LUGAR pra encarar o proximo. Nesse giro o
+    canto do robo varre hypot(0.25,0.25) = 0.354 m, e o cone ocupa 0.17:
+
+        margem do point-turn = STANDOFF - 0.354 - 0.17
+
+    Com 1.0 isso da 0.477 m — e o erro de pose do AMCL medido nesta arena chega
+    a 0.45 m (item 2c). Margem e erro do MESMO tamanho: na volta `nominal1` o
+    robo parou 0.44 m alem do standoff, girou a 0.523 m do centro do cone e
+    raspou 18 vezes (folga 0.0000). Com 1.4 a margem vai a 0.877 m — o dobro do
+    pior erro medido. NAO e' correcao do defeito (item 1, o giro segue cego ao
+    anel): e' mitigacao, e sai da tabela, sem codigo novo.
     """
     import json
     os.makedirs(os.path.dirname(os.path.abspath(destino)), exist_ok=True)

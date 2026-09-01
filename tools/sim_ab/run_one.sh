@@ -89,7 +89,12 @@ for BOOT in 1 2 3; do
     # é o action server. Espera os dois (180 s: a 1ª subida é a mais lenta).
     ok=1
     # bt_navigator ATIVO é o sinal de que o lifecycle percorreu a fila inteira.
-    timeout 90 bash -c 'until ros2 lifecycle get /bt_navigator 2>/dev/null | grep -q active; do sleep 3; done' || ok=0
+    # 2026-09-01: era `grep -q active` — e "inactive [2]" CASA com "active".
+    # Durante o boot o bt_navigator responde `inactive`, entao o gate dava
+    # pronto cedo demais. Aqui estava blindado pelas esperas de /clock e /scan
+    # acima (por isso nunca mordeu), mas o mesmo grep num script sem essas
+    # esperas disparou 5 goals contra o action server inativo (§2G.9).
+    timeout 90 bash -c 'until ros2 lifecycle get /bt_navigator 2>/dev/null | grep -q "^active"; do sleep 3; done' || ok=0
     [ "$ok" = "1" ] && { timeout 60 bash -c 'until ros2 topic list 2>/dev/null | grep -q "global_costmap/costmap$"; do sleep 2; done' || ok=0; }
     [ "$ok" = "1" ] && { timeout 60 bash -c 'until ros2 action list 2>/dev/null | grep -q "navigate_to_pose"; do sleep 2; done' || ok=0; }
     if [ "$ok" = "1" ]; then

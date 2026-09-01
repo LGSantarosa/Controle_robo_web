@@ -1,0 +1,16 @@
+volta,goal_n,dist_ultima_amostra_m,ultima_amostra_le_0.15
+std14_1,1,0.030,sim
+std14_1,2,0.046,sim
+std14_1,3,0.046,sim
+std14_1,4,0.024,sim
+std14_1,5,0.062,sim
+std14_2,1,0.039,sim
+std14_2,2,0.067,sim
+std14_2,3,0.055,sim
+std14_2,4,0.087,sim
+std14_2,5,0.056,sim
+std14_3,1,0.039,sim
+std14_3,2,0.023,sim
+std14_3,3,0.052,sim
+std14_3,4,0.027,sim
+std14_3,5,0.076,sim

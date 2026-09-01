@@ -1,0 +1,4 @@
+std14_1: offset 4.55s  yaw_med 1.10deg  n=5316  erro_pos mediana 6.7 cm  p90 17.6  max 49.1
+std14_2: offset 4.60s  yaw_med 1.10deg  n=4111  erro_pos mediana 8.1 cm  p90 12.7  max 24.4
+std14_3: offset 5.75s  yaw_med 1.00deg  n=4319  erro_pos mediana 8.3 cm  p90 17.2  max 25.8
+nominal1: offset 5.95s  yaw_med 1.00deg  n=4315  erro_pos mediana 8.0 cm  p90 17.1  max 45.1

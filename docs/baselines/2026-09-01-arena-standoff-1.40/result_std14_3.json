@@ -1,0 +1,100 @@
+{
+  "total_s": 244.0,
+  "goals": [
+    {
+      "goal": 1,
+      "alvo": [
+        3.11,
+        1.3
+      ],
+      "status": "OK",
+      "t": 42.0,
+      "dist": 2.27,
+      "parado": 0.1,
+      "v_max": 0.3,
+      "v_med": 0.159,
+      "min_scan": 1.0,
+      "min_front": 1.211,
+      "cm": {
+        "nada": 13.9
+      },
+      "unstuck": 0.0
+    },
+    {
+      "goal": 2,
+      "alvo": [
+        10.1,
+        1.74
+      ],
+      "status": "OK",
+      "t": 54.1,
+      "dist": 10.46,
+      "parado": 0.0,
+      "v_max": 0.3,
+      "v_med": 0.194,
+      "min_scan": 0.508,
+      "min_front": 0.762,
+      "cm": {
+        "nada": 54.1
+      },
+      "unstuck": 0.0
+    },
+    {
+      "goal": 3,
+      "alvo": [
+        12.03,
+        6.11
+      ],
+      "status": "OK",
+      "t": 51.0,
+      "dist": 7.56,
+      "parado": 0.0,
+      "v_max": 0.3,
+      "v_med": 0.149,
+      "min_scan": 0.472,
+      "min_front": 0.798,
+      "cm": {
+        "nada": 51.0
+      },
+      "unstuck": 0.0
+    },
+    {
+      "goal": 4,
+      "alvo": [
+        6.4,
+        7.74
+      ],
+      "status": "OK",
+      "t": 52.7,
+      "dist": 8.31,
+      "parado": 0.9,
+      "v_max": 0.3,
+      "v_med": 0.158,
+      "min_scan": 0.498,
+      "min_front": 0.768,
+      "cm": {
+        "nada": 52.7
+      },
+      "unstuck": 0.0
+    },
+    {
+      "goal": 5,
+      "alvo": [
+        1.5,
+        2.5
+      ],
+      "status": "OK",
+      "t": 44.2,
+      "dist": 8.04,
+      "parado": 0.0,
+      "v_max": 0.3,
+      "v_med": 0.182,
+      "min_scan": 0.568,
+      "min_front": 0.784,
+      "cm": {
+        "nada": 44.2
+      },
+      "unstuck": 0.0
+    }
+  ]
+}

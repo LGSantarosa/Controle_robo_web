@@ -18,6 +18,8 @@ sobre o mapa aberto ao lado, então uma implementação que confunda os dois
 reprova.
 """
 import importlib.util
+import json
+import math
 import os
 import subprocess
 import unittest
@@ -135,6 +137,57 @@ class TestLaunchArena(unittest.TestCase):
         self.assertTrue(mapa.endswith('maps/hotmilk_portas.yaml'), mapa)
         self.assertTrue(mundo.endswith('worlds/sala.sdf'), mundo)
         self.assertEqual((sx, sy), ('2.0', '2.5'))
+
+
+class TestMargemDoPointTurn(unittest.TestCase):
+    """O standoff tem que caber o GIRO NO LUGAR, não só o goal.
+
+    Por que existe (2026-09-01, §2G.8): com STANDOFF 1,0 m a `nominal1` raspou o
+    `cone_2` 18 vezes. O seguidor conclui o goal e gira no lugar pra encarar o
+    próximo; nesse giro o canto do robô varre `hypot(0,25; 0,25) = 0,354 m` e o
+    cone ocupa 0,17. Sobrava 0,477 m de margem — e o erro de pose do AMCL nesta
+    arena chega a 0,45 m (item 2c). Margem e erro do mesmo tamanho = contato por
+    sorteio.
+
+    Isto NÃO testa o defeito (item 1: o giro segue cego ao anel). Testa a
+    MITIGAÇÃO, que é o único ponto onde ela mora: a tabela da rota.
+    """
+
+    VARRE = math.hypot(0.25, 0.25)   # canto do footprint 0,5 x 0,5
+    R_CONE = 0.17
+    PIOR_ERRO_AMCL = 0.45            # máx medido na arena (§2G.3, §2G.8)
+
+    def _rota(self):
+        with open(os.path.join(RAIZ, 'maps', 'routes',
+                               'arena_galpao.json')) as f:
+            return json.load(f)['waypoints']
+
+    def _margem(self, w):
+        cx, cy, _tem = ga.PONTOS[w['alvo']]
+        d = math.hypot(w['x'] - cx, w['y'] - cy)
+        return d - self.VARRE - self.R_CONE
+
+    def test_todo_standoff_cabe_o_point_turn_com_folga(self):
+        wps = [w for w in self._rota() if ga.PONTOS[w['alvo']][2]]
+        self.assertEqual(len(wps), 4, 'a rota tem que ter os 4 cones')
+        for w in wps:
+            self.assertGreater(
+                self._margem(w), self.PIOR_ERRO_AMCL + 0.30,
+                '%s: margem de point-turn %.3f m nao cobre o pior erro de pose '
+                'medido (%.2f m) com sobra' % (w['alvo'], self._margem(w),
+                                               self.PIOR_ERRO_AMCL))
+
+    def test_o_standoff_ANTIGO_reprovaria(self):
+        """O par: prova que o teste acima é sensível ao número, e não passa por
+        acidente. Com 1,0 m a margem era 0,4764 — menor que o pior erro + 0,30."""
+        margem_antiga = 1.0 - self.VARRE - self.R_CONE
+        self.assertLess(margem_antiga, self.PIOR_ERRO_AMCL + 0.30)
+        self.assertAlmostEqual(margem_antiga, 0.4764, places=4)
+
+    def test_a_rota_commitada_e_a_que_o_gerador_produz(self):
+        """Rota editada na mão é a falha silenciosa: o `--conferir` aprova
+        qualquer goal navegável, inclusive um colado no cone."""
+        self.assertEqual(self._rota(), ga.rota_waypoints())
 
 
 class TestAckDoPlanner(unittest.TestCase):
