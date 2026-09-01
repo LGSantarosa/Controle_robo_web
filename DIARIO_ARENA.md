@@ -1649,6 +1649,59 @@ escolha é do dono:
 **Não escolho sozinho.** O que eu não posso é continuar chamando (a) de "fallback
 seguro".
 
+## 2F. Sessão 2026-09-01 — 3ª rodada: as 2 ressalvas procedem, e a 2ª expõe erro no §9
+
+### 2F.1 ✅ Os 16 s NÃO provam deslocamento — e o gate `nav_forward` é pior que isso
+
+Minha hipótese ("entre goals o robô pode já ter andado") **não se sustenta**:
+`path_follower.update()` retorna cedo com `not goal_active` (`path_follower.py:310`),
+então sem goal ativo **ninguém dirige**. E `nav_engaging()` aceita `linear_x`
+**zero** (`door_crossing.py:94-102`: `return linear_x > -nav_move_lin`), logo o
+arme pode acontecer no **primeiro tick** do goal novo, com o robô ainda parado no
+pré-goal. Os 16 s do item 2g provam **latência entre goals**, não janela
+espacial. Retiro a hipótese.
+
+> 🆕 **Achado ao conferir (não é dele nem meu erro anterior — é defeito do nó):**
+> `_nav_forward` é atualizado **só quando chega `/nav_vel`** (`:627-630`) e **não
+> tem verificação de idade** — diferente do `/scan`, que tem `scan_stale = 0.6 s`.
+> Se o Nav2 para de publicar `nav_vel` no buraco entre goals, o nó segue usando o
+> **último valor**. É um gate que não gateia. Entra no v2 e no item 2k.
+
+### 2F.2 ✅ Eu esqueci o fallback estático — que está no MEU §9
+
+Ele está certo: eu escrevi *"desistir da passagem de verdade exige máquina nova"*
+e isso só vale para a desistência **dinâmica** (detectar bloqueio na hora e
+abandonar). A **decisão prévia** de não usar a fresta já estava listada no §9-3
+do próprio desenho, e o §9 ainda diz que ela *"deve ser testada uma vez de
+qualquer jeito"*. Separação correta:
+
+| | precisa de código novo? |
+|---|---|
+| desistir **na hora**, ao medir o vão bloqueado | **sim** — `ActionClient`/executor, não existe |
+| decidir **antes da volta** não usar a fresta | **não** exige o nó; mas ver 2F.3 |
+
+### 2F.3 🔴 E o §9-3 que ele citou **está errado onde eu o escrevi**
+
+O §9-3 diz: *"Fechar a fresta A para o planejador e ir pelo contorno (...) **não
+depende de nenhum código novo**."* **Depende.** Conferido em
+`tools/gera_arena_galpao.py`: o `--mapa` (`gera_mapa`, `:255`) e o world
+(`corpo_sdf`, `:241`) saem **da mesma tabela `OBST`** (`:41-46`) — por decisão
+deliberada ("tudo da mesma tabela", §4.2). Fechar o vão na tabela fecha **no
+mundo também**, o que muda o experimento em vez de mudar a rota. Não há
+`--conferir`-like flag que desacople mapa de mundo, e **não existe keepout /
+filter_mask** no repo.
+
+O que o fallback estático custa, de verdade:
+
+| via | custo | ressalva |
+|---|---|---|
+| flag nova no gerador que pinta o vão só no **`.pgm`** | ~10 linhas + teste | quebra a invariante "mapa = mundo" de propósito; tem que ficar explícito no nome |
+| **waypoint forçado no contorno** (`y > 4,20`) na rota | dado, não código | a rota é gerada por `--rota`/`rota_waypoints()` (`:403`, `:418`) — editar à mão briga com a mesma invariante |
+
+**Continua sendo muito mais barato que a desistência dinâmica**, e continua sendo
+o que eu testaria primeiro. Mas "zero código" era otimismo meu, escrito no §9 e
+repetido por mim no chat.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -1876,6 +1929,8 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 66 | 🔁 **Asserção VAZIA outra vez** — no commit em que eu comemorava ter provado outro teste sensível | `test_collision_monitor_le_sempre_o_raw` achava o nó e depois só afirmava que a saída do mux era **um dos dois valores possíveis**: nunca olhava o `collision_monitor`. Passava com o pipeline quebrado. É o BO 63 **na íntegra**, dois commits depois, no mesmo arquivo em que eu tinha acabado de provar sensibilidade injetando defeito | Provar sensível **teste a teste**, não uma vez por arquivo: o teste que eu injetei defeito pra ver falhar era o *outro*. Agora o do collision lê o `cmd_vel_in_topic` dos dois YAMLs, e falha se apontarem pro `auto_vel_pre` |
 | 65 | Atribuí as paradas longas ao **churn da mira** sem medir o pipeline | A histerese cortou o chattering 3–5× e o tempo parado **não caiu**. A causa dos piores casos era o `motion_guard` zerando o giro — um nó que eu nem tinha olhado, e cuja volta ao caminho está registrada no item 7 dos meus próprios abertos | Quando o robô não se move, ler o **pipeline inteiro** (`freeze_capture` tem todos os estágios) antes de acusar o nó que eu acabei de mexer |
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
+| 76 | Inventei uma **janela espacial** a partir de uma latência temporal | Escrevi que nos 16 s entre goals "o robô pode já ter andado". Sem goal ativo o `path_follower` retorna cedo (`path_follower.py:310`) — ninguém dirige; e `nav_engaging()` aceita `linear_x = 0`, então o arme cai no 1º tick do goal novo, com o robô parado. Eu **rotulei como inferência**, o que evitou o estrago, mas rotular não substitui conferir as 2 linhas que a derrubam | Latência ≠ deslocamento. Antes de transformar um tempo medido em distância, achar quem **comanda** o robô naquele intervalo — e se a resposta é "ninguém", a hipótese morre ali |
+| 77 | Afirmei *"não depende de nenhum código novo"* sobre o fallback do contorno — **no §9 do desenho, e repeti no chat** | O `--mapa` e o world saem da **mesma tabela `OBST`** (`gera_arena_galpao.py:41-46`, `:241`, `:255`), por invariante deliberada. Fechar a fresta para o planejador fecha **no mundo** também; desacoplar exige flag nova (ou keepout, que não existe no repo). Achado porque o revisor citou a linha como o caminho barato — e eu fui conferir se ela era verdade | "Não precisa de código" só se pode escrever depois de abrir a ferramenta que geraria o artefato. E: a resposta certa era **as duas coisas** (ele estava certo de que existe fallback estático; eu estava errado sobre o preço dele) |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |

@@ -652,8 +652,14 @@ Ordem de recuo, do menos para o mais drástico:
 2. **Desarmar a porta** (`door_crossing:=false`) e correr como hoje — o
    comportamento atual, com o risco medido de contato.
 3. **Fechar a fresta A para o planejador** e ir pelo contorno (`y > 4,20`), como
-   `aprox2` e `latchN1` já fizeram na prática. Custa tempo, zera o risco de
-   contato **nessa** passagem, e não depende de nenhum código novo.
+   `aprox2` e `latchN1` já fizeram na prática. Custa tempo e zera o risco de
+   contato **nessa** passagem.
+   ⚠️ **Correção (BO 77):** a frase original dizia que isto *"não depende de
+   nenhum código novo"*. **Depende.** `--mapa` e o world saem da **mesma tabela
+   `OBST`** (`tools/gera_arena_galpao.py:41-46`), então fechar o vão fecha no
+   **mundo** também; e não há keepout no repo. Custa uma flag no gerador que
+   pinte o vão só no `.pgm` (quebrando de propósito a invariante "mapa = mundo"),
+   ou um waypoint forçado no contorno. Pequeno — mas não zero.
 
 A opção 3 é a rede de segurança da prova e deve ser **testada uma vez** de
 qualquer jeito, para que exista pronta se a 1 falhar em 04/09.
