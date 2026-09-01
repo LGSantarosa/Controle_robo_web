@@ -1702,6 +1702,143 @@ O que o fallback estático custa, de verdade:
 o que eu testaria primeiro. Mas "zero código" era otimismo meu, escrito no §9 e
 repetido por mim no chat.
 
+## 2G. Sessão 2026-09-01 (tarde) — o CONTORNO da fresta A, medido em 4 voltas
+
+**Contexto.** A rede de segurança da prova de 05/09 é **não usar a fresta A** e
+ir pelo contorno (a fresta é opcional; o cone não é). O `--fecha-fresta`
+(`2e79503`) fecha a fresta **só no `.pgm`** que o Nav2 carrega — o SDF/mundo
+segue com o vão fisicamente aberto. É a quebra deliberada da invariante
+"mapa = mundo", na direção de mudar a **rota** sem mudar o **experimento**.
+
+⚡ **A sessão anterior foi cortada por queda de luz** no boot da `contornoA1`
+(13:56 — `sim.log` parou no Gazebo, `nav2.log`/`probe.log` vazios). Nada ficou
+pela metade no repo: o commit já estava feito e pushado, e a volta foi refeita
+do zero aqui.
+
+### 2G.1 Conferido ANTES de rodar
+
+| conferência | resultado |
+|---|---|
+| suíte do `robot_nav` | **421 passed** (as 10 do tampão incluídas) |
+| `--conferir` da arena | `TUDO CERTO` |
+| autotestes `mapa_passagens` / `confere_evidencia` / `extrai_evidencia` / `colisao` | ok |
+| mapa tampado é **reprodutível** | regerado no scratchpad: mesmo `md5 b68f96c8…` do `maps/arena_galpao_semA.pgm` |
+| a fresta A está mesmo fechada **no mapa** | `mapa_passagens`: `A_fresta90 folga 0.000 m → ✗ FECHADO` (as outras 3 inalteradas) |
+| o contorno **existe** para o planejador | probes A→B: `✓ LIGADOS` nas 5 pernas, até raio **0,354** |
+| o Nav2 carregou o mapa certo | `nav2.log` cita `maps/arena_galpao_semA.{yaml,pgm}` |
+| guard desligado | `grep -c motion_guard log/sim_ab/contornoA*/nav2.log` = **0** em 4/4 |
+
+### 2G.2 As 4 voltas
+
+Comando da §4.5 com `AB_MAP=$PWD/maps/arena_galpao_semA.yaml`. A 4ª foi rodada
+para repor a volta que perdeu um goal (§2G.4), **sem** descartar a 3ª.
+
+| volta | tempo | goals | COLISÃO | raspão | folga mín (volta) | folga na fresta A | unstuck | parado |
+|---|---|---|---|---|---|---|---|---|
+| `noguard1` (pela fresta) | 227,6 | 5/5 | 0 | 0 | 0,0827 | **0,0827** | 0,0 | 0,0 |
+| `noguard2` (pela fresta) | 221,0 | 5/5 | 0 | 0 | 0,0667 | **0,0667** | 0,0 | 0,0 |
+| `noguard3` (pela fresta) | 245,4 | 5/5 | **9** | **48** | 0,0000 | **0,0000** | 1,5 | 3,6 |
+| **`contornoA1`** | 231,1 | 5/5 | **0** | **0** | 0,1349 (`cone_4`) | **0,2237** | 0,0 | 2,0 |
+| **`contornoA2`** | 241,6 | 5/5 | **0** | **0** | 0,1600 (`cone_3`) | **0,2349** | 0,0 | 1,0 |
+| **`contornoA3`** | 235,5 | **4/5** | **0** | **0** | 0,1838 (`C_fresta60_1`) | **0,2703** | 0,0 | 1,1 |
+| **`contornoA4`** | 286,6 | 5/5 | **0** | **0** | 0,1224 (`cone_3`) | **0,2375** | 1,4 | **25,6** |
+
+**✅ O que está medido:**
+
+1. **Zero contato em 4/4** — nenhuma COLISÃO e nenhum raspão, contra 1 volta em
+   3 com 9+48 eventos quando a rota usava a fresta.
+2. **A passagem no fio sumiu.** A menor folga da volta inteira passou a ser um
+   **cone** (0,12–0,18 m), não a fresta. Contra a estrutura da fresta A o robô
+   agora não chega a menos de **0,224 m** (era 0,067–0,083 nas duas voltas
+   limpas, e 0,000 na que bateu). O item 2k não foi *corrigido*: ele foi
+   **retirado da rota**.
+3. **Preço em tempo: pequeno.** 231–242 s nas três voltas sem incidente, contra
+   221–227 s pela fresta — **+4 a +9%** de volta. O contorno é mais longo, e é
+   isso que aparece.
+4. **A localização não piorou** com o mapa ≠ mundo (medido, era o risco óbvio da
+   quebra da invariante — §2G.3).
+
+### 2G.3 O risco da invariante quebrada: medido, e não se confirmou
+
+Com o tampão, o laser enxerga **espaço livre** onde o mapa afirma parede. Se o
+AMCL fosse degradar em algum lugar, seria ali. Erro de pose AMCL × Gazebo
+(séries alinhadas pelo yaw, offset por varredura, erro de yaw mediano 0,8–1,1°):
+
+| volta | mediana | p90 | máx |
+|---|---|---|---|
+| `noguard1` (mapa aberto) | 7,0 cm | 14,6 | 33,1 |
+| `noguard2` (mapa aberto) | 7,6 cm | 17,4 | 38,9 |
+| `noguard3` (mapa aberto) | 8,1 cm | 15,6 | 32,1 |
+| `contornoA1` (tampado) | 8,4 cm | 13,6 | 30,7 |
+| `contornoA2` (tampado) | 7,4 cm | 13,6 | 25,4 |
+| `contornoA3` (tampado) | 7,8 cm | 14,1 | 22,6 |
+| `contornoA4` (tampado) | 8,7 cm | 15,5 | 39,9 |
+
+**As duas famílias se sobrepõem inteiras.** Não dá para afirmar melhora (nem
+piora): o que dá para afirmar é que **o tampão não trouxe um degrau de erro de
+pose** nestas voltas. O item 2c (AMCL erra ~24 cm em pico) continua aberto e
+continua do mesmo tamanho — o tampão não mexe nele.
+
+⚠️ **O que este número NÃO cobre:** o mapa tampado ainda **não foi testado com o
+robô real**, onde o scan tem ruído, a arena tem features de verdade e o AMCL
+parte de uma pose inicial imperfeita.
+
+### 2G.4 O goal perdido da `contornoA3` — a causa está lida, e **não** é o item 8
+
+`goal 1: ABORTADO em 0s dist=0.0m`. O `nav2.log` diz o que houve, na linha 225:
+
+```
+[bt_navigator] Begin navigating from current location (1.00, 1.00) to (3.51, 1.36)
+[bt_navigator_navigate_to_pose_rclcpp_node] Timed out while waiting for action
+    server to acknowledge goal request for compute_path_to_pose
+[bt_navigator] Aborting handle.  /  Goal failed
+```
+
+É o **`server_timeout` de 200 ms** estourando no *acknowledge* do
+`compute_path_to_pose`, no **primeiro goal da volta** — 13,9 s depois do
+`Managed nodes are active`. **Não** apareceu `start/goal is an obstacle`, e o
+planejador não reprovou plano nenhum: ele não chegou a responder o *handshake*.
+O robô estava parado na largada, em espaço livre com 0,75 m de folga.
+
+Consequência na volta: o goal 2 saiu da **largada** em vez do standoff do
+`cone_1` — 12,26 m em 88 s, em vez de ~10,1 m em 47 s. Os 4 goals seguintes
+fecharam normais.
+
+**Isto é item novo nos abertos (2l), separado do item 8.** Não confundir os dois:
+o item 8 é o planejador **recusando** um plano de dentro da fresta A; este é o
+`bt_navigator` **desistindo de esperar** o servidor do planejador no primeiro
+goal.
+
+### 2G.5 A `contornoA4` trouxe de volta o defeito 2e/2f (e isso é bom saber)
+
+5/5 goals, zero contato — mas **25,6 s parado**, todos no goal 5, com:
+
+- duas janelas de `pose_congelada` (15,0 s e 10,8 s) em **(0,88; 6,00)**, com o
+  vizinho mais próximo a **1,22 m** (muro oeste) — não é obstáculo, não é guard
+  (desligado, `grep`=0);
+- `unstuck` disparando por **`reason=timeout`** com `nav_wants=1` e
+  `stuck_s=15,1`;
+- 15 alternâncias mira/avanço (contra 7–9 nas outras três).
+
+É a assinatura já registrada dos itens **2e/2i** (robô para, Nav2 continua
+querendo movimento) e **2f** (`unstuck` empurra robô que já chegou). **Não é
+efeito do tampão** — é o mesmo defeito de antes, que aparece em ~1 volta a cada
+3–4 e que o `4da6eb4` reduziu sem eliminar. Registrar que ele sobreviveu ao
+contorno.
+
+### 2G.6 O que estas 4 voltas **não** provam
+
+- **Não** provam A1/A2/A3: a rota para nos standoffs, 1 m antes de cada cone.
+- **n = 4**, tudo no sim, tudo com o mesmo mundo determinístico. "Zero contato em
+  4/4" **não** é taxa de contato.
+- **Não** validam o tampão no robô real: o `maps/arena_galpao_semA.*` ainda está
+  **fora do git** (o `.gitignore` ignora `maps/` e este par não tem exceção), e a
+  Pi deploya por `git reset --hard`. **Enquanto não for versionado + apontado
+  pelo launch, isto não existe no robô.**
+- **Não** fecham o item 2k *como defeito*: nada alinha o robô antes de um vão
+  estreito. Se a fresta voltar para a rota (ou se aparecer outro vão apertado),
+  o problema volta inteiro.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -1762,6 +1899,17 @@ do mapa.** Falta provar no sim.
 
 ### 4.1 Autotestes (não precisam de ROS nem do robô)
 
+⚠️ **Corrigido 09-01:** "não precisam de ROS" vale para o *ROS rodando* — mas a
+suíte do `pytest` importa `robot_nav`, então **precisa do `install/` no
+`PYTHONPATH`**. Em terminal novo (ou depois de um reboot), sem as duas linhas
+abaixo dá `ModuleNotFoundError: No module named 'robot_nav'` em 12 arquivos, que
+parece quebra e não é:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+```
+
 ```bash
 python3 tools/gera_arena_galpao.py --conferir      # invariantes da arena + rota
 python3 tools/mapa_passagens.py   --autoteste      # mapa sintético, vão 0,60
@@ -1769,6 +1917,7 @@ python3 tools/confere_evidencia.py --autoteste    # o conferidor de evidência
 python3 tools/confere_evidencia.py                # docs/baselines/: git + CRLF + README
 python3 tools/sim_ab/extrai_evidencia.py --autoteste  # critério da samba
 python3 tools/sim_ab/colisao.py   --autoteste      # 7 casos de geometria
+python3 tools/sim_ab/erro_pose.py --autoteste     # alinhamento AMCL x Gazebo (09-01)
 python3 -m pytest ros2_packages/robot_nav/test/ -q # 397 testes (08-31: +4 do latch)
 ```
 
@@ -1823,6 +1972,22 @@ AB_EXTRA_LAUNCH="follow_clear_full:=1.2 follow_clear_min:=0.35 motion_guard:=fal
 
 `AB_SX/AB_SY` = a **largada** (1.0, 1.0). O default do harness é (2.0, **0.0**),
 que na arena fica **em cima do muro sul**.
+
+### 4.5b Uma volta pelo CONTORNO (fresta A fechada só no mapa)
+
+Mesmo comando, trocando **só o mapa**. O mapa tampado se gera do próprio gerador
+e **não está versionado** (o `.gitignore` ignora `maps/`):
+
+```bash
+python3 tools/gera_arena_galpao.py --mapa maps/ --fecha-fresta A
+#   -> maps/arena_galpao_semA.{pgm,yaml}   (o SDF/mundo NÃO muda)
+AB_MAP=$PWD/maps/arena_galpao_semA.yaml   # ...e o resto igual à §4.5
+```
+
+Conferência barata de que o tampão pegou:
+`python3 tools/mapa_passagens.py maps/arena_galpao_semA.yaml $(python3
+tools/gera_arena_galpao.py --probes | tr '\n' ' ')` tem que dizer
+`A_fresta90 ... ✗ FECHADO` **e** manter as 5 pernas `✓ LIGADOS`.
 
 **Gerou pasta em `docs/baselines/`? Roda o conferidor ANTES do commit** (BO 67 —
 eu não rodei, e ele acha em 0,2 s o arquivo arquivado que o README esqueceu de
@@ -1931,6 +2096,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
 | 76 | Inventei uma **janela espacial** a partir de uma latência temporal | Escrevi que nos 16 s entre goals "o robô pode já ter andado". Sem goal ativo o `path_follower` retorna cedo (`path_follower.py:310`) — ninguém dirige; e `nav_engaging()` aceita `linear_x = 0`, então o arme cai no 1º tick do goal novo, com o robô parado. Eu **rotulei como inferência**, o que evitou o estrago, mas rotular não substitui conferir as 2 linhas que a derrubam | Latência ≠ deslocamento. Antes de transformar um tempo medido em distância, achar quem **comanda** o robô naquele intervalo — e se a resposta é "ninguém", a hipótese morre ali |
 | 77 | Afirmei *"não depende de nenhum código novo"* sobre o fallback do contorno — **no §9 do desenho, e repeti no chat** | O `--mapa` e o world saem da **mesma tabela `OBST`** (`gera_arena_galpao.py:41-46`, `:241`, `:255`), por invariante deliberada. Fechar a fresta para o planejador fecha **no mundo** também; desacoplar exige flag nova (ou keepout, que não existe no repo). Achado porque o revisor citou a linha como o caminho barato — e eu fui conferir se ela era verdade | "Não precisa de código" só se pode escrever depois de abrir a ferramenta que geraria o artefato. E: a resposta certa era **as duas coisas** (ele estava certo de que existe fallback estático; eu estava errado sobre o preço dele) |
+| 78 | Escrevi na §4.1 que os autotestes **"não precisam de ROS"** — e em terminal novo eles nem coletam | Depois da queda de luz, `pytest` deu `ModuleNotFoundError: No module named 'robot_nav'` em **12 arquivos**. Não é ROS *rodando* que falta: é o `install/setup.bash` no `PYTHONPATH`. Escrevi a §4.1 de dentro de um shell que já estava com tudo sourceado | Instrução de reprodução se testa em **shell limpo**. "Não precisa de X" quase sempre quer dizer "não precisa de X *no ar*" — e a diferença é exatamente o que quebra pra quem chega depois |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
@@ -1954,7 +2120,8 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 2g | **16 s em `idle`** entre dois goals (`aprox3`) | ⏳ **novo, 08-31.** Sem goal ativo — não é o seguidor. Buraco entre a conclusão de um goal e o próximo ser aceito; não investigado |
 | 2h | **Goal 2: última amostra a 0,156–0,160 nas 3 voltas** | ⏳ **novo, 08-31.** Único goal que a aproximação não puxa pra dentro, e sempre o mesmo. ⚠️ **NÃO é prova de que termina fora da tolerância** (BO 61: ~1,1 cm entre amostras a 20 Hz, e o checker é `stateful`). Suspeita não verificada: algo bloqueia o avanço ali (é o goal cujo caminho passa pela fresta A) |
 | 2i | **Por que o Nav2 ainda queria movimento com o robô já chegado?** | ⏳ **novo, 08-31.** A explicação que eu tinha dado (parou fora dos 0,15) **caiu**: o checker é `stateful` e o robô entrou dentro. Hipótese do próprio log: `Failed to make progress` → recovery → **reset do goal checker** → o XY volta a ser exigido. Medir antes de afirmar |
-| 2k | 🔴 **Fresta A: nada controla o ERRO LATERAL antes da boca** (título corrigido — BO 69) | ⏳ **novo, 08-31 (§2B.9).** Nas 14 voltas a folga mínima na `A_fresta90_2` foi 0,045–0,212 m; a `noguard3` entrou com yaw **−5,4°** (as outras 13: −13° a −26°) e **bateu** (9 COLISÃO + 48 raspões). Nada alinha o robô antes do vão. ⚠️ n=3 sem guard: **não** está provado que tirar o guard causou — o guard estava `idle` na fresta em 11/11 voltas — mas também não está provado que não. **DESENHO 09-01 escrito, aguardando revisão do Codex:** `docs/superpowers/specs/2026-09-01-fresta-a-door-crossing-design.md` — reativar o `door_crossing` (decisão do dono); medição em §2B.10 |
+| 2k | 🔴 **Fresta A: nada controla o ERRO LATERAL antes da boca** | 🟡 **CONTORNADO 09-01, não corrigido (§2G).** Com `--fecha-fresta A` (tampão só no `.pgm`, `2e79503`) a rota deixa de usar o vão: **4 voltas, zero COLISÃO e zero raspão**, folga mínima contra a estrutura da fresta **0,224–0,270 m** (era 0,067–0,083 nas voltas limpas e 0,000 na que bateu), custo **+4 a +9%** de tempo, e o erro de pose do AMCL **não** piorou com o mapa ≠ mundo. **O defeito continua vivo**: nada alinha o robô antes de um vão estreito — só não há mais vão estreito na rota. ⛔ **Falta versionar o mapa tampado e apontar o launch pra ele**, senão não existe no robô. Desenho do `door_crossing` (§2.10 + `docs/superpowers/specs/2026-09-01-fresta-a-door-crossing-design.md`) fica de pé como a correção de verdade, para depois da prova |
+| 2l | **1º goal da volta perdido por `server_timeout` (200 ms)** | ⏳ **novo, 09-01 (§2G.4).** `contornoA3`: `Timed out while waiting for action server to acknowledge goal request for compute_path_to_pose` → `Goal failed` em 0 s, com o robô parado na largada em espaço livre. **Não é** o item 8 (`start/goal is an obstacle`): o planejador não recusou plano, não respondeu o handshake. 1 em 4 voltas. Barato de mitigar (subir `server_timeout` / esperar o `compute_path_to_pose` antes do 1º goal), mas **na prova custa um cone** |
 | 2j | 🔴🔴 **`motion_guard` bloqueia o robô na arena** | ⏳ **novo, 08-31 (§2B.7).** Vigia de PESSOA ligado numa prova **sem pessoa**; zera o giro entre `auto_vel_pre` e `auto_vel_raw`. Medido: **26,9 s** (`hist3`) e **52,1 s** (`aprox2`); nos episódios, ~505 comandos entraram e **1** saiu. Os 3 episódios duram 25,7–26,9 s = `hold_still_max` 20 + `clear_time` 5 + settle, sempre com um **cone** como único vizinho — a vigília roda até o teto em cima do cone. Só dispara nas voltas com aproximação (que adiciona point-turn perto de cone). ✅ **DESLIGADO na arena por decisão do dono 08-31** (`motion_guard:=false`, §2B.8); 3 voltas sem ele na §2B.9 — parado 0,0 s em 14/15 goals, mas **1 das 3 bateu na fresta A** (item 2k), então **não** está validado. 🔴 **`--arena` vale no REAL também**: sem `--sim` o robô físico sobe sem vigia de pessoa — exige pista controlada + E-STOP na mão |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |

@@ -1,0 +1,7 @@
+contornoA1: offset 6.05s  yaw_med 0.80deg  n=4017  erro_pos mediana 8.4 cm  p90 13.6  max 30.7
+contornoA2: offset 4.65s  yaw_med 0.90deg  n=4103  erro_pos mediana 7.4 cm  p90 13.6  max 25.4
+contornoA3: offset 4.45s  yaw_med 0.90deg  n=4038  erro_pos mediana 7.8 cm  p90 14.1  max 22.6
+contornoA4: offset 6.40s  yaw_med 0.90deg  n=4935  erro_pos mediana 8.7 cm  p90 15.5  max 39.9
+noguard1: offset 4.70s  yaw_med 1.10deg  n=3803  erro_pos mediana 7.0 cm  p90 14.6  max 33.1
+noguard2: offset 4.95s  yaw_med 1.00deg  n=3754  erro_pos mediana 7.6 cm  p90 17.4  max 38.9
+noguard3: offset 6.05s  yaw_med 1.10deg  n=4207  erro_pos mediana 8.1 cm  p90 15.6  max 32.1

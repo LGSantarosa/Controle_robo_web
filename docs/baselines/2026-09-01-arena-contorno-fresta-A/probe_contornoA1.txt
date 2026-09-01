@@ -1,0 +1,7 @@
+[INFO] [1788282633.391384622] [ab_probe]: esperando o action server navigate_to_pose...
+[INFO] [1788282651.162000059] [ab_probe]: goal 1: OK em 43s  dist=2.66m  parado=0.1s  vmax=0.3  min_scan=0.778  cm={'nada': 13.9}
+[INFO] [1788282703.426462278] [ab_probe]: goal 2: OK em 47s  dist=10.13m  parado=0.9s  vmax=0.3  min_scan=0.513  cm={'nada': 47.4}
+[INFO] [1788282757.939160299] [ab_probe]: goal 3: OK em 49s  dist=7.76m  parado=1.0s  vmax=0.3  min_scan=0.513  cm={'nada': 49.0}
+[INFO] [1788282808.302116187] [ab_probe]: goal 4: OK em 46s  dist=8.37m  parado=0.0s  vmax=0.3  min_scan=0.529  cm={'nada': 46.3}
+[INFO] [1788282855.955337300] [ab_probe]: goal 5: OK em 45s  dist=7.98m  parado=0.0s  vmax=0.3  min_scan=0.486  cm={'nada': 45.1}
+[INFO] [1788282855.956984221] [ab_probe]: FIM: 231s total -> /home/rbe-luis/Workspace/Controle_robo_web/log/sim_ab/contornoA1/result.json

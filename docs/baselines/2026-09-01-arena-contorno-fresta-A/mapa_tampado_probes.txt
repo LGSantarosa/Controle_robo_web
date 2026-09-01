@@ -1,0 +1,48 @@
+mapa: arena_galpao_semA.yaml   304x204 células @ 0.05 m   (91% livre)
+
+     raio  fresta mín   trechos   maior trecho
+    0.250       0.50m         2         87.2%
+    0.320       0.64m         2         90.2%
+    0.354       0.71m         2         92.1%
+
+  "fresta mín" = corredor mais estreito que o robô ainda atravessa (2·raio).
+  "trechos" alto é normal (ruído/salpico do SLAM); o que importa é o
+  MAIOR TRECHO não desabar quando o raio sobe — isso é passagem fechando.
+
+  gargalos do trecho principal (raio 0.32), em célula (linha,coluna):
+     ( 108, 237)  folga 0.32 m  -> corredor de ~0.64 m
+     (  88,  68)  folga 0.32 m  -> corredor de ~0.64 m
+     (  38, 165)  folga 0.32 m  -> corredor de ~0.64 m
+     (  38, 186)  folga 0.32 m  -> corredor de ~0.64 m
+     ( 103, 151)  folga 0.32 m  -> corredor de ~0.64 m
+     ( 103, 172)  folga 0.32 m  -> corredor de ~0.64 m
+     ( 108,  60)  folga 0.32 m  -> corredor de ~0.64 m
+     (  89, 198)  folga 0.32 m  -> corredor de ~0.64 m
+
+  PROBES LOCAIS (conectividade A->B, o que o percentual acima esconde)
+    largada->cone1_livre: (1.00,1.00) -> (4.50,1.50)
+       raio 0.250: ✓ LIGADOS
+       raio 0.320: ✓ LIGADOS
+       raio 0.354: ✓ LIGADOS
+    cone1->cone2_fresta0.90: (4.50,1.50) -> (11.50,1.80)
+       raio 0.250: ✓ LIGADOS
+       raio 0.320: ✓ LIGADOS
+       raio 0.354: ✓ LIGADOS
+    cone2->cone3_fresta0.70: (11.50,1.80) -> (12.20,7.50)
+       raio 0.250: ✓ LIGADOS
+       raio 0.320: ✓ LIGADOS
+       raio 0.354: ✓ LIGADOS
+    cone3->cone4_fresta0.60: (12.20,7.50) -> (5.00,7.80)
+       raio 0.250: ✓ LIGADOS
+       raio 0.320: ✓ LIGADOS
+       raio 0.354: ✓ LIGADOS
+    cone4->chegada_fresta0.80: (5.00,7.80) -> (1.50,2.50)
+       raio 0.250: ✓ LIGADOS
+       raio 0.320: ✓ LIGADOS
+       raio 0.354: ✓ LIGADOS
+
+  FOLGA NO VÃO (o robô passa se folga >= raio 0.320)
+    A_fresta90_esperado0.90: folga 0.000 m (corredor 0.00 m) -> ✗ FECHADO
+    B_fresta70_esperado0.70: folga 0.350 m (corredor 0.70 m) -> ✓ PASSA
+    C_fresta60_esperado0.60: folga 0.300 m (corredor 0.60 m) -> ✗ FECHADO
+    D_fresta80_esperado0.80: folga 0.400 m (corredor 0.80 m) -> ✓ PASSA

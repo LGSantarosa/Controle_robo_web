@@ -1,0 +1,3 @@
+volta,fonte,t_ini,t_fim,dur_s,detalhe
+contornoA4,pose_congelada,223.0,238.1,15.0,obj=muro_oeste folga_min=1.2195
+contornoA4,pose_congelada,250.9,261.6,10.8,obj=muro_oeste folga_min=1.2562
