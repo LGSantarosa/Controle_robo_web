@@ -1399,11 +1399,12 @@ voltas.
    travessia da fresta foi `idle` em **todas**. Os únicos `slowing` do histórico
    somam ~6 s e aconteceram longe: muro oeste (1,29 m), `C_fresta60_1` (0,95 m),
    `cone_4` (0,48 m). Não havia proteção ali pra eu ter removido.
-3. **A `noguard3` chegou na fresta ERRADA, e atrasada.** Nas outras 13 voltas ela
-   é cruzada em t=35–45 s com yaw entre **−13° e −26°**. A `noguard3` cruzou em
-   **t=60,9** com yaw **−5,4°** — quase de frente pro batente. Antes disso, o
-   `unstuck` disparou (`reason=near`) aos 50,8 s lá atrás no goal 1, que levou
-   59,5 s (contra 42–46 s das outras duas).
+3. ~~**A `noguard3` chegou na fresta ERRADA, e atrasada.**~~ ⚠️ **RETRATADO
+   09-01 — ver §2B.10.** O yaw de −5,4° era leitura de UMA amostra solta; medindo
+   a travessia inteira, a `noguard3` cruzou o plano dos blocos a **−10,7°**,
+   **dentro** da faixa das 13 voltas boas (−8° a −16°). **Yaw não é o
+   discriminante.** O que continua valendo: ela cruzou **atrasada** (t=60,9
+   contra 35–45 s), depois de um `unstuck` (`reason=near`) aos 50,8 s no goal 1.
 
 **⚠️ O que isso NÃO prova:** são **3 voltas**. Não dá pra tirar taxa de contato
 de n=3, e "o guard não atuava ali" não é o mesmo que "tirar o guard não muda
@@ -1413,6 +1414,66 @@ mudança de caminho de dado. **Não vou registrar guard-off como validado.**
 **O que a `noguard3` provavelmente escancarou é um defeito que já estava lá:** a
 rota passa por um vão de 90 cm com folga de 4–21 cm, sem nada que corrija o rumo
 antes de entrar. Um dia o rumo ia estar 15° fora. Item novo nos abertos.
+
+### 2B.10 O que REALMENTE separa a volta que bateu (medido 09-01)
+
+Fui desenhar a correção da fresta A e a primeira coisa que fiz foi conferir a
+minha própria explicação contra a trajetória (`colisao.csv`, x/y/yaw/folga a
+20 Hz). **Ela não sobreviveu.**
+
+Geometria: blocos em **x = 7,5** com **0,60 m de espessura** → o túnel é
+**x 7,2–7,8**; o vão vai de **y 1,80 a 2,70**, eixo em **y = 2,25**. O robô é um
+retângulo 0,5×0,5 (o oráculo usa o retângulo exato girado pelo yaw).
+
+Pose de cada volta no plano dos blocos (x = 7,5):
+
+| volta | t | y | desvio do eixo | yaw | folga mín na A |
+|---|---|---|---|---|---|
+| `hist2` | 48,2 | 2,169 | −0,081 | −9,8° | 0,0630 |
+| `noguard1` | 40,4 | 2,187 | −0,063 | −9,4° | 0,0827 |
+| `arena_latch1` | 47,3 | 2,187 | −0,063 | −10,4° | 0,0741 |
+| `noguard2` | 41,0 | 2,191 | −0,059 | −12,6° | 0,0667 |
+| `aprox3` | 39,8 | 2,188 | −0,062 | −8,1° | 0,0907 |
+| `latchN2` | 41,1 | 2,202 | −0,048 | −12,9° | 0,0749 |
+| `hist1` | 43,2 | 2,216 | −0,034 | −12,0° | 0,0776 |
+| `latchN3` | 41,8 | 2,244 | −0,006 | −15,1° | 0,1014 |
+| `arena_baseline1` | 39,1 | 2,293 | +0,043 | −14,7° | 0,0687 |
+| `aprox1` | 50,5 | 2,306 | +0,056 | −15,8° | 0,0483 |
+| `hist3` | 42,5 | 2,328 | +0,078 | −13,1° | 0,0451 |
+| **`noguard3`** | **64,0** | **2,370** | **+0,120** | **−10,7°** | **0,0000** |
+
+**O yaw da `noguard3` está no meio do pelotão.** O que ela tem de único é o
+**desvio lateral**: +0,120 m, contra ±0,081 de todas as 11 outras. A minha frase
+de "−5,4° quase de frente pro batente" veio de amostra solta e **está retratada**
+(BO 69).
+
+**E o contato não foi dentro do túnel — foi ANTES dele.** As 9 COLISÃO estão em
+**x 6,90–6,96**, ou seja **~25 cm antes da boca** (túnel começa em 7,2), com o
+robô a **y ≈ 2,50** (desvio +0,25): ele encostou na **face frontal do bloco de
+cima** (o que vai de y 2,70 a 4,20) enquanto ainda vinha chegando. Depois disso
+**raspou por 3 s** com folga travada em 0,018 e yaw **congelado em −10,7°**,
+convergindo o desvio de +0,26 até +0,02 — ele **se espremeu pra dentro do vão
+raspando**, sem nada reagir ao contato.
+
+**A volta boa fazia o oposto:** a `noguard2` chegou em x=6,90 com desvio +0,170
+e yaw **−24,3°** — apontada pra *cortar* em direção ao eixo — e ainda deu um
+giro no lugar na boca (−24,3° → −12,6° com x parado em 7,33), entrando com
+desvio −0,02. **O yaw grande das voltas boas era a CORREÇÃO, não o defeito.**
+
+**Mecanismo, então:** a perna `cone1→cone2` chega pela esquerda-de-cima e nada
+controla o **erro lateral** contra o eixo do vão antes da boca. Cada volta
+converge o quanto o plano por acaso cortou. Quem chega com desvio grande **e**
+ângulo de convergência pequeno bate na face do batente antes de entrar.
+
+**Margem real que existe pra errar:** vão 0,90; largura varrida por um 0,5×0,5 a
+−12° é 0,5·(cos+sen) = **0,60 m** → sobram **0,15 m repartidos nos dois lados**.
+Para o **Nav2** é pior: com `robot_radius` 0,32 ele enxerga um círculo de 0,64 →
+**±0,13 m** de erro de eixo antes de o plano ficar inviável. É por isso que o
+`"start/goal is an obstacle"` mora justamente aqui.
+
+**Nota de escopo:** 2 das 14 voltas (`aprox2`, `latchN1`) **não passaram pela
+fresta A** — foram pelo contorno (`y > 4,20`). A fresta é **atalho opcional**
+(`tools/gera_arena_galpao.py`), não obrigação da prova.
 
 ## 2C. Sessão 2026-09-01 — conferência do review (nada mudou no código)
 
@@ -1673,6 +1734,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 63 | Asserção **VAZIA** no microsim novo — no teste escrito pra responder o review anterior | `trocas = sum(... if p == q == 'goal_approach')` comparado com `< 600`, num laço de no máximo 599 pares: **não podia falhar**. E contava pares de estados IGUAIS, não alternâncias; o nome do estado nem distingue mirar de avançar — quem distingue é o `vx`. É o BO 56 outra vez, dois commits depois | Toda asserção numérica nova tem que ser **provada sensível**: agora há um teste que roda o microsim com `turn_exit == turn_enter` (o defeito) e exige alternância MAIOR — 1 com histerese, 5 sem |
 | 64 | Anunciei retratações e **não as propaguei** | Retratei no corpo da §2B.6 e deixei: o título absoluto *"NÃO são da aproximação"*, o README repetindo as duas conclusões retiradas, a coluna `dentro_do_checker_0.15` afirmando o julgamento do checker, e os itens 2e/2f/2h repetindo a causalidade caída | Retratação não é parágrafo, é **varredura**: título, README, nome de coluna, itens abertos. O mesmo erro do BO 48, agora com retratação em vez de fato |
 | 68 | Chamei a `noguard2` de "**volta mais rápida das 14**" comparando só o relógio | A `latchN1` fez **219,8 s**, mais rápido — com **4/5 goals**. Comparei tempo de volta incompleta com tempo de volta inteira, o que infla o ganho que eu estava anunciando | Tempo só compara entre voltas com o **mesmo número de goals cumpridos**; a coluna `goals_ok` entra na frase, não no rodapé |
+| 69 | 🔁 **Diagnostiquei a batida da `noguard3` por UMA amostra de yaw** — e publiquei no diário, no handoff e no chat | Escrevi que ela entrou na fresta a **−5,4°** contra −13°/−26° das boas, e construí em cima disso o item 2k ("entra torta, nada corrige o rumo"). Medindo a travessia inteira: **−10,7°, no meio do pelotão**. O discriminante é o **desvio lateral** (+0,120 m contra ±0,081), e o contato foi **25 cm ANTES da boca**, na face do batente — não dentro do vão. É o BO 65 outra vez: conclusão sobre uma volta inteira tirada de um ponto | Antes de virar item de backlog, **plotar a trajetória inteira** do evento (a `colisao.csv` tem x/y/yaw/folga a 20 Hz). Uma amostra não descreve uma travessia — e foi o desenho da correção que quase saiu errado por causa disso |
 | 67 | Não rodei `tools/confere_evidencia.py` — a ferramenta que existe **exatamente** pra isso | Deixei `guard_bloqueio.csv` arquivado e **não citado** no README da pasta nova. O conferidor pega isso em 0,2 s, foi escrito depois dos BOs 31/45/50 (a mesma falha 3×) e eu não o executei nas duas pastas que criei hoje | Gerou pasta em `docs/baselines/` → **roda o conferidor no mesmo comando**, antes do commit. Está na §4.5 agora |
 | 66 | 🔁 **Asserção VAZIA outra vez** — no commit em que eu comemorava ter provado outro teste sensível | `test_collision_monitor_le_sempre_o_raw` achava o nó e depois só afirmava que a saída do mux era **um dos dois valores possíveis**: nunca olhava o `collision_monitor`. Passava com o pipeline quebrado. É o BO 63 **na íntegra**, dois commits depois, no mesmo arquivo em que eu tinha acabado de provar sensibilidade injetando defeito | Provar sensível **teste a teste**, não uma vez por arquivo: o teste que eu injetei defeito pra ver falhar era o *outro*. Agora o do collision lê o `cmd_vel_in_topic` dos dois YAMLs, e falha se apontarem pro `auto_vel_pre` |
 | 65 | Atribuí as paradas longas ao **churn da mira** sem medir o pipeline | A histerese cortou o chattering 3–5× e o tempo parado **não caiu**. A causa dos piores casos era o `motion_guard` zerando o giro — um nó que eu nem tinha olhado, e cuja volta ao caminho está registrada no item 7 dos meus próprios abertos | Quando o robô não se move, ler o **pipeline inteiro** (`freeze_capture` tem todos os estágios) antes de acusar o nó que eu acabei de mexer |

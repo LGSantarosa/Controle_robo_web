@@ -108,9 +108,16 @@ contato desde o `arena_baseline1`.
   **todas**; os únicos `slowing` do histórico somam ~6 s e foram longe (muro
   oeste 1,29 m, `C_fresta60_1` 0,95 m, `cone_4` 0,48 m). Não havia proteção ali
   pra eu ter removido;
-- a `noguard3` cruzou **atrasada e torta**: t=60,9 e yaw **−5,4°**, contra
-  t=35–45 s e yaw −13° a −26° nas outras 13 — depois de um `unstuck` (`near`)
-  aos 50,8 s, ainda no goal 1.
+- a `noguard3` cruzou **atrasada**: t=60,9 contra t=35–45 s nas outras 13, depois
+  de um `unstuck` (`near`) aos 50,8 s, ainda no goal 1.
+
+> ⚠️ **RETRATADO 09-01 (BO 69):** este item dizia "atrasada **e torta**, yaw
+> **−5,4°** contra −13°/−26°". Era **uma amostra solta**. Medindo a travessia
+> inteira, a `noguard3` cruzou o plano dos blocos a **−10,7°**, dentro da faixa
+> das boas. O discriminante é o **desvio lateral** (+0,120 m contra ±0,081 das 11
+> outras), e as colisões foram **25 cm ANTES da boca**, na face do batente de
+> cima. Medição completa em `DIARIO_ARENA.md` **§2B.10** — leia essa seção antes
+> de desenhar qualquer correção da fresta.
 
 > **n=3. GUARD-OFF NÃO ESTÁ VALIDADO — está medido.** Não tire taxa de contato de
 > três voltas.
