@@ -1887,6 +1887,68 @@ o shell de quem chama já tem o ROS no ambiente. Vale pra quem for chamar o
 rota. As 4 voltas da §2G.2 foram pelo harness A/B, que monta os argumentos do
 launch na mão. Uma volta completa pelo `launch.sh --arena` ainda não foi rodada.
 
+### 2G.8 Volta completa pelo `launch.sh --arena` (`nominal1`) — **REPROVOU**, e a causa fechou em geometria
+
+Critério de saída combinado com o dono antes do deploy: sobe com o mapa tampado,
+5/5 goals, **0 colisão, 0 raspão**, sem falha nova de boot. Comando:
+`./launch.sh --sim --nav2 --arena`, **sem mais nenhum argumento** — o oráculo de
+colisão e o `probe` da rota por cima, nada mais.
+
+| critério | resultado |
+|---|---|
+| sobe com `arena_galpao_semA.yaml` | ✅ |
+| 5/5 goals | ✅ 236,6 s |
+| falha nova de boot/handshake | ✅ nenhuma (`Timed out ... acknowledge` = 0) |
+| **0 raspão** | 🔴 **18 raspões no `cone_2`**, folga **0,0000 m** |
+| 0 COLISÃO | ✅ 0 |
+
+**Não avancei pro deploy.** O critério era conjunto.
+
+#### O que aconteceu, medido (não inferido)
+
+Os 18 eventos cabem em **2,9 s** (gt t=83,8→86,7), todos com o seguidor em
+**`turning`** — o point-turn de saída do goal 2 pro goal 3. O robô não estava
+andando: `vx = 0,00`, `wz` de −4,5 a −2,4.
+
+A geometria fecha exata:
+
+| | dist ao centro do `cone_2` | folga no point-turn |
+|---|---|---|
+| standoff do goal 2 — **onde o AMCL achava que estava** (10,55; 1,75) | 1,001 m | **+0,477 m** |
+| **posição REAL no giro** (10,980; 1,855) | 0,523 m | **−0,001 m** |
+
+Varredura do canto do robô `hypot(0,25; 0,25) = 0,354` + raio do cone `0,17` =
+**0,524 m**. A folga medida pelo oráculo foi 0,0000–0,013. **Naquele ponto o
+point-turn não tinha como não encostar.**
+
+#### A causa é o PAR item 1 + item 2c, e não o caminho nominal
+
+- **item 1** (point-turn sem proteção): nada no `path_follower` olha o anel de
+  0,354 m antes de girar no lugar. Já era o bloqueador de A4, já tinha raspado o
+  `cone_3` na `aprox2` (§2B.6). Aqui repetiu no `cone_2`.
+- **item 2c** (AMCL erra na arena): o robô parou 0,44 m **além** do standoff, na
+  direção do cone, e o seguidor marcou `dist_goal = 0,040` — ou seja, "cheguei".
+  O erro de pose desta volta: mediana 8,0 cm, p90 17,1, **máx 45,1**. O máximo da
+  volta aconteceu **exatamente aqui**.
+
+⚠️ **O alinhamento das séries não explica isto.** Durante os 2,9 s o robô está
+**parado girando**: as duas séries dão posição constante (gt ≈ 10,98 / AMCL ≈
+10,55). Um erro de offset temporal não produz 0,43 m de diferença entre dois
+valores estáticos.
+
+⚠️ **Isto NÃO é defeito do caminho nominal.** Nas 4 voltas do harness a folga no
+`cone_2` foi 0,28 m — que pela mesma conta significa que o robô parou ~0,20 m
+além do standoff, com o mesmo mecanismo, e só não encostou porque o erro do AMCL
+foi menor naquele instante. **n=1 pelo nominal e n=4 pelo harness não separam as
+duas coisas** — o que separa é o erro de pose do momento, e ele varia.
+
+#### O número que a prova precisa saber
+
+O standoff a **1,00 m** do cone deixa **0,477 m** de margem para o point-turn. O
+erro de pose medido na arena chega a **0,45 m**. **A margem e o erro são do mesmo
+tamanho** — por isso o contato aparece em uma volta e não na outra. Enquanto o
+`path_follower` girar no lugar sem olhar o anel, isto é sorte, não projeto.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -2165,12 +2227,12 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 
 | # | item | estado |
 |---|---|---|
-| 1 | **Proteção de point-turn** (anel 0,25–0,36 m no `path_follower`) | 🔴🔴 **bloqueador de A4, agora MEDIDO como o que falta**: a `aprox2` raspou o `cone_3` 4× com o seguidor em `turning` a **6,15 m do goal** (§2B.6). 7 voltas com latch: 6 limpas, 1 com contato — a causa nunca foi corrigida, só não tinha se alinhado. **Desenho fechado** (§2.10), zero código. **Não é** no collision monitor: lá a única alavanca é escalar o `wz`, que trava o robô (deadlock já reproduzido) |
+| 1 | **Proteção de point-turn** (anel 0,25–0,36 m no `path_follower`) | 🔴🔴 **bloqueador de A4, agora MEDIDO como o que falta**: a `aprox2` raspou o `cone_3` 4× com o seguidor em `turning` a **6,15 m do goal** (§2B.6). 7 voltas com latch: 6 limpas, 1 com contato — a causa nunca foi corrigida, só não tinha se alinhado. 🔴 **REPRODUZIDO 09-01 pelo caminho NOMINAL da prova** (§2G.8): 18 raspões no `cone_2` em 2,9 s, seguidor em `turning`, `vx=0`, folga **0,0000**. A conta fecha: standoff dá **+0,477 m** de margem, o robô girou a 0,523 m do centro do cone = **−0,001**. O gatilho foi o erro do AMCL (item 2c) comer a margem — margem e erro são do MESMO tamanho (0,477 × 0,45 máx). **Desenho fechado** (§2.10), zero código. **Não é** no collision monitor: lá a única alavanca é escalar o `wz`, que trava o robô (deadlock já reproduzido) |
 | 2 | Baseline Nav2 até os standoffs | ✅ **FEITO 08-28** — 5/5 goals, 236,4 s, 2 colisões + 28 raspões no cone (§2.8). Evidência em `docs/baselines/2026-08-28-arena-baseline1/` |
 | 2b | Travar a chegada (mata a samba — defeito provado) | ✅ **FEITO 08-31** (`c85a8d8`) — saídas da chegada pro carrot **8 → 0**; volta em `docs/baselines/2026-08-31-arena-latch1/` (§2B.4) |
 | 2e | 🟡 **O robô PARA longe do goal e o Nav2 não conclui** | **ATACADO 08-31, não fechado** (`4da6eb4`, §2B.6). ⚠️ O título era *"estaciona fora do `xy_goal_tolerance`"* — **a explicação pelos 0,15 caiu** (checker é `stateful`, item 2i). O que é medido: robô parado + `nav_wants=1` + unstuck por timeout, em 4/4 voltas. Com a aproximação a última amostra cai pra **3–9 cm** (era 11–15) e o `unstuck` some (0,0–3,0 s) — sobra **churn de mira** (~54 s na `aprox2`) |
 | 2f | **`unstuck` empurra robô que JÁ CHEGOU** | ⏳ **novo 08-31, menos urgente depois de `4da6eb4`**: os disparos caíram de 1,3–6,2 s para **0,0 / 3,0 / 1,4 s** — a aproximação reduziu o *tempo parado* que aciona o resgate (⚠️ **não** "removeu a causa": por que o Nav2 não concluía continua sendo o item 2i), **não o mecanismo**. O supervisor segue sem assinar estado nenhum do `path_follower`, então continua sem distinguir "encalhado" de "chegou e parou". Passo 4 |
-| 2c | 🔴🔴 **AMCL erra 24 cm na arena** (mediana 9, p90 16, max 27) | ⏳ **novo, 08-28.** Maior que a tolerância de A2 (20 cm) e muito maior que os ±3 cm da fresta de 0,60. Suspeita: arena pobre em feature + os 4 cones não estão no mapa |
+| 2c | 🔴🔴 **AMCL erra 24 cm na arena** (mediana 9, p90 16, max 27) | ⏳ **novo, 08-28.** Maior que a tolerância de A2 (20 cm) e muito maior que os ±3 cm da fresta de 0,60. Suspeita: arena pobre em feature + os 4 cones não estão no mapa 🔴 **09-01: virou CONTATO** — na `nominal1` o pico de 45,1 cm caiu exatamente no point-turn do goal 2 e pôs o robô 0,44 m além do standoff, em cima do `cone_2` (§2G.8). Deixou de ser risco teórico |
 | 2d | Bug `start/goal is an obstacle` **reproduzido nesta arena** | ⏳ disparou dentro da fresta A (0,90 m), indo pro goal 2 |
 | 2g | **16 s em `idle`** entre dois goals (`aprox3`) | ⏳ **novo, 08-31.** Sem goal ativo — não é o seguidor. Buraco entre a conclusão de um goal e o próximo ser aceito; não investigado |
 | 2h | **Goal 2: última amostra a 0,156–0,160 nas 3 voltas** | ⏳ **novo, 08-31.** Único goal que a aproximação não puxa pra dentro, e sempre o mesmo. ⚠️ **NÃO é prova de que termina fora da tolerância** (BO 61: ~1,1 cm entre amostras a 20 Hz, e o checker é `stateful`). Suspeita não verificada: algo bloqueia o avanço ali (é o goal cujo caminho passa pela fresta A) |
