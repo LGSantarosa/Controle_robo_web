@@ -71,6 +71,36 @@ def blocos():
     return out
 
 
+def tampao(nome):
+    """Caixa que FECHA o vão de uma fresta — do batente ao batente, com a mesma
+    espessura do bloco. Usada SÓ na pintura do mapa (--fecha-fresta); NUNCA entra
+    em blocos()/corpo_sdf(), senão fecharia o mundo junto.
+
+    Devolve (cx, cy, sx, sy), no mesmo formato de blocos()."""
+    for n, eixo, coord, faixas, _f, _c in OBST:
+        if n != nome:
+            continue
+        ini, fim = faixas[0][1], faixas[1][0]        # o vão
+        comp, meio = fim - ini, (ini + fim) / 2
+        if eixo == 'x':
+            return (coord, meio, ESP_BLOCO, comp)
+        return (meio, coord, comp, ESP_BLOCO)
+    raise ValueError(
+        f'fresta desconhecida: {nome!r} — conhecidas: '
+        + ', '.join(o[0] for o in OBST))
+
+
+def resolve_fresta(rotulo):
+    """Aceita 'A', 'a' ou o nome inteiro ('A_fresta90'). Erra alto se não achar."""
+    r = str(rotulo).strip()
+    for n, *_ in OBST:
+        if r.upper() == n.split('_')[0] or r == n:
+            return n
+    raise ValueError(
+        f'fresta desconhecida: {rotulo!r} — use A/B/C/D ou '
+        + ', '.join(o[0] for o in OBST))
+
+
 def muros():
     T = T_MURO
     return [
@@ -252,7 +282,7 @@ def corpo_sdf():
 
 
 # --------------------------------------------------------------------- mapa
-def gera_mapa(destino_pgm, destino_yaml, com_cones=False):
+def gera_mapa(destino_pgm, destino_yaml, com_cones=False, fecha=()):
     import numpy as np
     for d in (destino_pgm, destino_yaml):
         os.makedirs(os.path.dirname(os.path.abspath(d)), exist_ok=True)
@@ -275,6 +305,12 @@ def gera_mapa(destino_pgm, destino_yaml, com_cones=False):
 
     for _n, cx, cy, sx, sy in muros() + blocos():
         pinta_caixa(cx, cy, sx, sy)
+    # TAMPÃO: fecha a fresta SÓ aqui, no mapa do planejador. O mundo (SDF) segue
+    # com o vão aberto — é a quebra deliberada da invariante "mapa = mundo", para
+    # obrigar o Theta* a ir pelo contorno sem alterar o experimento físico.
+    # Coberta por test_arena_tampao.py (o SDF é afirmado idêntico lá).
+    for nome in fecha:
+        pinta_caixa(*tampao(nome))
     if com_cones:
         for n, (x, y, tem) in PONTOS.items():
             if tem:
@@ -444,9 +480,21 @@ def main():
     ap.add_argument('--mapa', metavar='DIR', help='gera arena_galpao.pgm/.yaml em DIR')
     ap.add_argument('--com-cones', action='store_true',
                     help='inclui os cones no mapa estático (default: NÃO — ver docstring)')
+    ap.add_argument('--fecha-fresta', metavar='A[,B..]', default='',
+                    help='SÓ COM --mapa: fecha a(s) fresta(s) no .pgm mantendo o '
+                         'SDF intacto (obriga o planejador a ir pelo contorno). '
+                         'Escreve arena_galpao_semX.{pgm,yaml} — nome diferente '
+                         'de propósito, pro mapa tampado não ser confundido com '
+                         'o oficial')
     ap.add_argument('--probes', action='store_true',
                     help='imprime os argumentos --probe pro mapa_passagens.py')
     a = ap.parse_args()
+    # ANTES de qualquer ramo: o --sdf/--rota/--corpo-sdf retornam cedo, e a
+    # guarda posta depois deles não guardava nada (pegado ao rodar à mão).
+    fecha = [resolve_fresta(r) for r in a.fecha_fresta.split(',') if r.strip()]
+    if fecha and not a.mapa:
+        raise SystemExit('--fecha-fresta só vale com --mapa: ele NÃO altera o '
+                         'mundo (--sdf), de propósito.')
     if a.conferir:
         raise SystemExit(conferir())
     if a.sdf:
@@ -468,10 +516,16 @@ def main():
             print(f'--folga {px},{py}:{nome}_esperado{esperada:.2f}')
         return
     if a.mapa:
-        W, H, o = gera_mapa(os.path.join(a.mapa, 'arena_galpao.pgm'),
-                            os.path.join(a.mapa, 'arena_galpao.yaml'), a.com_cones)
-        print(f'mapa {W}x{H} células @ {RES} m, origin {o}, '
+        sufixo = ('_sem' + ''.join(n.split('_')[0] for n in fecha)) if fecha else ''
+        base = 'arena_galpao' + sufixo
+        W, H, o = gera_mapa(os.path.join(a.mapa, base + '.pgm'),
+                            os.path.join(a.mapa, base + '.yaml'), a.com_cones,
+                            fecha=fecha)
+        print(f'mapa {base} {W}x{H} células @ {RES} m, origin {o}, '
               f'cones {"INCLUÍDOS" if a.com_cones else "fora (o cone é objetivo)"}')
+        if fecha:
+            print('  TAMPÃO no .pgm: ' + ', '.join(fecha)
+                  + '  (o SDF/mundo NÃO muda — o vão continua fisicamente aberto)')
         return
     ap.print_help()
 
