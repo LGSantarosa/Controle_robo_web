@@ -1,9 +1,11 @@
 # HANDOFF — `motion_guard` desligado na arena (2026-08-31)
 
 > Estado de quem pega o bastão. **Tudo medido no SIM, nada foi ao robô real.**
-> Branch: **`arena-galpao`**. Último commit: `a052c18`. **Working tree limpa.**
-> Fonte completa: `DIARIO_ARENA.md` §2B.7, §2B.8, §2B.9 (este arquivo é o resumo
-> navegável, o diário é a fonte).
+> Branch: **`arena-galpao`**. **Commit da mudança (guard-off): `a052c18`** —
+> é o commit funcional, **não** a ponta do ramo (que anda a cada doc; use
+> `git log --oneline -1`). **Working tree limpa quando isto foi escrito.**
+> Fonte completa: `DIARIO_ARENA.md` §2B.7, §2B.8, §2B.9 + **§2C** (conferência
+> do review 09-01) — este arquivo é o resumo navegável, o diário é a fonte.
 
 ---
 

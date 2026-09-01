@@ -7,7 +7,9 @@
 > `docs/superpowers/specs/2026-08-28-arena-galpao-design.md`.
 
 > Estado de quem pega o bastão. Tudo aqui foi **medido no sim**, nada foi ao robô real.
-> Branch: **`nav2-trekking`**. Último commit: `e03555b`.
+> Branch: **`nav2-trekking`**. **Commit da mudança: `e03555b`** — é o commit
+> funcional (costmap/robot_radius), **não** a ponta do ramo (`f78ffc1` em
+> 09-01; use `git log --oneline -1 nav2-trekking`).
 
 ---
 
