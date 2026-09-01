@@ -1440,6 +1440,15 @@ sem `--pi/--sim/--arena` não passa `params_file` nenhum), então é arquivo mor
 
 Suíte completa depois de restaurar o yaml: **411 passam** (`python3 -m pytest ros2_packages/robot_nav/test -q`).
 
+**Segunda rodada do review (mesmo dia):** sobrou uma inconsistência — o
+cabeçalho do `HANDOFF_ARENA_GUARD.md` dizia *"Último commit: `a052c18`"* com o
+HEAD já em `cddeb3b`. O **hash estava certo, o rótulo é que não**: `a052c18` é o
+commit **da mudança** (guard-off), e um cabeçalho que nomeia a ponta do ramo
+envelhece a cada doc que eu commito. Virou "commit da mudança" nos dois
+handoffs — o `HANDOFF_NAV2_TREKKING.md` tinha o **mesmo defeito não apontado**
+(dizia `e03555b`, ponta real `f78ffc1`). Só rótulo; nenhum código tocado
+(`4b44819`).
+
 Working tree limpo, `origin/arena-galpao` = HEAD (nada parado no dev).
 
 ## 3. Medições
