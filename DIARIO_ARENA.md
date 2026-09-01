@@ -1571,6 +1571,84 @@ ter mexido"*.
 **Nada foi implementado, nada foi decidido.** O desenho leva um aviso de
 retratação no topo apontando para cá; a direção do conserto é decisão do dono.
 
+## 2E. Sessão 2026-09-01 — 2ª rodada do Codex: ele achou 2 erros MEUS na retratação
+
+A retratação da §2D introduziu **duas imprecisões novas**. As duas procedem; a
+terceira observação é uma distinção que eu apaguei indevidamente.
+
+### 2E.1 ✅ A conta do `will_clear` usava o yaw da CHEGADA, não o da decisão
+
+`will_clear()` só é avaliado **depois** que o `rotating` fechou `|yaw_err| ≤ 3°`
+por `align_stable = 5` ticks (`door_crossing.py:439-446`) — e o point-turn **não
+muda `x`/`y`** (`Cmd('rotating', 0.0, wz, ...)`, `:466`), logo **`s` e `d` são os
+mesmos**. Usar `yaw = −7,7°` (a pose de chegada) na conta é usar um ângulo que a
+máquina já corrigiu antes de decidir.
+
+Refazendo com o yaw que existe no instante da chamada (`|yaw_err| ≤ 3°`,
+`tan 3° = 0,0524`, braço `s·side = +0,6` → `±0,031 m`):
+
+| pose | projeção no plano dos batentes | contra `fit = 0,15` |
+|---|---|---|
+| `d = +0,259` (1º raspão da `noguard3`) | **0,228 … 0,290 m** | **reprova sempre** |
+| `d = +0,120` | **0,089 … 0,151 m** | aprova — **exceto** colada em +3°, onde 0,151 > 0,150 |
+
+**A conclusão sobre a pose do raspão sobrevive e fica mais forte** (reprova em
+toda a janela, não por 0,028 de folga). Mas **eu não podia ter afirmado que
+`d = 0,120` "passa"**: passa em quase toda a janela e reprova na borda. Os 0,178
+que publiquei não são o número de decisão nenhuma.
+
+### 2E.2 ✅ "O giro acontece onde o robô entra na zona" está errado
+
+Entrar no círculo de 1,1 m **não basta**. O arme exige, em ordem:
+`_cleared` populado (goal SUCCEEDED na zona) → **outro** goal ativo →
+`nav_forward` → aí sim `_pick_door` e `rotating`. Meu exemplo (7,00; 1,99) prova
+que **o conjunto de poses de arme permitidas contém posições perigosas** — não
+prova que a rota giraria ali. O correto:
+
+- **sem waypoint pré-fresta:** não gira **nunca** (é a §2D.1);
+- **com pré-fresta em (6,90; 2,25):** gira **a partir dali**;
+- **se alguém remover o `_cleared`:** aí sim o giro nasce perto da entrada da
+  zona, e o lugar tem que sair da **trajetória medida**, não de um ponto que eu
+  escolhi para ilustrar.
+
+> ⏳ **Detalhe meu, ainda por medir (é inferência, não medida):** "a partir dali"
+> não é "exatamente ali". O pulso de `goal_succeeded` é consumido em 1 tick
+> (`:683-684`), mas o arme também exige `goal_active` — e entre dois goals existe
+> um buraco medido de até **16 s em `idle`** (item 2g). Quando o goal seguinte
+> entra, o robô pode já ter andado. A janela real de arme (e a folga do círculo
+> varrido nela) tem que sair do CSV de uma volta, não desta linha.
+
+### 2E.3 🟡 Fail-closed limitado ≠ freeze — a distinção é dele, e é justa
+
+Eu colei "manter zero até liberação" no `align_timeout` 15 → 600 revertido. **São
+coisas diferentes:** fail-closed pode ser **limitado** (zero até o scan voltar ou
+até um timeout curto). A analogia foi preguiçosa e o título da §4.8 do desenho —
+*"Aborto e fallback **seguro**"* — não se sustenta com A4 exigindo zero contato:
+devolver ao mesmo plano que aponta para um vão que eu **acabei de medir como
+bloqueado** é avanço sem percepção, não segurança.
+
+**O que eu acrescento, e que muda o custo do remédio:** os desfechos que ele
+propõe — *"cancelar a passagem e mandar o executor pelo contorno"*, *"solicitar
+nova rota"* — **não existem hoje, em lugar nenhum**. Conferido:
+
+- o `door_crossing` **não tem `ActionClient` nem publisher de goal**: os únicos
+  publishers são `door_vel` e `door_zone` (`:593-594`). Ele não cancela nem
+  substitui goal — está escrito na §4.6 do desenho e é verdade.
+- **não há keepout/filter_mask** em `config/` nem em `robot_nav/` (o `grep` por
+  `contorno` só acha plano-de-desvio de **pessoa**). O `probe.py` manda os
+  waypoints em sequência e não replaneja.
+
+Então "fail-closed limitado" hoje se decompõe em duas opções honestas, e a
+escolha é do dono:
+
+| | o que é | custo |
+|---|---|---|
+| **(a)** zero limitado **e depois abortar** | atraso antes do mesmo desfecho de hoje | ~nada; **não fecha** a objeção — só adia o retorno cego |
+| **(b)** desistir da passagem de verdade | exige **máquina nova**: marcar a fresta como intransponível e/ou o executor pular/replanejar | mudança no executor + no planner a 4 dias da prova; é **maior** que reativar o `door_crossing` |
+
+**Não escolho sozinho.** O que eu não posso é continuar chamando (a) de "fallback
+seguro".
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -1798,6 +1876,8 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 66 | 🔁 **Asserção VAZIA outra vez** — no commit em que eu comemorava ter provado outro teste sensível | `test_collision_monitor_le_sempre_o_raw` achava o nó e depois só afirmava que a saída do mux era **um dos dois valores possíveis**: nunca olhava o `collision_monitor`. Passava com o pipeline quebrado. É o BO 63 **na íntegra**, dois commits depois, no mesmo arquivo em que eu tinha acabado de provar sensibilidade injetando defeito | Provar sensível **teste a teste**, não uma vez por arquivo: o teste que eu injetei defeito pra ver falhar era o *outro*. Agora o do collision lê o `cmd_vel_in_topic` dos dois YAMLs, e falha se apontarem pro `auto_vel_pre` |
 | 65 | Atribuí as paradas longas ao **churn da mira** sem medir o pipeline | A histerese cortou o chattering 3–5× e o tempo parado **não caiu**. A causa dos piores casos era o `motion_guard` zerando o giro — um nó que eu nem tinha olhado, e cuja volta ao caminho está registrada no item 7 dos meus próprios abertos | Quando o robô não se move, ler o **pipeline inteiro** (`freeze_capture` tem todos os estágios) antes de acusar o nó que eu acabei de mexer |
 | 22 | No teste novo do parser, **minha expectativa estava errada** | Escrevi (2,0 · 1,0) — que é o resultado de **ignorar** o yaw. O teste teria passado na versão com bug | Ao testar rotação, afirmar também o valor que o bug produziria |
+| 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
+| 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
 | 71 | Construí o **argumento decisivo** do desenho em cima de uma comparação que a máquina não faz | *"0,120 > 0,080 → ela não teria deixado atravessar"*. O discriminante real é `will_clear` com `fit = 0,15 m`, e ele **aprova** 0,120 com aquele yaw (projeção 0,039). A conclusão pode sobreviver — via a outra trava, com a pose de 0,259 — mas o número que eu publiquei como prova prova o contrário | Antes de chamar um número de "argumento decisivo", achar a **linha que compara esse número**. Sem uso, é declaração |
 | 72 | 🔁 **Teste vermelho que não é vermelho** — no documento escrito para ser revisado | O teste do §4.9 (*"com a pose ruim, não pode estar em `crossing`"*) passa com o nó em `idle` para sempre, que é justamente o estado real (o contrato `_cleared` nunca é cumprido na rota da arena). É o BO 56/63/66 pela **quarta** vez, agora antes de existir código | Um teste de "não faz X" só é sensível se o **par positivo** ("faz X nesta condição") rodar no mesmo caminho de arme. Escrever os dois juntos, sempre |

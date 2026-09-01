@@ -20,19 +20,36 @@
 > 2. **§2 ("argumento decisivo") e §4.3, linha "entra em CROSSING"** —
 >    `align_lat = 0.08` **não participa de nenhuma decisão** (única ocorrência:
 >    string de log, `:613`). O gate real é `|yaw| < 3°` **+** `will_clear()`
->    (`fit = 0,15 m`). A pose de `+0,120` que eu apresentei como barrada **passa**
->    (projeção 0,039); a do 1º raspão (`+0,259`) é que reprova (0,178 > 0,15).
+>    (`fit = 0,15 m`). ⚠️ **A conta que estava aqui também estava errada** (BO 74,
+>    2ª rodada do review): usava o yaw da **chegada**, mas `will_clear` só roda
+>    **depois** do alinhamento (`:439-446`), e o giro não muda `s`/`d`. Com
+>    `|yaw_err| ≤ 3°` a projeção é uma **janela**: `d = +0,259` (1º raspão) dá
+>    **0,228–0,290 → reprova sempre**; `d = +0,120` dá **0,089–0,151 → aprova,
+>    salvo colado em +3°**.
 > 3. **§4.9 e §4.10-item-2** — o teste "não pode estar em `crossing`" **não é
 >    vermelho** (passa com o nó `idle`), e "não entra com `|lat| > align_lat`"
 >    não é critério de coisa nenhuma.
 > 4. **§4.4-(a), os 18,7 cm** — descrevem o giro no **ponto de preparação**, que
->    o arme direto **não usa**. O point-turn inicial acontece onde o robô entrar
->    na zona (raio 1,1 m); há posições de arme em que o círculo varrido
->    (r = 0,354) **invade o bloco**.
+>    o arme direto **não usa**, e **não há guarda contínua do setor varrido**
+>    durante o giro. ⚠️ **Correção da própria correção** (BO 75): eu escrevi que
+>    o giro acontece "onde o robô entrar na zona" — **não acontece**. O arme
+>    exige `_cleared` + goal ativo + `nav_forward` (item 5). Sem waypoint
+>    pré-fresta, **não gira nunca**; com ele em (6,90; 2,25), gira **a partir
+>    dali** (janela por medir — ver `DIARIO_ARENA.md` §2E.2). A pose (7,00; 1,99),
+>    onde o círculo varrido (r = 0,354) invade o bloco, mostra que o **conjunto de
+>    poses de arme permitidas** contém posições perigosas — não que a rota giraria
+>    ali.
 > 5. **§5.2, "o bloqueador de integração"** — são **dois**. O outro:
 >    `_pick_door` exige a porta em `_cleared`, que só é populado por um goal
 >    **SUCCEEDED com o robô na zona** (`:330`, `:359-367`). A rota da arena não
 >    tem esse goal → o nó **nunca arma**.
+>
+> 6. **§4.8, título "Aborto e fallback seguro"** — abortar devolve ao **mesmo
+>    plano** que aponta para o vão que a máquina acabou de medir como bloqueado.
+>    Com A4 exigindo **zero contato**, isso não se chama seguro. Desistir da
+>    passagem de verdade exige máquina que **não existe** (o nó não tem
+>    `ActionClient` nem publisher de goal, `:593-594`; não há keepout no repo) —
+>    é decisão de escopo do dono, ver `DIARIO_ARENA.md` §2E.3.
 >
 > **Nada foi implementado. O desenho precisa voltar à prancheta antes de virar
 > código.**
