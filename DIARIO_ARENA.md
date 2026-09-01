@@ -1414,6 +1414,32 @@ mudança de caminho de dado. **Não vou registrar guard-off como validado.**
 rota passa por um vão de 90 cm com folga de 4–21 cm, sem nada que corrija o rumo
 antes de entrar. Um dia o rumo ia estar 15° fora. Item novo nos abertos.
 
+## 2C. Sessão 2026-09-01 — conferência do review (nada mudou no código)
+
+O dono trouxe um review que aponta 4 problemas. **Os 4 descrevem o estado do
+commit `dd4d0cc`** — o `7ff5b5f` (HEAD) já é a correção deles (BO 66/67/68 +
+alcance real do `--arena`). Em vez de confiar na mensagem do commit, **re-rodei
+a evidência no HEAD**:
+
+| o que o review apontou | estado no HEAD | como conferi |
+|---|---|---|
+| 1. conferidor achou `guard_bloqueio.csv` não citado | ✅ limpo | `tools/confere_evidencia.py` → **6 pastas, 0 problemas** |
+| 2. `test_collision_monitor_le_sempre_o_raw` é asserção vazia | ✅ sensível | injetei `cmd_vel_in_topic: auto_vel_pre` no `nav2_params_arena.yaml` → **o teste falhou**; restaurei → 6/6 passam |
+| 3. "volta mais rápida das 14" (a `latchN1` fez 4/5 goals) | ✅ corrigido | texto agora diz "volta **completa** mais rápida"; `latchN1` com a ressalva |
+| 4. `--arena` desliga o vigia **no robô real** | ✅ escrito + aviso na tela | `launch.sh:586-591` imprime o alerta quando arena **sem** `--sim`; condição na §2B.8 e no item 2j |
+
+E a ordem que o review propõe (fresta A **antes** de repetir voltas) já é a que
+está registrada: **item 2k antes de novas voltas**. Uma config que fez 9 colisões
++ 48 raspões não vira validada por mais n.
+
+**Achado lateral (pequeno, não mexido):** `nav2_params_legacy.yaml` ainda existe
+no `config/`, mas o `ESTADO_PROJETO.md:37` e o `HANDOFF_NAV2_TREKKING.md:95`
+dizem que ele foi **apagado**. Nenhum caminho do `launch.sh` o carrega (o ramo
+sem `--pi/--sim/--arena` não passa `params_file` nenhum), então é arquivo morto
++ doc desencontrada, não risco de subir com a geometria errada.
+
+Working tree limpo, `origin/arena-galpao` = HEAD (nada parado no dev).
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
