@@ -2460,6 +2460,15 @@ desejável (abaixo dele o skid-steer não vira, atrito), então o giro no lugar 
 **ciclo-limite**, e é exatamente o *"bang-bang caçando dir/esq"* relatado em
 campo em 06-19 — agora com número.
 
+> 🔴 **ERRADO — derrubado por medição no MESMO dia, §2H.13 (fica como escrito, a
+> correção vem do lado).** `rot_min` é o **comando**, não a taxa entregue. Medido
+> em 6099 ticks de giro no lugar: o robô entrega **0,135** do `wz` comandado —
+> \|Δyaw\| por tick de **mediana 1,00°** (p90 3,20 / máx 9,20), não 7,16°. A janela
+> de 6,00° cabe **seis passos medianos**; a quantização não existe no robô. Cai
+> junto o "3/13 abortam" e caem os números do quadro acima **como previsão** —
+> todos vêm do mesmo integrador ideal, que dá ao robô 7× a autoridade de giro
+> real. Erro 88 da §5.
+
 🔴 **O que isso significa para os 10 que passaram: eles passaram por FASE, não
 por mecanismo.** A oscilação é determinística dada a pose inicial; em 10 das 13
 ela por acaso caiu dentro da janela. Isso **não é** base para "100% das vezes".
@@ -2479,6 +2488,11 @@ quem fecha a malha durante a travessia é o `cross_k_yaw`, não o `align_yaw`. O
 
 **Recomendo 5°, e SÓ no perfil da arena** (`align_yaw_deg` é param de launch) —
 assim a config da sala, que tem validação de campo, não muda.
+
+> 🔻 **Rebaixado em §2H.13:** era justificado por "senão 3 em 13 abortam", e esse
+> número caiu. Não retiro a recomendação (10,0° de janela contra 9,20° de pior
+> passo medido é argumento honesto), mas ela **deixa de ser pré-requisito** e
+> vira ajuste a decidir **com** a volta no sim, não antes dela.
 
 #### O que ficou no código (mudança de comportamento: ZERO)
 
@@ -2518,6 +2532,78 @@ Erro 87 da §5.
 verdade: o teste agora entrega o pulso de goal cumprido que a pendência C exige,
 e prova **os dois lados** do gate — `test_SEM_o_pre_porta_a_maquina_NUNCA_arma`
 (40 ticks, só `idle`) e a travessia completa com ele.
+
+### 2H.13 🔴 EU DERRUBO A §2H.11: o passo do giro NÃO é 7,16° — é **1,0°** medido
+
+Fui procurar o furo da minha própria tese antes que o review procurasse, e achei.
+A conta do ciclo-limite assume que o robô **atinge** `rot_min = 2,5 rad/s`
+instantaneamente. `rot_min` é um **comando**, não uma taxa entregue.
+
+Medido no `follow_debug.csv` de 4 voltas, só nos ticks de **giro no lugar**
+(`|vx| ≤ 0,02`) com comando forte (`|wz| ≥ 2,0`), n = **6099**:
+
+| grandeza | valor |
+|---|---|
+| \|Δyaw\| por tick — **mediana** | **1,00°** |
+| \|Δyaw\| por tick — p90 | 3,20° |
+| \|Δyaw\| por tick — máx | 9,20° |
+| razão **entregue/comandado** — mediana | **0,135** |
+| idem — p90 / máx | 0,269 / 0,796 |
+| *(minha conta ideal dizia)* | *7,16°* |
+
+**Comandando 2,5 rad/s o robô entrega ~0,34 rad/s = 0,96° por tick.** A janela de
+6,00° cabe **seis passos medianos**. A quantização que eu descrevi **não existe**
+no robô desta arena.
+
+#### O que cai, o que fica, e o que muda de status
+
+- ❌ **Cai** a afirmação *"a janela é menor que um passo → ciclo-limite → nunca
+  converge"*. Ela vale para o meu integrador ideal, **não** para o robô.
+- ❌ **Cai o "3/13 abortam"** como propriedade do robô. É artefato do integrador,
+  que dá ao robô uma autoridade de giro **7× maior** que a medida.
+- ❌ **Caem como previsão** os números bonitos do §2H.11 (folga 16,1 cm, desvio
+  3,2 cm). Mesmo integrador, mesmo viés. A **direção** (a máquina reduz a
+  dispersão) segue plausível — os **números**, não.
+- 🟡 **Fica um risco menor e de outra natureza:** o passo vai a **9,20°** no
+  máximo, e o `align_stable = 5` exige **5 ticks CONSECUTIVOS** dentro de ±3°.
+  Com p90 de 3,20° isso é *provável*, não garantido. Deixou de ser
+  "impossível converger" e virou "pode demorar" — coisa que o `align_timeout`
+  de 15 s cobre.
+- ✅ **Fica a trava** `janela_de_alinhamento_ok()` — mas ela agora é uma checagem
+  do **caso ideal/pior**, não um diagnóstico do robô. O WARN no boot continua
+  útil (avisa quando a config é geometricamente impossível), e continua sendo
+  só WARN.
+- 🔻 **A recomendação de subir `align_yaw` para 5° perde a urgência.** Ela era
+  justificada por "senão 3 em 13 abortam", e esse número não se sustenta. Não a
+  retiro — 40% de margem sobre o pior passo medido (9,20° contra janela de
+  10,0°) é argumento honesto — mas ela deixa de ser pré-requisito e vira
+  **ajuste a decidir COM a volta no sim**, não antes dela.
+
+#### Por que eu errei de novo, e é o MESMO erro do 83
+
+Usei a saída de um **modelo** como se fosse **medição** — como usei o máximo da
+volta inteira como se fosse o erro na fresta. Nos dois casos o dado que me
+corrigia já estava no repo e custou 10 minutos. A diferença é que desta vez eu
+fui olhar antes de o dono agir em cima, e não depois.
+
+⚠️ **Ressalva à ressalva (para não superestimar esta medição):** o
+`follow_debug.csv` é o **`path_follower`** girando, não o `door_crossing` — nó
+diferente, mesma pilha a jusante (mux → collision → motores) e mesma arena. É o
+proxy mais próximo que existe sem rodar; **não** é a mesma malha. E a razão
+mediana de 0,135 é baixa o bastante para merecer explicação própria (teto de
+`max_vel_theta`? escala do collision? derrapagem do skid-steer?) — **não
+investigado**, fica anotado.
+
+### 2H.14 Onde isto deixa as duas decisões do dono
+
+A pergunta 2 (`align_yaw` 3° → 5°) **sai da frente**: não é mais pré-requisito
+para rodar. Sobra **uma** decisão, e é a mesma de antes:
+
+> **O waypoint pré-fresta entra na rota da prova?**
+
+Sem ele o `door_crossing` não arma e nada do que foi construído hoje roda. Com
+ele, a próxima medida é uma **volta no sim** — que é a única coisa capaz de
+substituir os números que eu acabei de invalidar.
 
 ## 3. Medições
 
@@ -2793,6 +2879,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 85 | Escrevi no spec (§5.1) que a fresta C de 0,60 *"provavelmente não cabe"* no giro de alinhamento | Ao implementar `margem_point_turn()` a conta saiu **+0,071 m** — cabe. Todas as 4 cabem (A +0,187 / B +0,107 / C +0,071 / D +0,146). O motivo real para não marcar a C é outro (o Nav2 já a trata como parede com `robot_radius 0.32`), e eu tinha o motivo certo escrito **na mesma frase** | "Provavelmente" num documento de desenho é uma conta que eu não fiz. A conta cabia em 3 linhas — fazê-la antes de escrever a suspeita, ou não escrever a suspeita |
 | 86 | 🔁 **Teste chamado "existe no git" que checava o DISCO** — BO 72 pela terceira vez nesta branch | `maps/*` está no `.gitignore:15`; os mapas da prova entraram com `git add -f`. Meu `git add -A` não levou o `arena_galpao.doors.json`, e o teste que eu escrevi para pegar exatamente isso usava `os.path.exists` — **passava com o arquivo fora do git**. Como acabei de pôr falha fechada no `--arena` ("sem doors.json, aborta"), o resultado na Pi seria o launch abortando por um arquivo que "o teste diz que está lá" | O nome do teste é uma promessa. Se ele diz **git**, tem que perguntar ao **git** — `os.path.exists` responde outra pergunta. E: em repo com `.gitignore` sobre um diretório de artefatos, `git add -A` **não é** "adiciona tudo" |
 | 87 | Default de argumento congelando uma constante de módulo — e a falha fechada **não disparava** | `def ponto_pre_fresta(..., dist=PRE_FRESTA_DIST)`: o Python avalia o default no `def`, então mudar `PRE_FRESTA_DIST` depois não surtia efeito. Consequência real: o teste que exige `SystemExit` para distância curta demais (robô girando em cima do batente) **passava sem a guarda existir de fato**. Achado porque escrevi o teste ANTES de confiar na guarda | Constante de módulo que pode mudar não vai em default de argumento — resolve no corpo (`x = CONST if x is None else x`). E: foi o teste que pegou, não a leitura — a guarda "parecia certa" no código |
+| 88 | 🔴🔴 **Usei a saída de um MODELO como se fosse medição** — e é o **erro 83 de novo**, 6 horas depois | Escrevi que a janela de alinhamento é menor que o passo do giro (7,16°) e que por isso 3 de 13 travessias abortam. Os 7,16° vêm de `rot_min × dt` assumindo que o robô **atinge** o comando; `rot_min` é **comando**. Medido em 6099 ticks reais de giro no lugar: entrega **0,135** do comandado, \|Δyaw\|/tick **mediana 1,00°**. A janela cabe 6 passos — a quantização não existe. Caem junto o "3/13" e os números de folga/desvio, todos do mesmo integrador ideal (7× a autoridade real) | Antes de deixar a saída de um modelo virar diagnóstico do ROBÔ, medir o **ganho do atuador** contra dado real. E o padrão que se repete: eu produzo um número derivado, esqueço que é derivado, e opero nele como se fosse observação. Dessa vez eu mesmo fui atrás — mas só porque me obriguei a procurar o furo antes do revisor |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
