@@ -32,6 +32,27 @@ import numpy as np
 
 # ---- portas de arquivo -----------------------------------------------------
 
+def _extrai_doors(dados, origem):
+    """Tira a lista `doors` do JSON — e ERRA se a chave não existir.
+
+    2026-09-02 (achado do review): `dados.get('doors', [])` tratava
+    `{"portas": [...]}` (chave errada, schema mudado, arquivo de outra coisa)
+    como **zero portas em silêncio** — e zero portas é indistinguível de "nó
+    idle", que é o robô atravessando a fresta sem ninguém dirigindo. Lista vazia
+    EXPLÍCITA continua legítima: é o que o gerador escreve para o mapa tampado
+    (`--fecha-fresta`), onde a fresta é parede e armar seria errado.
+    """
+    if not isinstance(dados, dict):
+        raise ValueError(f'{origem}: raiz tem que ser objeto, veio '
+                         f'{type(dados).__name__}')
+    if 'doors' not in dados:
+        raise ValueError(
+            f'{origem}: sem a chave "doors". Lista vazia se escreve '
+            '{"doors": []} — a chave AUSENTE é arquivo errado, e virar '
+            '"zero portas" em silêncio deixa a fresta sem ninguém dirigindo')
+    return dados['doors']
+
+
 def valida_doors(doors, origem='<memória>'):
     """Valida a lista do schema do DoorStore e devolve ela mesma.
 
@@ -74,7 +95,7 @@ def doors_de_arquivo(path):
             dados = json.load(f)
         except ValueError as e:
             raise ValueError(f'{path}: JSON inválido ({e})') from e
-    return valida_doors(dados.get('doors', []), origem=path)
+    return valida_doors(_extrai_doors(dados, path), origem=path)
 
 
 # ---- geometria pura --------------------------------------------------------
@@ -693,7 +714,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
         def _on_doors(self, msg):
             try:
                 self.doors = valida_doors(
-                    json.loads(msg.data).get('doors', []), origem='/doors')
+                    _extrai_doors(json.loads(msg.data), '/doors'),
+                    origem='/doors')
                 self.get_logger().info(f'{len(self.doors)} porta(s) carregada(s)')
             except (ValueError, AttributeError) as e:
                 # mantém as portas que já tinha (do doors_file): mensagem ruim na

@@ -664,18 +664,41 @@ case "$MODE" in
         ARENA_DOOR_ARG=""
         if [ "$ARENA" = true ]; then
             _DOORS_FILE="${MAP_FILE%.yaml}.doors.json"
-            if [ -f "$_DOORS_FILE" ]; then
-                ARENA_DOOR_ARG="door_crossing:=true doors_file:=$_DOORS_FILE"
-            else
-                # FALHA FECHADA: sem o arquivo o no' subiria e ficaria `idle`
-                # para sempre — o robo atravessaria a fresta sem ninguem
-                # dirigindo, que e' exatamente o caso que bateu (noguard3).
+            # FALHA FECHADA AQUI, e nao dentro do no' (decisao 2026-09-02, review):
+            # se o arquivo falta ou esta' malformado, o no' subiria e ficaria
+            # `idle` — e no' idle e' indistinguivel de no' MORTO: nos dois casos
+            # ninguem dirige a travessia, que e' exatamente o caso que bateu
+            # (noguard3). Matar o no' nao protege mais que logar. Quem protege e'
+            # NAO SUBIR A STACK, que so' da' pra fazer aqui, antes do launch — e
+            # com o erro na tela do operador, nao enterrado no nav2.log.
+            if [ ! -f "$_DOORS_FILE" ]; then
                 echo "ERRO: --arena pedido, mas as portas do mapa nao existem:"
                 echo "      $_DOORS_FILE"
                 echo "      Gere com: python3 tools/gera_arena_galpao.py --mapa maps/"
                 echo "      Abortando (nao vou subir a travessia da fresta sem porta marcada)."
                 exit 1
             fi
+            # Conteudo, nao so' existencia: valida com a MESMA funcao que o no'
+            # usa (nada de reimplementar o schema aqui — seria outra fonte de
+            # verdade divergindo em silencio).
+            if ! _DOORS_OUT=$(PYTHONPATH="$SCRIPT_DIR/ros2_packages/robot_nav" \
+                    python3 -c '
+import sys
+from robot_nav.door_crossing import doors_de_arquivo
+try:
+    print(len(doors_de_arquivo(sys.argv[1])))
+except ValueError as e:          # mensagem limpa, sem traceback na tela
+    sys.stderr.write(str(e) + "\n"); sys.exit(1)
+' "$_DOORS_FILE" 2>&1); then
+                echo "ERRO: --arena pedido, mas as portas do mapa nao prestam:"
+                echo "      $_DOORS_FILE"
+                echo "      $_DOORS_OUT"
+                echo "      Regere com: python3 tools/gera_arena_galpao.py --mapa maps/"
+                echo "      Abortando (nao vou subir a travessia com porta invalida)."
+                exit 1
+            fi
+            echo "      [ARENA] door_crossing LIGADO — $_DOORS_OUT porta(s) em $(basename "$_DOORS_FILE")"
+            ARENA_DOOR_ARG="door_crossing:=true doors_file:=$_DOORS_FILE"
         fi
         # <<< PERFIL_ARENA_DOOR
         ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG $INIT_POSE_ARG $ARENA_FOLLOW_ARG $ARENA_GUARD_ARG $ARENA_DOOR_ARG > "$NAV2_LOG" 2>&1 &

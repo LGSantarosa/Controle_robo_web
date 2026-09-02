@@ -251,11 +251,12 @@ class TestLaunchArenaDoorCrossing(unittest.TestCase):
         with open(os.path.join(RAIZ, 'launch.sh')) as f:
             texto = f.read()
         bloco = texto.split(MARCA_DOOR_INI)[1].split(MARCA_DOOR_FIM)[0]
-        script = (f'ARENA={"true" if arena else "false"}\n'
+        script = (f'SCRIPT_DIR={RAIZ}\n'
+                  f'ARENA={"true" if arena else "false"}\n'
                   f'MAP_FILE={mapa}\n' + bloco
                   + '\necho "ARG=$ARENA_DOOR_ARG"\n')
         r = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
-        return r.returncode, r.stdout
+        return r.returncode, r.stdout + r.stderr
 
     def test_arena_com_mapa_ABERTO_liga_e_aponta_a_porta(self):
         rc, out = self._roda(True, os.path.join(MAPAS, 'arena_galpao.yaml'))
@@ -314,3 +315,58 @@ class TestLaunchArenaDoorCrossing(unittest.TestCase):
                              'maps/arena_galpao.doors.json != saida do gerador. '
                              'Regere com: python3 tools/gera_arena_galpao.py '
                              '--mapa maps/')
+
+
+class TestLaunchArenaDoorsInvalido(unittest.TestCase):
+    """O `--arena` valida o CONTEÚDO do doors.json, não só a existência.
+
+    Decisão de 2026-09-02 (achado do review): validar dentro do nó não protege —
+    nó `idle` e nó MORTO dão no mesmo, ninguém dirige a travessia. Quem protege é
+    **não subir a stack**, e isso só dá para fazer aqui, antes do launch, com o
+    erro na tela do operador em vez de enterrado no nav2.log.
+
+    A validação chama a MESMA função que o nó usa (`doors_de_arquivo`); nada de
+    reimplementar o schema no shell e ter duas fontes de verdade divergindo.
+    """
+
+    def _com_doors(self, conteudo):
+        """Monta um par <mapa>.yaml / <mapa>.doors.json temporário e roda o
+        bloco real do launch.sh em cima dele."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            mapa = os.path.join(tmp, 'x.yaml')
+            with open(mapa, 'w') as f:
+                f.write('image: x.pgm\n')
+            if conteudo is not None:
+                with open(os.path.join(tmp, 'x.doors.json'), 'w') as f:
+                    f.write(conteudo)
+            return TestLaunchArenaDoorCrossing._roda(self, True, mapa)
+
+    def test_json_corrompido_ABORTA(self):
+        rc, out = self._com_doors('{ nao e json')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('nao prestam', out)
+
+    def test_chave_doors_AUSENTE_aborta(self):
+        """O caso silencioso: JSON válido, chave errada. Antes disso virava
+        'zero portas' sem um pio — e zero portas = fresta sem ninguém dirigindo."""
+        rc, out = self._com_doors('{"portas": []}')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('sem a chave', out)
+
+    def test_porta_malformada_aborta(self):
+        rc, out = self._com_doors('{"doors": [{"id": 1, "a": [1.0, 2.0]}]}')
+        self.assertEqual(rc, 1, out)
+
+    def test_arquivo_ausente_aborta(self):
+        rc, out = self._com_doors(None)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('nao existem', out)
+
+    def test_lista_VAZIA_explicita_e_legitima(self):
+        """O par sensível: é o que o gerador escreve para o mapa tampado
+        (`--fecha-fresta`), onde a fresta é parede e armar seria errado. Se este
+        teste falhar, a falha fechada virou paranoia e quebrou o botão de pânico."""
+        rc, out = self._com_doors('{"doors": []}')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('door_crossing:=true', out)

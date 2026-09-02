@@ -2385,6 +2385,48 @@ entraram com `git add -f`. Erro 86 da §5.
 (`TestPoseDaNoguard3`): a máquina fica `idle` porque a pendência C segue armada.
 **Eles ficam vermelhos até a decisão do dono sobre o waypoint (§2H.7).**
 
+### 2H.10 2ª rodada do review no §5.2/5.3: os 2 riscos procedem, e o 2º eu resolvi em OUTRO lugar
+
+| # | risco apontado | veredito |
+|---|---|---|
+| 1 | `dados.get('doors', [])` aceita JSON válido **sem a chave** como lista vazia silenciosa (no arquivo e no `/doors`) | ✅ **procede — corrigido** |
+| 2 | `doors_file` malformado só **loga**, não aborta o nó | ✅ o buraco procede; ⚠️ **o remédio, não** — ver abaixo |
+
+**Risco 1, corrigido.** `_extrai_doors()` separa os dois casos que estavam
+colapsados: **chave ausente = arquivo errado** (schema mudado, arquivo de outra
+coisa, typo) → `ValueError`; **`{"doors": []}` explícito = legítimo**, que é o
+que o gerador escreve para o mapa tampado, onde a fresta é parede e armar seria
+errado. O `/doors` da web passa pelo mesmo caminho.
+
+**Risco 2 — concordo com o diagnóstico, discordo do remédio.** Matar o nó não
+protege: **nó `idle` e nó MORTO dão no mesmo resultado físico** — ninguém dirige
+a travessia, e o robô entra na fresta como entrou na `noguard3`. A diferença
+entre logar e abortar é só *quem* fica sabendo, e um nó que morre no boot some
+dentro do `nav2.log` igual a um `error`.
+
+O que **de fato** protege é **não subir a stack**. Isso só dá pra fazer antes do
+launch, e é onde eu pus: o bloco `PERFIL_ARENA_DOOR` do `launch.sh` agora valida
+o **conteúdo**, não só a existência — chamando a **mesma função que o nó usa**
+(`doors_de_arquivo`), para não haver duas fontes de verdade sobre o schema
+divergindo em silêncio. Falha → mensagem limpa (sem traceback) **na tela do
+operador** e `exit 1`.
+
+Medido nos dois lados, com o bloco real do `launch.sh`:
+
+| doors.json | rc |
+|---|---|
+| bom (1 porta) | **0** — imprime `[ARENA] door_crossing LIGADO — 1 porta(s)` |
+| JSON corrompido | **1** |
+| `{"portas": []}` (chave errada) | **1** |
+| porta sem batente `b` | **1** |
+| arquivo ausente | **1** |
+| **`{"doors": []}` explícito** | **0** — o botão de pânico não pode quebrar |
+
+O log do nó continua sendo `error` (não `warn`), como já estava.
+
+**461 testes passam, 2 vermelhos** — os mesmos 2 de sempre, esperando a decisão
+do waypoint (§2H.7).
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô

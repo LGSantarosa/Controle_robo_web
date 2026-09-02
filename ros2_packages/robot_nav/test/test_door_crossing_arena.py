@@ -21,6 +21,7 @@ import unittest
 from robot_nav.door_crossing import (
     DoorCrossConfig,
     DoorCrossing,
+    _extrai_doors,
     doors_de_arquivo,
     valida_doors,
 )
@@ -127,6 +128,20 @@ class TestDoorsFile(unittest.TestCase):
             with self.subTest(rotulo):
                 with self.assertRaises(ValueError):
                     valida_doors(doors)
+
+    def test_chave_doors_AUSENTE_erra_alto(self):
+        """Achado do review 2026-09-02: `dados.get('doors', [])` tratava chave
+        errada como ZERO PORTAS em silêncio — e zero portas é indistinguível de
+        nó idle, que é a fresta sem ninguém dirigindo."""
+        for ruim in ({'portas': []}, {}, [], 'x'):
+            with self.subTest(repr(ruim)):
+                with self.assertRaises(ValueError):
+                    _extrai_doors(ruim, 'teste')
+
+    def test_lista_VAZIA_explicita_continua_legitima(self):
+        """O par: é o que o gerador escreve pro mapa tampado (--fecha-fresta),
+        onde a fresta é parede e armar seria errado."""
+        self.assertEqual(_extrai_doors({'doors': []}, 'teste'), [])
 
     def test_porta_boa_passa(self):
         """O par: se tudo erra, o validador não vale nada."""
