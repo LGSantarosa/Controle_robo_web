@@ -2692,6 +2692,13 @@ confirmada em execução, não mais só na aritmética.
 volta toda foi justamente na fresta A (0,1822 m) — e mesmo ela ficou acima do
 critério de 0,045 m do §6.4 do spec, por 4×.
 
+⚠️ **A volta NÃO foi lisa, e vender assim seria o erro 82 de novo** (achado do
+review, que eu tinha omitido do resumo): o **goal 4** teve **3,5 s parado** e
+**1,1 s de `unstuck reason=near`** (11 ticks, t 146,6→147,6, em (11,02 ; 4,19)).
+É o item **2e/2f** de sempre — longe da fresta, na perna `cone_2 → cone_3` — e
+não tem relação com a travessia. Mas é episódio, e episódio entra no resumo.
+Parado por goal: 0,0 / 0,8 / 0,7 / **3,5** / 1,0 / 0,0 s.
+
 Erro de pose do AMCL na volta: mediana 6,8 / p90 14,8 / máx 25,0 cm — dentro do
 histórico. Na boca da fresta: **máx 4,7 cm**, igual ao medido nas 13 anteriores
 (§2H.4 confirmada com dado novo).
@@ -2701,9 +2708,15 @@ histórico. Na boca da fresta: **máx 4,7 cm**, igual ao medido nas 13 anteriore
 - **n = 1.** É uma volta. O critério do dono é **0 contato em 100%**, e 11 de 12
   voltas antigas também eram limpas — foi exatamente por isso que a `noguard3`
   passou despercebida.
-- **A entrada foi fácil.** Não sei ainda se ela cobre uma chegada torta como a da
-  `noguard3` (+12,1 cm / −10,7°); o §6.3-item-5 do spec pede volta com **largada
-  deslocada** justamente para isso.
+- **A entrada foi fácil** — e este é um risco **SEPARADO** do `n = 1`, não uma
+  parte dele (correção do review; eu tinha colapsado os dois no chat). Repetir a
+  volta aumenta a amostra de entradas **parecidas com esta**; nenhuma quantidade
+  delas prova que a máquina segura uma chegada como a da `noguard3` (+12,1 cm /
+  −10,7°). São dois eixos:
+  **(a) dispersão** — resolve com n voltas;
+  **(b) pior caso** — só resolve com a volta de **largada deslocada** (§6.3-item-5
+  do spec), que força a entrada ruim. Rodar 10 voltas fáceis não substitui uma
+  difícil.
 - **Tempo:** 250,1 s contra 221–245 das voltas sem a máquina. O custo aparente é
   +5 a +13 %, mas com `n=1` e um goal a mais na rota isso ainda **não** é uma
   medida de custo — é uma observação.
@@ -2991,6 +3004,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 88 | 🔴🔴 **Usei a saída de um MODELO como se fosse medição** — e é o **erro 83 de novo**, 6 horas depois | Escrevi que a janela de alinhamento é menor que o passo do giro (7,16°) e que por isso 3 de 13 travessias abortam. Os 7,16° vêm de `rot_min × dt` assumindo que o robô **atinge** o comando; `rot_min` é **comando**. Medido em 6099 ticks reais de giro no lugar: entrega **0,135** do comandado, \|Δyaw\|/tick **mediana 1,00°**. A janela cabe 6 passos — a quantização não existe. Caem junto o "3/13" e os números de folga/desvio, todos do mesmo integrador ideal (7× a autoridade real) | Antes de deixar a saída de um modelo virar diagnóstico do ROBÔ, medir o **ganho do atuador** contra dado real. E o padrão que se repete: eu produzo um número derivado, esqueço que é derivado, e opero nele como se fosse observação. Dessa vez eu mesmo fui atrás — mas só porque me obriguei a procurar o furo antes do revisor |
 | 89 | 🔁 **A regra "arquivo ANTES do chat" quebrada de novo** — e o dono teve que perguntar "anotou?" pela terceira vez | Mandei no chat *"pro review, os dois pontos onde eu bateria: (a) a implementação do `--pre-fresta`, (b) se o proxy do `path_follower` vale para o `door_crossing`"* e **não escrevi no arquivo**. A ressalva do proxy até estava lá (§2H.13), mas a **agenda de review** — o que eu quero que ataquem e o que derruba cada coisa — era só chat. Se a sessão morre ali, some | O gatilho da regra não é só "conclusão". É **qualquer coisa que a próxima sessão precisaria** — e um pedido de revisão com critério de falsificação é exatamente isso. Repetiu-se porque eu li a regra como sendo sobre *resultados*, e ela é sobre **tudo que eu produzo de pensamento**. Agenda aberta agora mora na §2H.15 |
 | 90 | **Travei uma medição atrás de uma decisão que ela não exigia** — perguntei 3 vezes a mesma coisa | Repeti *"sem a decisão do waypoint nada roda"* e fiquei esperando. Mas eu tinha feito o waypoint **opt-in exatamente para não depender da decisão**, e o harness aceita `AB_ROTA` apontando pra outra rota. Medir nunca esteve bloqueado; só o **default do repo** estava. Resultado: horas de trabalho especulativo em cima de integrador ideal (erros 88) quando a volta real custava 4 minutos e derrubava/confirmava tudo | Separar **"o que precisa de decisão"** de **"o que precisa de dado"**. Quando eu me pegar perguntando a mesma coisa pela 3ª vez, a pergunta certa é *"o que eu consigo medir sem a resposta?"* — e quase sempre é tudo |
+| 91 | **Colapsei dois riscos independentes em um** ("a tese viva agora é uma só: n=1") — e **omiti o episódio da volta** | Duas coisas na mesma fala: (1) reduzi o risco restante a tamanho de amostra, quando **robustez a entrada ruim** é eixo separado — rodar 10 voltas fáceis não prova que a máquina segura uma chegada como a da `noguard3`; o meu próprio diário dizia isso 3 parágrafos acima. (2) resumi como "6/6, 0 colisão, 0 raspão" e **não contei** que o goal 4 teve 3,5 s parado + 1,1 s de `unstuck near`. Não invalida a fresta, mas faz a rodada soar lisa | Dois hábitos ruins, o mesmo impulso: **arrumar demais o resumo**. Riscos de natureza diferente não se somam num número; e episódio que eu não contei é episódio que o dono descobre depois — é o erro 82 (descrever a métrica e não a cena) na direção inversa |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
