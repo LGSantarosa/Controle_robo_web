@@ -2050,6 +2050,66 @@ faz, e é por isso que o desenho da §2.10 insiste que ele **não depende do AMC
 caminho que a missão inteira atravessa. O standoff 1,4 (§2G.9) é do **cone** e
 segue valendo independente disto.
 
+## 2H. Sessão 2026-09-02 — conferência do Codex e escolha do foco do dia
+
+### 2H.1 O Codex conferiu a §2G.9 contra os artefatos: **nenhum erro factual**
+
+Revisão independente do resumo de abertura desta sessão, feita contra os CSVs e
+não contra o meu texto. Resultado: **consistente**. O que ele bateu, item a item:
+
+| conferido | fonte | resultado |
+|---|---|---|
+| HEAD = `b8ac9fb`, tese do standoff 1,0 → 1,4 | git | ✅ |
+| §2G.9 × baseline | `docs/baselines/2026-09-01-arena-standoff-1.40/README.md` | ✅ |
+| `nominal1`: 18 raspões no `cone_2`, folga 0,0000 | `colisao_por_objeto_nominal1.csv` | ✅ |
+| `std14_1..3`: 0 colisão, 0 raspão; `cone_2` = 0,3628 / 0,6255 / 0,5657 | `colisao_por_objeto.csv` | ✅ |
+| erro de pose máx **49,1** (std14_1) × **45,1** (nominal1) | `erro_pose_amcl_x_gazebo.txt` | ✅ |
+| tempos 295,3 / 232,9 / 244,0 | idem | ✅ |
+| ressalva "mitigação, não correção" | `DIARIO_ARENA.md:1984` | ✅ bem formulada |
+| separação robô × harness (BOs 79-81) | `:2318`, `:2319`, `:2347` | ✅ é infra de runner, não regressão da arena |
+
+**As 2 cautelas de leitura que ele deixou — e que eu adoto:**
+
+1. **`n=3` no sim.** "Prova que o regime mudou" (§2G.9, ponto 3) é leitura de
+   **engenharia**, não validação estatística. Fica valendo como está escrito, com
+   esta etiqueta do lado.
+2. **Isto não mede o A2.** A rota morre no standoff; o gargalo do A2 continua
+   sendo o `PolygonFront` a ~0,67 m do centro do cone. Não misturar os dois
+   assuntos hoje.
+
+Nada mudou no código nesta subseção.
+
+### 2H.2 Foco do dia: **fresta A**. Por que não é o item 1.
+
+A pergunta posta foi: *fresta A 100% ou fechar o risco residual do point-turn
+(item 1)?* Escolhido **fresta A**, por três razões medidas — não por preferência:
+
+1. **É a ordem do dono de ontem** (§2G.10): *"vamos ter que fazer ele passar
+   nessa porra 100% das vezes"*.
+2. **O item 1 já não morde onde mordia, e onde ainda morderia é justo o que o
+   `door_crossing` substitui.** No cone ele está mitigado (margem 0,877 m ×
+   erro máx 0,49 m, 0 contato em 3/3). O outro ponto da rota em que o seguidor
+   gira no lugar perto de obstáculo é **em frente à fresta** — e ali quem passa a
+   comandar é o `door_crossing`, que traz garantia própria: §4.4(a) do spec conta
+   o círculo circunscrito (`0,25·√2 = 0,354 m`) contra o canto do bloco e sobra
+   **18,7 cm** no ponto de preparação da fresta A, e §4.4(b) tem o `will_clear()`
+   que **re-estagia em vez de tentar**. ⚠️ Essa conta vale **só para a fresta A**.
+3. **Escopo de risco.** O item 1 (anel 0,25–0,36 m no `path_follower`) mexe no
+   caminho de **todo giro da missão**, inclusive nas voltas que já estão limpas.
+   O `door_crossing` só atua **dentro de uma zona** e tem botão de pânico
+   (`--fecha-fresta A`, medido em 4 voltas com 0 contato, §2G.2). A 3 dias da
+   prova, o segundo é o risco menor.
+
+**O item 1 continua ABERTO** (§6, item 1) e a resposta dele *para a prova* segue
+sendo a mitigação do standoff 1,4 — não o conserto. Isso está dito, não resolvido.
+
+⚠️ **Dito de novo, sem maquiagem:** o `door_crossing` é código novo a **3 dias**
+da prova, no caminho que a missão inteira atravessa. O que segura essa aposta é o
+passo 4 do plano (§2G.10): se na véspera não estiver 100%, o contorno volta a ser
+o default.
+
+**Baseline de hoje: `b8ac9fb`.**
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
