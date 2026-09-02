@@ -2922,6 +2922,54 @@ intocados a 3 dias**.
 
 Isto é observação de prioridade para o dono decidir, não mudança de plano minha.
 
+### 2H.20 ❌ "Atravessa 100%?" — **NÃO**, e o pior caso não foi nem testado
+
+Pergunta direta do dono. Resposta direta: **não está provado, e o que existe
+aponta para o contrário.**
+
+| | |
+|---|---|
+| voltas com o `door_crossing` | **2** (`porta1`, `torta1`) |
+| atravessaram a fresta | 2 de 2 |
+| contato | 0 de 2 |
+| **folga na pior delas** | **2,3 cm** (oráculo) |
+
+Duas voltas não são 100%. E **11 de 12** voltas antigas **sem** a máquina também
+eram limpas — foi exatamente por isso que a `noguard3` passou despercebida.
+
+#### 🔴 O ponto novo, e é o que mais pesa
+
+A entrada ruim que eu testei (**+12 cm** fora do eixo) **não é um pior caso — é
+um caso NORMAL.** O waypoint pré-fresta tem `xy_goal_tolerance = 0,15 m`, então
+o robô pode legitimamente parar em **+15 cm** e a travessia começa dali. E o
+`will_clear` **commita** com desvio de até `fit = 0,15 m`, isto é, ele autoriza
+a faixa inteira da tolerância.
+
+Extrapolando o comportamento medido (a máquina **piorou** a lateral em 1,4 cm):
+
+| desvio na chegada | cruza em | folga geométrica |
+|---|---|---|
+| +12 cm (**medido**) | +13,4 cm | **6,1 cm** (oráculo: **2,3**) |
+| +14 cm | ~15,4 cm | ~4,1 cm |
+| +15 cm (limite da tolerância) | ~16,4 cm | ~3,1 cm |
+
+⚠️ As duas últimas linhas são **extrapolação, não medição** — mas a de +12 é
+medida, e o oráculo ficou **3,8 cm abaixo** da conta geométrica nela. Aplicando
+a mesma diferença, o limite da tolerância fica **perto de zero**.
+
+**Conclusão:** hoje a fresta é atravessada com folga que **depende de onde o
+robô parou no waypoint**, e a máquina **não corrige** essa dependência (ela
+corrige o yaw, §2H.17). Sem o conserto do arme em `staging`, "100% das vezes"
+não tem mecanismo que o sustente — tem sorte de chegada.
+
+#### O que faria virar "sim"
+
+1. **Conserto do §2H.17** (armar em `staging` quando `|d| > align_lat`): a
+   máquina passa a **dirigir até o eixo** antes de entrar, e a folga deixa de
+   depender da chegada. ⏳ não implementado, aguarda decisão do dono.
+2. **Depois disso**, repetir a `torta1` (entrada ruim) + n voltas normais. Só o
+   par (pior caso + repetição) sustenta "100%".
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
