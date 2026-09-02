@@ -42,9 +42,9 @@ def _no(ld, nome):
     return None
 
 
-def _ctx(valor):
+def _ctx(valor, chave='motion_guard'):
     c = LaunchContext()
-    c.launch_configurations['motion_guard'] = valor
+    c.launch_configurations[chave] = valor
     return c
 
 
@@ -115,3 +115,53 @@ class TestGuardLaunch(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestDoorCrossingLaunch(unittest.TestCase):
+    """`door_crossing:=true` (perfil ARENA) tem que SUBIR o nó — e só ele.
+
+    Por que existe (2026-09-02, spec §5.3): o nó publica em `door_vel`, que tem
+    prioridade 20 no mux de autonomia — a MAIOR das fontes autônomas. Religá-lo
+    por engano em `--pi`/`--sim` comuns poria um nó desativado desde 06-26 na
+    frente do Nav2 sem ninguém ter pedido.
+    """
+
+    def test_default_e_DESLIGADO(self):
+        """Fora da arena, nada muda: o nó só sobe quem pediu."""
+        arg = [e for e in _ld().entities
+               if e.__class__.__name__ == 'DeclareLaunchArgument'
+               and e.name == 'door_crossing']
+        self.assertEqual(len(arg), 1, 'o launch arg tem que existir')
+        self.assertEqual(arg[0].default_value[0].perform(LaunchContext()),
+                         'false')
+
+    def test_o_no_sobe_so_com_true(self):
+        no = _no(_ld(), 'door_crossing')
+        self.assertIsNotNone(no, 'o nó tem que estar na descrição (foi '
+                                 'descomentado em 2026-09-02)')
+        self.assertTrue(no.condition.evaluate(_ctx('true', 'door_crossing')))
+        self.assertFalse(no.condition.evaluate(_ctx('false', 'door_crossing')))
+
+    def test_doors_file_chega_no_no(self):
+        """O par sensível: o nó pode subir e ainda assim não receber porta
+        nenhuma — aí ele fica `idle` para sempre e a volta roda igual à de hoje,
+        com a diferença de que eu acharia que testei (spec §5.2)."""
+        no = _no(_ld(), 'door_crossing')
+        ctx = _ctx('true', 'door_crossing')
+        ctx.launch_configurations['doors_file'] = '/tmp/x.doors.json'
+        achou = None
+        for p in no._Node__parameters:
+            if isinstance(p, dict):
+                for k, v in p.items():
+                    nome = perform_substitutions(ctx, list(k)) if not isinstance(k, str) else k
+                    if nome == 'doors_file':
+                        achou = v.evaluate(ctx) if hasattr(v, 'evaluate') else v
+        self.assertEqual(achou, '/tmp/x.doors.json',
+                         'o doors_file do launch não chega ao nó')
+
+    def test_doors_file_default_e_vazio(self):
+        arg = [e for e in _ld().entities
+               if e.__class__.__name__ == 'DeclareLaunchArgument'
+               and e.name == 'doors_file']
+        self.assertEqual(len(arg), 1)
+        self.assertEqual(arg[0].default_value[0].perform(LaunchContext()), '')

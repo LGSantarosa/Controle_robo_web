@@ -80,6 +80,24 @@ def generate_launch_description():
         description='false = NÃO sobe o motion_guard e o mux de autonomia '
                     'publica direto em auto_vel_raw (perfil ARENA)')
     guard_on = LaunchConfiguration('motion_guard')
+
+    # door_crossing DESLIGADO por default (2026-09-02, spec §5.3). Ele publica
+    # em door_vel com prioridade 20 no mux de autonomia — a MAIOR das fontes
+    # autônomas — então não pode voltar a subir em `--pi`/`--sim` comuns sem
+    # ninguém ter pedido. `--arena` LIGA (é lá que a fresta A existe).
+    # ⚠️ Ligar o nó NÃO basta para ele armar: sem porta marcada
+    # (maps/<mapa>.doors.json, via doors_file) e sem um goal do Nav2 que TERMINE
+    # dentro da zona da porta (pendência C, door_crossing.py:330), ele sobe e
+    # fica `idle` para sempre. Ver DIARIO_ARENA §2H.5.
+    door_crossing_arg = DeclareLaunchArgument(
+        'door_crossing', default_value='false',
+        description='true = sobe o door_crossing (perfil ARENA: travessia da '
+                    'fresta A). Exige doors_file com a porta marcada')
+    doors_file_arg = DeclareLaunchArgument(
+        'doors_file', default_value='',
+        description='maps/<mapa>.doors.json lido do disco no arranque; /doors '
+                    '(controle_web) sobrescreve se chegar. Vazio = só /doors')
+    door_on = LaunchConfiguration('door_crossing')
     # Com o guard fora, o estágio auto_vel_pre->auto_vel_raw some: sem religar a
     # saída do mux, o collision_monitor fica SEM PUBLISHER na entrada e a
     # autonomia inteira emudece. Este é o mesmo encadeamento de antes do guard
@@ -217,16 +235,24 @@ def generate_launch_description():
         # reto vigiando o vão (door_vel, prio 20 no twist_mux). Publica
         # /door_zone = gate da máscara de batente no scan_sanitizer.
         # Spec: docs/superpowers/specs/2026-06-12-zonas-de-porta-design.md
-        # 2026-06-26 DESATIVADO TEMPORARIAMENTE: o path_follower atravessa a porta
-        # NATIVAMENTE (reto+giro-no-lugar pelo /plan do Theta*) — validado 4/4 no
-        # real, com a porta deletada do mapa, sem ponto pré-porta. O door_crossing
-        # era gambiarra pro DWB velho (que não threadava o vão) e virou obsoleto.
-        # Re-habilitar = descomentar este bloco (e colcon build robot_nav).
-        # Node(
-        #     package='robot_nav', executable='door_crossing',
-        #     name='door_crossing', output=nav_output,
-        #     parameters=[sim_time_param],
-        # ),
+        # 2026-06-26 DESATIVADO: o path_follower atravessava a porta da SALA
+        # nativamente (reto+giro-no-lugar pelo /plan do Theta*), validado 4/4 no
+        # real com a porta deletada do mapa.
+        # 2026-09-02 RE-HABILITADO sob flag (default false): na fresta A da arena
+        # (0,90 m) a travessia nativa NÃO serve — medido em 13 travessias, o robô
+        # entra SEMPRE torto (-4,8° a -15,8°, mediana -10,7°) e com desvio lateral
+        # de até 12,1 cm, deixando folga de 3,7 cm no pior caso, que foi contato
+        # (DIARIO_ARENA §2H.4). O door_crossing existe justamente para zerar essas
+        # duas parcelas antes de entrar.
+        Node(
+            package='robot_nav', executable='door_crossing',
+            name='door_crossing', output=nav_output,
+            parameters=[sim_time_param, {
+                'doors_file': ParameterValue(
+                    LaunchConfiguration('doors_file'), value_type=str),
+            }],
+            condition=IfCondition(door_on),
+        ),
         # Mux de AUTONOMIA (1º estágio do 2-mux, 2026-06-26): arbitra as fontes
         # autônomas (nav_vel, follow_vel, door_vel) numa fonte só, auto_vel_pre,
         # que passa pelo motion_guard e entra no collision_monitor. unstuck/
@@ -358,4 +384,6 @@ def generate_launch_description():
                               init_pose_arg, init_x_arg, init_y_arg, init_yaw_arg,
                               follow_clear_full_arg, follow_clear_min_arg,
                               motion_guard_arg,
+                              door_crossing_arg,
+                              doors_file_arg,
                               *nodes])

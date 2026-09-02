@@ -18,7 +18,12 @@ import math
 import os
 import unittest
 
-from robot_nav.door_crossing import DoorCrossConfig, DoorCrossing
+from robot_nav.door_crossing import (
+    DoorCrossConfig,
+    DoorCrossing,
+    doors_de_arquivo,
+    valida_doors,
+)
 
 RAIZ = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 DOORS_JSON = os.path.join(RAIZ, 'maps', 'arena_galpao.doors.json')
@@ -79,6 +84,54 @@ class TestFrestaAMarcadaComoPorta(unittest.TestCase):
                 vao, 0.65,
                 f'porta de {vao:.2f} m marcada — a de 0,60 não pode ser marcada '
                 'sem refazer a conta do §4.4-(a): id={}'.format(d.get('id')))
+
+
+class TestDoorsFile(unittest.TestCase):
+    """§5.2 — o nó tem que conseguir carregar porta do DISCO.
+
+    `/doors` só é publicado pelo `controle_web`, e o harness A/B do sim não sobe
+    o stack web. Sem isto o nó sobe, não recebe porta, fica idle, e a volta roda
+    idêntica à de hoje — com a diferença de que eu poderia achar que testei."""
+
+    def test_le_a_porta_da_arena_do_disco(self):
+        d = doors_de_arquivo(DOORS_JSON)
+        self.assertEqual(len(d), 1)
+        self.assertEqual(d[0]['id'], 1)
+
+    def test_caminho_vazio_e_sem_portas_nao_e_erro(self):
+        """Fora da arena ninguém passa doors_file — não pode explodir."""
+        self.assertEqual(doors_de_arquivo(''), [])
+        self.assertEqual(
+            doors_de_arquivo(os.path.join(RAIZ, 'maps',
+                                          'arena_galpao_semA.doors.json')), [])
+
+    def test_arquivo_QUE_NAO_EXISTE_erra_alto(self):
+        """O par sensível: descartar em silêncio vira 'nó idle', que é
+        indistinguível de 'não tem porta' — e aí o robô atravessa a fresta sem
+        ninguém dirigindo. Deploy quebrado tem que aparecer."""
+        with self.assertRaises(ValueError):
+            doors_de_arquivo(os.path.join(RAIZ, 'maps', 'nao_existe.doors.json'))
+
+    def test_porta_malformada_erra_alto(self):
+        ruins = (
+            ('não é lista', {'x': 1}),
+            ('porta não é objeto', [42]),
+            ('sem batente b', [{'id': 1, 'a': [1.0, 2.0]}]),
+            ('batente com 1 número', [{'id': 1, 'a': [1.0], 'b': [2.0, 2.0]}]),
+            ('batente não numérico', [{'id': 1, 'a': ['x', 2.0], 'b': [2.0, 2.0]}]),
+            ('batentes no mesmo ponto', [{'id': 1, 'a': [1.0, 2.0], 'b': [1.0, 2.0]}]),
+            ('sem id (o gate do arme usa o id)',
+             [{'a': [1.0, 2.0], 'b': [1.0, 3.0]}]),
+        )
+        for rotulo, doors in ruins:
+            with self.subTest(rotulo):
+                with self.assertRaises(ValueError):
+                    valida_doors(doors)
+
+    def test_porta_boa_passa(self):
+        """O par: se tudo erra, o validador não vale nada."""
+        boa = [{'id': 1, 'a': [7.5, 1.8], 'b': [7.5, 2.7]}]
+        self.assertEqual(valida_doors(boa), boa)
 
 
 class TestPoseDaNoguard3(unittest.TestCase):

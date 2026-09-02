@@ -2306,6 +2306,85 @@ decisão tomada como se o ponto fosse exato.
 ⏳ **Não implementado — aguardando a decisão do dono**, porque mexer na rota da
 prova a 3 dias é mudança que ele tem que ver antes.
 
+### 2H.8 Review do Codex às 4 teses da §2H.4/2H.5/2H.7: **as 4 procedem**
+
+Conferidas contra o código, não contra o meu texto:
+
+| # | tese | veredito |
+|---|---|---|
+| 1 | `_pose_map()` é AMCL → `d` é map-relative (`:641`, `:338`) | ✅ procede — **erro 84 fica de pé** |
+| 2 | A pendência C trava (`_pick_door:330`, `_cleared` em `:359-367`, rota sem waypoint) | ✅ procede — publica `approaching`, **não arma** |
+| 3 | Waypoint a 1,0 m arma (`zone_radius 1.1` ≥ 1,0; `approach_bearing 70°` folgado) | ✅ **com 2 dependências** |
+| 4 | A conta do pior caso depende do `xy_goal_tolerance` | ✅ procede, e o valor está confirmado: **0,15** em `nav2_params_arena.yaml:151` (o `0.07` do `:261` é do `FollowPath`, não do critério de goal) |
+
+**As 2 dependências do item 3, que eu não tinha explicitado:**
+
+1. **Ligar o nó no launch** — ele estava comentado desde 06-26 (§5.3). ✅ feito
+   nesta sessão, ver abaixo.
+2. **O waypoint precisa de yaw apontando para a fresta**, não só da distância
+   certa. O `approach_bearing = 70°` é medido do **yaw do robô**; um waypoint em
+   (6,50 ; 2,25) com yaw errado reprova o gate mesmo estando na zona. Como o
+   Nav2 termina o goal respeitando o `yaw_goal_tolerance`, o waypoint tem que
+   nascer com **yaw = 0** (encarando +x, o eixo do vão).
+
+### 2H.9 §5.2, §5.3 e §5.4 ✅ — o nó agora sobe, lê a porta do disco, e só na arena
+
+**§5.2 — portas do disco (`doors_file`).** `/doors` só é publicado pelo
+`controle_web`, que o harness A/B não sobe: sem isto o nó subiria, não receberia
+porta e ficaria `idle` — a volta rodaria idêntica à de hoje e eu poderia achar
+que testei. Agora `doors_de_arquivo()` + `valida_doors()` são **lógica pura**
+(fora da cola de I/O) e o nó carrega no arranque; `/doors` sobrescreve se chegar.
+Porta malformada **erra alto**: descartar em silêncio vira "nó idle", que é
+indistinguível de "não tem porta". `/doors` inválido agora **mantém** as portas
+que já tinha — mensagem ruim da web não pode apagar a porta da prova.
+
+**§5.3 — fiação.** Launch arg `door_crossing` (default **false** — ele publica em
+`door_vel`, prioridade 20, a maior das fontes autônomas; não volta a subir em
+`--pi`/`--sim` comuns sem alguém pedir) + `doors_file`. O `--arena` liga e aponta
+o `doors.json` **do mapa que ele carregou** — se o operador apertar
+`--fecha-fresta`, o `doors.json` do tampado é a lista vazia, então o nó sobe e
+não arma nada, que é o certo: ali a fresta é parede pro planejador.
+**Falha fechada:** `--arena` sem o `doors.json` **aborta**.
+
+**Sensibilidade provada nos 3 testes novos de fiação** (BO 66), injetando defeito:
+nó sem `condition` → falha; `doors_file` não repassado → falha; default do mapa
+revertido → falha. Restaurados, tudo verde.
+
+**§5.4 — higiene, com 2 correções de fato:**
+
+- A docstring dizia `|yaw|<5°`; o valor em vigor é **3,0°** desde 06-19.
+- O comentário da ré de escape dizia *"door_vel fura o collision"*. **Não fura
+  desde o 2-mux de 06-26**: `door_vel` entra no `twist_mux_auto` e a saída passa
+  **pelo** collision (`nav2_params_arena.yaml:625-629`). Quem fura são o unstuck
+  (prio 30) e o humano. Consequência real: a ré de escape **pode ser freada pelo
+  collision**, e o cenário "stalla → desarma o BMS" não se sustenta pela razão
+  escrita.
+- O `_dbg_t` marcado "DIAG (REMOVER)" foi **promovido a log honesto**: "por que
+  não arma?" é *a* pergunta deste nó, e o gate da pendência C deixa ele idle em
+  silêncio.
+- **Relógio, medido** (o spec pedia medir, não trocar): os timeouts usam
+  `time.monotonic()` (parede) com `use_sim_time` ligado. Fator de tempo real do
+  harness medido em 4 voltas: **1,037 / 1,319 / 1,019 / 1,025**. O sim roda no
+  mesmo ritmo ou **à frente** da parede → os timeouts ficam iguais ou mais
+  **folgados** em tempo de simulação, nunca mais curtos. Não é risco; fica
+  registrado.
+
+#### 🐞 BO: `maps/*` está no `.gitignore`, e meu teste "existe no git" olhava o disco
+
+O `.gitignore:15` ignora `maps/*` (os mapas da prova entraram com `git add -f`).
+O `git add -A` do commit `9c4e418` **não levou** o `arena_galpao.doors.json`. Pior:
+o teste que eu tinha escrito para justamente pegar isso se chamava
+`..._existe_no_git` e checava `os.path.exists` — **passava com o arquivo fora do
+git**, que é o estado que quebra a Pi (ela deploya por `git reset --hard` e não
+roda o gerador; com a falha fechada nova, o launch lá abortaria). Corrigido: o
+teste agora consulta os arquivos **rastreados**, e há um segundo teste que
+compara o `doors.json` commitado com a saída do gerador de hoje. Os dois arquivos
+entraram com `git add -f`. Erro 86 da §5.
+
+**Estado dos testes: 454 passam, 2 vermelhos** — e os 2 vermelhos são os certos
+(`TestPoseDaNoguard3`): a máquina fica `idle` porque a pendência C segue armada.
+**Eles ficam vermelhos até a decisão do dono sobre o waypoint (§2H.7).**
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -2578,6 +2657,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 83 | 🔴🔴 **Usei o MÁXIMO DA VOLTA INTEIRA como se fosse o erro NA FRESTA** — e construí o plano do dia inteiro em cima disso | Escrevi na §2G.10 que *"o erro do AMCL (máx 0,49 m) é maior que o orçamento lateral inteiro (±0,20 m) → nenhuma solução map-relative passa 100%"*. Os 0,49 m caíram no **point-turn do goal 2**, a 4,6 m dali (eu mesmo tinha documentado isso na §2G.8). Medido na boca da fresta, 13 voltas / n=1593: **mediana 1,4 cm, p90 3,4, máx 4,7**. A frase eliminou "metade das ideias" com um número do lugar errado | Agregado de trajetória **não** é erro local. Antes de deixar um número **descartar uma classe inteira de soluções**, medi-lo no ponto onde a decisão acontece — os dados já estavam no repo, custou 20 min. É o mesmo erro do "validar o que estou vendo antes de decidir", agora com número em vez de premissa |
 | 84 | 🔴 Prescrevi o `door_crossing` como **"scan-relative, logo imune ao AMCL"** — ele é **map-relative** | O nó alimenta a máquina com `_pose_map()` = TF `map`→`base_link` (a pose do AMCL) e compara com batentes em coordenadas de mapa (`door_crossing.py:641-649`). O `/scan` só entra como trava (`gap_ahead`, `front_gap`). Ou seja: o remédio que prescrevi **por ser imune** tem a mesma dependência que usei para desqualificar os outros. Achado ao investigar por que o teste ficava `idle` — não por revisão | Antes de dizer que um componente "não depende de X", abrir a função que produz a entrada dele. E: quando dois erros meus se cancelam (o remédio serve mesmo assim), isso é **sorte**, não acerto — os dois entram aqui separados |
 | 85 | Escrevi no spec (§5.1) que a fresta C de 0,60 *"provavelmente não cabe"* no giro de alinhamento | Ao implementar `margem_point_turn()` a conta saiu **+0,071 m** — cabe. Todas as 4 cabem (A +0,187 / B +0,107 / C +0,071 / D +0,146). O motivo real para não marcar a C é outro (o Nav2 já a trata como parede com `robot_radius 0.32`), e eu tinha o motivo certo escrito **na mesma frase** | "Provavelmente" num documento de desenho é uma conta que eu não fiz. A conta cabia em 3 linhas — fazê-la antes de escrever a suspeita, ou não escrever a suspeita |
+| 86 | 🔁 **Teste chamado "existe no git" que checava o DISCO** — BO 72 pela terceira vez nesta branch | `maps/*` está no `.gitignore:15`; os mapas da prova entraram com `git add -f`. Meu `git add -A` não levou o `arena_galpao.doors.json`, e o teste que eu escrevi para pegar exatamente isso usava `os.path.exists` — **passava com o arquivo fora do git**. Como acabei de pôr falha fechada no `--arena` ("sem doors.json, aborta"), o resultado na Pi seria o launch abortando por um arquivo que "o teste diz que está lá" | O nome do teste é uma promessa. Se ele diz **git**, tem que perguntar ao **git** — `os.path.exists` responde outra pergunta. E: em repo com `.gitignore` sobre um diretório de artefatos, `git add -A` **não é** "adiciona tudo" |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |

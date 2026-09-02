@@ -22,6 +22,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 import unittest
 
 import yaml
@@ -229,3 +230,87 @@ class TestAckDoPlanner(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+MARCA_DOOR_INI, MARCA_DOOR_FIM = '>>> PERFIL_ARENA_DOOR', '<<< PERFIL_ARENA_DOOR'
+
+
+class TestLaunchArenaDoorCrossing(unittest.TestCase):
+    """O `--arena` tem que LIGAR o door_crossing e apontar o doors.json do mapa
+    QUE ELE CARREGOU (2026-09-02, spec §5.3).
+
+    Por que o pareamento importa: se o operador aperta `--fecha-fresta`, o mapa
+    trata a fresta A como parede — e armar uma travessia ali seria mandar o robô
+    atravessar o que o planejador acha que é muro. Mapa e portas saem do mesmo
+    comando do gerador justamente para não divergirem.
+
+    Executa o BLOCO REAL do launch.sh entre os marcadores, não uma cópia (BO 63).
+    """
+
+    def _roda(self, arena, mapa):
+        with open(os.path.join(RAIZ, 'launch.sh')) as f:
+            texto = f.read()
+        bloco = texto.split(MARCA_DOOR_INI)[1].split(MARCA_DOOR_FIM)[0]
+        script = (f'ARENA={"true" if arena else "false"}\n'
+                  f'MAP_FILE={mapa}\n' + bloco
+                  + '\necho "ARG=$ARENA_DOOR_ARG"\n')
+        r = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+        return r.returncode, r.stdout
+
+    def test_arena_com_mapa_ABERTO_liga_e_aponta_a_porta(self):
+        rc, out = self._roda(True, os.path.join(MAPAS, 'arena_galpao.yaml'))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('door_crossing:=true', out)
+        self.assertIn(
+            'doors_file:=' + os.path.join(MAPAS, 'arena_galpao.doors.json'),
+            out)
+
+    def test_arena_com_o_mapa_TAMPADO_aponta_o_doors_do_TAMPADO(self):
+        """O par: com --fecha-fresta o doors.json do tampado é o de lista VAZIA
+        (o gerador o escreve assim), então o nó sobe e não arma nada — que é o
+        certo, porque ali a fresta é parede pro planejador."""
+        rc, out = self._roda(True, os.path.join(MAPAS, 'arena_galpao_semA.yaml'))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('arena_galpao_semA.doors.json', out)
+        self.assertNotIn('arena_galpao.doors.json:', out)
+
+    def test_sem_arena_nao_liga_nada(self):
+        rc, out = self._roda(False, os.path.join(MAPAS, 'hotmilk_portas.yaml'))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('ARG=', out)
+        self.assertNotIn('door_crossing:=true', out)
+
+    def test_FALHA_FECHADA_sem_o_doors_json(self):
+        """Sem o arquivo o nó subiria e ficaria `idle` para sempre — o robô
+        atravessaria a fresta sem ninguém dirigindo, que é o caso que bateu
+        (noguard3). Tem que ABORTAR, não seguir em silêncio."""
+        rc, out = self._roda(True, os.path.join(MAPAS, 'nao_existe.yaml'))
+        self.assertNotEqual(rc, 0, 'tinha que abortar: ' + out)
+        self.assertIn('portas do mapa nao existem', out)
+
+    def test_o_doors_json_da_arena_esta_NO_GIT(self):
+        """Igual ao mapa: a Pi deploya por `git reset --hard` e não roda o
+        gerador — sem o artefato versionado o launch aborta lá (falha fechada
+        que eu acabei de escrever) e ninguém sabe por quê.
+
+        ⚠️ `maps/*` está no .gitignore (`.gitignore:15`), então estes arquivos
+        só entram com `git add -f`. A 1ª versão deste teste checava
+        `os.path.exists` e passava com o arquivo FORA do git — que é exatamente
+        o estado que quebra a Pi."""
+        trk = _rastreados()
+        for nome in ('maps/arena_galpao.doors.json',
+                     'maps/arena_galpao_semA.doors.json'):
+            self.assertIn(nome, trk,
+                          '%s tem que estar no git (maps/* e ignorado: use '
+                          '`git add -f`)' % nome)
+
+    def test_o_doors_json_commitado_e_o_que_o_gerador_produz_HOJE(self):
+        """O par do teste do .pgm: portas velhas no git = o robô arma travessia
+        num eixo que o mundo não tem mais."""
+        sys.path.insert(0, os.path.join(RAIZ, 'tools'))
+        import gera_arena_galpao as ga
+        with open(os.path.join(MAPAS, 'arena_galpao.doors.json')) as f:
+            self.assertEqual(json.load(f)['doors'], ga.portas(),
+                             'maps/arena_galpao.doors.json != saida do gerador. '
+                             'Regere com: python3 tools/gera_arena_galpao.py '
+                             '--mapa maps/')

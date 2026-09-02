@@ -653,7 +653,32 @@ case "$MODE" in
                 echo "          rode sem --arena, ou passe motion_guard:=true no launch."
             fi
         fi
-        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG $INIT_POSE_ARG $ARENA_FOLLOW_ARG $ARENA_GUARD_ARG > "$NAV2_LOG" 2>&1 &
+        # door_crossing SO' na arena (2026-09-02, DIARIO_ARENA §2H.4): na fresta
+        # A de 0,90 m o seguidor entra SEMPRE torto (13 travessias medidas:
+        # -4,8° a -15,8°) e com desvio de ate' 12,1 cm — folga de 3,7 cm no pior
+        # caso, que foi contato. O door_crossing zera as duas parcelas antes de
+        # entrar. As portas vem do <mapa>.doors.json, que o gerador escreve junto
+        # com o mapa: assim o robo NUNCA arma travessia numa fresta que o mapa
+        # que ele carregou trata como parede.
+        # >>> PERFIL_ARENA_DOOR
+        ARENA_DOOR_ARG=""
+        if [ "$ARENA" = true ]; then
+            _DOORS_FILE="${MAP_FILE%.yaml}.doors.json"
+            if [ -f "$_DOORS_FILE" ]; then
+                ARENA_DOOR_ARG="door_crossing:=true doors_file:=$_DOORS_FILE"
+            else
+                # FALHA FECHADA: sem o arquivo o no' subiria e ficaria `idle`
+                # para sempre — o robo atravessaria a fresta sem ninguem
+                # dirigindo, que e' exatamente o caso que bateu (noguard3).
+                echo "ERRO: --arena pedido, mas as portas do mapa nao existem:"
+                echo "      $_DOORS_FILE"
+                echo "      Gere com: python3 tools/gera_arena_galpao.py --mapa maps/"
+                echo "      Abortando (nao vou subir a travessia da fresta sem porta marcada)."
+                exit 1
+            fi
+        fi
+        # <<< PERFIL_ARENA_DOOR
+        ros2 launch robot_nav nav2.launch.py map:="$MAP_FILE" $SIM_TIME_ARG $NAV2_PARAMS_ARG $INIT_POSE_ARG $ARENA_FOLLOW_ARG $ARENA_GUARD_ARG $ARENA_DOOR_ARG > "$NAV2_LOG" 2>&1 &
         NAV2_PID=$!
         echo "      PID: $NAV2_PID  |  Log: $NAV2_LOG"
         # Nav2 demora pra ativar todos os lifecycle nodes; espera o costmap global.

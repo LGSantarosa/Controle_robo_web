@@ -7,7 +7,8 @@ eram fantasmas do LD06, ver scan_sanitizer). Este nó assume a travessia
 quando o robô chega na zona de uma porta MARCADA pelo usuário:
 
   IDLE -> STAGING (vai pro ponto de preparação no eixo da porta)
-       -> ROTATING (gira no lugar até encarar o eixo: |lat|<8cm E |yaw|<5°)
+       -> ROTATING (gira no lugar até encarar o eixo: |yaw| < align_yaw,
+                    3.0° desde 2026-06-19 — a docstring dizia 5° até 09-02)
        -> CROSSING (reto e devagar, micro-correção no eixo, vigiando o vão;
                     publica estado 'crossing' = gate da máscara de batente
                     no scan_sanitizer)
@@ -19,12 +20,61 @@ timeout. Lógica pura (sem ROS) testável offline; cola de I/O no main() —
 mesmo padrão do unstuck_supervisor. Spec:
 docs/superpowers/specs/2026-06-12-zonas-de-porta-design.md
 """
+import json
 import math
+import os
 import time
 from dataclasses import dataclass
 from typing import List, NamedTuple, Optional, Tuple
 
 import numpy as np
+
+
+# ---- portas de arquivo -----------------------------------------------------
+
+def valida_doors(doors, origem='<memória>'):
+    """Valida a lista do schema do DoorStore e devolve ela mesma.
+
+    Erra ALTO (ValueError) em vez de descartar em silêncio: porta malformada
+    vira "o nó fica idle", que é indistinguível de "não tem porta" — e o robô
+    atravessa a fresta sem ninguém dirigindo, que é o defeito que este nó existe
+    para corrigir. Deploy quebrado tem que aparecer.
+    """
+    if not isinstance(doors, list):
+        raise ValueError(f'{origem}: "doors" tem que ser lista, veio {type(doors).__name__}')
+    for i, d in enumerate(doors):
+        if not isinstance(d, dict):
+            raise ValueError(f'{origem}: porta {i} não é objeto')
+        for k in ('a', 'b'):
+            p = d.get(k)
+            if (not isinstance(p, (list, tuple)) or len(p) != 2
+                    or not all(isinstance(v, (int, float)) for v in p)):
+                raise ValueError(f'{origem}: porta {i} sem batente "{k}" válido ([x, y])')
+        if math.hypot(d['b'][0] - d['a'][0], d['b'][1] - d['a'][1]) <= 0.0:
+            raise ValueError(f'{origem}: porta {i} tem os dois batentes no mesmo ponto')
+        if 'id' not in d:
+            raise ValueError(f'{origem}: porta {i} sem "id" (o gate do arme usa o id)')
+    return doors
+
+
+def doors_de_arquivo(path):
+    """Lê `maps/<mapa>.doors.json` do disco. Caminho vazio = sem portas.
+
+    Existe porque `/doors` só é publicado pelo `controle_web` (MapBridge), e o
+    harness A/B do sim não sobe o stack web: sem isto o nó subiria, não receberia
+    porta nenhuma e ficaria idle — a volta rodaria idêntica à de hoje e eu poderia
+    achar que testei (spec §5.2). Serve igual no robô real.
+    """
+    if not path:
+        return []
+    if not os.path.exists(path):
+        raise ValueError(f'doors_file não existe: {path}')
+    with open(path, encoding='utf-8') as f:
+        try:
+            dados = json.load(f)
+        except ValueError as e:
+            raise ValueError(f'{path}: JSON inválido ({e})') from e
+    return valida_doors(dados.get('doors', []), origem=path)
 
 
 # ---- geometria pura --------------------------------------------------------
@@ -225,8 +275,15 @@ class DoorCrossConfig:
     crossing_cooldown: float = 8.0   # s — após CRUZAR, não re-armar (campo 06-22: a ré pós-porta trazia o robô de volta pra zona e re-armava a door — sendo que ele já estava do OUTRO lado)
     # Ré de ESCAPE (2026-06-16): sem a ré do unstuck (calado na região da
     # porta), o door_crossing precisa se reajustar sozinho — senão fica
-    # morto-preso de nariz na parede (e stalla o motor -> desarma o BMS, já que
-    # door_vel fura o collision). Ré RETA (NUNCA arco), gated pelo vão traseiro.
+    # morto-preso de nariz na parede.
+    # ⚠️ CORRIGIDO 2026-09-02 (spec §5.4): este comentário dizia "já que door_vel
+    # fura o collision". **Não fura mais** desde o 2-mux de 2026-06-26: door_vel
+    # entra no `twist_mux_auto` e a saída passa PELO collision_monitor
+    # (`nav2_params_arena.yaml:625-629`). Quem fura são unstuck (prio 30) e o
+    # humano, no mux FINAL. Consequência prática: a ré de escape daqui pode ser
+    # FREADA pelo collision, e o cenário "stalla o motor -> desarma o BMS" não se
+    # sustenta pela razão que estava escrita.
+    # Ré RETA (NUNCA arco), gated pelo vão traseiro.
     escape_front_gap: float = 0.20      # m — obstáculo a menos disso à frente -> ré (anti-stall)
     escape_substuck_time: float = 5.0   # s — alinhando sem chegar ao crossing -> ré
     escape_reverse_dist: float = 0.30   # m — quanto recua por escape (teto)
@@ -552,6 +609,9 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
                 ('rear_tail_x', -0.25), ('rear_half_width', 0.30),
                 ('front_head_x', 0.25), ('lidar_x', 0.0),
+                # spec §5.2: portas do disco quando ninguém publica /doors
+                # (harness A/B do sim não sobe o controle_web). Vazio = só /doors.
+                ('doors_file', ''),
             ):
                 self.declare_parameter(name, default)
                 g[name] = self.get_parameter(name).value
@@ -579,9 +639,26 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self.lidar_x = g['lidar_x']
 
             self.doors = []
+            # Carrega do disco ANTES de subir os subscribers: se /doors chegar
+            # depois (a web está no ar), ele sobrescreve — a web é a fonte viva.
+            self._doors_file = g['doors_file']
+            if self._doors_file:
+                try:
+                    self.doors = doors_de_arquivo(self._doors_file)
+                    self.get_logger().info(
+                        f'{len(self.doors)} porta(s) de {self._doors_file}')
+                except ValueError as e:
+                    # ERRO, não warn: sem porta o nó fica idle e o robô atravessa
+                    # a fresta sem ninguém dirigindo. Tem que aparecer no log.
+                    self.get_logger().error(f'doors_file IGNORADO: {e}')
             self._goal_active = {}
             self._goal_succeeded_edge = False  # pulso de 1 tick: goal terminou OK
-            self._dbg_t = 0.0                  # DIAG arme (REMOVER): throttle manual
+            # 2026-09-02: PROMOVIDO de "DIAG (REMOVER)" a log honesto (spec
+            # §5.4). "Por que não arma?" é A pergunta deste nó — o gate da
+            # pendência C (`_cleared`) deixa ele idle em silêncio, e foi assim
+            # que a fresta A ficou sem ninguém dirigindo. O throttle é manual de
+            # propósito (o do rclpy já matou um log de door antes).
+            self._dbg_t = 0.0
             self._nav_forward = False
             self._scan = None          # (ranges, angle_min, inc)
             self._scan_t = None
@@ -615,11 +692,22 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
 
         def _on_doors(self, msg):
             try:
-                self.doors = json.loads(msg.data).get('doors', [])
+                self.doors = valida_doors(
+                    json.loads(msg.data).get('doors', []), origem='/doors')
                 self.get_logger().info(f'{len(self.doors)} porta(s) carregada(s)')
             except (ValueError, AttributeError) as e:
-                self.get_logger().warn(f'/doors inválido: {e}')
+                # mantém as portas que já tinha (do doors_file): mensagem ruim na
+                # web não pode APAGAR a porta da prova.
+                self.get_logger().warn(f'/doors inválido, mantendo as atuais: {e}')
 
+        # ⚠️ RELÓGIO (medido 2026-09-02, spec §5.4): todos os timeouts deste nó
+        # (`align_timeout` 15 s, `total_timeout` 40 s, `scan_stale`) usam
+        # `time.monotonic()` = tempo de PAREDE, enquanto o launch entrega
+        # `use_sim_time`. Medido no harness A/B, o fator de tempo real do sim é
+        # **1,02-1,32** (4 voltas: 1.037 / 1.319 / 1.019 / 1.025) — ou seja, o sim
+        # roda no mesmo ritmo ou um pouco à FRENTE da parede. Efeito: os timeouts
+        # ficam iguais ou mais FOLGADOS em tempo de simulação, nunca mais curtos.
+        # Não troco o relógio agora — fica medido e registrado, como o spec pede.
         def _on_scan(self, msg):
             self._scan = (msg.ranges, msg.angle_min, msg.angle_increment)
             self._scan_t = time.monotonic()
