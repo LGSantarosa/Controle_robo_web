@@ -1,7 +1,147 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-08-25**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-08-26**.
+
+---
+
+## 🥾🔴 2026-08-26 — PRIMEIRO CAMPO NO ROBÔ REAL: o trekking anda (3 bugs de produção), BNO055 ficou de fora
+
+Primeiro dia de `ROTEIRO_CAMPO.md` no robô real. **A BNO055 não foi montada** (o
+dono estava sem jumper), então as Fases 0 e 2 caíram inteiras. A Fase 4 (o
+quadrante de arco vazio) foi **descartada de propósito**: a decisão de não usar
+arco já estava tomada, medir de novo não muda nada. Sobrou Fase 1, Fase 3 e
+Fase 5 — e a Fase 5 pagou o dia sozinha.
+
+### 🐞 Três bugs de produção achados e corrigidos (⚠️ na Pi, FORA do git)
+
+1. **`nav_vel` órfão — o Play do trekking NUNCA moveu roda nenhuma.**
+   `trekking.launch.py` remapeava a saída do `trekking_runner` pra `cmd_vel` →
+   **`nav_vel`**, mas a entrada de autonomia do `twist_mux` (em
+   `robot.launch.py`) se chama **`auto_vel`**. O nome foi trocado de um lado e o
+   launch não acompanhou. Sintoma: aperta Play, o estado vai pra `mode=play`,
+   a máquina de estado roda inteira, o PID calcula — e o robô não anda. Prova:
+   `/nav_vel` com **1 publisher e 0 subscribers**, `/auto_vel` com 0 publishers.
+   Isso valia pra **qualquer** Play de trekking neste checkout, não é de hoje.
+   Fix: `remappings=[('cmd_vel', 'auto_vel')]`.
+
+2. **`cone_detector` descartava calado metade do scan.** O LD06 publica
+   `angle_min=0` / `angle_max=2π`, mas `angle_min`/`angle_max` do nó foram
+   escritos assumindo ±π com 0 = frente, e o filtro compara o ângulo **cru**:
+   `(angles >= a_min) & (angles <= a_max)`. Com o default ±π, só passava de 0°
+   a 180° — **a metade direita do robô nunca gerou cone, desde sempre**. Fix:
+   normalizar pra [−π, π] antes do filtro (`(a + π) % 2π − π`). `cos`/`sin` não
+   mudam com o wrap, então `xs`/`ys` saem idênticos: só o filtro angular passa a
+   significar o que a doc do parâmetro promete.
+
+3. **`cone_detector` com defaults permissivos demais → mapa web pulando.**
+   `trekking.launch.py` passava só `lidar_offset_x`; o resto ficava no default:
+   2 pontos / 4 cm / 45 cm / 5 m / 360°. Perna de cadeira, batente e quina
+   viravam cone. Como o auto-fit do mapa enquadra **robô + waypoints + cones**
+   (`trekking.js:43`), cada falso positivo esticava o enquadramento e o mapa
+   pulava. Apertado pra `min_cluster_points=4`, `range_max=2.5`, `angle=±1.2`
+   (só depois do fix nº 2 isso significa "±69° na frente").
+   ⚠️ `max_cluster_width` **NÃO** deve ser apertado: 0,45 é "cone + margem" e
+   0,30 rejeita o cone real quando o robô chega perto e o LiDAR resolve a base
+   inteira. Isso foi testado e deu errado em campo.
+
+### FASE 1 — reta pura, 3 repetições (vx 0,25 · 8 s · `use_imu2` inexistente na Pi)
+
+| rep | andou (odom) | girou `/odom` | girou IMU (sinal corrigido) |
+|---|---|---|---|
+| 1 | 1,99 m | +3,7° | +4,0° |
+| 2 | 1,99 m | +3,5° | +3,9° |
+| 3 | 2,01 m | +4,2° | +4,2° |
+| **média** | **2,00 m** | **+3,8°** | **+4,0°** |
+
+- **A odometria de translação é boa no real:** erro < 1% em 2 m. A suspeita
+  herdada do sim (a `/odom` que mentiu 48 cm) **não se reproduz** em reta.
+- **O robô puxa +3,8° à ESQUERDA a cada 2 m, e é físico.** Confirmado por três
+  réguas independentes: odom, gyro e o olho do dono (~5°). Implica roda direita
+  ~1,7% mais rápida. Em 10 m isso é 1,6 m fora da linha.
+- ⚠️ **`arc_calib` e `spin_calib` imprimem o "IMU check" SEM aplicar
+  `imu_yaw_sign`** (que vale −1.0 na Pi, MPU6050 de ponta-cabeça). O cross-check
+  sai com o sinal invertido e parece contradizer a `/odom`. Não contradiz —
+  inverta o sinal na leitura. Papercut de 2 linhas, não corrigido.
+
+### A RÉ desfaz só dois terços do giro (dado novo)
+
+Ré de 8 s a −0,25 depois da ida: andou 1,98 m, girou **−2,6°** (odom) /
+**−2,3°** (IMU corrigida), contra +3,8° da ida.
+
+O **sinal inverte** — confirma que a causa é diferença de velocidade entre as
+rodas, não sensor. Mas a **magnitude não fecha**: a ré desfaz ~68% do giro. Além
+do fator de escala entre rodas existe um componente **dependente do sentido de
+marcha** (folga, zona-morta assimétrica por sentido, ou arrasto). Consequência
+prática: dá pra usar ré como transporte entre repetições, mas cada ida-e-volta
+deixa **~1,2° de sobra na orientação**. Não atrapalha `spin_calib` nem
+`arc_calib` (ambos medem delta contra o próprio início).
+
+### FASE 3 — giro no lugar (comando 3,0 rad/s)
+
+| lado | girou (odom) | girou IMU (corrigida) | efetivo |
+|---|---|---|---|
+| esquerda | +48,9° | +48,9° | **+0,41 rad/s** (23,5°/s) |
+| direita | −52,6° | −52,5° | **−0,45 rad/s** (25,8°/s) |
+| | | assimetria | **−7,0%** (direita gira mais) |
+
+- **Confirma a curva já registrada** em `:1614` (`2,5→19%`, 0,47 rad/s). Comando
+  3,0 entrega 0,43 — 15% do pedido. Nada novo: **não vale re-medir isso.**
+- A assimetria fecha com a Fase 1: roda direita mais forte explica tanto o puxão
+  à esquerda na reta quanto o giro 7% maior à direita. Bate com o `direita ×1.05`
+  já modelado no `sim_actuator_model` (`:1542`).
+- ⚠️ **A premissa do roteiro sobre `rot_min` está errada pro real.** O roteiro
+  fala em "rot_min 4,0 = 83°/s"; na Pi o `rot_min` é **2,4** e entrega ~24°/s.
+  Se a rota sair torta, o culpado provável **não** é rot_min alto — baixar mais
+  joga o comando dentro da zona-morta (1,7) e ele para de girar.
+
+### FASE 5 — TREKKING ANDOU ✅ (depois dos 3 fixes)
+
+Rota `rota_reta`: 1 waypoint a 2,16 m, com cone. `v_max=0,35`, `arrival=25 cm`.
+
+```
+t=15.0  play   auto=+0.349/-0.104     ← arranca no v_max
+t=16.0  play   pose_fix wp0: Δ=(-0.02, -0.31)
+t=18.5  play   auto=+0.287/+0.207     ← freia no último waypoint
+t=19.5  idle   rota concluída          ← 142 comandos, zera e para
+```
+
+**Parou exatamente em frente ao cone** (confirmado a olho pelo dono).
+
+- **O "pulo na pose" que o dono viu no mapa é o `pose_fix` acertando**, não um
+  glitch: `Δ=(-0.02, -0.31)` — a âncora de cone corrigiu **31 cm laterais** um
+  segundo depois de arrancar. O salto *é* o conserto.
+- **A odometria acumulou 31 cm de erro lateral em 2,16 m** — bem mais que os
+  6,5 cm de deriva pura medidos a 0,25 m/s na Fase 1. A 0,35 m/s escorrega mais.
+  Só o cone enxergou isso.
+- ⚠️ **Isto NÃO validou o controle de direção.** Todos os `wz` comandados
+  (−0,12 a +0,35) estão **dentro da zona-morta de 1,7** — fisicamente o robô não
+  esterçou; foi reto e o cone corrigiu o resto. Validou Play, mux, detecção de
+  cone e âncora. **O teste de verdade é a rota em L** (2 waypoints com canto),
+  onde o `h_err` cresce e o `omega` sai da zona-morta. Falta fazer.
+
+### ⏳ Pendências deste dia
+
+> 📄 **`HANDOFF_CAMPO_2026-08-26.md`** — passo a passo pra retomar amanhã:
+> o que está na Pi fora do git (4 mudanças, **uma delas NÃO TESTADA**), o
+> procedimento correto de corrida (Reset antes do Play) e o buraco de fundo:
+> o `trekking_runner` **não tem piso de giro** (`rot_min`), então pede
+> correção de rumo abaixo da zona-morta e não esterça.
+
+- **Os 3 fixes estão na Pi e FORA do git.** O checkout de lá já era divergente
+  (branch `seguir-pessoa` + arquivos por `scp` + fixes do headless). Backups:
+  `cone_detector.py.bak-campo-20260826`, `trekking.launch.py.bak-campo-20260826`.
+  **Um `git pull`/`reset` descuidado perde tudo.**
+- **Rota em L** — o único teste que valida o controle de direção no real.
+- **BNO055** — Fases 0 e 2 do roteiro seguem inteiras pra fazer.
+- **Caminho na Pi é `~/workspace/Controle_robo_web`**, não `~/Controle_robo_web`
+  como o `ROTEIRO_CAMPO.md` afirma. Corrigir o roteiro.
+- **LD06 instável na subida:** vingou na 2ª ou 3ª tentativa em todas as 4 subidas
+  do dia, e caiu sozinho uma vez (o watchdog reergueu). Se cair no meio de um
+  Play, o trekking perde o snap-to-cone.
+- ⚠️ **`ros2 topic hz /scan` mente**: o LD06 publica em `BEST_EFFORT` e o `hz`
+  assina em `RELIABLE` — ele diz "não publicado" com o LiDAR vivo e saudável.
+  Use um subscriber com `qos_profile_sensor_data` pra checar.
 
 ---
 

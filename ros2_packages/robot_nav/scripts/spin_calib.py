@@ -58,6 +58,14 @@ class SpinCalib(Node):
         self._imu_t = None
         self._imu_wz = 0.0
         self._have_imu = False
+        # A MPU esta de ponta-cabeca no robo: o `pose_estimator` corrige o gyro
+        # com `imu_yaw_sign` (-1.0, o mesmo default do robot.launch.py) antes de
+        # fundir na /odom. Este script lia o gyro CRU, entao o "IMU check" saia
+        # com o sinal trocado e PARECIA contradizer a /odom — foi o que
+        # confundiu a leitura das Fases 1 e 3 no campo de 2026-08-26. Nao
+        # contradizia: era o sinal.
+        self.declare_parameter('imu_yaw_sign', -1.0)
+        self._imu_sign = float(self.get_parameter('imu_yaw_sign').value)
 
         self.pub = self.create_publisher(Twist, cmd_topic, 10)
         self.create_subscription(Odometry, odom_topic, self._on_odom, 10)
@@ -74,7 +82,7 @@ class SpinCalib(Node):
 
     def _on_imu(self, msg):
         now = time.monotonic()
-        wz = msg.angular_velocity.z
+        wz = msg.angular_velocity.z * self._imu_sign
         if self._imu_t is not None:
             self._imu_accum += wz * (now - self._imu_t)
         self._imu_t = now
@@ -152,7 +160,7 @@ def main():
                 eff = (y1 - y0) / args.duration         # rad/s efetivo no comando
                 res[name] = (d_cmd, d_tot, d_imu, eff)
                 log('  %4.1f rad/s %s: cmd=%+7.1f°  +coast=%+7.1f°  '
-                    'IMU=%+7.1f°  efetivo=%+.2f rad/s'
+                    'IMU(corr)=%+7.1f°  efetivo=%+.2f rad/s'
                     % (sp, name, d_cmd, d_tot, d_imu, eff))
                 rows.append({'speed': sp, 'side': name, 'deg_cmd': d_cmd,
                              'deg_total': d_tot, 'deg_imu': d_imu, 'eff_radps': eff})

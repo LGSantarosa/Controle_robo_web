@@ -76,6 +76,14 @@ class ArcCalib(Node):
         self._imu_t = None
         self._imu_wz = 0.0
         self._have_imu = False
+        # A MPU esta de ponta-cabeca no robo: o `pose_estimator` corrige o gyro
+        # com `imu_yaw_sign` (-1.0, o mesmo default do robot.launch.py) antes de
+        # fundir na /odom. Este script lia o gyro CRU, entao o "IMU check" saia
+        # com o sinal trocado e PARECIA contradizer a /odom — foi o que
+        # confundiu a leitura das Fases 1 e 3 no campo de 2026-08-26. Nao
+        # contradizia: era o sinal.
+        self.declare_parameter('imu_yaw_sign', -1.0)
+        self._imu_sign = float(self.get_parameter('imu_yaw_sign').value)
 
         self.pub = self.create_publisher(Twist, cmd_topic, 10)
         self.create_subscription(Odometry, odom_topic, self._on_odom, 10)
@@ -96,7 +104,7 @@ class ArcCalib(Node):
 
     def _on_imu(self, msg):
         now = time.monotonic()
-        wz = msg.angular_velocity.z
+        wz = msg.angular_velocity.z * self._imu_sign
         if self._imu_t is not None:
             self._imu_accum += wz * (now - self._imu_t)
         self._imu_t = now
@@ -200,7 +208,7 @@ def main():
             % (args.vx, args.wz, r_cmd))
         log('  efetivo   : wz=%+.2f rad/s (%.0f%% do comando)  girou=%+.1f° (+coast %+.1f°)'
             % (eff_wz, 100.0 * ratio, d_cmd, d_tot))
-        log('  IMU check : girou=%+.1f°   |   andou(reto)=%.2f m   raio_efetivo=%.2f m'
+        log('  IMU check : girou=%+.1f° (sinal corrigido)   |   andou(reto)=%.2f m   raio_efetivo=%.2f m'
             % (d_imu, chord, r_eff))
         if abs(ratio) < 0.25:
             log('  >> ARQUEOU QUASE NADA (%.0f%%): nessa wz ele NÃO faz arco.' % (100 * ratio))

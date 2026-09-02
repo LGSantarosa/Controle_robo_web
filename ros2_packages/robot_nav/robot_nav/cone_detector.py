@@ -151,8 +151,23 @@ class ConeDetector(Node):
         key = (ranges.size, scan.angle_min, scan.angle_increment)
         if self._angles_key != key:
             self._angles_key = key
-            self._angles = scan.angle_min + np.arange(
+            a = scan.angle_min + np.arange(
                 ranges.size, dtype=np.float32) * scan.angle_increment
+            # NORMALIZA pra [-pi, pi]. O LD06 publica angle_min=0 /
+            # angle_max=2*pi, mas `angle_min`/`angle_max` deste no foram
+            # escritos assumindo +-pi com 0 = frente (e a doc do parametro
+            # promete isso). Sem o wrap o filtro compara o angulo CRU: com o
+            # default +-pi so passava de 0deg a 180deg, ou seja, a metade
+            # DIREITA do robo nunca gerou cone. Medido em campo 2026-08-26 —
+            # o cone estava a 352deg e sumia; com angle=+-1.2 virou "0deg a
+            # 69deg" e a deteccao morreu de vez.
+            #
+            # cos/sin nao mudam com o wrap, entao xs/ys ficam iguais a menos
+            # do arredondamento float32 (medido: <1e-6 m a 5 m, contra ruido de
+            # cm do LD06). O unico efeito pratico e o filtro angular passar a
+            # significar o que a doc do parametro diz. Feito aqui, no cache, e
+            # nao a cada scan — custo zero.
+            self._angles = (a + np.pi) % (2.0 * np.pi) - np.pi
         angles = self._angles
         valid = (
             np.isfinite(ranges)

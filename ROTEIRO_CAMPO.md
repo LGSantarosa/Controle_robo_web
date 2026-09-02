@@ -59,7 +59,7 @@ hoje o default velho ainda vale lá. Explícito funciona nos dois casos.
       descuidado perde os fixes.
       ```bash
       ssh robo@robo-desktop.local
-      cd ~/Controle_robo_web && git status && git stash list && git branch -vv
+      cd ~/workspace/Controle_robo_web && git status && git stash list && git branch -vv
       ```
       Guarde o que estiver sujo (`git stash push -m "fixes headless da Pi"`)
       **antes** de trazer a `main` nova. O firmware da BNO055 só existe na
@@ -140,7 +140,7 @@ O `mega_bridge` velho segura a `/dev/mega`. Derrube a stack antes:
 
 ```bash
 tmux kill-session -t robo 2>/dev/null            # se estiver de pé
-cd ~/Controle_robo_web/firmware/mega_bridge
+cd ~/workspace/Controle_robo_web/firmware/mega_bridge
 pio run -t upload
 ```
 
@@ -153,7 +153,7 @@ pio run -t upload
 ### 0.3 — O frame está chegando
 
 ```bash
-cd ~/Controle_robo_web && source install/setup.bash
+cd ~/workspace/Controle_robo_web && source install/setup.bash
 ros2 launch robot_nav robot.launch.py use_flow:=false
 ```
 Noutra aba, **as duas** — a nova e a que já existia:
@@ -407,11 +407,32 @@ web, que o `robot.launch.py` sozinho não sobe):
 1. Grave uma rota **curta**: uma reta e um canto, 2 waypoints, sem cone.
 2. Dê Play e assista.
 
-**Se aparecer giro extra ou traçado torto, o primeiro knob a baixar é o
-`rot_min`** (hoje 4,0 = 83°/s, no `trekking.launch.py`). O sim mostrou um
-**penhasco entre 4,0 e 4,5** — 4,5 dá 35 cm de desvio e um giro extra. No real a
-margem tende a ser menor. Desça pra 3,4 (61°/s) e depois 2,4 (24°/s) se
-precisar.
+> ⚠️ **Corrigido em 2026-08-27 — a instrução anterior estava invertida pro
+> robô real, e apontava o arquivo errado.**
+>
+> **Onde `rot_min` mora:** só no `DriveConfig` do `trekking_runner.py`
+> (default 4,0). **Não** está no `trekking.launch.py` e não tem argumento de
+> launch. Os params são lidos **uma vez no init**, sem callback — `ros2 param
+> set /trekking_runner rot_min ...` com o nó no ar **não faz nada**. Pra mudar
+> em campo: subir o nó com `-p rot_min:=X` ou editar o `DriveConfig`.
+>
+> **Confira em qual checkout você está antes de mexer.** A `main` tem 4,0; o
+> checkout da Pi (branch `seguir-pessoa`, congelado em 06-12) tem **2,4** — e
+> naquela versão o `_control_tick` nem usa piso de giro.
+
+**Se aparecer giro extra ou traçado torto, `rot_min` NÃO é o primeiro knob a
+baixar.** Medido no robô real em 2026-08-26 (Fase 3): a zona-morta do skid é
+**~1,7 rad/s** e o comando 3,0 entrega só 0,43 rad/s efetivos (24°/s). Baixar o
+piso joga a correção **dentro** da zona-morta: o controlador pede giro e a roda
+não sai do lugar — o robô segue reto achando que está corrigindo. Foi assim que
+ele empurrou o cone por 100 s com `wz=-0,476` congelado.
+
+O sim mostrou um **penhasco entre 4,0 e 4,5** (4,5 dá 35 cm de desvio e um giro
+extra), então 4,5 pra cima é o que se evita. Entre 4,0 e o piso útil real a
+margem é estreita: **desça no máximo até 3,4 (61°/s) e pare aí.** Abaixo disso,
+suspeite de outra coisa antes — `turn_enter` (20°) alto demais pro canto,
+`arrival_tolerance` (25 cm) apertada, ou odometria escorregando sem cone pra
+ancorar.
 
 | tentativa | `rot_min` | nº de giros | traçado | tempo |
 |---|---|---|---|---|

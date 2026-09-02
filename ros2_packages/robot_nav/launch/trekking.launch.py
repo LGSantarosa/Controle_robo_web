@@ -62,8 +62,27 @@ def generate_launch_description():
         executable='cone_detector',
         name='cone_detector',
         output='screen',
+        # Params de CONE REAL, nao os defaults permissivos do no. Ate 08-26 o
+        # launch so passava `lidar_offset_x` e o resto ficava no default
+        # (2 pontos / 4 cm / 45 cm / 5 m / 360 graus): perna de cadeira, batente
+        # e quina viravam cone. Como o auto-fit do mapa web enquadra robo +
+        # waypoints + CONES (`trekking.js:43`), cada falso positivo esticava o
+        # enquadramento e o mapa pulava na tela do dono.
+        #
+        # ATENCAO: `max_cluster_width` fica em 0.45 de proposito — 0.45 e "cone
+        # + margem". Apertar pra 0.30 foi testado em campo 08-26 e REJEITA o
+        # cone real quando o robo chega perto e o LiDAR resolve a base inteira.
+        #
+        # `angle_min/max` = +-1.2 rad (+-69 graus na frente) so significa isso
+        # DEPOIS do wrap pra [-pi, pi] no cone_detector — sem ele o LD06 (que
+        # publica em [0, 2pi]) transformava a janela em "0 a 69 graus".
         parameters=[{
             'lidar_offset_x': LaunchConfiguration('lidar_offset_x'),
+            'min_cluster_points': 4,
+            'max_cluster_width': 0.45,
+            'range_max': 2.5,
+            'angle_min': -1.2,
+            'angle_max': 1.2,
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
     )
