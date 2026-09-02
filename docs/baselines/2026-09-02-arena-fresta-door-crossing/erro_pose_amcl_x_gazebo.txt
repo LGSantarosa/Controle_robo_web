@@ -1,0 +1,1 @@
+porta1: offset 3.50s  yaw_med 1.05deg  n=4356  erro_pos mediana 6.8 cm  p90 14.8  max 25.0

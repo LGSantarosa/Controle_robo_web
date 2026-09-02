@@ -1,0 +1,3 @@
+door_crossing: idle -> rotating
+door_crossing: rotating -> crossing
+door_crossing: crossing -> idle

@@ -1,0 +1,5 @@
+volta             y_cruz  desvio     yaw  meia_l   folga  evt | AMCL lateral na boca (n / med / p90 / max, cm)
+porta1             2.262    +1.2    -1.1   0.255    18.3    0 |   230    1.6    3.5    4.7
+
+1 travessias: |desvio| 1.2-1.2 cm | yaw -1.1 a -1.1° (mediana -1.1) | folga 18.3-18.3 cm
+orçamento: ±20,0 cm reto | align_yaw do door_crossing = 3,0° | align_lat = 8,0 cm
