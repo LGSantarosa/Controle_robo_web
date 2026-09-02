@@ -35,6 +35,7 @@ MAP_FILE="$SCRIPT_DIR/maps/hotmilk_portas.yaml"
 PI_PROFILE=false
 SIM=false
 ARENA=false                       # --arena: perfil da prova do galpao (05/09)
+FECHA_FRESTA=false                # --fecha-fresta: BOTAO DE PANICO (ver PERFIL_ARENA)
 WORLD_FILE="$SCRIPT_DIR/worlds/sala.sdf"   # default: sala c/ paredes+obstáculos+porta 0.93m (empty.sdf = template vazio)
 SPAWN_X="2.0"
 SPAWN_Y="2.5"
@@ -65,18 +66,22 @@ for arg in "$@"; do
         --pi)              PI_PROFILE=true ;;
         --no-pi)           PI_PROFILE=false ;;
         --arena)           ARENA=true ;;
+        --fecha-fresta)    FECHA_FRESTA=true ;;
         --flash-mega)      FLASH_MEGA="force" ;;
         --no-flash-mega)   FLASH_MEGA="off" ;;
         --help|-h)
-            echo "Uso: $0 [--teleop|--slam|--nav2|--trekking] [--sim] [--arena] [--web-teleop] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
+            echo "Uso: $0 [--teleop|--slam|--nav2|--trekking] [--sim] [--arena] [--fecha-fresta] [--web-teleop] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
             echo ""
             echo "  --arena          perfil da prova do galpao (05/09): mundo arena_galpao.sdf,"
-            echo "                   mapa arena_galpao_semA.yaml (fresta A FECHADA so' no mapa ->"
-            echo "                   o robo contorna), spawn 1.0/1.0, motion_guard OFF,"
-            echo "                   robot_radius 0.32,"
+            echo "                   mapa arena_galpao.yaml (fresta A ABERTA -> o robo PASSA),"
+            echo "                   spawn 1.0/1.0, motion_guard OFF, robot_radius 0.32,"
             echo "                   inflacao maior, PolygonFront unico. Na geometria continua"
             echo "                   isso fecha vao < 0.64 m — CONFIRME no mapa rasterizado com"
             echo "                   tools/mapa_passagens.py. NAO cobre raspao em point-turn."
+            echo "  --fecha-fresta   BOTAO DE PANICO: troca o mapa do --arena pelo TAMPADO"
+            echo "                   (arena_galpao_semA.yaml). A fresta A de 0,90 m fica FECHADA"
+            echo "                   so' pro planejador (o vao segue aberto no mundo) e o robo"
+            echo "                   CONTORNA. 4 voltas medidas com 0 colisao e 0 raspao."
             echo "  --web-teleop     reativa o controle de movimento pela web (default: off — use PS4/WASD)"
             echo "  --flash-mega     força \`pio run -t upload\` mesmo sem mudança"
             echo "  --no-flash-mega  pula o flash da MEGA sempre"
@@ -100,27 +105,43 @@ done
 # --arena carrega a prova inteira, e cada peca so' e' sobrescrita se o operador
 # passou o argumento na mao.
 #
-# O MAPA e' o TAMPADO (`arena_galpao_semA.yaml`): a fresta A de 0,90 m aparece
-# FECHADA pro planejador, embora o vao esteja fisicamente aberto no mundo. E' a
-# rede de seguranca da prova — 4 voltas medidas com 0 colisao e 0 raspao contra
-# 1 volta em 3 batendo quando a rota usava o vao (docs/baselines/
-# 2026-09-01-arena-contorno-fresta-A/). Para rodar PELA fresta, passe
-# `--map=$PWD/maps/arena_galpao.yaml` explicitamente.
+# 2026-09-02 (decisao do dono, DIARIO_ARENA §2G.10): *"vamos ter que fazer ele
+# passar nessa porra 100% das vezes"*. O MAPA default do --arena volta a ser o
+# ABERTO (`arena_galpao.yaml`) — a fresta A de 0,90 m existe pro planejador e o
+# robo PASSA por ela. Entre 01/09 e 02/09 o default era o TAMPADO
+# (`arena_galpao_semA.yaml`), que fazia o robo CONTORNAR; isso virou a rede de
+# seguranca e agora se pede com `--fecha-fresta` (botao de panico, 4 voltas
+# medidas com 0 colisao e 0 raspao em docs/baselines/
+# 2026-09-01-arena-contorno-fresta-A/).
+#
+# ATENCAO: o mapa aberto sozinho NAO faz o robo passar com seguranca — o
+# orcamento lateral do vao e' +-0,20 m e o erro do AMCL medido nesta arena chega
+# a 0,49 m (§2G.10). Quem controla a travessia e' o `door_crossing` (scan-relative);
+# rodar com o mapa aberto SEM ele e' a configuracao que bateu na fresta em 1 de 3
+# voltas (`noguard3`).
 # O test_arena_perfil_prova.py EXECUTA o bloco entre os marcadores abaixo (em vez
 # de reconstruir a logica, que seria tautologia). Nao renomeie os marcadores sem
 # ajustar o teste, e mantenha cada um sozinho na sua linha.
 # >>> PERFIL_ARENA_DEFAULTS
 if [ "$ARENA" = true ]; then
-    [ "$MAP_EXPLICITO"   = false ] && MAP_FILE="$SCRIPT_DIR/maps/arena_galpao_semA.yaml"
+    _ARENA_MAPA="arena_galpao.yaml"
+    [ "$FECHA_FRESTA" = true ] && _ARENA_MAPA="arena_galpao_semA.yaml"
+    [ "$MAP_EXPLICITO"   = false ] && MAP_FILE="$SCRIPT_DIR/maps/$_ARENA_MAPA"
     [ "$WORLD_EXPLICITO" = false ] && WORLD_FILE="$SCRIPT_DIR/worlds/arena_galpao.sdf"
     if [ "$SPAWN_EXPLICITO" = false ]; then SPAWN_X="1.0"; SPAWN_Y="1.0"; fi
-    # FALHA FECHADA, igual ao params: mapa tampado ausente NAO pode virar
-    # "roda com o mapa aberto em silencio" — isso mandaria o robo pela fresta.
+    # FALHA FECHADA nos DOIS sentidos: o mapa pedido tem que existir. Se falta o
+    # TAMPADO, cair no aberto em silencio mandaria o robo pela fresta justamente
+    # quando o operador apertou o botao de panico; se falta o ABERTO, cair no
+    # default de fora da arena (hotmilk_portas) subiria a prova com o mapa errado.
     if [ "$MAP_EXPLICITO" = false ] && [ ! -f "$MAP_FILE" ]; then
         echo "ERRO: --arena pedido, mas o mapa da prova nao existe:"
         echo "      $MAP_FILE"
-        echo "      Gere com: python3 tools/gera_arena_galpao.py --mapa maps/ --fecha-fresta A"
-        echo "      Abortando (nao vou subir com o mapa da fresta ABERTA por acidente)."
+        if [ "$FECHA_FRESTA" = true ]; then
+            echo "      Gere com: python3 tools/gera_arena_galpao.py --mapa maps/ --fecha-fresta A"
+        else
+            echo "      Gere com: python3 tools/gera_arena_galpao.py --mapa maps/"
+        fi
+        echo "      Abortando (nao vou subir a prova com o mapa errado por acidente)."
         exit 1
     fi
 fi

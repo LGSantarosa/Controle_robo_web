@@ -2028,12 +2028,29 @@ de ser o objetivo e vira **rede de segurança**.
 **O erro do AMCL sozinho é maior que o orçamento inteiro.** Logo: **nenhuma
 solução referenciada ao `map` passa 100%** — waypoint na frente da fresta,
 standoff, afinar inflação, mexer no `robot_radius`, tudo isso é map-relative.
+
+> 🔴 **ERRADO — corrigido em 2026-09-02, §2H.4 (o parágrafo fica como escrito,
+> a correção vem do lado).** Os 0,49 m são o **máximo da volta inteira** e caíram
+> no point-turn do goal 2, a 4,6 m da fresta. Medido **na boca da fresta** (13
+> voltas, n=1593): mediana **1,4 cm**, p90 **3,4**, máx **4,7**. O erro de pose
+> ali cabe 4× no orçamento — **map-relative não está eliminado**. O que gasta o
+> orçamento é outra coisa: entrada torta (100% das travessias entre −4,8° e
+> −15,8°) e desvio de condução (até 12,1 cm, dos quais só 4,7 são do AMCL).
+> Erro 83 da §5.
 Foi por isso que afastar o standoff resolveu o cone (lá a margem é 0,877 m, o
 erro cabe) e **não resolve a fresta** (lá a margem é 0,20 m, o erro não cabe).
 
 O controle tem que ser **relativo ao scan**: medir as duas bordas do vão no
 LiDAR ao vivo, centrar nelas e entrar reto. É exatamente o que o `door_crossing`
 faz, e é por isso que o desenho da §2.10 insiste que ele **não depende do AMCL**.
+
+> 🔴 **ERRADO nas duas metades — corrigido em 2026-09-02, §2H.5.** O
+> `door_crossing` **não** mede as bordas no LiDAR: ele usa a pose do AMCL
+> (`_pose_map()`, TF `map`→`base_link`) contra os batentes em coordenadas de
+> **mapa**. É map-relative dos dois lados; o `/scan` entra só como trava de
+> segurança. Ele segue sendo o remédio certo — porque ataca o yaw de entrada e o
+> desvio lateral, que é o que realmente gasta o orçamento (§2H.4) — mas **não**
+> por ser imune ao AMCL. Erro 84 da §5.
 
 #### Plano combinado para amanhã (2026-09-02)
 
@@ -2109,6 +2126,148 @@ passo 4 do plano (§2G.10): se na véspera não estiver 100%, o contorno volta a
 o default.
 
 **Baseline de hoje: `b8ac9fb`.**
+
+### 2H.3 Passo 1 ✅ — o `--arena` voltou a rodar PELA fresta, e o contorno virou 1 flag
+
+| o quê | onde | teste |
+|---|---|---|
+| default do `--arena` volta ao mapa **ABERTO** (`arena_galpao.yaml`) | `launch.sh`, bloco `PERFIL_ARENA_DEFAULTS` | `test_arena_carrega_o_mapa_ABERTO` |
+| **`--fecha-fresta`** = botão de pânico (troca SÓ o mapa pelo tampado) | idem | `test_fecha_fresta_e_o_BOTAO_DE_PANICO` |
+| a flag é **inerte** fora do `--arena` | idem | `test_fecha_fresta_SEM_arena_nao_faz_nada` |
+| falha fechada agora vale **nos dois sentidos** (faltar o tampado mandaria o robô pela fresta com o pânico apertado; faltar o aberto subiria a prova com `hotmilk_portas`) | idem | (a que já existia) |
+
+O teste continua **executando o bloco real** do `launch.sh` entre os marcadores,
+não uma cópia (BO 63). **Sensibilidade provada**: reinjetei o default antigo
+(`_ARENA_MAPA="arena_galpao_semA.yaml"`) e o `test_arena_carrega_o_mapa_ABERTO`
+falhou; restaurado, 14/14 passam.
+
+### 2H.4 🔴 A PREMISSA DA §2G.10 CAIU — o AMCL **não** erra 49 cm na fresta, erra **4,7**
+
+Escrevi ontem, e repeti no chat: *"o erro do AMCL sozinho é maior que o orçamento
+inteiro (±0,20 m) → **nenhuma** solução map-relative passa 100%"*. Fui medir o
+número **onde a fresta está**, antes de escrever o código que essa frase
+justificava. **A frase está errada.**
+
+Os 0,49 m são o **máximo da volta inteira**, e caíram no point-turn do goal 2
+(§2G.8) — a 4,6 m da fresta. Medido agora na **boca da fresta** (x 6,40→7,50),
+13 voltas, n = 1593 amostras, com o mesmo alinhamento de relógios do
+`erro_pose.py`:
+
+| erro **lateral** do AMCL na boca | valor |
+|---|---|
+| mediana | **1,4 cm** |
+| p90 | **3,4 cm** |
+| **máximo (13 voltas)** | **4,7 cm** |
+
+**4,7 cm, não 49.** Cabe no orçamento de ±20 cm **quatro vezes**, e cabe até
+dentro do `align_lat = 8 cm` do próprio `door_crossing`.
+
+#### Então o que gasta o orçamento? Medido na verdade-terreno, no plano dos batentes
+
+`tools/sim_ab/travessia_fresta.py` (novo, com autoteste sensível):
+
+| volta | desvio lateral | yaw na entrada | meia-largura efetiva | **folga** | eventos |
+|---|---|---|---|---|---|
+| `noguard1` | −6,4 cm | −9,4° | 0,287 | 9,9 cm | 0 |
+| `noguard2` | −5,8 | −12,6° | 0,299 | 9,3 | 0 |
+| 🔴 **`noguard3`** | **+12,1** | **−10,7°** | 0,292 | **3,7** | **57** |
+| `aprox1` | +5,5 | −15,8° | 0,309 | 8,6 | 0 |
+| `aprox2` | −9,3 | −4,8° | 0,270 | 8,7 | 0 |
+| `aprox3` | −6,2 | −8,1° | 0,283 | 10,5 | 0 |
+| `hist1` | −3,4 | −12,0° | 0,297 | 12,0 | 0 |
+| `hist2` | −8,1 | −9,8° | 0,289 | 8,0 | 0 |
+| `hist3` | +7,7 | −13,1° | 0,300 | 7,3 | 0 |
+| `latchN1` | −8,3 | −9,5° | 0,288 | 7,9 | 0 |
+| `latchN3` | −0,5 | −15,1° | 0,306 | 13,8 | 0 |
+| `arena_baseline1` | +4,2 | −14,7° | 0,305 | 10,3 | 0 |
+| `arena_latch1` | −6,3 | −10,4° | 0,291 | 9,6 | 0 |
+
+`folga = 0,45 − |desvio| − meia_largura(yaw)`, com
+`meia_largura(yaw) = 0,25·cos|yaw| + 0,25·sin|yaw|`.
+
+**Os três fatos que isto estabelece:**
+
+1. **O robô cruza SEMPRE torto: 100% das travessias entre −4,8° e −15,8°, mediana
+   −10,7°.** Nenhuma passou perto dos 3° do `align_yaw`. O yaw sozinho come
+   **3,7–5,9 cm** de orçamento por lado, e é **sistemático** (sempre negativo),
+   não ruído.
+2. **O desvio lateral vai a 12,1 cm — e só 4,7 desses são do AMCL.** O resto é
+   **condução**: ninguém centra o robô no vão, ele passa onde o plano o levar.
+3. **A `noguard3` não bateu por estar mal localizada** (o AMCL dela errou no
+   máximo 3,4 cm na boca). Bateu por chegar **12,1 cm fora do eixo e 10,7°
+   torta** — sobra geométrica de 3,7 cm, e o oráculo mediu 0,000.
+
+#### O que muda no plano (e o que NÃO muda)
+
+- ❌ **Cai o argumento** "só scan-relative resolve". Com 4,7 cm de erro de pose na
+  boca, uma solução **map-relative é viável** ali. Eu escolhi o remédio certo
+  pela razão errada.
+- ✅ **O `door_crossing` continua sendo o remédio** — mas pelo motivo que a
+  medição mostra: ele ataca **exatamente as duas parcelas que gastam o
+  orçamento** (alinha o yaw a ≤3° e centra a lateral a ≤8 cm). Com d = 8 cm e
+  yaw = 3°: folga = 0,45 − 0,08 − 0,263 = **10,7 cm**; centrando a ~2 cm, **16,7 cm**.
+  Hoje o pior caso medido é 3,7 cm.
+- ⚠️ **Muda o critério de sucesso.** Não adianta medir "passou sem bater" — 12 de
+  13 já passavam. O que a máquina tem que provar é que **encolhe a dispersão**:
+  yaw de entrada dentro de ±3° e |desvio| abaixo de 8 cm, contra a faixa de hoje
+  (−15,8°..−4,8° e 0,5..12,1 cm).
+
+### 2H.5 O segundo bloqueador é real, e apareceu no teste: a máquina **nunca arma**
+
+Com a porta marcada, os 4 testes de geometria passaram e os 2 da máquina
+continuaram vermelhos: `state == 'idle'`. A causa é a **pendência C**
+(`door_crossing.py:330`): `_pick_door` só considera porta cujo `id` está em
+`self._cleared`, e `_cleared` só é populado por um **goal do Nav2 que TERMINA
+(`SUCCEEDED`) com o robô dentro da zona** (`:359-367`). A rota da arena não tem
+waypoint pré-fresta — só os standoffs dos cones — então **nenhum goal termina
+ali e o nó fica `idle` para sempre**.
+
+Isto **já estava** no cabeçalho do spec (item 5 da revisão do Codex: *"são dois
+bloqueadores"*); o que é novo é que agora está **reproduzido em teste**, não
+lido. E é a razão de o teste do §4.9 ter que afirmar `state != 'idle'` — a versão
+do spec (*"não pode estar em `crossing`"*) passaria com o nó desligado (BO 74).
+
+#### 🔴 E uma correção ao meu próprio desenho: o `door_crossing` **não é scan-relative**
+
+A §2G.10 diz: *"o controle tem que ser relativo ao scan (...) é exatamente o que o
+`door_crossing` faz, e é por isso que o desenho da §2.10 insiste que ele não
+depende do AMCL"*. **Não é o que o código faz.** O nó alimenta a máquina com
+`_pose_map()` = TF `map`→`base_link`, ou seja **a pose do AMCL** (`:641-649`), e
+compara com os batentes em coordenadas de **mapa**. O desvio lateral `d` que ele
+corrige é `f(pose do AMCL, porta no mapa)` — map-relative dos dois lados. O
+`/scan` entra só como **trava de segurança** (`gap_ahead` no `crossing`,
+`front_gap`/`rear_gap` no escape), nunca para achar as bordas do vão.
+
+Ou seja: o remédio que eu prescrevi por ser *"imune ao AMCL"* tem **exatamente a
+dependência que eu usei para desqualificar os outros**. Ele segue servindo — mas
+porque o erro na boca é 4,7 cm (§2H.4), não porque seja imune. O §8.3 do spec
+chega perto disso e erra o escopo: diz que no sim está tudo bem *"porque os
+batentes são exatos"* — batente exato é **metade** da subtração; a outra metade é
+a pose, e a pose é AMCL no sim também.
+
+### 2H.6 Estado do passo 2 (§5.1 ✅, §5.2/§5.3 ⏳)
+
+**Feito:**
+
+- `tools/gera_arena_galpao.py` ganhou `batentes()`, `margem_point_turn()` e
+  `portas()`, e passa a escrever `maps/<mapa>.doors.json` **no mesmo comando que
+  gera o mapa**. Mapa e portas que discordam = robô armando travessia em cima de
+  parede; saindo juntos, não discordam.
+- Os batentes saem da **tabela `OBST`**, a mesma que gera o mundo — bordas
+  exatas, não cliques a olho.
+- `margem_point_turn()` **impede** marcar fresta sem a conta do §4.4-(a): margem
+  ≤ 0 vira `SystemExit`. Confere com o spec: **A = +0,187 m** (os 18,7 cm dele).
+- Só a **fresta A** está marcada (`MARCADAS_COMO_PORTA`), e há teste proibindo
+  marcar vão < 0,65 m.
+
+**Achado que corrige o §5.1 do spec:** ele suspeitava que a fresta C (0,60)
+*"provavelmente não cabe"* no giro. **Cabe**: margem **+0,071 m**. As margens
+medidas são A +0,187 / B +0,107 / C +0,071 / D +0,146 — todas positivas. O motivo
+para não marcar a C continua valendo, mas é **outro**: com `robot_radius 0.32` o
+Nav2 já a trata como parede, então seria zona armada que o planejador nunca usa.
+
+**Falta:** §5.2 (o nó não lê porta de arquivo — `doors_file`), §5.3 (fiação do
+launch), §5.4 (higiene) e o desbloqueio da pendência C (§2H.5).
 
 ## 3. Medições
 
@@ -2379,6 +2538,9 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 80 | `pkill` com o caminho do arquivo, quando o processo roda com **cwd** lá dentro | Matei órfão com `pkill -f "controle_web/app.py"`, mas o `launch.sh` sobe o app com `cd controle_web` — a linha de comando é **`python3 app.py`**, e o padrão não casa. O órfão sobreviveu segurando a porta 5000 e os nós ROS; a volta seguinte subiu com **dois** `app.py` e o `bt_navigator` nunca ativou. **Custou 2 das 3 voltas** | Antes de escrever um `pkill -f`, olhar a linha de comando REAL no `ps`, não o caminho que eu imagino |
 | 81 | **`pkill` que casou com a própria tarefa** e a matou | `pkill -f tres_voltas_std14` dentro de um comando cujo **próprio argv continha essa string** — o shell da ferramenta se matou (exit 144), a correção do runner que vinha depois nunca foi gravada, e eu quase reportei um resultado de um script que não tinha sido corrigido | Padrão de `pkill` não pode aparecer na linha de comando de quem o executa. Ou usa PID, ou separa em outra chamada |
 | 82 | 🔴 **Eu disse "adotar o contorno" sem dizer o que o dono ia VER** | Ele abriu o sim, viu o robô ignorando um vão de 0,90 m que ele sabe que o robô atravessa, e reagiu: *"o merda do robô nem está mais passando no primeiro vão porra, o que foi feito?"*. A decisão era dele e estava tomada com os números certos — mas eu descrevi o efeito em métrica ("0 contato, +4-9% de tempo") e **nunca na imagem** ("ele vai deixar de passar pela fresta; você vai ver ele dando a volta") | Quando a mudança altera o que o dono vê acontecer, descrever **o que ele vai ver**, não só o que a métrica faz. Métrica é resumo; a cena é o que ele confere |
+| 83 | 🔴🔴 **Usei o MÁXIMO DA VOLTA INTEIRA como se fosse o erro NA FRESTA** — e construí o plano do dia inteiro em cima disso | Escrevi na §2G.10 que *"o erro do AMCL (máx 0,49 m) é maior que o orçamento lateral inteiro (±0,20 m) → nenhuma solução map-relative passa 100%"*. Os 0,49 m caíram no **point-turn do goal 2**, a 4,6 m dali (eu mesmo tinha documentado isso na §2G.8). Medido na boca da fresta, 13 voltas / n=1593: **mediana 1,4 cm, p90 3,4, máx 4,7**. A frase eliminou "metade das ideias" com um número do lugar errado | Agregado de trajetória **não** é erro local. Antes de deixar um número **descartar uma classe inteira de soluções**, medi-lo no ponto onde a decisão acontece — os dados já estavam no repo, custou 20 min. É o mesmo erro do "validar o que estou vendo antes de decidir", agora com número em vez de premissa |
+| 84 | 🔴 Prescrevi o `door_crossing` como **"scan-relative, logo imune ao AMCL"** — ele é **map-relative** | O nó alimenta a máquina com `_pose_map()` = TF `map`→`base_link` (a pose do AMCL) e compara com batentes em coordenadas de mapa (`door_crossing.py:641-649`). O `/scan` só entra como trava (`gap_ahead`, `front_gap`). Ou seja: o remédio que prescrevi **por ser imune** tem a mesma dependência que usei para desqualificar os outros. Achado ao investigar por que o teste ficava `idle` — não por revisão | Antes de dizer que um componente "não depende de X", abrir a função que produz a entrada dele. E: quando dois erros meus se cancelam (o remédio serve mesmo assim), isso é **sorte**, não acerto — os dois entram aqui separados |
+| 85 | Escrevi no spec (§5.1) que a fresta C de 0,60 *"provavelmente não cabe"* no giro de alinhamento | Ao implementar `margem_point_turn()` a conta saiu **+0,071 m** — cabe. Todas as 4 cabem (A +0,187 / B +0,107 / C +0,071 / D +0,146). O motivo real para não marcar a C é outro (o Nav2 já a trata como parede com `robot_radius 0.32`), e eu tinha o motivo certo escrito **na mesma frase** | "Provavelmente" num documento de desenho é uma conta que eu não fiz. A conta cabia em 3 linhas — fazê-la antes de escrever a suspeita, ou não escrever a suspeita |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
@@ -2402,7 +2564,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 2g | **16 s em `idle`** entre dois goals (`aprox3`) | ⏳ **novo, 08-31.** Sem goal ativo — não é o seguidor. Buraco entre a conclusão de um goal e o próximo ser aceito; não investigado |
 | 2h | **Goal 2: última amostra a 0,156–0,160 nas 3 voltas** | ⏳ **novo, 08-31.** Único goal que a aproximação não puxa pra dentro, e sempre o mesmo. ⚠️ **NÃO é prova de que termina fora da tolerância** (BO 61: ~1,1 cm entre amostras a 20 Hz, e o checker é `stateful`). Suspeita não verificada: algo bloqueia o avanço ali (é o goal cujo caminho passa pela fresta A) |
 | 2i | **Por que o Nav2 ainda queria movimento com o robô já chegado?** | ⏳ **novo, 08-31.** A explicação que eu tinha dado (parou fora dos 0,15) **caiu**: o checker é `stateful` e o robô entrou dentro. Hipótese do próprio log: `Failed to make progress` → recovery → **reset do goal checker** → o XY volta a ser exigido. Medir antes de afirmar |
-| 2k | 🔴🔴 **Passar pela fresta A 100% das vezes** (título trocado 09-01 — era "nada controla o erro lateral") | 🔄 **VIROU O ALVO 09-01 por decisão do dono** (§2G.10): *"vamos ter que fazer ele passar nessa porra 100% das vezes"*. O contorno (`--fecha-fresta A`) rebaixado a **botão de pânico**. O número que fecha o caminho: orçamento lateral do vão **±0,20 m** (±0,16 entrando 10° torto) contra erro de AMCL de **até 0,49 m** — **nenhuma solução map-relative passa 100%**. Tem que ser scan-relative = `door_crossing` (§2.10 + spec `2026-09-01-fresta-a-door-crossing-design.md`, 3 rodadas de review do Codex, **zero linha escrita**). Plano dos 4 passos na §2G.10 |
+| 2k | 🔴🔴 **Passar pela fresta A 100% das vezes** (título trocado 09-01 — era "nada controla o erro lateral") | 🔄 **VIROU O ALVO 09-01 por decisão do dono** (§2G.10): *"vamos ter que fazer ele passar nessa porra 100% das vezes"*. O contorno (`--fecha-fresta A`) rebaixado a **botão de pânico**. O número que fecha o caminho: orçamento lateral do vão **±0,20 m** (±0,16 entrando 10° torto) contra erro de AMCL de **até 0,49 m** — **nenhuma solução map-relative passa 100%**. Tem que ser scan-relative = `door_crossing` (§2.10 + spec `2026-09-01-fresta-a-door-crossing-design.md`, 3 rodadas de review do Codex, **zero linha escrita**). Plano dos 4 passos na §2G.10 | 🔄 **09-02 (§2H.4): a premissa caiu.** O erro do AMCL **na boca da fresta** é máx **4,7 cm** (mediana 1,4 / p90 3,4, 13 voltas, n=1593) — os 0,49 m eram o máximo da volta, no point-turn do goal 2. **Map-relative NÃO está eliminado** (erro 83). O que gasta o orçamento é **entrada torta** (100% das travessias entre −4,8° e −15,8°, mediana −10,7°) e **desvio de condução** (até 12,1 cm). O `door_crossing` segue sendo o remédio por atacar essas duas parcelas — e **não** por ser scan-relative, que ele não é (erro 84). ✅ **passo 1 feito** (§2H.3) e ✅ **§5.1 feito** (§2H.6: `doors.json` sai do gerador, fresta A marcada, margem +0,187 m). ⏳ falta §5.2/§5.3/§5.4 e **desarmar a pendência C** — hoje o nó fica `idle` para sempre (§2H.5) |
 | 2l | **1º goal da volta perdido por `server_timeout` (200 ms)** | ⏳ **novo, 09-01 (§2G.4).** `contornoA3`: `Timed out while waiting for action server to acknowledge goal request for compute_path_to_pose` → `Goal failed` em 0 s, com o robô parado na largada em espaço livre. **Não é** o item 8 (`start/goal is an obstacle`): o planejador não recusou plano, não respondeu o handshake. 1 em 4 voltas. Barato de mitigar (subir `server_timeout` / esperar o `compute_path_to_pose` antes do 1º goal), mas **na prova custa um cone** |
 | 2m | **`launch.sh` mata Gazebo de OUTRO launch** | ⏳ **novo, 09-01 (§2G.9).** O `trap cleanup EXIT` termina com `pkill -9 -f "gz sim"` **global, sem filtrar por PID** (`launch.sh:414-416`). Como o trap é lento (`sleep 1` + 5 s de escalação por nó), quem roda voltas em sequência tem o Gazebo da volta seguinte morto pela limpeza da anterior — `exit -9`, zero log. Custou 3 voltas hoje. Não mexi: é decisão à parte (filtrar por PID quebra o papel de "rede de segurança contra órfão") |
 | 2j | 🔴🔴 **`motion_guard` bloqueia o robô na arena** | ⏳ **novo, 08-31 (§2B.7).** Vigia de PESSOA ligado numa prova **sem pessoa**; zera o giro entre `auto_vel_pre` e `auto_vel_raw`. Medido: **26,9 s** (`hist3`) e **52,1 s** (`aprox2`); nos episódios, ~505 comandos entraram e **1** saiu. Os 3 episódios duram 25,7–26,9 s = `hold_still_max` 20 + `clear_time` 5 + settle, sempre com um **cone** como único vizinho — a vigília roda até o teto em cima do cone. Só dispara nas voltas com aproximação (que adiciona point-turn perto de cone). ✅ **DESLIGADO na arena por decisão do dono 08-31** (`motion_guard:=false`, §2B.8); 3 voltas sem ele na §2B.9 — parado 0,0 s em 14/15 goals, mas **1 das 3 bateu na fresta A** (item 2k), então **não** está validado. 🔴 **`--arena` vale no REAL também**: sem `--sim` o robô físico sobe sem vigia de pessoa — exige pista controlada + E-STOP na mão |

@@ -101,28 +101,47 @@ class TestLaunchArena(unittest.TestCase):
     """Executa o BLOCO REAL do launch.sh (entre os marcadores), não uma cópia:
     reconstruir a lógica aqui seria tautologia (BO 63)."""
 
-    def _roda(self, arena, explicito=False):
+    def _roda(self, arena, explicito=False, fecha_fresta=False):
         with open(os.path.join(RAIZ, 'launch.sh')) as f:
             texto = f.read()
         bloco = texto.split(MARCA_INI)[1].split(MARCA_FIM)[0]
         script = (
-            'SCRIPT_DIR=%s\nARENA=%s\n'
+            'SCRIPT_DIR=%s\nARENA=%s\nFECHA_FRESTA=%s\n'
             'MAP_EXPLICITO=%s\nWORLD_EXPLICITO=%s\nSPAWN_EXPLICITO=%s\n'
             'MAP_FILE=$SCRIPT_DIR/maps/hotmilk_portas.yaml\n'
             'WORLD_FILE=$SCRIPT_DIR/worlds/sala.sdf\n'
             'SPAWN_X=2.0\nSPAWN_Y=2.5\n'
             % (RAIZ, 'true' if arena else 'false',
+               'true' if fecha_fresta else 'false',
                *(['true'] * 3 if explicito else ['false'] * 3))
         ) + bloco + '\necho "$MAP_FILE|$WORLD_FILE|$SPAWN_X|$SPAWN_Y"\n'
         r = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return r.stdout.strip().split('\n')[-1].split('|')
 
-    def test_arena_carrega_o_mapa_TAMPADO(self):
+    def test_arena_carrega_o_mapa_ABERTO(self):
+        """2026-09-02 (§2G.10): o default do --arena voltou a ser o mapa ABERTO
+        — a fresta A existe pro planejador e o robô PASSA. Quem controla a
+        travessia é o door_crossing, não o mapa."""
         mapa, mundo, sx, sy = self._roda(arena=True)
+        self.assertTrue(mapa.endswith('maps/arena_galpao.yaml'), mapa)
+        self.assertFalse(mapa.endswith('semA.yaml'), mapa)
+        self.assertTrue(mundo.endswith('worlds/arena_galpao.sdf'), mundo)
+        self.assertEqual((sx, sy), ('1.0', '1.0'))
+
+    def test_fecha_fresta_e_o_BOTAO_DE_PANICO(self):
+        """O par do teste acima: --fecha-fresta troca SÓ o mapa pelo tampado
+        (mundo e spawn seguem os da prova). É a rede de segurança da véspera."""
+        mapa, mundo, sx, sy = self._roda(arena=True, fecha_fresta=True)
         self.assertTrue(mapa.endswith('maps/arena_galpao_semA.yaml'), mapa)
         self.assertTrue(mundo.endswith('worlds/arena_galpao.sdf'), mundo)
         self.assertEqual((sx, sy), ('1.0', '1.0'))
+
+    def test_fecha_fresta_SEM_arena_nao_faz_nada(self):
+        """Fora do perfil da arena a flag é inerte — não pode sequestrar o mapa
+        de quem roda a sala normal."""
+        mapa, _, _, _ = self._roda(arena=False, fecha_fresta=True)
+        self.assertTrue(mapa.endswith('maps/hotmilk_portas.yaml'), mapa)
 
     def test_sem_arena_nada_muda(self):
         """O par: fora da arena os defaults antigos continuam intactos."""

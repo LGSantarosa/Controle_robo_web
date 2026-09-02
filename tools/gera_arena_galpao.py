@@ -18,6 +18,7 @@ colisao.py cobra contato nele. Só não vira parede permanente do mapa.
 Use --com-cones para gerar a variante com eles, se algum dia interessar.
 """
 import argparse
+import json
 import math
 import os
 
@@ -88,6 +89,73 @@ def tampao(nome):
     raise ValueError(
         f'fresta desconhecida: {nome!r} — conhecidas: '
         + ', '.join(o[0] for o in OBST))
+
+
+# --- FRESTAS MARCADAS COMO PORTA (door_crossing) -----------------------------
+# 2026-09-02, DIARIO_ARENA §2G.10: o dono quer o robô PASSANDO pela fresta A
+# 100% das vezes. O vão de 0,90 m dá orçamento lateral de ±0,20 m e o erro do
+# AMCL nesta arena chega a 0,49 m — nenhuma solução map-relative fecha isso. Quem
+# atravessa é o `door_crossing`, que precisa dos DOIS BATENTES marcados.
+#
+# Os batentes saem daqui, da mesma tabela OBST que gera o mundo: são as bordas
+# exatas dos blocos, não cliques a olho. Isso mata a classe de erro "eixo torto"
+# NO SIM (no robô real o mapa vem de SLAM — ver §8.3 do spec).
+#
+# ⚠️ Marcar SÓ a fresta A nesta rodada (spec §5.1). Antes de acrescentar B ou D
+# aqui, refaça a conta de margem_point_turn() para ela: se a margem for negativa,
+# o robô bate no batente durante o PRÓPRIO giro de alinhamento. A fresta C (0,60)
+# não deve ser marcada — com robot_radius 0.32 o Nav2 já a trata como parede.
+MARCADAS_COMO_PORTA = ('A_fresta90',)
+
+# Volume varrido por um 0,50 × 0,50 girando no lugar (raio circunscrito).
+RAIO_CIRCUNSCRITO = 0.25 * math.sqrt(2)
+# door_crossing.DoorCrossConfig.stage_dist — onde o alinhamento acontece.
+STAGE_DIST = 0.60
+
+
+def batentes(nome):
+    """Os 2 batentes do vão de uma fresta, em (x, y). Mesma fonte do mundo."""
+    for n, eixo, coord, faixas, _f, _c in OBST:
+        if n != nome:
+            continue
+        ini, fim = faixas[0][1], faixas[1][0]        # o vão
+        if eixo == 'x':
+            return (coord, ini), (coord, fim)
+        return (ini, coord), (fim, coord)
+    raise ValueError(f'fresta desconhecida: {nome!r}')
+
+
+def margem_point_turn(nome, stage_dist=STAGE_DIST):
+    """Spec §4.4-(a): sobra espaço pro giro de alinhamento no ponto de preparação?
+
+    O ponto fica a `stage_dist` do centro, no eixo do vão. O obstáculo mais perto
+    é o CANTO do bloco: `stage_dist − ESP_BLOCO/2` ao longo da normal e `vão/2` ao
+    longo da parede. Margem = essa distância − RAIO_CIRCUNSCRITO.
+    Negativa = a fresta NÃO pode ser marcada.
+    """
+    (ax, ay), (bx, by) = batentes(nome)
+    vao = math.hypot(bx - ax, by - ay)
+    dist_canto = math.hypot(stage_dist - ESP_BLOCO / 2, vao / 2)
+    return dist_canto - RAIO_CIRCUNSCRITO
+
+
+def portas(fecha=()):
+    """Lista no schema do DoorStore (maps/<mapa>.doors.json), consumida pelo
+    /doors. Uma fresta TAMPADA no mapa não vira porta: o planejador nem passa
+    por lá, e uma zona armada em cima de parede é armadilha."""
+    out = []
+    for nome in MARCADAS_COMO_PORTA:
+        if nome in fecha:
+            continue
+        m = margem_point_turn(nome)
+        if m <= 0:
+            raise SystemExit(
+                f'{nome}: margem de point-turn {m:+.3f} m no ponto de preparação '
+                f'— o robô bateria no batente durante o próprio giro de '
+                f'alinhamento. NÃO pode ser marcada como porta (spec §4.4-a).')
+        a, b = batentes(nome)
+        out.append({'id': len(out) + 1, 'a': [a[0], a[1]], 'b': [b[0], b[1]]})
+    return out
 
 
 def resolve_fresta(rotulo):
@@ -540,6 +608,21 @@ def main():
         if fecha:
             print('  TAMPÃO no .pgm: ' + ', '.join(fecha)
                   + '  (o SDF/mundo NÃO muda — o vão continua fisicamente aberto)')
+        # Portas do door_crossing, no mesmo passo e da mesma tabela (§5.1 do
+        # spec). Sai junto com o mapa de propósito: mapa e portas que discordam
+        # é como o robô arma uma travessia em cima de parede.
+        pts = portas(fecha=fecha)
+        destino = os.path.join(a.mapa, base + '.doors.json')
+        with open(destino, 'w', encoding='utf-8') as f:
+            json.dump({'doors': pts}, f, indent=1)
+            f.write('\n')
+        if pts:
+            for d in pts:
+                nome = MARCADAS_COMO_PORTA[d['id'] - 1]
+                print(f'  porta {d["id"]} ({nome}): {d["a"]} -> {d["b"]}  '
+                      f'margem de point-turn {margem_point_turn(nome):+.3f} m')
+        else:
+            print(f'  {destino}: SEM portas (as marcadas estão tampadas no mapa)')
         return
     ap.print_help()
 
