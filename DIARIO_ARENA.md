@@ -2962,6 +2962,24 @@ robô parou no waypoint**, e a máquina **não corrige** essa dependência (ela
 corrige o yaw, §2H.17). Sem o conserto do arme em `staging`, "100% das vezes"
 não tem mecanismo que o sustente — tem sorte de chegada.
 
+#### Decisão do dono 02/09: **mais voltas antes do conserto**
+
+*"anota isso e vamos testar mais vezes o door_crossing então"*. Ou seja: o
+conserto do arme em `staging` (§2H.17) **fica em espera**; primeiro medir com o
+que existe. E o A2/A3 seguem onde estão — registrado que o dono foi avisado
+(§2H.19) e escolheu continuar na fresta.
+
+**Lote definido** (todos com `AB_ROTA` de teste; rota da prova intacta):
+
+| tag | waypoint | por quê |
+|---|---|---|
+| `lim1`, `lim2` | (6,50 ; **2,40**) yaw −10,7° = **+15 cm** | **o pior caso NORMAL** — limite do `xy_goal_tolerance`, nunca rodado. É a linha da tabela da §2H.20 que era extrapolação |
+| `torta2`, `torta3` | (6,50 ; 2,37) = +12 cm | os 2,3 cm da `torta1` se repetem, ou foram sorte? |
+| `porta2`, `porta3` | (6,50 ; 2,25) = no eixo | dispersão do caso fácil (o eixo (a) da §2H.16) |
+
+Ordem: **pior caso primeiro** (mesma lógica que o dono aplicou em 02/09 e que
+funcionou: o caso ruim derruba tese, o fácil só acumula confiança).
+
 #### O que faria virar "sim"
 
 1. **Conserto do §2H.17** (armar em `staging` quando `|d| > align_lat`): a
