@@ -2806,6 +2806,75 @@ re-estágio pelo caminho que já existe (a ré de escape). Não recomendo de car
 histórico do parâmetro é de *thrash* (`:212`, baixado de 0,13 para 0,05 em 06-23
 justamente porque re-estagiava à toa).
 
+### 2H.18 Review acha 3 problemas meus — os 3 procedem, os 3 corrigidos
+
+#### 1. 🔴 A falha fechada do `launch.sh` abortava por `numpy`, não pelo JSON
+
+`door_crossing.py` importava `numpy` **no topo**, e o `launch.sh` importa deste
+módulo só para validar o `doors.json`. Num shell sem numpy o `--arena` morria com
+`ModuleNotFoundError` — **falha fechada disparando pelo motivo errado**, dizendo
+que as portas "nao prestam" com o JSON perfeito. Reproduzido
+(`sys.modules['numpy']=None`).
+
+Corrigido: `numpy` só é usado em `gap_ahead()` e no `_tick()` do nó. Import
+movido para dentro deles (`_np()`) e para o `main()`. Agora o módulo importa e
+valida schema **sem numpy**, e o bloco real do `launch.sh` roda até em `env -i`
+(sem ROS, sem nada): `rc=0 → [ARENA] door_crossing LIGADO — 1 porta(s)`.
+
+**Por que eu não vi:** meu ambiente tem numpy sempre. É o **erro 78 outra vez**
+("não precisa de X" testado dentro de um shell que já tinha X). Erro 92.
+
+#### 2. 🔴 Eu cristalizei em código e teste uma tese que eu mesmo já tinha refutado
+
+`janela_de_alinhamento_ok()` e o WARN de boot calculavam o passo como
+`rot_min / rate_hz` — a conta que a §2H.13 **derrubou no mesmo dia** (o robô
+entrega 0,135 do comandado; passo real ~1,0°/tick). Pior: o WARN dizia *"vai
+oscilar e abortar por align_timeout"*, e ele apareceu **nas duas voltas**
+(`porta1`, `torta1`) que atravessaram **sem nenhum abort**. Era alarme falso
+institucionalizado — exatamente o risco que eu mesmo tinha listado na §2H.15
+(item 5) e não fui verificar.
+
+Corrigido: a entrega virou constante **medida e nomeada**
+(`ENTREGA_DO_GIRO = 0.135`, `ENTREGA_DO_GIRO_MAX = 0.796`), e a guarda usa o
+**pior tick medido**, porque guarda de configuração se faz no pior caso. Com os
+valores em vigor: pior passo **5,70°** contra janela de **6,00°** → **passa**
+(apertado), que é o que as voltas mostraram. Config absurda (0,5°, ou 5 Hz) ainda
+reprova. O WARN deixou de prever comportamento e agora só diz "config
+impossível". Erro 93.
+
+#### 3. 🟠 Testes que promoviam o integrador ideal a evidência causal
+
+Procede. Pior do que o review viu: rodando o integrador **ideal** da pose da
+`torta1`, ele **aborta** (`rotating → idle`) — enquanto o robô real **atravessou**.
+Calibrando com a entrega medida (0,135) ele passa a acertar a **estrutura**
+(atravessa, mesma sequência) e continua errando a **magnitude**: dá **+5,9 cm**
+onde o sim mediu **+13,4**.
+
+| modelo | entrada boa | entrada ruim |
+|---|---|---|
+| ideal (o que eu tinha) | atravessa, +0,0 cm | 🔴 **NÃO atravessa** |
+| calibrado 0,135 | atravessa, +0,0 cm | atravessa, **+5,9 cm** |
+| **sim real** | atravessa, **+1,2 cm** | atravessa, **+13,4 cm** |
+
+Corrigido: o helper de malha fechada passa a aplicar `ENTREGA_DO_GIRO` e traz na
+docstring que é **modelo calibrado, não previsão** — serve para afirmar
+**sequência de estados** e **decisão**, nunca folga/desvio. E os testes que
+faziam afirmação quantitativa foram trocados por dois que provam a mesma causa
+**sem dinâmica nenhuma**:
+
+- `test_GEOMETRIA_a_maquina_COMMITA_com_12_cm_fora_do_eixo` — só `will_clear()`:
+  `fit = 0,15 m` aprova a projeção de 0,12. **É este o teste que sustenta o
+  §2H.17.**
+- `test_ESTRUTURA_o_arme_pula_o_staging` — 1 tick: o arme cai em `rotating`.
+
+Os dois falham no dia em que o conserto da §2H.17 entrar, e dizem isso na
+mensagem. **481 testes passam.**
+
+#### O que o review confirmou como bom
+
+`_extrai_doors()` (chave ausente ≠ lista vazia) e o waypoint `--pre-fresta`
+opt-in preservando a rota oficial. Nenhum dos dois foi tocado.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -3084,6 +3153,8 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 89 | 🔁 **A regra "arquivo ANTES do chat" quebrada de novo** — e o dono teve que perguntar "anotou?" pela terceira vez | Mandei no chat *"pro review, os dois pontos onde eu bateria: (a) a implementação do `--pre-fresta`, (b) se o proxy do `path_follower` vale para o `door_crossing`"* e **não escrevi no arquivo**. A ressalva do proxy até estava lá (§2H.13), mas a **agenda de review** — o que eu quero que ataquem e o que derruba cada coisa — era só chat. Se a sessão morre ali, some | O gatilho da regra não é só "conclusão". É **qualquer coisa que a próxima sessão precisaria** — e um pedido de revisão com critério de falsificação é exatamente isso. Repetiu-se porque eu li a regra como sendo sobre *resultados*, e ela é sobre **tudo que eu produzo de pensamento**. Agenda aberta agora mora na §2H.15 |
 | 90 | **Travei uma medição atrás de uma decisão que ela não exigia** — perguntei 3 vezes a mesma coisa | Repeti *"sem a decisão do waypoint nada roda"* e fiquei esperando. Mas eu tinha feito o waypoint **opt-in exatamente para não depender da decisão**, e o harness aceita `AB_ROTA` apontando pra outra rota. Medir nunca esteve bloqueado; só o **default do repo** estava. Resultado: horas de trabalho especulativo em cima de integrador ideal (erros 88) quando a volta real custava 4 minutos e derrubava/confirmava tudo | Separar **"o que precisa de decisão"** de **"o que precisa de dado"**. Quando eu me pegar perguntando a mesma coisa pela 3ª vez, a pergunta certa é *"o que eu consigo medir sem a resposta?"* — e quase sempre é tudo |
 | 91 | **Colapsei dois riscos independentes em um** ("a tese viva agora é uma só: n=1") — e **omiti o episódio da volta** | Duas coisas na mesma fala: (1) reduzi o risco restante a tamanho de amostra, quando **robustez a entrada ruim** é eixo separado — rodar 10 voltas fáceis não prova que a máquina segura uma chegada como a da `noguard3`; o meu próprio diário dizia isso 3 parágrafos acima. (2) resumi como "6/6, 0 colisão, 0 raspão" e **não contei** que o goal 4 teve 3,5 s parado + 1,1 s de `unstuck near`. Não invalida a fresta, mas faz a rodada soar lisa | Dois hábitos ruins, o mesmo impulso: **arrumar demais o resumo**. Riscos de natureza diferente não se somam num número; e episódio que eu não contei é episódio que o dono descobre depois — é o erro 82 (descrever a métrica e não a cena) na direção inversa |
+| 92 | 🔁 **"Não precisa de X" testado num shell que já tinha X** — o erro 78, de novo | Pus a validação do `doors.json` no `launch.sh` importando do `door_crossing`, que importa `numpy` no topo. Num ambiente sem numpy o `--arena` aborta com `ModuleNotFoundError` **antes de olhar o JSON** — a falha fechada dispara pelo motivo errado e culpa o arquivo. Passou porque meu shell sempre tem numpy; achado por review que rodou em outro ambiente | Caminho de validação leve não importa módulo de runtime. E o teste da afirmação "isto roda em qualquer lugar" é rodar **em qualquer lugar** — `env -i` custa uma linha |
+| 93 | 🔴🔴 **Transformei em CÓDIGO E TESTE uma tese que eu mesmo refutei no mesmo dia** | O WARN de boot e a `janela_de_alinhamento_ok()` cravavam o passo de 7,16° (`rot_min/rate_hz`), conta derrubada pela §2H.13. O WARN dizia "vai abortar por align_timeout" e **apareceu nas 2 voltas que atravessaram sem abort**. Eu tinha listado esse risco exato na minha própria agenda (§2H.15, item 5) e não fui conferir — e o dado que confirmava estava nos logs das voltas que eu mesmo rodei | Retratar no diário **não desfaz** o que já virou código. Ao derrubar uma tese, o passo seguinte é `grep` por ela no repo — teste e comentário que a repetem são a forma mais durável do erro, porque parecem verificação |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |

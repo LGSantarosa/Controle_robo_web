@@ -27,7 +27,12 @@ import time
 from dataclasses import dataclass
 from typing import List, NamedTuple, Optional, Tuple
 
-import numpy as np
+# 2026-09-02 (achado de review): `numpy` era importado no TOPO, e o `launch.sh`
+# importa deste módulo só para validar o `doors.json` antes de subir a stack.
+# Resultado: num shell sem numpy o `--arena` abortava com `ModuleNotFoundError`
+# — falha fechada disparando pelo motivo ERRADO, dizendo que as portas "nao
+# prestam" quando o JSON estava perfeito. O parse/schema não precisa de numpy;
+# só `gap_ahead()` e o `_tick()` do nó precisam. Import movido para dentro deles.
 
 
 # ---- portas de arquivo -----------------------------------------------------
@@ -198,6 +203,12 @@ GAP_CORRIDOR_HALF_W = 0.28   # m — meia-largura do corredor vigiado (corpo+3cm
 GAP_MAX_X = 0.80             # m — até onde olhar à frente
 
 
+def _np():
+    """numpy sob demanda — ver a nota do import no topo do módulo."""
+    import numpy as np
+    return np
+
+
 def gap_ahead(ranges, angle_min: float, angle_increment: float,
               pose: Tuple[float, float, float],
               jambs: List[Tuple[float, float]], jamb_r: float) -> float:
@@ -209,6 +220,7 @@ def gap_ahead(ranges, angle_min: float, angle_increment: float,
     """
     if angle_increment == 0.0:
         return math.inf
+    np = _np()
     r = np.asarray(ranges, dtype=np.float64)
     if r.size == 0:
         return math.inf
@@ -325,29 +337,45 @@ class Cmd(NamedTuple):
     door_id: Optional[int]
 
 
-def passo_minimo_do_giro(rot_min: float, rate_hz: float) -> float:
-    """Menor variação de yaw que UM tick consegue produzir, em rad.
+# Fração do `wz` comandado que o robô realmente ENTREGA num tick de giro no
+# lugar. MEDIDO (2026-09-02) em 6099 ticks de 4 voltas da arena, filtrando
+# `|vx| <= 0.02` e `|wz| >= 2.0`: mediana 0.135, p90 0.269, máx 0.796.
+# Vem daqui a diferença entre teoria e robô: comandar `rot_min = 2.5` produz
+# ~0.34 rad/s, e não 2.5.
+ENTREGA_DO_GIRO = 0.135
+ENTREGA_DO_GIRO_MAX = 0.796      # p/ o pior tick medido, não a mediana
 
-    `rot_min` é um PISO, não um mínimo desejável: abaixo dele o skid-steer não
-    vira (atrito). Então o giro no lugar é quantizado em `rot_min / rate_hz`.
+
+def passo_minimo_do_giro(rot_min: float, rate_hz: float,
+                         entrega: float = ENTREGA_DO_GIRO) -> float:
+    """Variação de yaw que UM tick produz, em rad, com a entrega REAL do robô.
+
+    ⚠️ Histórico que não se poda (erro 88 da §5 do DIARIO_ARENA): a 1ª versão
+    desta função devolvia `rot_min / rate_hz` — assumindo que o robô ATINGE o
+    comando. Com isso eu "descobri" um ciclo-limite de 7,16° que **não existe**:
+    o passo medido é ~1,0°/tick. Duas voltas no sim (`porta1`, `torta1`)
+    atravessaram a fresta com o WARN disparado e **zero** abort, confirmando.
+    `entrega` é multiplicador MEDIDO, não estimado.
     """
-    return rot_min / rate_hz
+    return entrega * rot_min / rate_hz
 
 
 def janela_de_alinhamento_ok(align_yaw: float, rot_min: float,
-                             rate_hz: float) -> bool:
-    """A janela `|yaw_err| <= align_yaw` (largura 2·align_yaw) tem que caber
-    MAIS DE UM passo do giro — senão o estado ROTATING nunca converge.
+                             rate_hz: float,
+                             entrega: float = ENTREGA_DO_GIRO_MAX) -> bool:
+    """A janela `|yaw_err| <= align_yaw` (largura 2·align_yaw) cabe mais de um
+    passo do giro? Se não couber, o ROTATING oscila por cima dela.
 
-    Achado 2026-09-02 (DIARIO_ARENA §2H.11): com os valores em vigor
-    (align_yaw 3°, rot_min 2.5, 20 Hz) a janela mede 6,00° e o passo mede
-    7,16° — o giro PULA por cima da janela toda vez e o alinhamento termina em
-    `align_timeout`. Medido nas 13 poses reais de entrada na fresta A: 3
-    abortaram, e os 10 que passaram passaram por FASE (a oscilação por acaso
-    caiu dentro), não por mecanismo. É o "caçando dir/esq" relatado em campo
-    2026-06-19, agora com número.
+    Usa `ENTREGA_DO_GIRO_MAX` (o **pior tick medido**, 0.796), não a mediana:
+    esta é uma guarda de configuração, e guarda de configuração se faz no pior
+    caso observado. Com os valores em vigor (3°, 2.5, 20 Hz) o pior passo dá
+    5,70° contra janela de 6,00° — **passa, apertado**, que é exatamente o que
+    as duas voltas mostraram (atravessaram sem abort).
+
+    NÃO é previsão de comportamento: é checagem de que a config não é
+    geometricamente impossível. Ver §2H.13/§2H.17 do DIARIO_ARENA.
     """
-    return 2.0 * align_yaw > passo_minimo_do_giro(rot_min, rate_hz)
+    return 2.0 * align_yaw > passo_minimo_do_giro(rot_min, rate_hz, entrega)
 
 
 def _wrap(a: float) -> float:
@@ -615,6 +643,7 @@ class DoorCrossing:
 def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
     import json
 
+    import numpy as np
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import (QoSDurabilityPolicy, QoSProfile, ReliabilityPolicy,
@@ -728,24 +757,25 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                     GoalStatusArray, topic,
                     lambda m, t=topic: self._on_status(t, m), 10)
 
-            # Trava do ciclo-limite (2026-09-02, §2H.11): se a janela de
-            # alinhamento for menor que um passo do giro, o ROTATING não
-            # converge e a travessia morre no align_timeout. WARN e não erro: a
-            # config da SALA roda assim desde 06-19 e tem validação de campo —
-            # quebrar o boot dela agora seria pior que avisar alto.
+            # Guarda de CONFIGURAÇÃO (2026-09-02): a janela de alinhamento tem
+            # que caber mais de um passo do giro no pior caso medido. A 1ª
+            # versão disto usava `rot_min/rate_hz` (comando, não entrega) e
+            # gritava em toda subida da arena prevendo um abort que nunca
+            # aconteceu — 2 voltas atravessaram com o WARN aceso (§2H.13/§2H.17,
+            # erro 88). Agora usa a entrega MEDIDA e só fala quando é de fato
+            # impossível.
             if not janela_de_alinhamento_ok(self.cfg.align_yaw, self.cfg.rot_min,
                                             g['rate_hz']):
                 self.get_logger().warn(
-                    'JANELA DE ALINHAMENTO MENOR QUE O PASSO DO GIRO: '
-                    'align_yaw %.2f° (janela %.2f°) < passo %.2f° '
-                    '(rot_min %.2f / %.0f Hz). O ROTATING vai oscilar por cima '
-                    'da janela e abortar por align_timeout. Suba align_yaw_deg '
-                    'ou rate_hz.' % (
-                        math.degrees(self.cfg.align_yaw),
+                    'CONFIG DE ALINHAMENTO IMPOSSIVEL: janela %.2f° < pior '
+                    'passo do giro %.2f° (rot_min %.2f / %.0f Hz x entrega '
+                    'medida %.3f). O ROTATING nao tem como pousar dentro dela. '
+                    'Suba align_yaw_deg ou rate_hz.' % (
                         2 * math.degrees(self.cfg.align_yaw),
-                        math.degrees(passo_minimo_do_giro(self.cfg.rot_min,
-                                                          g['rate_hz'])),
-                        self.cfg.rot_min, g['rate_hz']))
+                        math.degrees(passo_minimo_do_giro(
+                            self.cfg.rot_min, g['rate_hz'],
+                            ENTREGA_DO_GIRO_MAX)),
+                        self.cfg.rot_min, g['rate_hz'], ENTREGA_DO_GIRO_MAX))
             self.create_timer(1.0 / g['rate_hz'], self._tick)
             self._publish_zone('idle', None)
             self.get_logger().info(

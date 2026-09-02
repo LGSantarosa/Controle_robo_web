@@ -22,8 +22,12 @@ import unittest
 from robot_nav.door_crossing import (
     DoorCrossConfig,
     DoorCrossing,
+    door_geometry,
+    will_clear,
     _extrai_doors,
     doors_de_arquivo,
+    ENTREGA_DO_GIRO,
+    ENTREGA_DO_GIRO_MAX,
     janela_de_alinhamento_ok,
     passo_minimo_do_giro,
     valida_doors,
@@ -213,14 +217,16 @@ class TestPoseDaNoguard3(unittest.TestCase):
                       f'no eixo e alinhada, nunca commitou: {estados}')
 
     def _malha_fechada(self, pose0, portas, cfg=None, dt=0.05, tmax=60.0):
-        """Roda a máquina em MALHA FECHADA: integra o (vx, wz) que ela comanda
-        de volta na pose. Sem isso o teste segura o robô parado e mede a
-        máquina brigando com uma pose que ela mandou mudar (foi o defeito da
-        1ª versão deste teste).
+        """Roda a máquina realimentando o (vx, wz) que ela comanda na pose.
 
-        Cinemática ideal, de propósito: sem inércia, sem collision_monitor, sem
-        derrapagem. Serve para achar defeito de LÓGICA — um resultado limpo aqui
-        NÃO substitui a volta no sim.
+        ⚠️ **MODELO CALIBRADO, NÃO PREVISÃO.** O `wz` é multiplicado por
+        `ENTREGA_DO_GIRO` (0,135, medido em 6099 ticks) porque sem isso o modelo
+        dá ao robô 7× a autoridade de giro real — foi assim que eu "descobri" um
+        ciclo-limite inexistente (erro 88). Mesmo calibrado ele acerta a
+        ESTRUTURA e erra a MAGNITUDE: na entrada ruim dá +5,9 cm onde o sim
+        mediu +13,4. Portanto: usar para afirmar **sequência de estados** e
+        **decisão** (commitou? re-estagiou?), NUNCA para afirmar folga/desvio.
+        Quem afirma número é a volta no sim (§2H.16/§2H.17).
         """
         cfg = cfg or DoorCrossConfig()
         m = DoorCrossing(cfg)
@@ -228,111 +234,125 @@ class TestPoseDaNoguard3(unittest.TestCase):
         m.update(0.0, (x, y, yaw), portas, goal_active=True, nav_forward=True,
                  gap=3.0, scan_fresh=True, front_gap=3.0, rear_gap=3.0,
                  goal_succeeded=True)
-        t, tr, cruz, reest = dt, [], None, 0
+        t, tr, cruz = dt, [], None
         for i in range(int(tmax / dt)):
             c = m.update(t, (x, y, yaw), portas, goal_active=True,
                          nav_forward=True, gap=3.0, scan_fresh=True,
                          front_gap=3.0, rear_gap=3.0)
             if not tr or tr[-1] != c.state:
                 tr.append(c.state)
-                if c.state == 'staging':
-                    reest += 1
             nx = x + c.vx * math.cos(yaw) * dt
-            if x < 7.50 <= nx:                      # interpola o plano dos batentes
+            if x < 7.50 <= nx:
                 f = (7.50 - x) / (nx - x)
                 cruz = (y + f * c.vx * math.sin(yaw) * dt, math.degrees(yaw))
-            x, y, yaw = nx, y + c.vx * math.sin(yaw) * dt, yaw + c.wz * dt
+            x, y = nx, y + c.vx * math.sin(yaw) * dt
+            yaw += c.wz * ENTREGA_DO_GIRO * dt
             t += dt
             if c.state == 'idle' and i > 3:
                 break
-        return dict(cruzou=cruz, transicoes=tr, reestagios=reest, t=t)
+        return dict(cruzou=cruz, transicoes=tr)
 
-    def test_da_pose_QUE_RASPOU_ela_re_estagia_e_atravessa_centrada(self):
-        """O que a máquina compra, na pose exata do 1º raspão da `noguard3`.
+    def test_GEOMETRIA_a_maquina_COMMITA_com_12_cm_fora_do_eixo(self):
+        """A causa do §2H.17, provada SEM dinâmica nenhuma — só `will_clear()`.
 
-        Ela NÃO entra com os 25,9 cm de desvio — o `will_clear` reprova
-        (fit = 0,45 − 0,25 − 0,05 = 0,15 m), ela dá ré, re-estagia no eixo e
-        só então atravessa. É o único re-estágio permitido pelo §4.10-item-3."""
+        Este é o teste que sustenta o achado: entrando +12 cm fora do eixo (a
+        pose da `noguard3`), a trava geométrica **aprova** a travessia, porque
+        `fit = half_width - robot_half_width - fit_margin = 0,45 - 0,25 - 0,05
+        = 0,15 m` e a projeção com yaw alinhado é ~0,12 < 0,15. Ou seja: a
+        máquina commita legalmente torta, e nada a jusante centra.
+        """
+        g = door_geometry((7.50, 1.80), (7.50, 2.70))
+        self.assertAlmostEqual(g.half_width - 0.25 - 0.05, 0.15, places=6)
+        # s = -0.6 (no ponto de preparação), yaw já alinhado, d = +0.12
+        self.assertTrue(will_clear(g, -0.60, 0.12, 0.0, -1, 0.25, 0.05),
+                        'se isto reprovar, a máquina passou a re-estagiar — o '
+                        'conserto da §2H.17 entrou, atualize o diário')
+        # e o par: com desvio grande o bastante ela REPROVA (a trava existe)
+        self.assertFalse(will_clear(g, -0.60, 0.26, 0.0, -1, 0.25, 0.05))
+
+    def test_ESTRUTURA_o_arme_pula_o_staging(self):
+        """A outra metade da causa: `_pick_door` arma direto em `rotating`, que
+        alinha SÓ o ângulo. O `staging` (quem dirige até o eixo) só aparece como
+        recuperação pós-escape. Sem dinâmica: olha o 1º estado após o arme."""
+        portas = carrega_portas()
+        m, _ = self._maquina()
+        self._pre_porta_cumprido(m, (6.50, 2.37, math.radians(-10.7)), portas)
+        cmd = self._tick(m, 0.05, (6.50, 2.37, math.radians(-10.7)), portas)
+        self.assertEqual(cmd.state, 'rotating',
+                         'armou em outro estado — se for `staging`, o conserto '
+                         'da §2H.17 entrou')
+
+    def test_da_pose_QUE_RASPOU_a_trava_geometrica_REPROVA_e_ela_re_estagia(self):
+        """O contraste que fecha o quadro: a 25,9 cm fora do eixo (a amostra do
+        1º raspão da `noguard3`, já DENTRO da zona) o `will_clear` reprova e a
+        máquina re-estagia. A 12 cm ela commita. O defeito não é ausência de
+        trava — é o **limiar** dela ser maior que o que o vão tolera na prática.
+        """
         r = self._malha_fechada(self.POSE_TORTA, carrega_portas())
-        self.assertIsNotNone(r['cruzou'],
-                             f'nunca atravessou: {r["transicoes"]}')
-        y, yawg = r['cruzou']
-        desvio, folga = abs(y - 2.25), 0.45 - abs(y - 2.25) - (
-            0.25 * math.cos(math.radians(abs(yawg)))
-            + 0.25 * math.sin(math.radians(abs(yawg))))
-        self.assertLessEqual(desvio, 0.08,
-                             f'entrou {desvio*100:.1f} cm fora do eixo')
-        self.assertLessEqual(abs(yawg), 3.0,
-                             f'entrou {yawg:.1f}° torta')
-        # hoje, sem a máquina, esta volta entrou com 12,1 cm / -10,7° e folga 3,7 cm
-        self.assertGreater(folga, 0.10,
-                           f'folga {folga*100:.1f} cm — tinha que ser MUITO '
-                           'melhor que os 3,7 cm que rasparam')
-        self.assertLessEqual(r['reestagios'], 1,
-                             f'thrash de re-estágio: {r["transicoes"]}')
+        self.assertIn('staging', r['transicoes'],
+                      f'nao re-estagiou: {r["transicoes"]}')
+        self.assertIn('crossing', r['transicoes'],
+                      f're-estagiou e nunca atravessou: {r["transicoes"]}')
 
-    def test_com_a_janela_em_vigor_ela_ABORTA_de_algumas_poses(self):
-        """O defeito do §2H.11, medido em malha fechada a partir de uma pose
-        REAL de entrada na zona (`aprox2`, yaw -25,8°): com align_yaw 3° a 20 Hz
-        o giro pula por cima da janela e a travessia morre no align_timeout."""
-        r = self._malha_fechada((6.452, 2.549, math.radians(-25.8)),
-                                carrega_portas())
-        self.assertIsNone(r['cruzou'],
-                          'se isto passou a atravessar, o ciclo-limite foi '
-                          'consertado — atualize o §2H.11 e este teste')
-        self.assertIn('idle', r['transicoes'])
-
-    def test_com_a_janela_CORRIGIDA_a_mesma_pose_atravessa(self):
-        """O par que prova que a causa é a janela, e não a pose: só mudando
-        align_yaw 3° -> 5° (nada mais), a mesma entrada atravessa."""
-        cfg = dataclasses.replace(DoorCrossConfig(),
-                                  align_yaw=math.radians(5.0))
-        r = self._malha_fechada((6.452, 2.549, math.radians(-25.8)),
-                                carrega_portas(), cfg=cfg)
-        self.assertIsNotNone(r['cruzou'],
-                             f'não atravessou nem com 5°: {r["transicoes"]}')
-        y, yawg = r['cruzou']
-        self.assertLessEqual(abs(yawg), 3.0,
-                             f'entrou {yawg:.1f}° — alargar a janela do ROTATING '
-                             'não pode piorar o yaw DE ENTRADA (o cross_k_yaw '
-                             'fecha a malha durante a travessia)')
+    def test_MODELO_reproduz_a_ESTRUTURA_das_duas_voltas_do_sim(self):
+        """O modelo calibrado só vale para isto: a sequência de estados bate com
+        as duas voltas medidas (§2H.16/§2H.17), nas duas entradas."""
+        for pose, nome in (((6.50, 2.25, 0.0), 'porta1'),
+                           ((6.50, 2.37, math.radians(-10.7)), 'torta1')):
+            with self.subTest(nome):
+                r = self._malha_fechada(pose, carrega_portas())
+                self.assertEqual(r['transicoes'], ['rotating', 'crossing', 'idle'],
+                                 f'{nome}: o sim fez rotating->crossing->idle')
+                self.assertIsNotNone(r['cruzou'])
 
 
-class TestCicloLimiteDoAlinhamento(unittest.TestCase):
-    """A janela do ROTATING tem que caber mais de um passo do giro (§2H.11).
+class TestGuardaDeConfiguracaoDoAlinhamento(unittest.TestCase):
+    """A janela do ROTATING cabe mais de um passo do giro? (guarda de CONFIG)
 
-    `rot_min` é PISO (abaixo dele o skid-steer não vira), então o giro no lugar
-    é quantizado em `rot_min/rate_hz`. Com os valores em vigor a janela mede
-    6,00° e o passo 7,16°: o giro pula por cima da janela inteira toda vez.
+    ⚠️ Esta classe já foi outra coisa, e o histórico importa (erro 88 da §5 do
+    DIARIO_ARENA): ela testava um "ciclo-limite" de 7,16°/tick, calculado como
+    `rot_min/rate_hz` — ou seja, **assumindo que o robô atinge o comando**. Isso
+    foi **refutado por medição no mesmo dia** (6099 ticks reais: entrega mediana
+    0,135 do comandado, |Δyaw| ~1,0°/tick) e depois **em execução**: as voltas
+    `porta1` e `torta1` atravessaram a fresta com o WARN aceso e ZERO abort.
+
+    O que sobrou é uma guarda honesta: pergunta se a config é *geometricamente
+    impossível*, usando o **pior tick medido** (0,796). Não prevê comportamento.
     """
 
-    def test_a_config_EM_VIGOR_reprova_a_20_Hz(self):
-        """Este é o defeito, escrito como teste. Medido nas 13 poses reais de
-        entrada na fresta A: 3 abortaram por align_timeout, e os 10 que
-        passaram passaram por FASE, não por mecanismo."""
+    def test_a_config_EM_VIGOR_passa(self):
+        """O que as 2 voltas mostraram: 3° a 20 Hz funciona. Se este teste
+        voltar a reprovar, é sinal de que alguém restaurou a conta antiga."""
         cfg = DoorCrossConfig()
-        self.assertFalse(janela_de_alinhamento_ok(cfg.align_yaw, cfg.rot_min, 20.0))
+        self.assertTrue(janela_de_alinhamento_ok(cfg.align_yaw, cfg.rot_min, 20.0))
+        pior = math.degrees(passo_minimo_do_giro(2.5, 20.0, ENTREGA_DO_GIRO_MAX))
+        self.assertAlmostEqual(pior, 5.70, places=2)
+        self.assertLess(pior, 2 * math.degrees(cfg.align_yaw))
+
+    def test_a_entrega_do_giro_e_MEDIDA_e_nao_1(self):
+        """O erro 88 em forma de teste: se alguém puser a entrega de volta em
+        1.0 (o comando integralmente entregue), a conta antiga volta e a guarda
+        volta a gritar sem motivo."""
+        self.assertLess(ENTREGA_DO_GIRO, 0.3)
+        self.assertLess(ENTREGA_DO_GIRO_MAX, 1.0)
         self.assertAlmostEqual(
-            math.degrees(passo_minimo_do_giro(cfg.rot_min, 20.0)), 7.16, places=2)
-        self.assertAlmostEqual(2 * math.degrees(cfg.align_yaw), 6.00, places=2)
-
-    def test_as_duas_saidas_medidas_aprovam(self):
-        """As duas que dão 13/13 nas 13 poses reais: alargar a janela ou subir
-        a taxa. Alargar não custa precisão — o yaw NA ENTRADA fica em 1,51° nos
-        dois casos, porque o cross_k_yaw fecha a malha durante a travessia."""
-        cfg = DoorCrossConfig()
-        self.assertTrue(janela_de_alinhamento_ok(math.radians(5.0), cfg.rot_min, 20.0))
-        self.assertTrue(janela_de_alinhamento_ok(cfg.align_yaw, cfg.rot_min, 50.0))
-
-    def test_o_criterio_REAGE_aos_tres_termos(self):
-        """O par sensível: um critério que não reage a algum dos três termos
-        passaria com a conta errada (foi assim que o defeito ficou 2 meses)."""
-        base = dict(align_yaw=math.radians(5.0), rot_min=2.5, rate_hz=20.0)
-        self.assertTrue(janela_de_alinhamento_ok(**base))
+            math.degrees(passo_minimo_do_giro(2.5, 20.0)), 0.97, places=2)
+        # com entrega=1.0 (a conta refutada) a config em vigor REPROVARIA:
         self.assertFalse(janela_de_alinhamento_ok(
-            **{**base, 'align_yaw': math.radians(1.0)}))   # janela menor
-        self.assertFalse(janela_de_alinhamento_ok(**{**base, 'rot_min': 8.0}))
-        self.assertFalse(janela_de_alinhamento_ok(**{**base, 'rate_hz': 5.0}))
+            math.radians(3.0), 2.5, 20.0, entrega=1.0))
+
+    def test_config_impossivel_ainda_e_pega(self):
+        """O par: se nada reprova, a guarda não vale nada."""
+        self.assertFalse(janela_de_alinhamento_ok(math.radians(0.5), 2.5, 20.0))
+        self.assertFalse(janela_de_alinhamento_ok(math.radians(3.0), 2.5, 5.0))
+
+    def test_o_criterio_REAGE_aos_quatro_termos(self):
+        base = dict(align_yaw=math.radians(3.0), rot_min=2.5, rate_hz=20.0)
+        self.assertTrue(janela_de_alinhamento_ok(**base))
+        self.assertFalse(janela_de_alinhamento_ok(**{**base, 'align_yaw': math.radians(0.5)}))
+        self.assertFalse(janela_de_alinhamento_ok(**{**base, 'rot_min': 20.0}))
+        self.assertFalse(janela_de_alinhamento_ok(**{**base, 'rate_hz': 4.0}))
+        self.assertFalse(janela_de_alinhamento_ok(**base, entrega=1.0))
 
 
 if __name__ == '__main__':
