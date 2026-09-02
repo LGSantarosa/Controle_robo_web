@@ -2988,6 +2988,69 @@ funcionou: o caso ruim derruba tese, o fácil só acumula confiança).
 2. **Depois disso**, repetir a `torta1` (entrada ruim) + n voltas normais. Só o
    par (pior caso + repetição) sustenta "100%".
 
+### 2H.21 🔴🔴 `lim1`: a máquina **NÃO ARMOU** — e o waypoint que eu escolhi é a causa
+
+1ª volta do lote (waypoint a +15 cm, o limite da tolerância). Resultado:
+
+```
+door DIAG idle: porta 1 distC=1.79 zone=1.10 cleared=False goal_succ=False
+```
+
+**Zero transições de estado.** O nó subiu, carregou a porta, e ficou `idle` a
+volta inteira. O robô atravessou a fresta **como antes da máquina existir**:
+desvio **−11,5 cm**, yaw **−9,80°**, folga **4,7 cm** (oráculo **0,0415 m**).
+6/6 goals, 0 contato — mas por sorte, não por controle.
+
+#### A causa: eu escolhi a distância do waypoint pela conta ERRADA
+
+A §2H.7 escolheu **1,0 m** olhando só a **margem do point-turn** (0,6 m dava
+−1,8 cm no pior canto). Não olhei a **condição de arme**, que é outra:
+
+> arma se `dist(robô, centro do vão) ≤ zone_radius = 1,1` **no instante do
+> `SUCCEEDED`**
+
+O waypoint a 1,0 m deixa **0,09 m** de folga até o raio da zona — e o
+`xy_goal_tolerance` é **0,15 m**. Ou seja, **o robô pode legitimamente concluir o
+goal FORA da zona**, e aí nada arma. É o que aconteceu.
+
+| waypoint | dist nominal | **pior canto do envelope** | arma? |
+|---|---|---|---|
+| eixo (6,50 ; 2,25) | 1,000 | **1,160** | 🔴 pode não armar |
+| +12 cm (`torta`) | 1,007 | **1,181** | 🔴 pode não armar |
+| +15 cm (`lim`) | 1,011 | **1,188** | 🔴 pode não armar |
+
+**As três rotas do lote têm o mesmo defeito** — inclusive a `porta1`/`torta1` que
+já rodaram. Elas armaram por **sorte de parada**, não por desenho. Isso rebaixa
+retroativamente as duas voltas de hoje: elas provam que a máquina *funciona
+quando arma*, não que ela *arma*.
+
+#### As distâncias que armam sempre
+
+| waypoint | pior caso | |
+|---|---|---|
+| 0,80 m | 0,996 | ✅ arma sempre |
+| 0,85 m | 1,044 | ✅ arma sempre |
+| **0,90 m** | **1,092** | ✅ arma sempre (folga 0,8 cm — apertado) |
+| 0,95 m | 1,140 | 🔴 pode não armar |
+| 1,00 m (atual) | 1,160 | 🔴 pode não armar |
+
+Cruzando com a margem de point-turn da §2H.7 (0,8 m → +10,7 cm; 1,0 → +27,3), a
+janela que satisfaz **as duas** condições é estreita: **0,80–0,90 m**. Em 0,80 m
+sobram 10,7 cm de margem de giro e 10,4 cm de folga de arme.
+
+⚠️ **A alternativa é mexer no `zone_radius`** (1,1 → 1,3, por exemplo), que
+resolve o arme sem apertar o point-turn. Mas é parâmetro validado em campo em
+06-19, e mexer nele muda o comportamento na porta da SALA também. Preferível
+mover o waypoint, que é dado da arena.
+
+#### Efeito no lote em andamento
+
+As 5 voltas restantes seguem rodando com o waypoint a 1,0 m. **Elas deixaram de
+medir "a máquina atravessa bem?" e passaram a medir "com que frequência ela
+sequer arma?"** — que agora é a pergunta mais importante. Vale deixar terminar.
+
+**Erro 94 da §5.**
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -3268,6 +3331,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 91 | **Colapsei dois riscos independentes em um** ("a tese viva agora é uma só: n=1") — e **omiti o episódio da volta** | Duas coisas na mesma fala: (1) reduzi o risco restante a tamanho de amostra, quando **robustez a entrada ruim** é eixo separado — rodar 10 voltas fáceis não prova que a máquina segura uma chegada como a da `noguard3`; o meu próprio diário dizia isso 3 parágrafos acima. (2) resumi como "6/6, 0 colisão, 0 raspão" e **não contei** que o goal 4 teve 3,5 s parado + 1,1 s de `unstuck near`. Não invalida a fresta, mas faz a rodada soar lisa | Dois hábitos ruins, o mesmo impulso: **arrumar demais o resumo**. Riscos de natureza diferente não se somam num número; e episódio que eu não contei é episódio que o dono descobre depois — é o erro 82 (descrever a métrica e não a cena) na direção inversa |
 | 92 | 🔁 **"Não precisa de X" testado num shell que já tinha X** — o erro 78, de novo | Pus a validação do `doors.json` no `launch.sh` importando do `door_crossing`, que importa `numpy` no topo. Num ambiente sem numpy o `--arena` aborta com `ModuleNotFoundError` **antes de olhar o JSON** — a falha fechada dispara pelo motivo errado e culpa o arquivo. Passou porque meu shell sempre tem numpy; achado por review que rodou em outro ambiente | Caminho de validação leve não importa módulo de runtime. E o teste da afirmação "isto roda em qualquer lugar" é rodar **em qualquer lugar** — `env -i` custa uma linha |
 | 93 | 🔴🔴 **Transformei em CÓDIGO E TESTE uma tese que eu mesmo refutei no mesmo dia** | O WARN de boot e a `janela_de_alinhamento_ok()` cravavam o passo de 7,16° (`rot_min/rate_hz`), conta derrubada pela §2H.13. O WARN dizia "vai abortar por align_timeout" e **apareceu nas 2 voltas que atravessaram sem abort**. Eu tinha listado esse risco exato na minha própria agenda (§2H.15, item 5) e não fui conferir — e o dado que confirmava estava nos logs das voltas que eu mesmo rodei | Retratar no diário **não desfaz** o que já virou código. Ao derrubar uma tese, o passo seguinte é `grep` por ela no repo — teste e comentário que a repetem são a forma mais durável do erro, porque parecem verificação |
+| 94 | 🔴🔴 **Escolhi a distância do waypoint por UMA condição e havia DUAS** | A §2H.7 fixou 1,0 m otimizando a margem do point-turn, e eu nunca conferi a **condição de arme** (`dist <= zone_radius 1,1` no instante do `SUCCEEDED`). A 1,0 m sobram 0,09 m de folga contra um `xy_goal_tolerance` de 0,15 — o robô pode concluir o goal FORA da zona. Na `lim1` foi o que aconteceu: `cleared=False`, zero transições, travessia igual à de antes da máquina. E rebaixa a `porta1`/`torta1`: elas armaram por sorte de parada | Quando um ponto tem que satisfazer 2 restrições, otimizar 1 e não listar a outra é o mesmo que escolher no chute. A hora de listar as restrições é **antes** de escolher o número — e a segunda estava escrita no código que eu tinha acabado de ler (`zone_radius`, `_pick_door`) |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
