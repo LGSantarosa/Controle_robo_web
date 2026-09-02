@@ -2875,6 +2875,53 @@ mensagem. **481 testes passam.**
 `_extrai_doors()` (chave ausente ≠ lista vazia) e o waypoint `--pre-fresta`
 opt-in preservando a rota oficial. Nenhum dos dois foi tocado.
 
+### 2H.19 📍 RETRATO DO ROBÔ HOJE (02/09, 3 dias da prova) — e o que NINGUÉM tocou
+
+O dono pediu o estado geral. Levantado agora, contra os artefatos.
+
+#### O que o robô FAZ hoje, medido
+
+| | |
+|---|---|
+| **Percurso** | ✅ largada → 4 cones → chegada, **6/6 goals** (5 na rota sem o waypoint) |
+| **Tempo** | 240–250 s |
+| **Contato** | ✅ **0 colisão, 0 raspão** nas últimas 5 voltas (3 pelo contorno + `porta1` + `torta1`) |
+| **Fresta A (0,90 m)** | ✅ atravessa com o `door_crossing`; sem ele, contorna |
+| **Frestas B/D (0,70 / 0,80)** | contorna — nunca foram exercitadas |
+| **Fresta C (0,60)** | o Nav2 trata como parede (`robot_radius 0.32`) — **por desenho** |
+| **Rampa 15° e barreira móvel** | fora de escopo por decisão do dono (08-28) |
+
+#### 🔴 Os critérios de aceitação: 2 de 5 estão em ZERO
+
+| # | critério | estado real |
+|---|---|---|
+| A1 | visita os 4 cones + chegada, na ordem, **sem pular após falha** | 🟡 o percurso acontece (6/6), mas **o executor que não pula ponto após falha não existe** |
+| A2 | **para a ≤ 20 cm do cone** | 🔴 **NÃO COMEÇOU.** A rota morre no standoff de **1,40 m**. Mesmo se fosse até lá, o `PolygonFront` trava o avanço a **~0,67 m** do centro do cone |
+| A3 | **LED acende em cada ponto** | 🔴 **NÃO COMEÇOU.** Só existe a interface no `mega_bridge` (`/light/marker`, pino 8) |
+| A4 | zero contato | ✅ nas últimas 5 voltas (n pequeno) |
+| A5 | completa sem depender de fresta | ✅ |
+
+**A missão da prova é "20 cm do cone = ponto marcado, acende LED". O robô hoje
+não chega perto do cone e não acende nada.** Ele faz um passeio limpo pela
+arena. A4/A5 (não bater, completar) estão bem; **A2 e A3, que são o que marca
+ponto, estão em zero.**
+
+#### Onde o esforço foi hoje, e a conta honesta
+
+O dia inteiro foi na **fresta A** — porque o dono mudou o alvo em 01/09
+(*"passar nessa porra 100% das vezes"*). Entregou:
+
+- a travessia funcionando (`porta1`: desvio 1,2 cm, folga 18,3 cm)
+- e o defeito dela achado (`torta1`: entrando torto, desvio 13,4 cm, folga
+  **2,3 cm** — a máquina endireita o yaw e **não** a lateral, §2H.17)
+
+⚠️ **Mas passar pela fresta é OPCIONAL pela regra da prova** (§1: *"sempre há
+contorno"*), e o contorno tem **0 contato em 4 voltas**. Ou seja: o trabalho de
+hoje melhora um **atalho**, enquanto **A2 e A3 — que são pontuação — seguem
+intocados a 3 dias**.
+
+Isto é observação de prioridade para o dono decidir, não mudança de plano minha.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
