@@ -2727,6 +2727,85 @@ histórico. Na boca da fresta: **máx 4,7 cm**, igual ao medido nas 13 anteriore
 deslocada. Nenhuma das duas depende de decisão do dono — só a mudança do
 **default da rota** depende.
 
+### 2H.17 🔴 A ENTRADA RUIM (`torta1`) DERRUBOU A TESE: a máquina endireita o **yaw**, não a **lateral**
+
+Ordem escolhida pelo dono: *"comece pela deslocada; n voltas no caso fácil só
+fortalecem confiança amostral"*. Estava certo — a deslocada derrubou em 4 min o
+que n voltas fáceis não tocariam.
+
+#### Como a entrada ruim foi produzida (e por que NÃO foi pelo spawn)
+
+O §6.3-item-5 do spec pede *"largada deslocada"*. **Isso não funciona mais**: com
+o waypoint pré-fresta na rota, o robô **para** ali e o erro do spawn se lava no
+`xy_goal_tolerance`. Quem define a entrada agora é o **waypoint**. Então
+desloquei o waypoint para exatamente a pose que raspou na `noguard3`:
+**(6,50 ; 2,37), yaw −10,7°** = +12 cm fora do eixo.
+
+Conferido antes de rodar: margem de point-turn **+42,0 cm** (pior canto +22,5),
+dist ao centro 1,007 m (dentro da zona 1,1), bearing do vão 3,9° (< 70°).
+Verdade-terreno: o robô passou pelo waypoint em **(6,463 ; 2,370)** — a entrada
+ruim foi de fato produzida.
+
+#### O resultado
+
+| | `porta1` (entrada boa) | **`torta1` (entrada ruim)** | sem a máquina |
+|---|---|---|---|
+| transições | `idle→rotating→crossing→idle` | **idêntico** | — |
+| desvio lateral no plano | +1,2 cm | 🔴 **+13,4 cm** | 0,5 – 12,1 cm |
+| yaw na entrada | −1,10° | ✅ **−1,20°** | −4,8° a −15,8° |
+| folga geométrica | 18,3 cm | 🔴 **6,1 cm** | 3,7 – 13,8 cm |
+| **folga mínima do oráculo** | 0,1822 m | 🔴 **0,0230 m** | 0,0000 (a que bateu) |
+| COLISÃO / raspão | 0 / 0 | **0 / 0** | 2 / 28 no baseline |
+| goals | 6/6, 250,1 s | **6/6, 240,3 s** | 5/5 |
+| `reversing` / re-estágio | 0 | **0** | — |
+| `align_timeout` / abort da máquina | 0 | **0** | — |
+| `unstuck` | 11 ticks (`near`, goal 4) | **0 ticks** | — |
+
+*(Os `Aborting handle` no log são do `controller_server`/`backup` do Nav2 no
+goal 4, não do `door_crossing`.)*
+
+#### 🔴 O que isto prova, e é o contrário do que eu esperava
+
+**A máquina corrigiu o yaw (−10,7° → −1,20°, quase perfeito) e NÃO corrigiu a
+lateral (+12 cm → +13,4 cm — piorou).** Ela atravessou **13,4 cm fora do eixo**,
+*mais* torta que a `noguard3` que raspou (12,1 cm), e escapou com **2,3 cm**.
+
+A causa está no código, e o próprio spec já a tinha dito sem eu ligar os pontos:
+
+1. `_pick_door` **arma direto em `rotating`**, pulando o `staging`
+   (`door_crossing.py:379-386`, mudança de 06-19 — *"a web já entrega o robô
+   centrado"*). O `staging`, que é quem **dirige até o eixo**, só é alcançado
+   como recuperação **pós-escape**.
+2. `rotating` alinha **só o ângulo**, por desenho — o comentário diz que o
+   offset lateral "é corrigido aos poucos ANDANDO no crossing".
+3. O `will_clear` **aprovou**: `fit = 0,45 − 0,25 − 0,05 = 0,15 m` e a projeção
+   com d = +0,12 e yaw ≈ 0 dá ~0,12 < 0,15. **Comitou legalmente com 12 cm.**
+4. No `crossing`, o `cross_k_lat` corrige lateral **só até o centro**
+   (`cross_lat_off_s = 0.0`) e divide o `wz` com o termo de yaw, com teto
+   `cross_wz_max = 0,8`. Em 0,6 m a 0,22 m/s não deu conta.
+
+**Consequência para a leitura da `porta1`:** os 18,3 cm de folga dela vieram da
+**entrada boa** (o waypoint no eixo), não de a máquina centrar. O que a máquina
+entrega de verdade é **o yaw** — e isso sozinho vale 3,7 → 6,1 cm no pior caso,
+melhora real mas **longe** de "100% das vezes".
+
+#### O conserto que o próprio código já tem
+
+O `staging` **existe e funciona**: no meu ensaio de malha fechada (§2H.11), a
+sequência `rotating → reversing → staging → rotating → crossing` saiu da pose
+torta e cruzou com **+3,1 cm**. O que falta é **entrar nele**: armar em
+`staging` (em vez de `rotating`) quando `|d| > align_lat` na hora do arme.
+
+É mudança pequena, num ponto só, e usa máquina já existente. ⏳ **Não
+implementada** — é mudança de comportamento em código novo a 3 dias da prova, e
+o dono decide.
+
+⚠️ **Alternativa mais barata a considerar junto:** apertar o `fit_margin` (hoje
+0,05 → `fit` 0,15 m) faria o `will_clear` **reprovar** os 12 cm e forçar o
+re-estágio pelo caminho que já existe (a ré de escape). Não recomendo de cara: o
+histórico do parâmetro é de *thrash* (`:212`, baixado de 0,13 para 0,05 em 06-23
+justamente porque re-estagiava à toa).
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
