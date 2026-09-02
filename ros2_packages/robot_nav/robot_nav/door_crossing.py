@@ -256,6 +256,14 @@ class DoorCrossConfig:
     # do ponto, com o robô já vindo centrado pelo xy_goal_tolerance=0.15 do nav2.
     zone_radius: float = 1.1        # m — distância do centro que arma a manobra (>= standoff 1.0)
     approach_bearing: float = math.radians(70)  # porta tem que estar "na frente"
+    # 2026-09-02: a zona circular só dizia "dá para assumir"; ela não dizia
+    # "esta é a ÁREA em que o door_crossing manda". Resultado: a máquina ainda
+    # pensava a fresta como LINHA e armava direto no rotating, confiando que o
+    # waypoint pré-fresta tinha entregue lateral boa. O caso +12 cm mostrou o
+    # buraco. A área útil é um corredor orientado pela porta: assume ali, ajeita
+    # ali, e só comita depois.
+    approach_dist: float = 1.0      # m — quanto ANTES do plano da porta ainda vale dirigir a aproximação
+    approach_half_width: float = 0.35  # m — largura lateral máxima do corredor de preparação
     # 2026-06-15: experimento "girar mais longe" (0.6 -> 1.0) REVERTIDO pra 0.6.
     # Com 1.0 o ponto de staging caía num ângulo que exigia GIRAR NO LUGAR pra
     # encarar (|err|>=60° -> vx=0). E giro no lugar fraco (~2.2 rad/s) o
@@ -382,6 +390,16 @@ def _wrap(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
 
+def in_approach_region(s: float, d: float, cfg: DoorCrossConfig) -> bool:
+    """A pose está no corredor em que a manobra local da porta pode assumir?"""
+    return -cfg.approach_dist <= s <= cfg.exit_margin and abs(d) <= cfg.approach_half_width
+
+
+def ready_to_commit(d: float, yaw_err: float, cfg: DoorCrossConfig) -> bool:
+    """Pose já está boa o bastante para sair do preparo e fechar o yaw final?"""
+    return abs(d) <= cfg.align_lat and abs(yaw_err) <= cfg.align_yaw
+
+
 class DoorCrossing:
     """Decisão pura da travessia. O nó alimenta com pose do TF, portas,
     status do goal, gap e freshness; recebe (estado, vx, wz)."""
@@ -478,8 +496,13 @@ class DoorCrossing:
                 for px, py in ((g.cx, g.cy), tuple(d['a']), tuple(d['b'])))
             if bearing > self.cfg.approach_bearing:
                 continue
-            return d, g
-        return None, None
+            raw_s = ((x - g.cx) * g.nx + (y - g.cy) * g.ny)
+            side = -1 if raw_s > 0 else +1
+            s, lat = door_progress_lateral(g, x, y, side)
+            if not in_approach_region(s, lat, self.cfg):
+                continue
+            return d, g, side
+        return None, None, 0
 
     # -- tick -----------------------------------------------------------------
     def update(self, now, pose, doors, goal_active, nav_forward, gap,
@@ -501,20 +524,20 @@ class DoorCrossing:
             if (pose is None or not goal_active or not nav_forward
                     or now < self._cooldown_until or not doors):
                 return Cmd('idle', 0.0, 0.0, None)
-            door, geom = self._pick_door(pose, doors)
+            door, geom, side = self._pick_door(pose, doors)
             if door is None:
                 return Cmd('idle', 0.0, 0.0, None)
-            x, y, _ = pose
-            # lado de aproximação: progresso negativo = "antes" da porta
-            raw_s = ((x - geom.cx) * geom.nx + (y - geom.cy) * geom.ny)
-            self.side = -1 if raw_s > 0 else +1
+            x, y, yaw = pose
+            self.side = side
             self.door, self.geom = door, geom
-            # 2026-06-19: a web (nav2 via ponto-pré-porta) já entrega o robô
-            # centrado na frente da porta. Arma DIRETO no rotating (só alinha o
-            # ângulo) e cruza — NÃO faz staging (não persegue o centro do vão,
-            # que era o "buscando eixo" que estragava a posição já boa). O
-            # staging fica só como recuperação pós-escape (reversing).
-            self.state = 'rotating'
+            s, lat = door_progress_lateral(geom, x, y, self.side)
+            yaw_err = _wrap(yaw - crossing_yaw(geom, self.side))
+            # 2026-09-02: o door deixa de pensar "só na entrada". Dentro do
+            # corredor da porta, se a pose ainda precisa ser ajeitada ele assume
+            # em staging e dirige a aproximação; só pula direto pro rotating
+            # quando já chegou praticamente pronto.
+            self.state = ('rotating' if ready_to_commit(lat, yaw_err, cfg)
+                          else 'staging')
             self.t_start = now
             self._stable = 0
             self._escape_count = 0
@@ -542,11 +565,17 @@ class DoorCrossing:
             esc = self._maybe_escape(now, (x, y), front_gap, rear_gap)
             if esc is not None:
                 return esc
-            # alvo: ponto no eixo, stage_dist antes do centro
-            tgx = g.cx - g.nx * self.side * cfg.stage_dist
-            tgy = g.cy - g.ny * self.side * cfg.stage_dist
+            # alvo: linha de pré-entrada no eixo. Se já passou dela, NÃO tenta
+            # "voltar pro ponto" (o que causava giro no lugar olhando pra trás);
+            # zera o lateral na abscissa ATUAL e prepara o commit dali.
+            s_goal = max(s, -cfg.stage_dist)
+            tgx = g.cx + g.nx * self.side * s_goal
+            tgy = g.cy + g.ny * self.side * s_goal
             dist = math.hypot(tgx - x, tgy - y)
-            if dist <= cfg.stage_tol:
+            # dentro da área da porta, "cheguei no staging" significa duas
+            # coisas: estou perto da linha de pré-entrada E já matei o lateral
+            # o bastante para o giro final não jogar o corpo no batente.
+            if dist <= cfg.stage_tol and abs(d) <= cfg.align_lat:
                 self.state = 'rotating'
                 self._stable = 0
             else:

@@ -16,6 +16,7 @@ fresta A não está marcada como porta, `/doors` chega vazio e a máquina fica
 import dataclasses
 import json
 import math
+import sys
 import os
 import unittest
 
@@ -23,22 +24,29 @@ from robot_nav.door_crossing import (
     DoorCrossConfig,
     DoorCrossing,
     door_geometry,
+    door_progress_lateral,
+    crossing_yaw,
     will_clear,
     _extrai_doors,
     doors_de_arquivo,
     ENTREGA_DO_GIRO,
     ENTREGA_DO_GIRO_MAX,
+    in_approach_region,
     janela_de_alinhamento_ok,
     passo_minimo_do_giro,
+    ready_to_commit,
     valida_doors,
 )
 
 RAIZ = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 DOORS_JSON = os.path.join(RAIZ, 'maps', 'arena_galpao.doors.json')
 
-# Geometria da fresta A, como o gerador a produz (tools/gera_arena_galpao.py:43):
-# blocos em x = 7,5 cobrindo y 0,30-1,80 e 2,70-4,20 -> vão de 0,90 m.
-A_ESPERADA = {'a': (7.50, 1.80), 'b': (7.50, 2.70)}
+# Geometria da fresta A. Os blocos ficam em x = 7,5 com 0,60 m de espessura
+# (7,20 a 7,80) e o vão vai de y 1,80 a 2,70.
+# 2026-09-02 (pedido do dono): a porta é marcada na QUINA por onde o robô chega
+# (x = 7,20), não no eixo do bloco (7,50). O bloco é um TÚNEL curto; marcando no
+# meio, o robô se alinha para um plano 30 cm DENTRO da parede.
+A_ESPERADA = {'a': (7.20, 1.80), 'b': (7.20, 2.70)}
 
 
 def carrega_portas():
@@ -52,10 +60,10 @@ def porta_A(portas):
     for d in portas:
         cx = (d['a'][0] + d['b'][0]) / 2.0
         cy = (d['a'][1] + d['b'][1]) / 2.0
-        if abs(cx - 7.50) <= 0.05 and abs(cy - 2.25) <= 0.05:
+        if abs(cx - 7.20) <= 0.05 and abs(cy - 2.25) <= 0.05:
             return d
     raise AssertionError(
-        f'nenhuma porta no vão da fresta A (7.50 ; 2.25) em {DOORS_JSON}: {portas}')
+        f'nenhuma porta na BOCA da fresta A (7.20 ; 2.25) em {DOORS_JSON}: {portas}')
 
 
 class TestFrestaAMarcadaComoPorta(unittest.TestCase):
@@ -82,16 +90,27 @@ class TestFrestaAMarcadaComoPorta(unittest.TestCase):
         vao = math.hypot(d['b'][0] - d['a'][0], d['b'][1] - d['a'][1])
         self.assertAlmostEqual(vao, 0.90, places=3)
 
-    def test_a_fresta_C_de_0_60_NAO_pode_estar_marcada(self):
-        """§5.1/§6.2: com robot_radius 0.32 o Nav2 já trata a de 0,60 como
-        parede, e a conta do §4.4-(a) provavelmente não fecha lá. Marcar porta
-        que o planejador não usa é zona armada à toa."""
-        for d in carrega_portas():
-            vao = math.hypot(d['b'][0] - d['a'][0], d['b'][1] - d['a'][1])
-            self.assertGreater(
-                vao, 0.65,
-                f'porta de {vao:.2f} m marcada — a de 0,60 não pode ser marcada '
-                'sem refazer a conta do §4.4-(a): id={}'.format(d.get('id')))
+    def test_as_QUATRO_frestas_estao_marcadas(self):
+        """2026-09-02, decisão do dono: marcar todas. Com a porta na QUINA a
+        conta do §4.4-(a) fecha em todas (giro +31,7 a +39,6 cm) — antes, com a
+        marcação no meio do bloco, a de 0,60 dava só +7,1 cm.
+
+        ⚠️ A fresta C (0,60) segue sendo tratada como PAREDE pelo Nav2
+        (`robot_radius 0.32`), então a porta dela é zona armada que o planejador
+        não usa. Marcada por pedido do dono; não é erro, é escopo."""
+        vaos = sorted(round(math.hypot(d['b'][0] - d['a'][0],
+                                       d['b'][1] - d['a'][1]), 2)
+                      for d in carrega_portas())
+        self.assertEqual(vaos, [0.60, 0.70, 0.80, 0.90])
+
+    def test_toda_porta_marcada_tem_margem_de_giro_POSITIVA(self):
+        """O par que protege a decisão acima: marcar fresta em que o robô bate
+        girando é pior que não marcar."""
+        sys.path.insert(0, os.path.join(RAIZ, 'tools'))
+        import gera_arena_galpao as ga
+        for nome in ga.MARCADAS_COMO_PORTA:
+            with self.subTest(nome):
+                self.assertGreater(ga.margem_point_turn(nome), 0.15)
 
 
 class TestDoorsFile(unittest.TestCase):
@@ -103,7 +122,7 @@ class TestDoorsFile(unittest.TestCase):
 
     def test_le_a_porta_da_arena_do_disco(self):
         d = doors_de_arquivo(DOORS_JSON)
-        self.assertEqual(len(d), 1)
+        self.assertEqual(len(d), 4)
         self.assertEqual(d[0]['id'], 1)
 
     def test_caminho_vazio_e_sem_portas_nao_e_erro(self):
@@ -201,8 +220,11 @@ class TestPoseDaNoguard3(unittest.TestCase):
                             'roda igual à de hoje')
         self.assertLessEqual(abs(cmd.vx), cfg.stage_speed + 1e-9,
                              'avançou em velocidade de rota com a porta armada')
-        self.assertNotAlmostEqual(cmd.wz, 0.0, msg='tinha que estar girando '
-                                  'pra tirar os 7,7° antes de entrar')
+        self.assertEqual(cmd.state, 'staging',
+                         'entrada ruim agora tem que ser corrigida na AREA da '
+                         'porta, nao pular direto para rotating')
+        self.assertNotAlmostEqual(cmd.wz, 0.0, msg='tinha que estar ajeitando '
+                                  'o heading na aproximacao')
 
     def test_pose_boa_ATRAVESSA_depois_de_estabilizar(self):
         """O par que prova o teste sensível: sem ele, a máquina desligada
@@ -252,35 +274,52 @@ class TestPoseDaNoguard3(unittest.TestCase):
                 break
         return dict(cruzou=cruz, transicoes=tr)
 
-    def test_GEOMETRIA_a_maquina_COMMITA_com_12_cm_fora_do_eixo(self):
-        """A causa do §2H.17, provada SEM dinâmica nenhuma — só `will_clear()`.
+    def test_GEOMETRIA_12_cm_ainda_PASSA_no_will_clear_mas_NAO_no_preparo(self):
+        """O `will_clear` continua sendo trava de batente, não de preparação.
 
-        Este é o teste que sustenta o achado: entrando +12 cm fora do eixo (a
-        pose da `noguard3`), a trava geométrica **aprova** a travessia, porque
-        `fit = half_width - robot_half_width - fit_margin = 0,45 - 0,25 - 0,05
-        = 0,15 m` e a projeção com yaw alinhado é ~0,12 < 0,15. Ou seja: a
-        máquina commita legalmente torta, e nada a jusante centra.
+        A pose +12 cm fora do eixo ainda PASSA na projeção geométrica pura
+        (`fit = 0,15 m`), então o ganho desta mudança não vem de apertar a
+        conta — vem de exigir preparo na ÁREA da porta antes do commit.
         """
         g = door_geometry((7.50, 1.80), (7.50, 2.70))
         self.assertAlmostEqual(g.half_width - 0.25 - 0.05, 0.15, places=6)
-        # s = -0.6 (no ponto de preparação), yaw já alinhado, d = +0.12
+        s, d, yaw_err = -0.60, 0.12, 0.0
         self.assertTrue(will_clear(g, -0.60, 0.12, 0.0, -1, 0.25, 0.05),
-                        'se isto reprovar, a máquina passou a re-estagiar — o '
-                        'conserto da §2H.17 entrou, atualize o diário')
-        # e o par: com desvio grande o bastante ela REPROVA (a trava existe)
+                        'o fit geometrico continua permitindo +12 cm')
+        self.assertFalse(ready_to_commit(d, yaw_err, DoorCrossConfig()),
+                         'o preparo da AREA da porta tem que segurar +12 cm')
         self.assertFalse(will_clear(g, -0.60, 0.26, 0.0, -1, 0.25, 0.05))
 
-    def test_ESTRUTURA_o_arme_pula_o_staging(self):
-        """A outra metade da causa: `_pick_door` arma direto em `rotating`, que
-        alinha SÓ o ângulo. O `staging` (quem dirige até o eixo) só aparece como
-        recuperação pós-escape. Sem dinâmica: olha o 1º estado após o arme."""
+    def test_ESTRUTURA_a_pose_ruim_arma_em_staging(self):
+        """A área da porta agora tem que comandar a correção antes da boca."""
         portas = carrega_portas()
         m, _ = self._maquina()
         self._pre_porta_cumprido(m, (6.50, 2.37, math.radians(-10.7)), portas)
         cmd = self._tick(m, 0.05, (6.50, 2.37, math.radians(-10.7)), portas)
-        self.assertEqual(cmd.state, 'rotating',
-                         'armou em outro estado — se for `staging`, o conserto '
-                         'da §2H.17 entrou')
+        self.assertEqual(cmd.state, 'staging',
+                         'entrada ruim tem que entrar em staging para matar lateral')
+
+    def test_ESTRUTURA_a_pose_boa_ainda_pode_ir_direto_ao_rotating(self):
+        """O par sensível: pose já pronta não deve ganhar um estágio à toa."""
+        portas = carrega_portas()
+        m, _ = self._maquina()
+        self._pre_porta_cumprido(m, (6.50, 2.25, 0.0), portas)
+        cmd = self._tick(m, 0.05, (6.50, 2.25, 0.0), portas)
+        self.assertEqual(cmd.state, 'rotating')
+
+    def test_AREA_de_aproximacao_filtra_pose_lateral_demais(self):
+        """Círculo sozinho era frouxo; fora do corredor a manobra não assume."""
+        portas = carrega_portas()
+        m, cfg = self._maquina()
+        pose = (6.50, 2.70, 0.0)
+        self._pre_porta_cumprido(m, pose, portas)
+        cmd = self._tick(m, 0.05, pose, portas)
+        self.assertEqual(cmd.state, 'idle')
+        g = door_geometry(tuple(porta_A(portas)['a']), tuple(porta_A(portas)['b']))
+        raw_s = ((pose[0] - g.cx) * g.nx + (pose[1] - g.cy) * g.ny)
+        side = -1 if raw_s > 0 else +1
+        s, d = door_progress_lateral(g, pose[0], pose[1], side)
+        self.assertFalse(in_approach_region(s, d, cfg))
 
     def test_da_pose_QUE_RASPOU_a_trava_geometrica_REPROVA_e_ela_re_estagia(self):
         """O contraste que fecha o quadro: a 25,9 cm fora do eixo (a amostra do
@@ -294,15 +333,18 @@ class TestPoseDaNoguard3(unittest.TestCase):
         self.assertIn('crossing', r['transicoes'],
                       f're-estagiou e nunca atravessou: {r["transicoes"]}')
 
-    def test_MODELO_reproduz_a_ESTRUTURA_das_duas_voltas_do_sim(self):
-        """O modelo calibrado só vale para isto: a sequência de estados bate com
-        as duas voltas medidas (§2H.16/§2H.17), nas duas entradas."""
-        for pose, nome in (((6.50, 2.25, 0.0), 'porta1'),
-                           ((6.50, 2.37, math.radians(-10.7)), 'torta1')):
+    def test_MODELO_reproduz_a_ESTRUTURA_das_duas_entradas(self):
+        """Boa entra quase pronta; ruim usa a área para se ajeitar antes."""
+        casos = (
+            ((6.50, 2.25, 0.0), 'porta1', ['rotating', 'crossing', 'idle']),
+            ((6.50, 2.37, math.radians(-10.7)), 'torta1',
+             ['staging', 'rotating', 'crossing', 'idle']),
+        )
+        for pose, nome, esperado in casos:
             with self.subTest(nome):
                 r = self._malha_fechada(pose, carrega_portas())
-                self.assertEqual(r['transicoes'], ['rotating', 'crossing', 'idle'],
-                                 f'{nome}: o sim fez rotating->crossing->idle')
+                self.assertEqual(r['transicoes'], esperado,
+                                 f'{nome}: transicoes inesperadas')
                 self.assertIsNotNone(r['cruzou'])
 
 
