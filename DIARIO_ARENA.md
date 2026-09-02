@@ -2269,6 +2269,43 @@ Nav2 já a trata como parede, então seria zona armada que o planejador nunca us
 **Falta:** §5.2 (o nó não lê porta de arquivo — `doors_file`), §5.3 (fiação do
 launch), §5.4 (higiene) e o desbloqueio da pendência C (§2H.5).
 
+### 2H.7 Como desarmar a pendência C — recomendação, e a conta que escolhe a distância
+
+Duas saídas para o nó parar de ficar `idle`:
+
+| | opção | o que traz | o que custa |
+|---|---|---|---|
+| **(a)** | **Waypoint pré-fresta na rota** (é o fluxo para o qual o gate foi feito, validado em campo 06-12/06-22) | O goal termina na zona → `_cleared` recebe o id → arma. **De quebra mata o risco nº 1 do spec (§8.1)**: o robô chega **parado e centrado** pelo `xy_goal_tolerance`, que é o contexto para o qual `zone_radius = 1,1` foi calibrado — hoje ele entraria na zona a ~0,9 m/s | +1 goal na volta (~+3–5 s), e a rota passa a ter um ponto que não é cone |
+| (b) | Afrouxar o gate na arena (`require_pre_door:=false`) | Não mexe na rota | Reabre o freeze de campo 06-22 que criou o gate, e deixa o risco §8.1 **inteiro** de pé (arme em movimento, na velocidade de rota) |
+
+**Recomendo (a).** Ela não é só o caminho mais barato: é a única que devolve o
+`door_crossing` ao **contexto em que ele foi validado**.
+
+#### A distância do waypoint NÃO é livre — e 0,6 m reprova
+
+O §4.4-(a) do spec calcula a margem do point-turn **no ponto exato** (6,90 ; 2,25)
+e conclui +18,7 cm. Mas o robô não para no ponto exato: para dentro do
+`xy_goal_tolerance = 0,15`. Refazendo a conta para o **pior canto do envelope de
+chegada**:
+
+| waypoint | margem no ponto ideal | **pior caso com tolerância 0,15** |
+|---|---|---|
+| a 0,6 m do centro (= `stage_dist`) | +18,7 cm | 🔴 **−1,8 cm** |
+| a 0,8 m | +31,9 cm | +10,7 cm |
+| **a 1,0 m** (6,50 ; 2,25) | +47,9 cm | ✅ **+27,3 cm** |
+
+**Os 18,7 cm do spec são de um ponto que o robô só alcança com ±15 cm de folga —
+e no pior canto desse envelope o círculo varrido (r = 0,354) ENCOSTA no bloco.**
+É o mesmo defeito do erro 83 em escala menor: conta feita no ponto nominal,
+decisão tomada como se o ponto fosse exato.
+
+**Proposta: waypoint a 1,0 m, em (6,50 ; 2,25).** Não é número escolhido a dedo —
+é exatamente o *"ponto pré-porta de 1,0 m"* para o qual o comentário do código
+(`door_crossing.py:169-173`) diz que `zone_radius = 1,1` foi dimensionado.
+
+⏳ **Não implementado — aguardando a decisão do dono**, porque mexer na rota da
+prova a 3 dias é mudança que ele tem que ver antes.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
