@@ -2427,6 +2427,98 @@ O log do nó continua sendo `error` (não `warn`), como já estava.
 **461 testes passam, 2 vermelhos** — os mesmos 2 de sempre, esperando a decisão
 do waypoint (§2H.7).
 
+### 2H.11 🔴🔴 A máquina NÃO CONVERGE: a janela de alinhamento é menor que um passo do giro
+
+Fiz o waypoint pré-fresta como **opt-in** (`--pre-fresta`, default OFF, rota da
+prova **byte a byte idêntica** — conferido com `diff`) para poder medir sem
+decidir pelo dono. Aí rodei a máquina em **malha fechada** — integrando o
+`(vx, wz)` que ela comanda de volta na pose — a partir das **13 poses REAIS de
+entrada na zona**, extraídas do `colisao.csv` de cada volta.
+
+#### O resultado, e o defeito que ele expôs
+
+| | passa | \|desvio\| máx | \|yaw\| máx | folga mín | re-estágios |
+|---|---|---|---|---|---|
+| **hoje** (20 Hz, `align_yaw` 3°) | **10/13** | 3,2 cm | 1,51° | 16,1 cm | 1 |
+| 50 Hz, 3° | **13/13** | 3,1 | 1,47° | 16,3 | 1 |
+| 20 Hz, **5°** | **13/13** | 3,2 | 1,51° | 16,1 | 1 |
+| 20 Hz, 4° | **13/13** | 3,2 | 1,51° | 16,1 | 1 |
+| *(sem máquina, medido no sim)* | 13/13 | **12,1** | **15,8°** | **3,7** | — |
+
+**As 3 que falharam (`aprox1`, `aprox2`, `hist2`) abortaram por
+`align_timeout`, todas em `t = 15,00 s`, e todas com o yaw parado em −3,7° a
+−3,9°** — logo fora da janela de 3°. A aritmética:
+
+```
+passo mínimo do giro = rot_min / rate_hz = 2,5 / 20 = 0,125 rad = 7,16°
+janela do align_yaw  = 2 × 3,0°                              =  6,00°
+```
+
+**A janela inteira é menor que UM passo.** `rot_min` é PISO, não mínimo
+desejável (abaixo dele o skid-steer não vira, atrito), então o giro no lugar é
+**quantizado** em 7,16° e pula por cima da janela de 6,00° toda vez. É um
+**ciclo-limite**, e é exatamente o *"bang-bang caçando dir/esq"* relatado em
+campo em 06-19 — agora com número.
+
+🔴 **O que isso significa para os 10 que passaram: eles passaram por FASE, não
+por mecanismo.** A oscilação é determinística dada a pose inicial; em 10 das 13
+ela por acaso caiu dentro da janela. Isso **não é** base para "100% das vezes".
+
+#### A saída, medida
+
+Alargar a janela ou subir a taxa — as duas dão **13/13**. E **alargar não custa
+precisão**: o yaw **na entrada do vão** fica em **1,51° nos dois casos**, porque
+quem fecha a malha durante a travessia é o `cross_k_yaw`, não o `align_yaw`. O
+`align_yaw` só decide **quando commitar**.
+
+| | a favor | contra |
+|---|---|---|
+| **`align_yaw` 3° → 5°** | é **parâmetro**; era este o valor até 06-19; margem 10,0° vs passo 7,16° (40%) | 06-19 baixou pra 3° por causa de uma porta de **11 cm** de folga — a fresta A tem **20 cm**, mas a porta da SALA não |
+| `rate_hz` 20 → 50 | mantém os 3° | muda a taxa de um nó na artéria da autonomia, mexe em CPU/timing na Pi, e interage com tudo |
+| `align_yaw` 4° | mínimo suficiente | margem de só 12% sobre o passo |
+
+**Recomendo 5°, e SÓ no perfil da arena** (`align_yaw_deg` é param de launch) —
+assim a config da sala, que tem validação de campo, não muda.
+
+#### O que ficou no código (mudança de comportamento: ZERO)
+
+`janela_de_alinhamento_ok(align_yaw, rot_min, rate_hz)` + `passo_minimo_do_giro()`
+como funções puras, e o nó **avisa alto no arranque** quando a janela não cabe.
+**WARN e não erro de propósito**: a config da sala roda assim desde 06-19 e tem
+validação de campo — quebrar o boot dela agora seria pior que avisar. O valor em
+vigor **continua 3°**; trocar é decisão do dono.
+
+⚠️ **Limite desta medição, dito antes que alguém a cite como prova:** é
+cinemática **ideal** — sem inércia, sem derrapagem, sem `collision_monitor`,
+sem `motion_guard`, sem erro de AMCL variando no tempo. Serve para achar defeito
+de **lógica** (e achou um grande). Um resultado limpo aqui **não substitui** a
+volta no sim.
+
+### 2H.12 Waypoint pré-fresta: implementado OPT-IN, rota da prova intacta
+
+`tools/gera_arena_galpao.py --rota <dest> --pre-fresta` insere o goal
+`pre_fresta_A` **antes do `cone_2`** (a perna que atravessa a fresta). Sem a
+flag, a rota sai **idêntica byte a byte** à commitada — há teste que compara com
+`maps/routes/arena_galpao.json` e falha se alguém mexer.
+
+- O ponto sai da **tabela `OBST`**, não é número chapado: mover a fresta move o
+  waypoint junto (tem teste).
+- **yaw aponta pro vão** (achado do review): `approach_bearing = 70°` é medido
+  do yaw do ROBÔ, e waypoint com yaw errado reprova o gate mesmo dentro da zona.
+- `margem_pre_fresta()` recusa gerar (`SystemExit`) se a margem do point-turn no
+  **pior canto do envelope** do `xy_goal_tolerance` for ≤ 0. O gerador reproduz
+  sozinho a tabela do §2H.7: **0,6 m → −1,8 cm**, 0,8 → +10,7, **1,0 → +27,3**.
+
+🐞 **BO achado por teste:** `def ponto_pre_fresta(..., dist=PRE_FRESTA_DIST)`
+congelava a constante no `def` — mudar `PRE_FRESTA_DIST` não surtia efeito, e a
+falha fechada da distância curta **não disparava**. Resolvido no corpo da função.
+Erro 87 da §5.
+
+**479 testes passam, 0 vermelhos.** Os 2 que estavam vermelhos viraram verdes de
+verdade: o teste agora entrega o pulso de goal cumprido que a pendência C exige,
+e prova **os dois lados** do gate — `test_SEM_o_pre_porta_a_maquina_NUNCA_arma`
+(40 ticks, só `idle`) e a travessia completa com ele.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -2700,6 +2792,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 84 | 🔴 Prescrevi o `door_crossing` como **"scan-relative, logo imune ao AMCL"** — ele é **map-relative** | O nó alimenta a máquina com `_pose_map()` = TF `map`→`base_link` (a pose do AMCL) e compara com batentes em coordenadas de mapa (`door_crossing.py:641-649`). O `/scan` só entra como trava (`gap_ahead`, `front_gap`). Ou seja: o remédio que prescrevi **por ser imune** tem a mesma dependência que usei para desqualificar os outros. Achado ao investigar por que o teste ficava `idle` — não por revisão | Antes de dizer que um componente "não depende de X", abrir a função que produz a entrada dele. E: quando dois erros meus se cancelam (o remédio serve mesmo assim), isso é **sorte**, não acerto — os dois entram aqui separados |
 | 85 | Escrevi no spec (§5.1) que a fresta C de 0,60 *"provavelmente não cabe"* no giro de alinhamento | Ao implementar `margem_point_turn()` a conta saiu **+0,071 m** — cabe. Todas as 4 cabem (A +0,187 / B +0,107 / C +0,071 / D +0,146). O motivo real para não marcar a C é outro (o Nav2 já a trata como parede com `robot_radius 0.32`), e eu tinha o motivo certo escrito **na mesma frase** | "Provavelmente" num documento de desenho é uma conta que eu não fiz. A conta cabia em 3 linhas — fazê-la antes de escrever a suspeita, ou não escrever a suspeita |
 | 86 | 🔁 **Teste chamado "existe no git" que checava o DISCO** — BO 72 pela terceira vez nesta branch | `maps/*` está no `.gitignore:15`; os mapas da prova entraram com `git add -f`. Meu `git add -A` não levou o `arena_galpao.doors.json`, e o teste que eu escrevi para pegar exatamente isso usava `os.path.exists` — **passava com o arquivo fora do git**. Como acabei de pôr falha fechada no `--arena` ("sem doors.json, aborta"), o resultado na Pi seria o launch abortando por um arquivo que "o teste diz que está lá" | O nome do teste é uma promessa. Se ele diz **git**, tem que perguntar ao **git** — `os.path.exists` responde outra pergunta. E: em repo com `.gitignore` sobre um diretório de artefatos, `git add -A` **não é** "adiciona tudo" |
+| 87 | Default de argumento congelando uma constante de módulo — e a falha fechada **não disparava** | `def ponto_pre_fresta(..., dist=PRE_FRESTA_DIST)`: o Python avalia o default no `def`, então mudar `PRE_FRESTA_DIST` depois não surtia efeito. Consequência real: o teste que exige `SystemExit` para distância curta demais (robô girando em cima do batente) **passava sem a guarda existir de fato**. Achado porque escrevi o teste ANTES de confiar na guarda | Constante de módulo que pode mudar não vai em default de argumento — resolve no corpo (`x = CONST if x is None else x`). E: foi o teste que pegou, não a leitura — a guarda "parecia certa" no código |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |

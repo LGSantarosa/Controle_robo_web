@@ -325,6 +325,31 @@ class Cmd(NamedTuple):
     door_id: Optional[int]
 
 
+def passo_minimo_do_giro(rot_min: float, rate_hz: float) -> float:
+    """Menor variação de yaw que UM tick consegue produzir, em rad.
+
+    `rot_min` é um PISO, não um mínimo desejável: abaixo dele o skid-steer não
+    vira (atrito). Então o giro no lugar é quantizado em `rot_min / rate_hz`.
+    """
+    return rot_min / rate_hz
+
+
+def janela_de_alinhamento_ok(align_yaw: float, rot_min: float,
+                             rate_hz: float) -> bool:
+    """A janela `|yaw_err| <= align_yaw` (largura 2·align_yaw) tem que caber
+    MAIS DE UM passo do giro — senão o estado ROTATING nunca converge.
+
+    Achado 2026-09-02 (DIARIO_ARENA §2H.11): com os valores em vigor
+    (align_yaw 3°, rot_min 2.5, 20 Hz) a janela mede 6,00° e o passo mede
+    7,16° — o giro PULA por cima da janela toda vez e o alinhamento termina em
+    `align_timeout`. Medido nas 13 poses reais de entrada na fresta A: 3
+    abortaram, e os 10 que passaram passaram por FASE (a oscilação por acaso
+    caiu dentro), não por mecanismo. É o "caçando dir/esq" relatado em campo
+    2026-06-19, agora com número.
+    """
+    return 2.0 * align_yaw > passo_minimo_do_giro(rot_min, rate_hz)
+
+
 def _wrap(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
@@ -703,6 +728,24 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                     GoalStatusArray, topic,
                     lambda m, t=topic: self._on_status(t, m), 10)
 
+            # Trava do ciclo-limite (2026-09-02, §2H.11): se a janela de
+            # alinhamento for menor que um passo do giro, o ROTATING não
+            # converge e a travessia morre no align_timeout. WARN e não erro: a
+            # config da SALA roda assim desde 06-19 e tem validação de campo —
+            # quebrar o boot dela agora seria pior que avisar alto.
+            if not janela_de_alinhamento_ok(self.cfg.align_yaw, self.cfg.rot_min,
+                                            g['rate_hz']):
+                self.get_logger().warn(
+                    'JANELA DE ALINHAMENTO MENOR QUE O PASSO DO GIRO: '
+                    'align_yaw %.2f° (janela %.2f°) < passo %.2f° '
+                    '(rot_min %.2f / %.0f Hz). O ROTATING vai oscilar por cima '
+                    'da janela e abortar por align_timeout. Suba align_yaw_deg '
+                    'ou rate_hz.' % (
+                        math.degrees(self.cfg.align_yaw),
+                        2 * math.degrees(self.cfg.align_yaw),
+                        math.degrees(passo_minimo_do_giro(self.cfg.rot_min,
+                                                          g['rate_hz'])),
+                        self.cfg.rot_min, g['rate_hz']))
             self.create_timer(1.0 / g['rate_hz'], self._tick)
             self._publish_zone('idle', None)
             self.get_logger().info(

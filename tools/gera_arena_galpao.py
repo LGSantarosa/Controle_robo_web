@@ -107,6 +107,68 @@ def tampao(nome):
 # não deve ser marcada — com robot_radius 0.32 o Nav2 já a trata como parede.
 MARCADAS_COMO_PORTA = ('A_fresta90',)
 
+# Waypoint pré-fresta (2026-09-02, DIARIO_ARENA §2H.7) — OPT-IN, default OFF.
+# O `door_crossing` só assume porta cujo goal do Nav2 TERMINOU dentro da zona
+# dela (`_pick_door`, pendência C): sem um goal ali, o nó sobe e fica `idle`
+# para sempre. Este waypoint é esse goal.
+#
+# A DISTÂNCIA não é livre. O §4.4-(a) do spec calcula a margem do point-turn no
+# ponto EXATO, mas o robô para dentro do `xy_goal_tolerance = 0.15`
+# (`nav2_params_arena.yaml:151`). Refeita para o pior canto do envelope:
+#     0,6 m -> -1,8 cm  (o círculo varrido ENCOSTA no bloco)
+#     0,8 m -> +10,7 cm
+#     1,0 m -> +27,3 cm   <- escolhido
+# 1,0 m também é o "ponto pré-porta" para o qual `zone_radius = 1.1` foi
+# dimensionado (door_crossing.py:169-173) — não é número a dedo.
+PRE_FRESTA_DIST = 1.0
+XY_GOAL_TOL = 0.15          # nav2_params_arena.yaml:151 (goal_checker)
+
+
+def ponto_pre_fresta(nome='A_fresta90', dist=None):
+    """(x, y, yaw) do waypoint pré-fresta, do lado por onde a rota chega.
+
+    Sai da MESMA tabela OBST que gera o mundo e as portas. O yaw aponta pro vão:
+    `approach_bearing = 70°` é medido do yaw do ROBÔ, então waypoint com yaw
+    errado reprova o gate mesmo estando dentro da zona (achado do review).
+    """
+    # resolvido AQUI, não no default do parâmetro: default de argumento congela
+    # o valor no `def` e a constante do módulo deixaria de valer (pegado por
+    # test_distancia_curta_demais_ABORTA_a_geracao)
+    dist = PRE_FRESTA_DIST if dist is None else dist
+    (ax, ay), (bx, by) = batentes(nome)
+    cx, cy = (ax + bx) / 2.0, (ay + by) / 2.0
+    vx, vy = bx - ax, by - ay
+    n = math.hypot(vx, vy)
+    nx, ny = -vy / n, vx / n              # normal do vão
+    # a rota vem de cone_1 (x < 7,5): escolhe o lado de onde ela chega
+    px, py, _ = PONTOS['cone_1']
+    lado = -1.0 if ((px - cx) * nx + (py - cy) * ny) < 0 else 1.0
+    x, y = cx + lado * dist * nx, cy + lado * dist * ny
+    return x, y, math.atan2(-lado * ny, -lado * nx)   # encarando o vão
+
+
+def margem_pre_fresta(nome='A_fresta90', dist=None, tol=XY_GOAL_TOL):
+    """Pior margem do point-turn considerando que o robô para em QUALQUER canto
+    do envelope permitido pelo `xy_goal_tolerance` — não no ponto ideal."""
+    dist = PRE_FRESTA_DIST if dist is None else dist
+    x, y, _ = ponto_pre_fresta(nome, dist)
+    cantos = []
+    for n_, eixo, coord, faixas, _f, _c in OBST:
+        if n_ != nome:
+            continue
+        for b in (faixas[0][1], faixas[1][0]):          # os 2 batentes
+            for s_ in (-1, 1):                          # as 2 faces do bloco
+                if eixo == 'x':
+                    cantos.append((coord + s_ * ESP_BLOCO / 2, b))
+                else:
+                    cantos.append((b, coord + s_ * ESP_BLOCO / 2))
+    pior = math.inf
+    for dx in (-tol, 0.0, tol):
+        for dy in (-tol, 0.0, tol):
+            d = min(math.hypot(x + dx - cxx, y + dy - cyy) for cxx, cyy in cantos)
+            pior = min(pior, d - RAIO_CIRCUNSCRITO)
+    return pior
+
 # Volume varrido por um 0,50 × 0,50 girando no lugar (raio circunscrito).
 RAIO_CIRCUNSCRITO = 0.25 * math.sqrt(2)
 # door_crossing.DoorCrossConfig.stage_dist — onde o alinhamento acontece.
@@ -504,7 +566,7 @@ def escreve_sdf(destino):
     open(destino, "w").write(CABECALHO_SDF + corpo_sdf() + "  </world>\n</sdf>\n")
 
 
-def escreve_rota(destino):
+def escreve_rota(destino, pre_fresta=False):
     """Rota da missao: standoff de cada cone + chegada, na ordem.
 
     O goal do nav2 NAO vai no cone: cone (r 0.17) + robot_radius (0.32) da
@@ -529,14 +591,29 @@ def escreve_rota(destino):
     """
     import json
     os.makedirs(os.path.dirname(os.path.abspath(destino)), exist_ok=True)
-    json.dump({"name": "arena_galpao", "waypoints": rota_waypoints()},
+    json.dump({"name": "arena_galpao",
+               "waypoints": rota_waypoints(pre_fresta=pre_fresta)},
               open(destino, "w"), indent=2)
 
 
-def rota_waypoints():
+def rota_waypoints(pre_fresta=False):
+    """pre_fresta=True insere o goal pré-fresta A antes do cone_2 (§2H.7).
+    Default OFF: a rota da prova sai IDÊNTICA a antes desta mudança."""
     ordem = ["largada", "cone_1", "cone_2", "cone_3", "cone_4", "chegada"]
     wps = []
     for i, nome in enumerate(ordem[1:], 1):
+        if pre_fresta and nome == "cone_2":
+            # a perna cone_1 -> cone_2 é a que atravessa a fresta A
+            m = margem_pre_fresta()
+            if m <= 0:
+                raise SystemExit(
+                    f'waypoint pré-fresta: margem de point-turn {m:+.3f} m no '
+                    'pior canto do envelope de chegada — o robô bateria no '
+                    'batente durante o próprio giro. Aumente PRE_FRESTA_DIST.')
+            fx, fy, fyaw = ponto_pre_fresta()
+            # `or 0.0` mata o -0.0 do atan2 (JSON com "-0.0" confunde quem lê)
+            wps.append({"x": round(fx, 3), "y": round(fy, 3),
+                        "yaw": round(fyaw, 4) or 0.0, "alvo": "pre_fresta_A"})
         ax, ay, _ = PONTOS[ordem[i - 1]]
         bx, by, tem_cone = PONTOS[nome]
         rumo = math.atan2(by - ay, bx - ax)
@@ -557,6 +634,10 @@ def main():
     ap.add_argument('--conferir', action='store_true')
     ap.add_argument('--sdf', metavar='DEST', help='escreve o world COMPLETO (cabeçalho + models)')
     ap.add_argument('--rota', metavar='DEST', help='escreve a rota da missão (.json do probe.py)')
+    ap.add_argument('--pre-fresta', action='store_true',
+                    help='SÓ COM --rota: insere o goal pré-fresta A (6,50;2,25) '
+                         'antes do cone_2. É o que ARMA o door_crossing '
+                         '(pendência C). Default: NÃO — a rota da prova não muda')
     ap.add_argument('--corpo-sdf', action='store_true',
                     help='imprime só os <model> (o cabeçalho do world é fixo no .sdf)')
     ap.add_argument('--mapa', metavar='DIR', help='gera arena_galpao.pgm/.yaml em DIR')
@@ -582,8 +663,14 @@ def main():
     if a.sdf:
         escreve_sdf(a.sdf); print(f'world completo escrito em {a.sdf}'); return
     if a.rota:
-        escreve_rota(a.rota); print(f'rota escrita em {a.rota}')
-        for w in rota_waypoints():
+        escreve_rota(a.rota, pre_fresta=a.pre_fresta)
+        print(f'rota escrita em {a.rota}'
+              + ('  [COM waypoint pré-fresta A]' if a.pre_fresta else ''))
+        if a.pre_fresta:
+            print(f'  margem do point-turn no pior canto do envelope '
+                  f'(xy_goal_tolerance {XY_GOAL_TOL}): '
+                  f'{margem_pre_fresta():+.3f} m')
+        for w in rota_waypoints(pre_fresta=a.pre_fresta):
             print(f"  {w['alvo']:9s} ({w['x']:6.2f},{w['y']:5.2f}) yaw {math.degrees(w['yaw']):6.1f}°")
         return
     if a.corpo_sdf:
