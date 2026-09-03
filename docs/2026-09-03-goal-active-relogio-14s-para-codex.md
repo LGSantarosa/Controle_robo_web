@@ -3,6 +3,10 @@
 **Data:** 2026-09-03 · **Branch:** `arena-galpao` · **ROS:** jazzy · **Ambiente:** sim (Gazebo), na máquina de dev
 **Prioridade:** máxima (ordem do dono). Bloqueia a arena inteira, prazo 05/09.
 
+> **ATUALIZADO 15:20 — LEIA A §6 ANTES DE TUDO.** A hipótese original (expiração de
+> goal terminal por `result_timeout`) foi **REFUTADA** por instrumentação. O
+> documento foi corrigido; as perguntas da §8 mudaram.
+
 ---
 
 ## 1. TL;DR
@@ -144,22 +148,58 @@ voltar**, porque com o goal seguindo em execução não há novo evento de statu
 
 ---
 
-## 6. Minha hipótese (NÃO confirmada)
+## 6. 🔻 A hipótese original foi REFUTADA pelos dados
 
-Os ~14-15 s batem com a **expiração do goal terminal anterior** na lista de status
-do action server (`result_timeout`), que provoca uma nova publicação de
-`GoalStatusArray`. Se essa publicação chegar sem nenhum status em `{1,2,3}`, o
-`any()` dá falso e o seguidor cala permanentemente.
+**O que eu havia proposto:** os ~14-15 s seriam a expiração do goal terminal
+anterior saindo da `status_list` (`result_timeout` do `rcl_action`), o que
+provocaria uma publicação sem nenhum status ativo.
 
-**O que apoia:** a regularidade (13,8-14,9 s, 3/3), o gatilho ser sempre relativo ao
-`Goal succeeded` anterior, e a ausência total de evento no `bt_navigator`.
+**Está errado.** A instrumentação (§7) rodou na corrida das 15:17 e mostra que a
+lista **nunca é podada** — ela só cresce, e os goals terminados permanecem nela:
 
-**O que eu não consigo explicar sozinho:** se o goal corrente está `EXECUTING`, ele
-deveria continuar na `status_list` mesmo após o anterior expirar — e o `any()`
-continuaria verdadeiro. Então ou a lista publicada nesse instante **não contém** o
-goal corrente, ou o goal corrente não está no estado que eu presumo.
+```
+n=1  [2]                    -> True     (EXECUTING)
+n=1  [4]                    -> False    (SUCCEEDED)
+n=2  [4,2]                  -> True
+n=2  [4,4]                  -> False
+n=3  [4,4,2]                -> True
+n=4  [4,4,4,2]              -> True
+n=5  [4,4,4,4,2]            -> True
+n=6  [4,4,4,4,4,2]          -> True
+n=7  [4,4,4,4,4,4,2]        -> True
+n=7  [4,4,4,4,4,4,4]        -> False
+```
 
----
+Um item por goal, de 1 a 7, **nada removido em 222 s de corrida**. Sem poda, não há
+expiração para culpar.
+
+**E nessa corrida o `goal_active` funcionou perfeitamente:** cada `True -> False`
+caiu exatamente quando o goal corrente virou **4 (SUCCEEDED)**, e cada
+`False -> True` ~1,5 s depois, quando o próximo foi aceito. **O bug não reproduziu**
+(a volta passou inteira, 7/7 goals).
+
+### As duas leituras que sobram
+
+Sabendo que a lista nunca poda, nas corridas travadas o `any()` só pode ter dado
+falso se o **goal corrente** apareceu como terminal enquanto o `bt_navigator` ainda
+o executava. Duas explicações concorrentes, e eu **não sei** qual é:
+
+**(A) O sinal está errado.** O status do goal corrente virou terminal (4, 5 ou 6)
+indevidamente. Alvo: `path_follower` / a action do `bt_navigator`.
+
+**(B) O goal realmente concluiu, e o BO é outro.** O goal checker usa a pose dele,
+que pode diferir do TF `map->base_link` que eu logo. Os **22,0° medidos contra
+`yaw_goal_tolerance = 20,05°`** são perto o bastante para essa diferença decidir.
+Se o goal concluiu de verdade, o seguidor fez **certo** em calar — e o BO real é que
+**o `map_service` não enviou o goal seguinte**. Evidência a favor: nas corridas
+travadas, o `False -> True` que aqui vem 1,5 s depois **nunca veio**, e nenhum novo
+`Begin navigating` aparece no `nav2.log`.
+
+**(B) mudaria o alvo de `path_follower.py` para `controle_web/map_service.py`.**
+
+O que decide entre as duas é uma corrida **ruim** com a instrumentação ligada: ela
+imprime a lista crua e **qual status** o goal corrente tinha no instante da queda.
+Ainda não temos essa captura.
 
 ## 7. Já instrumentado (no ar, não muda comportamento)
 
@@ -171,26 +211,30 @@ rodar uma volta e procurar `GOAL_ACTIVE` no `nav2.log`.
 
 ## 8. Perguntas específicas para o Codex
 
-1. **A hipótese do `result_timeout` procede no jazzy?** Qual é o default, e o que
-   exatamente é publicado no `GoalStatusArray` quando um goal terminal expira? A
-   lista pode sair **vazia** mesmo havendo um goal `EXECUTING`?
-2. **`any(st.status in ACTIVE for st in msg.status_list)` é a forma certa de
-   derivar "tem goal ativo"?** Se não, qual é — rastrear o `goal_id` aceito e só
-   soltar em status terminal daquele id? Assinar o feedback em vez do status?
-   Usar o resultado do action client do próprio `map_service` e republicar?
-3. **O `path_follower` deveria poder se recuperar disto sozinho?** Hoje, uma vez
-   falso, fica falso para sempre. Um latch ("só solto o goal ao ver status terminal
-   do id que eu estava seguindo") resolve sem esconder um problema real?
-4. **Segundo problema, independente:** com o seguidor calado, o Nav2 ficou com o
+1. **A `status_list` que cresce sem parar (n=7 e subindo, terminados como `4`
+   para sempre) é o comportamento esperado do `rclcpp_action` no jazzy?** Se sim,
+   por quanto tempo/quantos goals? Existe algum ponto em que ela é limpa e que
+   poderia produzir uma publicação sem nenhum ativo?
+2. **`any(st.status in {1,2,3} for st in msg.status_list)` é a forma certa de
+   derivar "tem goal ativo"?** Com a lista acumulando, isso vira "existe QUALQUER
+   goal não-terminal", o que funciona por acidente. O correto não seria rastrear o
+   `goal_id` aceito e olhar só o status **dele**?
+3. **Entre (A) e (B) da §6, qual você acha mais provável, e que evidência
+   distinguiria sem precisar esperar uma corrida ruim?** Há como inspecionar
+   retroativamente nos logs das corridas travadas (§10)?
+4. **Se for (B):** o que no `map_service.py` poderia aceitar um `SUCCEEDED` e não
+   enviar o waypoint seguinte, sem logar nada? O envio é por `NavigateToPose`
+   (`map_service.py:1004`), com callbacks de estado do goal a partir de `:430`.
+5. **Robustez, independente da causa:** o `path_follower` hoje, uma vez com
+   `goal_active` falso, fica falso para sempre (o sinal é por evento e nenhum novo
+   evento chega). Um latch — "só solto o goal ao ver status terminal do `goal_id`
+   que eu estava seguindo" — é a proteção certa, ou esconderia um problema real?
+6. **Segundo problema, independente:** com o seguidor calado, o Nav2 ficou com o
    robô e não conseguiu girá-lo **nem um grau** em 355 s, gastando 233 replans e 5
    spins. É a zona-morta do skid-steer comendo os comandos de rotação do DWB/spin?
-   Vale um `min_rotational_vel` / `RotationShim` diferente, ou é sintoma de outra
-   coisa?
-5. **Design:** faz sentido o waypoint pré-porta exigir yaw dentro de 20° a 0,8 m do
+7. **Design:** faz sentido o waypoint pré-porta exigir yaw dentro de 20° a 0,8 m do
    vão, sendo que o robô rotineiramente chega ~30° torto e depende do point-turn
-   final? Afrouxar `yaw_goal_tolerance` esconderia este bug ou é legítimo por si?
-
----
+   final? Afrouxar `yaw_goal_tolerance` esconderia o bug ou é legítimo por si?
 
 ## 9. ⚠️ O que NÃO mexer
 
@@ -215,6 +259,7 @@ diferente (giro de 180° dentro/na saída do vão, arrastando cones).
 | 14:47 — boa, volta completa | `docs/baselines/2026-09-03-arena-saida-reta-OK-volta-completa/` |
 | 14:57 — travou | `docs/baselines/2026-09-03-arena-travado-no-waypoint-pre-porta-1/` |
 | 15:05 — travou (repetiu) | `docs/baselines/2026-09-03-arena-travado-repetiu-14s/` |
+| 15:17 — passou direto, **com instrumentação** | `docs/baselines/2026-09-03-arena-passou-direto-com-instrumentacao/` |
 
 Cada uma tem `follow_debug.csv` (20 Hz: estado, pose, yaw, herr, dist_goal, vx, wz,
 clear) e `nav2.log`. A 14:57 tem também `attempt_checkpoint.json`.
@@ -224,3 +269,30 @@ Narrativa completa no `DIARIO_ARENA.md`, §2H.34 e §2H.35. Item `2r` do §6.
 **Provável duplicata:** o item `2g` do §6 ("16 s em `idle` entre dois goals",
 aberto desde 08-31) é quase certamente este mesmo relógio, catalogado na época como
 "buraco entre goals".
+
+---
+
+## 11. Resultados do outro pacote (contexto, não é o problema desta revisão)
+
+Em paralelo, hoje foi consertado um BO diferente: o robô girava 180° dentro/na saída
+do vão e arrastava os cones. Conserto = `exit_margin` 0,50 -> 0,60 + o seguidor não
+acumular estado enquanto o `door_crossing` dirige + uma janela de **saída reta** de
+0,8 m após a devolução. Resultados nas duas voltas que completaram:
+
+| | 14:47 | 15:17 |
+|---|---|---|
+| `exit_straight`, episódio 1 | 0,80 m | 0,79 m |
+| `exit_straight`, episódio 2 | 0,26 m (guarda de folga) | 0,19 m (guarda de folga) |
+| `exit_straight`, episódio 3 | 0,80 m | 0,80 m |
+| `wz` durante a saída reta | **0 nos três** | **0 nos três** |
+| porta 1: preparação + travessia | — | 1,7 s + **8,0 s**, 1 tentativa |
+| porta 2: preparação + travessia | 28,5 s total | 20,9 s + **7,0 s**, 2 tentativas |
+
+**A travessia é estável em 7-8 s e limpa.** O custo está na *preparação* da porta 2
+(limite-ciclo `staging <-> rotating`), que é anterior a este trabalho.
+
+⚠️ Achado consistente nas duas voltas: o episódio 2 termina pela **guarda de folga**,
+não pela distância — sinal de que a janela está armando depois de um **abort** do
+`door_crossing`, não só depois de travessia concluída. O `/door_zone` publica `idle`
+nos dois casos e o seguidor não distingue. Anotado como item `2p` do §6 do diário.
+Opinião do Codex bem-vinda aqui também.
