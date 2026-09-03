@@ -4310,6 +4310,75 @@ Suíte: **167 passam**; seguem os 2 quebrados da §2H.22.
 
 ⏳ **Não rodado.**
 
+### 2H.42 📌 ESTADO AO ENCERRAR A SESSÃO (2026-09-03, ~16:30) — o dono foi pro robô real
+
+**Tudo commitado e pushado na branch `arena-galpao`.** Working tree limpo, nenhum
+processo rodando, nada meu em `/tmp` que importe.
+
+#### O que mudou hoje, e o estado de cada coisa
+
+| # | mudança | testes | sim | REAL |
+|---|---|---|---|---|
+| 1 | `door_crossing`: `exit_margin` 0,50 → **0,60** | ✅ | ✅ | ❌ |
+| 2 | `path_follower`: não acumula estado sob `preempted` | ✅ | ✅ | ❌ |
+| 3 | `path_follower`: janela de **saída reta** 0,8 m | ✅ | ✅ | ❌ |
+| 4 | `path_follower`: **guard estreito** (conserto do travamento) | ✅ | ✅ **exercitado** | ❌ |
+| 5 | Portas 3 e 4 removidas do `doors.json` | ✅ | ✅ | ❌ |
+| 6 | Geometria do vão com `depth` (§2H.36) | ✅ | inerte (`depth=0`) | inerte |
+| 7 | Instrumentação: `GOAL_ACTIVE`, `FOLLOW_IDLE`, `WP_SEND/ACCEPT/RESULT` | ✅ | ✅ | ❌ |
+
+**O #4 é o mais importante** e é o único com prova de que o mecanismo do BO
+aconteceu e o robô sobreviveu:
+`docs/baselines/2026-09-03-arena-PROVA-conserto-guard-exercitado/`.
+
+#### ⚠️ Commitei 3 arquivos que NÃO são meus
+
+Estavam modificados no working tree desde antes desta sessão, e são **o estado com
+que todas as voltas de hoje rodaram**. Deixar sem commit tornaria hoje
+irreproduzível — um `reset --hard` traria a rota antiga de volta:
+
+- `maps/routes/arena_galpao.json` — waypoints dos cones. A versão commitada tinha
+  `(3,114 / 1,302)`; o disco tem `(5,10 / 0,90)`, que é o que rodou.
+- `controle_web/door_geom.py` — `DOOR_STANDOFF` 1,0 → **0,8**, casando com o
+  `PRE_FRESTA_DIST = 0.8` do gerador e com o waypoint `(6,40 / 2,25)` de todas as voltas.
+- `controle_web/static/js/map.js` — desenho das portas no mapa web (cosmético).
+
+#### Última volta do sim (16:16) — 7/7 goals, 222,3 s
+
+| porta | total | preparação | travessia | tentativas |
+|---|---|---|---|---|
+| 1 | 8,1 s | 1,4 s | **6,8 s** | 1 |
+| 2 | 31,2 s | **24,8 s** | **6,4 s** | 3 |
+
+`exit_straight`: 3 episódios, `wz = 0` nos três.
+
+#### Documentos para a próxima sessão / para o Codex
+
+- `docs/2026-09-03-plano-robo-real-para-codex.md` — **começa por aqui.** Ordem do
+  dono: relê → BNO055 → o pacote de hoje. Inclui os 4 avisos antes de ligar o robô.
+- `docs/2026-09-03-goal-active-relogio-14s-para-codex.md` — a investigação do
+  travamento, do começo (hipóteses erradas incluídas) até a causa e o conserto.
+- `docs/2026-09-03-vao-com-profundidade-plano.md` — plano **parqueado** por decisão
+  do dono (7 passos, só o passo 1 feito).
+
+#### Abertos, por prioridade
+
+1. **`2q` — quem é o dono do yaw final perto da porta?** Seguidor exige 6°, Nav2
+   fecha com 20,05°; 5 de 7 goals fecharam entre 14,3° e 19,9°. É decisão de
+   projeto, não ajuste de número. Provável raiz dos 20-25 s de preparação da porta 2.
+2. **`2p`** — janela de saída reta arma depois de *abort*, não só de travessia
+   concluída (consistente em 4 corridas).
+3. **`2o`** — porta é uma LINHA; profundidade não declarável.
+4. **item 8** — `start/goal is an obstacle`: o plano nasce apontando pra trás. É a
+   **raiz** dos BOs de hoje; os consertos só impedem que ele custe cones.
+5. 2 testes quebrados herdados (`test_rotating_is_proportional_slows_near_target`,
+   `test_restage_when_aligned_but_wont_fit`) — já falhavam em `3c2b051`.
+
+#### ⚠️ E o aviso que vale mais que todos
+
+**Nada disto rodou no robô real.** E `--arena` passa `motion_guard:=false` **também
+no físico** — sobe sem vigia de pessoa. Pista controlada e E-STOP na mão.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô

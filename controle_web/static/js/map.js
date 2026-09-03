@@ -73,6 +73,32 @@
     if (Math.abs(diff) < (12 * Math.PI / 180)) ang = snapped;
     return { x: ax + len * Math.cos(ang), y: ay + len * Math.sin(ang) };
   }
+
+  // Visual da "area de passagem" no mapa. Isto e' UI, nao geometria de controle:
+  // o robo continua usando os batentes reais. A ideia e' mostrar so' o vao/tunel
+  // a ser atravessado a partir da linha marcada, nao o corredor de aproximacao.
+  const DOOR_VIS_PASS_LEN = 0.60;   // m de profundidade visual da passagem
+  const DOOR_VIS_SIDE_PAD = 0.05;   // m de folga lateral alem do vao
+  // Arena do galpao: a linha salva e' a boca de ENTRADA; a faixa visual deve
+  // sair para DENTRO do vao/tunel. A normal geometrica sozinha nao sabe isso.
+  // ids 1..4 = A,B,C,D do maps/arena_galpao.doors.json atual.
+  const DOOR_VIS_SIDE_BY_ID = { 1: -1, 2: +1, 3: +1, 4: -1 };
+
+  function doorVisualFrame(door) {
+    const ax = door.a[0], ay = door.a[1];
+    const bx = door.b[0], by = door.b[1];
+    const dx = bx - ax, dy = by - ay;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) return null;
+    const tx = dx / len, ty = dy / len;    // ao longo do vao
+    const side = DOOR_VIS_SIDE_BY_ID[door.id] || 1;
+    const nx = side * -ty, ny = side * tx; // normal visual para DENTRO da passagem
+    const cx = (ax + bx) / 2, cy = (ay + by) / 2;
+    return {
+      cx, cy, tx, ty, nx, ny, side,
+      halfWidth: (len / 2) + DOOR_VIS_SIDE_PAD,
+    };
+  }
   const btnDoor = document.getElementById('map-btn-door');
   const btnGoal = document.getElementById('map-btn-goal');
   const doorChip = document.getElementById('map-door-chip');
@@ -865,13 +891,43 @@
       ctx.stroke();
     }
 
-    // Portas marcadas: segmento entre batentes + discos; ativa = destacada
+    // Portas marcadas: batentes reais + faixa visual da AREA de passagem.
     doors.forEach(d => {
       const a = worldToCanvas(d.a[0], d.a[1]);
       const b = worldToCanvas(d.b[0], d.b[1]);
       if (!a || !b) return;
       const active = doorZone && doorZone.door_id === d.id
                      && doorZone.state !== 'idle';
+      const frame = doorVisualFrame(d);
+      if (frame) {
+        const p1 = worldToCanvas(
+          frame.cx - frame.tx * frame.halfWidth,
+          frame.cy - frame.ty * frame.halfWidth);
+        const p2 = worldToCanvas(
+          frame.cx + frame.tx * frame.halfWidth,
+          frame.cy + frame.ty * frame.halfWidth);
+        const p3 = worldToCanvas(
+          frame.cx + frame.nx * DOOR_VIS_PASS_LEN + frame.tx * frame.halfWidth,
+          frame.cy + frame.ny * DOOR_VIS_PASS_LEN + frame.ty * frame.halfWidth);
+        const p4 = worldToCanvas(
+          frame.cx + frame.nx * DOOR_VIS_PASS_LEN - frame.tx * frame.halfWidth,
+          frame.cy + frame.ny * DOOR_VIS_PASS_LEN - frame.ty * frame.halfWidth);
+        if (p1 && p2 && p3 && p4) {
+          ctx.save();
+          ctx.fillStyle = active ? 'rgba(34,197,94,0.18)' : 'rgba(6,182,212,0.12)';
+          ctx.strokeStyle = active ? 'rgba(34,197,94,0.50)' : 'rgba(6,182,212,0.35)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.lineTo(p3.x, p3.y);
+          ctx.lineTo(p4.x, p4.y);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
       ctx.strokeStyle = active ? '#0f0' : '#0aa';
       ctx.lineWidth = active ? 3 : 2;
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();

@@ -6,7 +6,7 @@ propósito p/ a web (Flask) não depender do pacote ROS robot_nav.
 """
 import math
 
-DOOR_STANDOFF = 1.0   # m — distância do ponto-pré-porta antes do centro da porta
+DOOR_STANDOFF = 0.8   # m — distância do ponto-pré-porta antes do centro da porta
 
 
 def _seg_cross(p1, p2, p3, p4) -> bool:
