@@ -46,7 +46,7 @@ from nav2_msgs.srv import GetCostmap
 from nav_msgs.msg import OccupancyGrid, Path
 from sensor_msgs.msg import LaserScan
 from rclpy.qos import qos_profile_sensor_data
-from std_msgs.msg import Float64, String
+from std_msgs.msg import Bool, Float64, String
 from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -258,6 +258,8 @@ class MapBridge:
 
     POSE_PUBLISH_HZ = 10.0
     SCAN_PUBLISH_HZ = 10.0
+    GOAL_LIGHT_PULSE_S = 1.5
+    GOAL_LIGHT_LOG = 'light_events.log'
     PRE_DOOR_CLEARANCE = 0.50   # m — folga mínima do ponto-pré-porta até parede.
                                 # > inflation_radius GLOBAL (0.45) senão o ponto
                                 # cai no halo de inflação = inalcançável e o robô
@@ -329,6 +331,7 @@ class MapBridge:
         self._goal_pub = self._node.create_publisher(
             PoseStamped, '/goal_pose', 10
         )
+        self._light_pub = self._node.create_publisher(Bool, '/light/cmd', 10)
         # Relocalização manual no NAV2: /initialpose é consumido pelo AMCL
         # (re-semeia as partículas). OBS: o slam_toolbox em MAPEAMENTO NÃO
         # escuta /initialpose — o caminho do SLAM é via interactive markers
@@ -408,6 +411,9 @@ class MapBridge:
         # Permite reemitir pra clientes que conectam depois que o map_server
         # (latched) já foi processado — sem isso, a UI fica em "aguardando /map".
         self._last_map_payload: Optional[dict] = None
+        self._goal_light_log_path = os.path.join(maps_dir, 'logs',
+                                                 self.GOAL_LIGHT_LOG)
+        os.makedirs(os.path.dirname(self._goal_light_log_path), exist_ok=True)
 
         # Waypoint navigation state.
         # _wp_lock protege mutações em _wp_list/_wp_loop/_wp_active/_wp_current_idx
@@ -426,6 +432,8 @@ class MapBridge:
         self._wp_goal_done: threading.Event = threading.Event()
         self._wp_goal_status: Optional[int] = None
         self._wp_goal_handle = None
+        self._goal_light_timer: Optional[threading.Timer] = None
+        self._goal_light_lock = threading.Lock()
 
         # Executor próprio — permite spin dos callbacks sem bloquear o Flask.
         self._executor = SingleThreadedExecutor()
@@ -836,8 +844,11 @@ class MapBridge:
         cruza uma porta marcada -> o nav2 entrega o robô reto/longe na frente da
         porta e o door_crossing só alinha+cruza. Usa o /plan real
         (compute_path_to_pose); se o cálculo falhar num trecho, cai no teste de
-        reta como rede de segurança. Web é a ÚNICA que manda goal (sem preempção:
-        decide ANTES de executar)."""
+        reta como rede de segurança. Se o /plan CONTORNA uma porta marcada mas o
+        segmento direto do trecho a cruza, ainda inserimos o pré-porta: foi o
+        que permitiu tentar a fresta C da arena, que o Nav2 trata como parede e
+        portanto nunca apareceria no /plan. Web é a ÚNICA que manda goal (sem
+        preempção: decide ANTES de executar)."""
         doors = self._doors.doors
         if start_xy is None or not doors:
             return list(waypoints)
@@ -846,12 +857,16 @@ class MapBridge:
         for wp in waypoints:
             to = (wp['x'], wp['y'])
             path = self._plan_path_xy(prev, to)
-            door = (door_on_path(path, doors) if path is not None
-                    else door_on_segment(prev, to, doors))
+            door = door_on_path(path, doors) if path is not None else None
+            if door is None:
+                door = door_on_segment(prev, to, doors)
             if door is not None:
                 wx, wy, wyaw = pre_door_waypoint(door['a'], door['b'], prev)
                 wx, wy = self._clear_pre_door_point(door, wx, wy)
-                out.append({'x': wx, 'y': wy, 'yaw': wyaw})
+                out.append({
+                    'x': wx, 'y': wy, 'yaw': wyaw,
+                    '_light': False,
+                })
                 log.info(f"[MapBridge] porta {door['id']} no caminho "
                          f"{prev}->{to} -> ponto-pré-porta "
                          f"({wx:.2f},{wy:.2f}) inserido")
@@ -1001,6 +1016,102 @@ class MapBridge:
         send_future.add_done_callback(self._on_goal_response)
         log.info(f"[MapBridge] NavigateToPose → ({x:.2f}, {y:.2f}, yaw={yaw:.2f})")
 
+    def _log_goal_light(self, state: str, why: str):
+        with open(self._goal_light_log_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({
+                'ts': round(time.time(), 3),
+                'state': state,
+                'why': why,
+            }, ensure_ascii=True) + '\n')
+
+    def _set_goal_light(self, on: bool, why: str = ''):
+        self._light_pub.publish(Bool(data=bool(on)))
+        self._log_goal_light('on' if on else 'off', why)
+
+    def _pulse_goal_light(self, why: str):
+        """Pulso curto no relê quando um objetivo REAL termina com sucesso."""
+        with self._goal_light_lock:
+            if self._goal_light_timer is not None:
+                self._goal_light_timer.cancel()
+                self._goal_light_timer = None
+            self._set_goal_light(True, why)
+            timer = threading.Timer(
+                self.GOAL_LIGHT_PULSE_S,
+                lambda: self._set_goal_light(False, f'{why} [pulse_end]'))
+            timer.daemon = True
+            self._goal_light_timer = timer
+            timer.start()
+        log.info(f"[MapBridge] luz do objetivo acionada ({why})")
+
+    def _send_nav_goal_action(self, x: float, y: float, yaw: float = 0.0) -> bool:
+        """Goal único via action para detectar SUCCEEDED sem heurística."""
+        if not self._nav_action.wait_for_server(timeout_sec=2.0):
+            log.warning("[MapBridge] navigate_to_pose action server indisponível")
+            return False
+
+        goal = NavigateToPose.Goal()
+        goal.pose = self._pose_stamped(x, y, yaw)
+        send_future = self._nav_action.send_goal_async(goal)
+
+        def _on_resp(fut):
+            try:
+                handle = fut.result()
+            except Exception as e:
+                log.warning(f"[MapBridge] erro no send_goal simples: {e}")
+                return
+            if not handle.accepted:
+                log.warning("[MapBridge] goal simples rejeitado pelo Nav2")
+                return
+
+            def _on_result(res_fut):
+                try:
+                    result = res_fut.result()
+                except Exception as e:
+                    log.warning(f"[MapBridge] erro no get_result simples: {e}")
+                    return
+                if result.status == GoalStatus.STATUS_SUCCEEDED:
+                    self._pulse_goal_light('goal simples')
+
+            handle.get_result_async().add_done_callback(_on_result)
+
+        send_future.add_done_callback(_on_resp)
+        log.info(f"[MapBridge] NavigateToPose(simple) → ({x:.2f}, {y:.2f}, yaw={yaw:.2f})")
+        return True
+
+    def _send_nav_through_action(self, poses: list) -> bool:
+        """Rota expandida; a luz acende só no sucesso do objetivo final."""
+        if not self._nav_through.wait_for_server(timeout_sec=2.0):
+            log.warning("[MapBridge] navigate_through_poses indisponível")
+            return False
+
+        goal = NavigateThroughPoses.Goal()
+        goal.poses = poses
+        send_future = self._nav_through.send_goal_async(goal)
+
+        def _on_resp(fut):
+            try:
+                handle = fut.result()
+            except Exception as e:
+                log.warning(f"[MapBridge] erro no send_goal through: {e}")
+                return
+            if not handle.accepted:
+                log.warning("[MapBridge] goal through rejeitado pelo Nav2")
+                return
+
+            def _on_result(res_fut):
+                try:
+                    result = res_fut.result()
+                except Exception as e:
+                    log.warning(f"[MapBridge] erro no get_result through: {e}")
+                    return
+                if result.status == GoalStatus.STATUS_SUCCEEDED:
+                    self._pulse_goal_light('goal via porta')
+
+            handle.get_result_async().add_done_callback(_on_result)
+
+        send_future.add_done_callback(_on_resp)
+        return True
+
     def _on_goal_response(self, future):
         try:
             handle = future.result()
@@ -1093,7 +1204,10 @@ class MapBridge:
             status = self._wp_goal_status
 
             if status == GoalStatus.STATUS_SUCCEEDED:
+                wp = self._wp_list[idx]
                 log.info(f"[MapBridge] waypoint {idx + 1}/{total} concluído")
+                if wp.get('_light', True):
+                    self._pulse_goal_light(f'waypoint {idx + 1}/{total}')
                 if not _advance():
                     break
                 _send(idx)
@@ -1169,17 +1283,15 @@ class MapBridge:
             wx, wy = self._clear_pre_door_point(door, wx, wy)
             poses = [self._pose_stamped(wx, wy, wyaw),
                      self._pose_stamped(x, y, yaw)]
-            if not self._nav_through.wait_for_server(timeout_sec=2.0):
-                log.warning("[MapBridge] navigate_through_poses indisponível "
-                            "-> caindo no /goal_pose direto")
-            else:
-                g = NavigateThroughPoses.Goal()
-                g.poses = poses
-                self._nav_through.send_goal_async(g)
+            if self._send_nav_through_action(poses):
                 log.info(f"[MapBridge] porta {door['id']} no caminho -> rota "
                          f"[pré-porta ({wx:.2f},{wy:.2f}), destino ({x:.2f},{y:.2f})]")
                 return {'ok': True, 'x': x, 'y': y, 'yaw': yaw, 'via_door': door['id']}
+            log.warning("[MapBridge] navigate_through_poses indisponível "
+                        "-> caindo no /goal_pose direto")
         # caminho livre (ou sem pose/porta): destino direto
+        if self._send_nav_goal_action(x, y, yaw):
+            return {'ok': True, 'x': x, 'y': y, 'yaw': yaw}
         self._goal_pub.publish(self._pose_stamped(x, y, yaw))
         log.info(f"[MapBridge] /goal_pose → ({x:.2f}, {y:.2f}, yaw={yaw:.2f})")
         return {'ok': True, 'x': x, 'y': y, 'yaw': yaw}
