@@ -413,7 +413,13 @@ class DoorCrossConfig:
     # já ~0.10 m além do plano. A trava segue inteira longe da porta (onde importa).
     commit_s: float = -0.15         # m — progresso (s) a partir do qual não re-checa o will_clear (commit)
     gap_min: float = 0.45           # m — vão mínimo à frente pra seguir
-    exit_margin: float = 0.5        # m — além do centro pra soltar
+    # 2026-09-03 (§2H.23/§2H.27): 0.5 -> 0.6. A porta da arena e' feita de 2
+    # cones de R=0,17, entao ela tem 0,34 m de profundidade FISICA. Soltando em
+    # 0,50 sobravam 8 cm atras da traseira, e um pivo precisa da meia-diagonal
+    # (0,354) + o cone (0,17) = 0,524 m. Faltaram 2,4 cm e o path_follower girou
+    # 180 graus ali dentro, arrastando os dois cones. Com 0,60 sobram 7,6 cm e o
+    # giro acontece FORA do vao. Conta em exit_s_min().
+    exit_margin: float = 0.6        # m — além do centro pra soltar
     total_timeout: float = 40.0     # s — manobra inteira (revertido de 600; ver align_timeout)
     retrigger_cooldown: float = 3.0  # s — após abort, não rearmar na hora
     crossing_cooldown: float = 8.0   # s — após CRUZAR, não re-armar (campo 06-22: a ré pós-porta trazia o robô de volta pra zona e re-armava a door — sendo que ele já estava do OUTRO lado)
@@ -836,7 +842,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('robot_half_width', 0.25), ('fit_margin', 0.05),
                 ('commit_s', -0.15),
                 ('escape_reverse_speed', 0.25), ('gap_min', 0.45),
-                ('exit_margin', 0.5), ('rate_hz', 20.0),
+                ('exit_margin', 0.6), ('rate_hz', 20.0),
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
                 ('rear_tail_x', -0.25), ('rear_half_width', 0.30),
                 ('front_head_x', 0.25), ('lidar_x', 0.0),
