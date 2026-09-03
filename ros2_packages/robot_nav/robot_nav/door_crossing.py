@@ -113,18 +113,118 @@ class DoorGeom(NamedTuple):
     ty: float
     nx: float   # normal unitária (eixo de travessia; sinal vem de `side`)
     ny: float
+    # 2026-09-03 (§2H.25): a porta deixa de ser uma LINHA. `depth` é a espessura
+    # do vão ao longo do eixo de travessia; as bocas ficam em s = ±depth/2.
+    # 0 = parede fina = comportamento de antes deste campo existir (o default
+    # mantém toda construção posicional de DoorGeom válida). A porta da arena é
+    # feita de 2 cones de R=0,17 -> depth REAL 0,34, não zero.
+    depth: float = 0.0
 
 
-def door_geometry(a: Tuple[float, float], b: Tuple[float, float]) -> DoorGeom:
-    """Centro/eixos da porta a partir dos 2 batentes clicados (frame do mapa)."""
+def door_geometry(a: Tuple[float, float], b: Tuple[float, float],
+                  depth: float = 0.0) -> DoorGeom:
+    """Centro/eixos da porta a partir dos 2 batentes clicados (frame do mapa).
+
+    `depth` = espessura do vão no eixo de travessia (0 = parede fina). Os
+    batentes clicados definem o plano do MEIO; as bocas ficam em s = ±depth/2.
+    """
     ax, ay = a
     bx, by = b
     w = math.hypot(bx - ax, by - ay)
     if w <= 0.0:
         raise ValueError('batentes coincidentes')
+    if depth < 0.0:
+        raise ValueError(f'depth negativa ({depth})')
     tx, ty = (bx - ax) / w, (by - ay) / w
     return DoorGeom((ax + bx) / 2.0, (ay + by) / 2.0, w / 2.0,
-                    tx, ty, -ty, tx)
+                    tx, ty, -ty, tx, depth)
+
+
+# ---- geometria do CORPO no vão (medida, não estimada) -----------------------
+# Robô 0,50 × 0,50 roda-a-roda (§3.1). Envelope lateral de um retângulo girado
+# de θ = half_wid·cos θ + half_len·sin θ; máximo em 45° = meia-diagonal 0,354 m.
+ROBOT_HALF_WIDTH = 0.25
+ROBOT_HALF_LEN = 0.25
+BODY_MARGIN = 0.05
+
+
+def _envelope(th: float, half_wid: float, half_len: float) -> float:
+    """Meia-extensão lateral do corpo girado de `th` rad."""
+    return half_wid * math.cos(th) + half_len * math.sin(th)
+
+
+def pivot_max_yaw(gap_width: float,
+                  robot_half_width: float = ROBOT_HALF_WIDTH,
+                  robot_half_len: float = ROBOT_HALF_LEN,
+                  margin: float = BODY_MARGIN) -> float:
+    """Maior pivô (rad) que CABE dentro de um vão de `gap_width`, centrado.
+
+    Vem do BO da §2H.23: o que arrastou os cones foi um pivô de **180°**, não a
+    existência de pivô. Um pivô de 10° cabe num vão de 0,70 m; o de 180° não
+    cabe em nenhum. Por isso a proibição é por MAGNITUDE, não por estado.
+
+    Devolve `math.pi` (= sem limite) quando o envelope de 45° já cabe: o
+    envelope cresce monotonamente de 0 a 45° e decresce depois, então se o pior
+    caso passa, qualquer ângulo passa. Devolve 0.0 quando não cabe nem parado.
+
+    Medido (margem 5 cm): 0,60 m -> 0° · 0,70 -> 13,1° · 0,80 -> 36,9° ·
+    >=0,90 -> sem limite (pivô de 45° exige vão >= 0,81 m).
+    """
+    lim = gap_width / 2.0 - margin
+    if _envelope(0.0, robot_half_width, robot_half_len) > lim:
+        return 0.0
+    if _envelope(math.pi / 4.0, robot_half_width, robot_half_len) <= lim:
+        return math.pi
+    lo, hi = 0.0, math.pi / 4.0
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if _envelope(mid, robot_half_width, robot_half_len) <= lim:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
+def entry_yaw_budget(gap_width: float, depth: float,
+                     robot_half_width: float = ROBOT_HALF_WIDTH,
+                     margin: float = BODY_MARGIN) -> float:
+    """Erro de yaw (rad) máximo na ENTRADA que ainda sai do outro lado, sem
+    nenhuma correção dentro do vão.
+
+    É o teto FÍSICO da regra do dono (§2H.24/§2H.26: dentro não mexe, só reto).
+    O robô entra centrado e deriva `depth · tan(θ)` até a boca de saída, contra
+    a folga útil `meia-largura − meio-robô − margem`.
+
+    Medido contra o erro de entrada REAL (§2H.4: mediana 10,7°, pior 15,8°):
+    0,70 m de vão tolera 14,0° numa porta fina — passa por pouco, e reprova no
+    pior caso — mas só 1,4° num túnel de 2 m. A porta de 0,60 m tem folga útil
+    ZERO: impossível em qualquer profundidade.
+
+    `depth = 0` devolve `math.pi` (sem limite): sem braço de alavanca o yaw não
+    desloca nada. Folga útil <= 0 devolve 0.0.
+    """
+    fit = gap_width / 2.0 - robot_half_width - margin
+    if fit <= 0.0:
+        return 0.0
+    if depth <= 0.0:
+        return math.pi
+    return math.atan2(fit, depth)
+
+
+def exit_s_min(depth: float,
+               robot_half_width: float = ROBOT_HALF_WIDTH,
+               robot_half_len: float = ROBOT_HALF_LEN,
+               margin: float = 0.0) -> float:
+    """Progresso `s` mínimo pra SOLTAR o robô: onde um pivô de qualquer ângulo
+    já não toca o vão.
+
+    Substitui o `exit_margin` fixo de 0,5 m. É a conta que faltou na §2H.23: a
+    porta da arena tem 0,34 m de profundidade física (2 cones de R=0,17), a
+    traseira parada ficava a 0,08 m da borda do cone, e um pivô precisava de
+    `meia-diagonal 0,354 + 0,17 = 0,524 m`. Soltou em 0,50 -> **faltaram 2,4 cm**,
+    e o `path_follower` pivotou 180° ali.
+    """
+    return depth / 2.0 + math.hypot(robot_half_width, robot_half_len) + margin
 
 
 def door_progress_lateral(g: DoorGeom, x: float, y: float,
@@ -158,11 +258,14 @@ def will_clear(g: DoorGeom, s: float, d: float, yaw_err: float, side: int,
       lat_no_batente = d + s * side * tan(yaw_err)   # s<0 na aproximação
       fit            = half_width - robot_half_width - fit_margin
 
-    s>=0 já passou do ponto mais estreito -> sempre passa. O termo `s*side`
-    dá o braço de alavanca (quanto mais longe e mais torto, mais desvia)."""
-    if s >= 0.0:
+    O braço de alavanca é a distância até a boca de SAÍDA (`s = +depth/2`), não
+    até o plano do meio: num túnel, passar do centro não quer dizer estar fora.
+    Só `s >= depth/2` libera incondicionalmente. Com `depth = 0` (parede fina) a
+    conta é idêntica à de antes deste campo existir."""
+    half_depth = g.depth / 2.0
+    if s >= half_depth:
         return True
-    lat = d + s * side * math.tan(yaw_err)
+    lat = d + (s - half_depth) * side * math.tan(yaw_err)
     fit = g.half_width - robot_half_width - fit_margin
     return abs(lat) <= fit
 
@@ -400,6 +503,17 @@ def ready_to_commit(d: float, yaw_err: float, cfg: DoorCrossConfig) -> bool:
     return abs(d) <= cfg.align_lat and abs(yaw_err) <= cfg.align_yaw
 
 
+def can_retry_in_staging(s: float, cfg: DoorCrossConfig) -> bool:
+    """Ainda há pista bastante antes da boca para corrigir lateral andando?
+
+    Se sim, voltar para `staging` é melhor que entrar logo em ré: o robô usa a
+    própria aproximação no eixo para matar o `d` residual. Isto ataca o padrão
+    medido em 2026-09-03 na porta 2 da arena: `rotating -> reversing` repetido,
+    mesmo com espaço suficiente antes da boca para re-centrar.
+    """
+    return s <= -(cfg.stage_dist - cfg.stage_tol)
+
+
 class DoorCrossing:
     """Decisão pura da travessia. O nó alimenta com pose do TF, portas,
     status do goal, gap e freshness; recebe (estado, vx, wz)."""
@@ -575,7 +689,14 @@ class DoorCrossing:
             # dentro da área da porta, "cheguei no staging" significa duas
             # coisas: estou perto da linha de pré-entrada E já matei o lateral
             # o bastante para o giro final não jogar o corpo no batente.
-            if dist <= cfg.stage_tol and abs(d) <= cfg.align_lat:
+            # Não basta "estar perto da linha" e com |d| pequeno: na porta 2
+            # da arena isso ainda soltava para o rotating cedo demais, e o
+            # will_clear reprovava logo em seguida -> laço staging<->rotating ou
+            # rotating->reversing. Só entrega o giro final quando a lateral já
+            # cabe na boca assumindo yaw alinhado.
+            if (dist <= cfg.stage_tol and abs(d) <= cfg.align_lat
+                    and will_clear(g, s, d, 0.0, self.side,
+                                   cfg.robot_half_width, cfg.fit_margin)):
                 self.state = 'rotating'
                 self._stable = 0
             else:
@@ -604,6 +725,12 @@ class DoorCrossing:
                     # re-aproxima). Não atravessa torto (pendência A, campo 06-19).
                     if not will_clear(g, s, d, yaw_err, self.side,
                                       cfg.robot_half_width, cfg.fit_margin):
+                        if can_retry_in_staging(s, cfg):
+                            self.state = 'staging'
+                            self._stable = 0
+                            self._align_t0 = now
+                            self._align_anchor = (x, y)
+                            return Cmd('staging', 0.0, 0.0, self.door['id'])
                         return self._enter_reverse(now, (x, y), rear_gap)
                     self.state = 'crossing'
                     return Cmd('crossing', cfg.cross_speed, 0.0,

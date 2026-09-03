@@ -143,6 +143,21 @@ def test_staging_converge_e_rotaciona():
     assert c.wz != 0.0   # girando pra encarar pi/2
 
 
+def test_staging_nao_solta_para_rotating_se_ainda_nao_cabe_na_porta():
+    # Regressão de 2026-09-03: na porta 2 da arena o staging chegava "perto"
+    # da linha, mas com lateral ainda grande demais para a boca. Soltar cedo
+    # para o rotating devolvia immediately ao will_clear e travava o trecho.
+    dc = mk()
+    step(dc, 0.0, (1.7, 1.2, 0.0))     # arma -> rotating
+    dc.state = 'staging'
+    dc._align_t0 = 0.0
+    dc._align_anchor = (1.7, 1.2)
+    stage_y = 2.0 - CFG.stage_dist
+    c = step(dc, 1.0, (1.58, stage_y, math.pi / 2))   # d=0.08, ainda fora do fit
+    assert c.state == 'staging'
+    assert c.vx >= 0.0
+
+
 def test_rotating_estavel_vira_crossing():
     dc = mk()
     stage_y = 2.0 - CFG.stage_dist
@@ -468,16 +483,30 @@ def test_will_clear_side_minus_one():
 # ---- re-estágio quando "não passo" (2026-06-22) ------------------------------
 
 def test_restage_when_aligned_but_wont_fit():
-    # alinhado no YAW mas MUITO descentrado (d=0.3 > fit 0.20) -> NÃO commita a
-    # travessia: recua reto pra re-estagiar (não atravessa torto).
+    # 2026-09-03, porta 2 da arena: ficar alternando rotating->reversing com
+    # espaço de sobra antes da boca era desperdício. Se ainda há pista para o
+    # staging corrigir o lateral andando, volta para staging em vez de dar ré.
     dc = DoorCrossing(CFG)
     estep(dc, 0.0, (1.8, 1.4, math.pi / 2))            # arma -> rotating (d=0.3)
     t, last = 0.1, None
     for _ in range(CFG.align_stable + 1):
         last = estep(dc, t, (1.8, 1.4, math.pi / 2))
         t += 0.05
-    assert last.state == 'reversing'
-    assert last.wz == pytest.approx(0.0)               # ré RETA, nunca arco
+    assert last.state == 'staging'
+    assert last.vx == pytest.approx(0.0)
+    assert last.wz == pytest.approx(0.0)
+
+
+def test_restage_when_aligned_but_wont_fit_near_boca_still_reverses():
+    # Perto demais da boca já não dá para "costurar" lateral andando: aqui a
+    # ré segue sendo o último recurso seguro.
+    dc = mk()
+    _ate_crossing(dc)
+    dc.state = 'rotating'
+    dc._stable = CFG.align_stable - 1
+    c = estep(dc, 1.0, (1.8, 1.8, math.pi / 2), rear_gap=3.0)  # s=-0.2, d=0.3
+    assert c.state == 'reversing'
+    assert c.wz == pytest.approx(0.0)
 
 
 def test_crossing_restages_on_yaw_drift_before_jamb():
@@ -597,3 +626,135 @@ def test_rearm_allowed_after_crossing_cooldown_expires():
     assert c.state == 'rotating'                        # cooldown expirou -> re-arma
 
 
+# ---- profundidade do vão + pivô limitado (§2H.25/§2H.26) -------------------
+# Toda a geometria daqui é MEDIDA, não estimada: robô 0,50 × 0,50 roda-a-roda,
+# cone da arena R=0,17 (tools/gera_arena_galpao.py:28), larguras das 4 portas
+# 0,90 / 0,70 / 0,60 / 0,80 m. Números conferidos na §2H.26 do DIARIO_ARENA.md.
+
+from robot_nav.door_crossing import (          # noqa: E402
+    entry_yaw_budget,
+    exit_s_min,
+    pivot_max_yaw,
+    will_clear,
+)
+
+
+def test_door_geometry_depth_default_zero_e_retrocompativel():
+    # porta sem `depth` declarado = parede fina, comportamento de hoje
+    g = door_geometry((1.0, 2.0), (2.0, 2.0))
+    assert g.depth == pytest.approx(0.0)
+
+
+def test_door_geometry_aceita_depth():
+    g = door_geometry((1.0, 2.0), (2.0, 2.0), depth=0.34)
+    assert g.depth == pytest.approx(0.34)
+    # profundidade NÃO mexe em centro, largura nem eixos
+    assert (g.cx, g.cy) == pytest.approx((1.5, 2.0))
+    assert g.half_width == pytest.approx(0.5)
+
+
+def test_door_geometry_rejeita_depth_negativa():
+    with pytest.raises(ValueError):
+        door_geometry((1.0, 2.0), (2.0, 2.0), depth=-0.1)
+
+
+# -- pivot_max_yaw: quanto o robô pode PIVOTAR dentro do vão -----------------
+
+def test_pivot_max_yaw_vao_070_cabe_13_graus():
+    # 0,25*(cos+sin) <= 0.70/2 - 0.05  ->  ~13,1°
+    assert math.degrees(pivot_max_yaw(0.70)) == pytest.approx(13.1, abs=0.1)
+
+
+def test_pivot_max_yaw_vao_060_nao_cabe_nem_parado():
+    # meia-largura 0,30 - margem 0,05 = 0,25 = exatamente o meio-corpo
+    assert pivot_max_yaw(0.60) == pytest.approx(0.0)
+
+
+def test_pivot_max_yaw_vao_080():
+    assert math.degrees(pivot_max_yaw(0.80)) == pytest.approx(36.9, abs=0.1)
+
+
+def test_pivot_max_yaw_vao_largo_e_sem_limite():
+    # se o envelope de 45° (meia-diagonal 0,354) já cabe, qualquer pivô cabe
+    assert pivot_max_yaw(0.90) >= math.pi / 4
+    assert pivot_max_yaw(1.20) >= math.pi / 4
+
+
+def test_pivot_max_yaw_e_monotono_na_largura():
+    larguras = (0.60, 0.70, 0.80, 0.90, 1.20)
+    vals = [pivot_max_yaw(w) for w in larguras]
+    assert vals == sorted(vals)
+
+
+def test_pivot_max_yaw_vao_estreito_demais_e_zero_nao_negativo():
+    assert pivot_max_yaw(0.30) == pytest.approx(0.0)
+    assert pivot_max_yaw(0.0) == pytest.approx(0.0)
+
+
+# -- entry_yaw_budget: erro de entrada tolerável SEM correção dentro ---------
+
+def test_entry_yaw_budget_porta_fina_070_tolera_14_graus():
+    assert math.degrees(entry_yaw_budget(0.70, 0.20)) == pytest.approx(14.0, abs=0.1)
+
+
+def test_entry_yaw_budget_tunel_2m_070_exige_1_4_graus():
+    assert math.degrees(entry_yaw_budget(0.70, 2.0)) == pytest.approx(1.4, abs=0.1)
+
+
+def test_entry_yaw_budget_cai_com_a_profundidade():
+    # mesma largura, mais fundo -> menos tolerância. Este é o teto FÍSICO.
+    b = [entry_yaw_budget(0.80, d) for d in (0.2, 0.5, 1.0, 2.0)]
+    assert b == sorted(b, reverse=True)
+
+
+def test_entry_yaw_budget_vao_sem_folga_util_e_zero():
+    # 0,60 m: 0,30 - 0,25 - 0,05 = 0 -> impossível em qualquer profundidade
+    assert entry_yaw_budget(0.60, 0.0) == pytest.approx(0.0)
+    assert entry_yaw_budget(0.60, 2.0) == pytest.approx(0.0)
+
+
+def test_entry_yaw_budget_porta_de_espessura_zero_e_livre():
+    # d=0: sem braço de alavanca, o yaw não desloca nada -> sem limite
+    assert entry_yaw_budget(0.70, 0.0) >= math.pi / 4
+
+
+# -- exit_s_min: onde é seguro SOLTAR o robô ---------------------------------
+
+def test_exit_s_min_porta_de_cone_da_arena():
+    # cones R=0,17 -> depth 0,34; meia-diagonal 0,354 + 0,17 = 0,524 m
+    assert exit_s_min(0.34) == pytest.approx(0.524, abs=0.001)
+
+
+def test_exit_s_min_prova_que_o_exit_margin_de_hoje_era_curto():
+    # §2H.23: soltou em 0,50 e faltaram 2,4 cm pra um pivô caber
+    assert exit_s_min(0.34) > 0.50
+    assert (exit_s_min(0.34) - 0.50) == pytest.approx(0.024, abs=0.001)
+
+
+def test_exit_s_min_cresce_com_a_profundidade():
+    assert exit_s_min(2.0) == pytest.approx(1.0 + 0.354, abs=0.001)
+
+
+def test_exit_s_min_parede_fina_e_meia_diagonal():
+    assert exit_s_min(0.0) == pytest.approx(0.354, abs=0.001)
+
+
+# -- will_clear com profundidade --------------------------------------------
+
+def test_will_clear_depth_zero_nao_muda_nada():
+    # regressão: com depth=0 a conta é a de hoje (projeta até s=0)
+    g = door_geometry((0.0, 0.0), (0.0, 1.09))   # vão largo de 06-23
+    assert will_clear(g, -0.5, 0.0, math.radians(2.0), +1, 0.25, 0.05) is True
+    assert will_clear(g, 0.1, 0.30, math.radians(20.0), +1, 0.25, 0.05) is True
+
+
+def test_will_clear_em_tunel_nao_libera_so_por_ter_passado_do_centro():
+    # o bug da §2H.25: hoje `s >= 0` devolve True incondicional. Num túnel de
+    # 1 m, s=+0.1 ainda está DENTRO e apontando pro batente -> tem que reprovar.
+    g = door_geometry((0.0, 0.0), (0.0, 0.70), depth=1.0)
+    assert will_clear(g, 0.1, 0.04, math.radians(25.0), +1, 0.25, 0.05) is False
+
+
+def test_will_clear_em_tunel_libera_depois_da_boca_de_saida():
+    g = door_geometry((0.0, 0.0), (0.0, 0.70), depth=1.0)
+    assert will_clear(g, 0.6, 0.04, math.radians(25.0), +1, 0.25, 0.05) is True
