@@ -3321,6 +3321,86 @@ duro dentro do vão ou só "não pivota".
 negar o pivô, só em zona de porta) fica **em espera**, porque "zona de porta" é
 justamente a coisa que não existe direito.
 
+### 2H.26 O dono corrigiu meu modelo do robô: **não existe correção andando** — e isso põe um teto FÍSICO na profundidade do túnel
+
+Correção do dono à pergunta que eu fiz na §2H.25:
+
+> "Esse robô não corrige yaw andando lembra, ele só consegue pivotar, mas vimos
+> agora que um pivo dentro de um espaço minusculo igual aquele é fatal, essa parada
+> de arrumar enquanto anda, vi ele fazendo, mas ANTES de entrar no obstaculo, já no
+> Atravessando ele faz um ultimo pivo pra se ajeitar ai vai, mas passa reto, já que
+> ele n consegue fazer curvas abertas"
+
+Ele está certo e o dado já existia no repo: **`arc_calib` (06-25)** mediu que o robô
+**sempre sub-vira andando, nunca acima de 19%** do comando (`ESTADO_PROJETO.md:1866-1879`);
+andar a wz=2,5 entrega ~0,47 rad/s, igual ao giro PARADO a 2,5. `README.md:1024`
+repete: *"o skid-steer com zona-morta não esterça andando (medido: sempre sub-vira,
+≤19% do comando)"*. Eu tinha isso na memória e ofereci o contrário como opção
+recomendada. **Erro 97 da §5.**
+
+O que o `crossing` faz hoje, e que portanto é fantasia:
+`wz = −cross_k_lat·d − cross_k_yaw·yaw_err`, `k_lat=1,5`, `k_yaw=2,0`, teto
+`cross_wz_max=0,8` rad/s — com o comentário *"teto da micro-correção (NÃO girar)"*.
+Num robô que entrega 19% andando, isso não corrige: **esfrega**.
+
+#### A forma que o dono descreve (e que a máquina já tem)
+
+| fase | onde | o que pode |
+|---|---|---|
+| preparação | **fora** do vão | ajeitar-se, inclusive andando (aqui o arco ruim é inofensivo) |
+| **último pivô** | na boca, antes de entrar | pivô parado pra alinhar — a última chance |
+| travessia | **dentro** do vão | **reto, `wz = 0`** |
+
+Isso mapeia 1:1 no `staging → rotating → crossing` que já existe. A mudança é
+`crossing` virar `wz = 0` (zerar `cross_k_lat`/`cross_k_yaw`), e a região "dentro"
+passar a durar a **profundidade toda** (§2H.25).
+
+#### 🔴 O teto físico: sem correção dentro, o último pivô tem que ser perfeito
+
+Erro de yaw máximo tolerável na entrada, com `wz=0` dentro (robô 0,50 m, margem 5 cm):
+
+| largura | folga útil/lado | d=0 (fina) | d=0,2 m | d=0,5 m | d=1,0 m | d=2,0 m |
+|---|---|---|---|---|---|---|
+| 0,60 m | **0,000** | impossível | impossível | impossível | impossível | impossível |
+| 0,70 m | 0,050 | livre | **14,0°** | 5,7° | 2,9° | **1,4°** |
+| 0,80 m | 0,100 | livre | 26,6° | 11,3° | 5,7° | 2,9° |
+| 0,90 m | 0,150 | livre | 36,9° | 16,7° | 8,5° | 4,3° |
+| 1,00 m | 0,200 | livre | 45,0° | 21,8° | 11,3° | 5,7° |
+| 1,20 m | 0,300 | livre | 56,3° | 31,0° | 16,7° | 8,5° |
+
+Contra isso, o erro de entrada **medido** (§2H.4, 13 voltas): mediana **10,7°**, pior
+**15,8°**, 100% entre −4,8° e −15,8°.
+
+Leitura:
+- **Porta fina de 0,70 m tolera 14°** → é por isso que funciona hoje. Passa raspando
+  na mediana e **reprova no pior caso de 15,8°**. Não é folga, é sorte calibrada.
+- **Túnel de 0,5 m já derruba a mediana** na porta de 0,70 (tolera 5,7°).
+- **Túnel de 2 m com 0,70 m exige 1,4°** — 7× melhor que a mediana atual. Com a
+  precisão de hoje, **impossível**.
+- **A porta de 0,60 m tem folga útil ZERO** (0,30 − 0,25 − 0,05). É a **porta 3 da
+  arena**. Só passa com margem 0 — qualquer profundidade a torna impossível.
+
+#### A saída que NÃO é arco: pivô PEQUENO parado, dentro do túnel
+
+O que matou a volta da §2H.23 foi um pivô de **180°**, não a existência de pivô.
+Envelope varrido por um retângulo 0,50×0,50 girando θ: `0,25·(cos θ + sin θ)`.
+
+| largura | pivô máx cabível (centrado, margem 5 cm) |
+|---|---|
+| 0,60 m | **0,0°** (não cabe nem parado) |
+| 0,70 m | **13,1°** |
+| 0,80 m | 36,9° |
+| 0,90 m | 45,0° |
+| ≥ 0,90 m | 45,0° (meia-diagonal 0,354 m; pivô de 45° exige vão ≥ 0,81 m) |
+
+Ou seja: **corrigir 10° parado dentro de um vão de 0,70 m CABE.** O que não cabe é
+girar 45°+, e muito menos 180°. Então a proibição correta não é "pivô dentro do vão",
+é **"pivô acima de θ_max(largura) dentro do vão"** — isso recusa o 180° do
+`path_follower` e preserva a correção de 10° que um túnel fundo vai exigir.
+
+**Nada implementado.** Decisão pendente do dono: para túnel fundo, aceitar o teto
+físico (e cair no contorno quando não passar) ou liberar o pivô pequeno limitado.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -3604,6 +3684,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 94 | 🔴🔴 **Escolhi a distância do waypoint por UMA condição e havia DUAS** | A §2H.7 fixou 1,0 m otimizando a margem do point-turn, e eu nunca conferi a **condição de arme** (`dist <= zone_radius 1,1` no instante do `SUCCEEDED`). A 1,0 m sobram 0,09 m de folga contra um `xy_goal_tolerance` de 0,15 — o robô pode concluir o goal FORA da zona. Na `lim1` foi o que aconteceu: `cleared=False`, zero transições, travessia igual à de antes da máquina. E rebaixa a `porta1`/`torta1`: elas armaram por sorte de parada | Quando um ponto tem que satisfazer 2 restrições, otimizar 1 e não listar a outra é o mesmo que escolher no chute. A hora de listar as restrições é **antes** de escolher o número — e a segunda estava escrita no código que eu tinha acabado de ler (`zone_radius`, `_pick_door`) |
 | 95 | 🔴 **Fui puxar os logs por `ssh` na Pi quando a corrida era no SIM, na própria máquina** | O dono pediu "os logs atuais"; eu abri um `until ssh robo@robo-desktop.local` sem antes olhar `controle_web/logs/`, que tinha os CSVs de 3 minutos atrás. Levei uma bronca merecida: *"EU TO USANDO O GAZEBO, TA TUDO NA MAQUINA"*. O baseline mais recente no repo (10:45) também era local — o sinal estava na minha frente | Antes de escolher a FONTE do log, olhar o carimbo de tempo do que já está no disco local. `ssh` é o caminho quando o real rodou; presumir o real porque o projeto tem um robô é presumir |
 | 96 | 🔴 **Propus um gate usando um sinal que eu não conferi — e que não teria pegado o BO** | Na §2H.23 ofereci "proibir point-turn quando o `clear` lateral for pequeno: cai de 2,74 pra 0,36 no giro". O `clear` é **frontal ±40°**, não lateral, e os 0,36 aparecem **depois** de 32° de giro; na hora da decisão valia **2,74**. Eu li a queda na coluna e assumi causa, quando ela é **consequência** do próprio giro | Antes de propor um gate, checar o valor do sinal **no instante da decisão**, não depois. Coluna que despenca durante o evento é candidata a consequência — e o nome da variável (`clear`, sem sufixo) não diz o referencial: fui olhar `clear_sector_deg` só quando o dono aprovou o conserto |
+| 97 | 🔴🔴 **Ofereci como "recomendado" uma correção que o robô NÃO consegue fazer** | Perguntei ao dono se mantinha a "correção fina de yaw andando" do `crossing` (`cross_k_lat=1,5`, `cross_k_yaw=2,0`), chamando-a de *comportamento validado em campo*. O robô é skid-steer com zona-morta e **não esterça andando**: `arc_calib` (06-25) mediu **≤19%** de fidelidade, e tanto o `ESTADO_PROJETO.md:1866` quanto o `README.md:1024` **e a minha própria memória** ("NUNCA giro em ARCO") dizem isso. O dono corrigiu: *"esse robô não corrige yaw andando lembra"* | Eu tratei um ganho escrito no código como capacidade do robô. Código que comanda `wz` junto com `vx` **não é prova** de que o robô arqueia — é prova de que alguém escreveu isso. Antes de pôr um comportamento numa pergunta como "validado", conferir se o ATUADOR entrega; a medição existia no repo há 2 meses |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
