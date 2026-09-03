@@ -105,7 +105,11 @@ def tampao(nome):
 # aqui, refaça a conta de margem_point_turn() para ela: se a margem for negativa,
 # o robô bate no batente durante o PRÓPRIO giro de alinhamento. A fresta C (0,60)
 # não deve ser marcada — com robot_radius 0.32 o Nav2 já a trata como parede.
-MARCADAS_COMO_PORTA = ('A_fresta90',)
+# 2026-09-03: C e D SAIRAM por ordem do dono — "retira os doors 3 e 4, eles nao
+# serao utilizados, pode descartar, focamos so no 1 e 2". O door_crossing deixa
+# de armar nelas; a fresta segue existindo no mundo/mapa (o robo passa por ela
+# com o nav2 puro, se a rota mandar).
+MARCADAS_COMO_PORTA = ('A_fresta90', 'B_fresta70')
 
 # Waypoint pré-fresta (2026-09-02, DIARIO_ARENA §2H.7) — OPT-IN, default OFF.
 # O `door_crossing` só assume porta cujo goal do Nav2 TERMINOU dentro da zona
@@ -120,7 +124,16 @@ MARCADAS_COMO_PORTA = ('A_fresta90',)
 #     1,0 m -> +27,3 cm   <- escolhido
 # 1,0 m também é o "ponto pré-porta" para o qual `zone_radius = 1.1` foi
 # dimensionado (door_crossing.py:169-173) — não é número a dedo.
-PRE_FRESTA_DIST = 1.0
+# 2026-09-02, ERRO 94 + marcação na quina: 1,0 m NÃO servia por DUAS razões.
+# (a) A condição de arme é `dist(robô, centro do vão) <= zone_radius 1,1` no
+#     instante do SUCCEEDED, e a 1,0 m sobravam só 0,09 m contra um
+#     `xy_goal_tolerance` de 0,15 -> o robô podia concluir o goal FORA da zona e
+#     a máquina nunca armar (foi o que aconteceu na volta `lim1`).
+# (b) Com o plano da porta na QUINA (0,30 m mais perto), 1,0 m ficaria ainda
+#     mais longe do centro do vão.
+# A 0,80 m: pior canto do envelope = hypot(0,95 ; 0,30) = 0,996 < 1,1 -> ARMA
+# SEMPRE, e a margem do point-turn sobe (o ponto sai da sombra do bloco).
+PRE_FRESTA_DIST = 0.8
 XY_GOAL_TOL = 0.15          # nav2_params_arena.yaml:151 (goal_checker)
 
 
@@ -173,32 +186,99 @@ def margem_pre_fresta(nome='A_fresta90', dist=None, tol=XY_GOAL_TOL):
 RAIO_CIRCUNSCRITO = 0.25 * math.sqrt(2)
 # door_crossing.DoorCrossConfig.stage_dist — onde o alinhamento acontece.
 STAGE_DIST = 0.60
+ZONE_RADIUS = 1.1       # door_crossing.DoorCrossConfig.zone_radius
+ROBO_MEIA_C = 0.25      # meio COMPRIMENTO do robo (0,50 x 0,50)
 
 
-def batentes(nome):
-    """Os 2 batentes do vão de uma fresta, em (x, y). Mesma fonte do mundo."""
+# Qual perna da rota atravessa cada fresta — define de que LADO o robô chega.
+PERNA_DA_FRESTA = {
+    'A_fresta90': ('cone_1', 'cone_2'),
+    'B_fresta70': ('cone_2', 'cone_3'),
+    'C_fresta60': ('cone_3', 'cone_4'),
+    'D_fresta80': ('cone_4', 'chegada'),
+}
+
+
+def lado_de_chegada(nome):
+    """-1 se o robô chega pelo lado de coordenada MENOR que o eixo do bloco,
+    +1 se pelo lado maior. Sai da rota, não de chute."""
+    for n, eixo, coord, _faixas, _f, _c in OBST:
+        if n != nome:
+            continue
+        de, _para = PERNA_DA_FRESTA[nome]
+        px, py, _ = PONTOS[de]
+        v = px if eixo == 'x' else py
+        return -1.0 if v < coord else 1.0
+    raise ValueError(f'fresta desconhecida: {nome!r}')
+
+
+def batentes(nome, face='entrada'):
+    """Os 2 batentes do vão de uma fresta, em (x, y). Mesma fonte do mundo.
+
+    `face` (2026-09-02, pedido do dono): onde fica o PLANO da porta.
+
+      'meio'    — no eixo do bloco (o que existia até hoje).
+      'entrada' — na QUINA por onde o robô chega, isto é, o eixo do bloco
+                  recuado de meia espessura (ESP_BLOCO/2 = 0,30 m).
+
+    Por que 'entrada' é o certo: o bloco tem 0,60 m de espessura, então a fresta
+    é um TÚNEL curto — a boca fica 0,30 m antes do eixo. Marcando no meio, o
+    `door_crossing` alinha e projeta o `will_clear` para um plano que está
+    **dentro da parede**, 30 cm depois de onde o robô pode encostar. Ele se
+    ajeita para o lugar errado. Marcando na quina, ele se alinha para ENTRAR.
+    """
     for n, eixo, coord, faixas, _f, _c in OBST:
         if n != nome:
             continue
         ini, fim = faixas[0][1], faixas[1][0]        # o vão
+        c = coord
+        if face == 'entrada':
+            c = round(coord + lado_de_chegada(nome) * ESP_BLOCO / 2.0, 6)
+        elif face != 'meio':
+            raise ValueError(f"face desconhecida: {face!r} (use 'entrada'/'meio')")
         if eixo == 'x':
-            return (coord, ini), (coord, fim)
-        return (ini, coord), (fim, coord)
+            return (c, ini), (c, fim)
+        return (ini, c), (fim, c)
     raise ValueError(f'fresta desconhecida: {nome!r}')
 
 
-def margem_point_turn(nome, stage_dist=STAGE_DIST):
+def margem_point_turn(nome, stage_dist=STAGE_DIST, face='entrada'):
     """Spec §4.4-(a): sobra espaço pro giro de alinhamento no ponto de preparação?
 
-    O ponto fica a `stage_dist` do centro, no eixo do vão. O obstáculo mais perto
-    é o CANTO do bloco: `stage_dist − ESP_BLOCO/2` ao longo da normal e `vão/2` ao
-    longo da parede. Margem = essa distância − RAIO_CIRCUNSCRITO.
-    Negativa = a fresta NÃO pode ser marcada.
+    O ponto fica a `stage_dist` do PLANO da porta, no eixo do vão. O obstáculo
+    mais perto é a QUINA do bloco naquele plano: `stage_dist` ao longo da normal
+    e `vão/2` ao longo da parede. Margem = essa distância − RAIO_CIRCUNSCRITO.
+    Negativa = a fresta NÃO pode ser marcada (o robô bate girando).
+
+    2026-09-02: com `face='entrada'` o plano é a boca do túnel, então a distância
+    ao canto é `stage_dist` cheio. Com `face='meio'` (o antigo) o ponto ficava
+    0,30 m "dentro da sombra" do bloco e a margem caía — é por isso que os
+    números desta função melhoraram ao mudar a marcação.
     """
-    (ax, ay), (bx, by) = batentes(nome)
+    (ax, ay), (bx, by) = batentes(nome, face)
     vao = math.hypot(bx - ax, by - ay)
-    dist_canto = math.hypot(stage_dist - ESP_BLOCO / 2, vao / 2)
-    return dist_canto - RAIO_CIRCUNSCRITO
+    braco = stage_dist if face == 'entrada' else stage_dist - ESP_BLOCO / 2
+    return math.hypot(braco, vao / 2) - RAIO_CIRCUNSCRITO
+
+
+def margem_arme(nome, dist=None, tol=XY_GOAL_TOL, lat=0.0):
+    """Folga até o `zone_radius` no PIOR canto do envelope de chegada do goal.
+
+    O `door_crossing` só arma se `dist(robô, centro do vão) <= zone_radius` no
+    instante em que o goal conclui. Positivo = arma sempre. Ver erro 94.
+    """
+    dist = PRE_FRESTA_DIST if dist is None else dist
+    return ZONE_RADIUS - math.hypot(dist + tol, abs(lat) + tol)
+
+
+def margem_saida(nome, exit_margin):
+    """Quanto o robô AINDA está dentro do túnel quando a máquina solta.
+
+    Positivo = já saiu inteiro. O bloco tem ESP_BLOCO de espessura e o plano da
+    porta agora é a BOCA, então o robô só está fora quando o centro dele passa
+    de `ESP_BLOCO + meio comprimento`.
+    """
+    return exit_margin - (ESP_BLOCO + ROBO_MEIA_C)
 
 
 def portas(fecha=()):

@@ -3433,6 +3433,67 @@ falhavam em `3c2b051`, conferido).
 
 **Erro 98 da §5.**
 
+### 2H.28 Por que ele gira ao SAIR do corredor 2: a **mira filtrada** guarda 13 s de lixo de dois planos
+
+Corrida de 14:09 (sim), ja com `exit_margin=0,60`. O robo **atravessa** e o giro
+saiu de dentro do vao — mas continua girando logo depois. Relato do dono: *"ele vem
+reto, passa o obstaculo, logo em seguida comeca a girar sozinho, do nada"*.
+
+Ele nao gira do nada. Persegue uma mira envenenada. Tres coisas empilhadas:
+
+**1. Dois planos globais alternando ~1 Hz.** A coluna `n` do `follow_debug` durante
+a travessia:
+
+| t | n | aim | pra onde |
+|---|---|---|---|
+| 313,9 | 130 | (9,93 / 3,62) | OESTE (contorno) |
+| 315,0 | 68 | (11,38 / 5,03) | NORTE (direto) |
+| 316,0 | 130 | (9,97 / 3,64) | OESTE |
+| 318,5 | 65 | (11,43 / 5,17) | NORTE |
+| 319,5 | 129 | (9,93 / 3,64) | OESTE |
+| 323,5 | 53 | (11,38 / 4,92) | NORTE |
+
+O `nav2.log` da a razao: `No valid trajectories out of 35!` 3x, `Could not generate
+path between the given poses`, e limpezas de costmap local **e** global no meio. O
+planejador alterna entre achar a fresta bloqueada e livre, e cospe dois caminhos
+opostos.
+
+**2. A EMA da mira (`_aim_filt`, `path_follower.py:410`) nao e zerada quando outro no
+tem o mux.** O `path_follower` ficou **13 s travado em `turning`** (313,9 -> 326,7)
+com o `door_crossing` dirigindo: os `wz` dele iam pro lixo, mas o filtro **continuou
+integrando** bearings dos dois planos. Na soltura a mira filtrada apontava pra um
+meio-termo inexistente — `herr` marcava +67°, +96°, +122° com o plano ja apontando
+pro norte. Ele girou pra caçar (yaw 89° -> 160°, `wz` +4,3), a EMA convergiu pro
+norte real, o `herr` **trocou de sinal**, e ele girou de volta (`wz` -2,98 -> -2,4).
+
+**3. O lookahead alterna 0,6 <-> 1,5 m** (23 e 83 amostras em 6 s), movendo o carrot
+~1 m e fazendo `ci` pular de 12 pra 31 **dentro do mesmo plano**.
+
+Denominador comum com a §2H.23: **enquanto o `door_crossing` dirige, o
+`path_follower` segue rodando e acumulando estado, e descarrega tudo no instante em
+que ganha o mux.** O `exit_margin` so mudou ONDE isso descarrega.
+
+⏳ Nada consertado aqui — o dono pediu so a causa.
+
+### 2H.29 Portas 3 e 4 REMOVIDAS por ordem do dono
+
+> "retira os doors 3 e 4 por favor, eles nao serao utilizados, pode descartar,
+> focamos so no 1 e 2. Ele nao deve nem tentar passar o 3 e 4"
+
+`MARCADAS_COMO_PORTA` foi de `('A_fresta90','B_fresta70','C_fresta60','D_fresta80')`
+para `('A_fresta90','B_fresta70')`, e o `maps/arena_galpao.doors.json` ficou com 2
+portas (ids 1 e 2, coordenadas intactas). Conferido que o gerador agora **produz
+exatamente** esse JSON (nao ha drift na proxima regeracao) e que
+`doors_de_arquivo` valida — e a mesma checagem que o `launch.sh` faz antes de subir.
+
+Some junto a fresta C de 0,60 m, que tinha **folga util ZERO** (§2H.26).
+
+⚠️ **O que isto NAO faz:** a rota segue com 5 waypoints (`cone_1, cone_2, cone_3,
+cone_4, chegada`) e as frestas C e D **continuam existindo no mundo e no mapa**. O
+robo ainda vai passar por elas indo pro cone_4 e pra chegada — so que com nav2 puro,
+sem o `door_crossing`. Para ele "nao tentar passar", a rota e/ou a arena tem que
+mudar tambem; **nao mexi nisso**, e pergunta aberta pro dono.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
