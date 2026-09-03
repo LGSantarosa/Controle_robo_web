@@ -3603,6 +3603,58 @@ nenhum aplicado:
 | B | `path_follower` | **compromisso pos-travessia**: depois de `crossing -> idle`, segurar o rumo da travessia por ~1-2 m ou ate' o plano parar de apontar pra tras. Nao deixa desfazer o que acabou de fazer |
 | C | costmap/inflacao | o item 8 do §6 — a fresta ser considerada bloqueada com o robo em cima dela. E' a RAIZ; sem isso A e B sao curativo |
 
+### 2H.32 ✅ Saída reta obrigatória pós-travessia (aprovada pelo dono)
+
+> "OK, faz sentido ele ter que seguir reto, ai ele sai todo e encontra caminho livre
+> a frente e volta a seguir o plan correto já"
+
+**A medição que sustenta.** Nas DUAS corridas que falharam, no instante da devolução
+(`crossing -> idle`):
+
+| corrida | yaw na soltura | `clear` à frente | o que fez |
+|---|---|---|---|
+| 14:09 (§2H.28) | 89,1° (norte) | **2,55 m** | girou |
+| 14:27 (§2H.31) | 92,8° (norte) | **2,56 m** | girou 180° e encalhou |
+
+Estava apontado pro rumo certo, com 2,5 m de corredor livre, e girou. O `clear` só
+desabou **depois** do giro (0,36 m aos 70° girados) — nas duas.
+
+**O que foi implementado.** Quando o `/door_zone` sai de um estado de condução, o
+`path_follower` entra numa janela em que **ignora o rumo do plano e anda reto**
+(`wz = 0`, `vx` de cruzeiro, estado `exit_straight`). Ela acaba no primeiro de:
+
+- `exit_straight_dist = 0,8 m` percorridos
+- `exit_straight_max_t = 4,0 s` (teto — robô empacado não trava a janela)
+- `front_clear < exit_straight_min_clear = 0,5 m` (apareceu coisa na frente ->
+  devolve pra lógica normal em vez de arar)
+
+`exit_straight_dist = 0` desliga.
+
+**Por que INCONDICIONAL.** Não importa se o plano ruim é passageiro (14:09) ou
+teimoso por 15 s (14:27). Um gate de confirmação temporal — o "Fix 2" que eu tinha
+proposto — só salvaria o primeiro caso (erro 99).
+
+**Onde ficou no `update()`, e por quê.** Depois do carrot/filtro (a mira segue
+esquentando com o plano atual, então quando a janela acaba ela já está correta) e
+**depois das fases de chegada** (`goal_approach`/`goal_turn` têm precedência — não
+quero passar do goal por causa disto).
+
+**O que NÃO conserta, e está no teste.** Se o plano seguir mandando voltar depois da
+janela, o robô vira — só que 0,8 m longe do vão, em espaço aberto, onde o pivô cabe
+e não tem cone. **Troca uma batida por uma volta a mais.** O item 8 do §6 (plano
+nascendo pra trás) segue aberto e é a raiz.
+
+**Fix 1 mantido** (recomendação minha, dono não objetou): reverter sozinho só
+devolveria o balanço da §2H.28. ⚠️ Isso deixa **duas** diferenças contra o baseline
+das 14:09 — se a volta der certo eu não sei qual das duas resolveu. O dono foi
+avisado e pode pedir a atribuição limpa.
+
+**Testes:** 7 novos (arma, termina por distância, termina por timeout com o robô
+empacado, aborta por folga, não arma sem travessia, desligável, e o de honestidade
+do escopo). Suíte: **162 passam**; seguem os 2 quebrados da §2H.22.
+
+⏳ **Não rodado.**
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô

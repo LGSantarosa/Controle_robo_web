@@ -254,6 +254,21 @@ class FollowConfig:
     clear_full: float = 0.0         # m — folga a partir da qual anda a plena (0 = off)
     clear_min: float = 0.35         # m — folga em que já está no min_speed
 
+    # SAIDA RETA POS-TRAVESSIA (2026-09-03, §2H.32). Nas duas corridas que
+    # falharam (14:09 e 14:27) o robo foi devolvido pelo door_crossing apontado
+    # pro NORTE com `clear` = 2,55 m livre a frente, e girou 180 graus obedecendo
+    # um plano que mandava voltar pela fresta. O giro em si o deslocou 41 cm pro
+    # lado (skid-steer pivotando) e ele encalhou no cone leste.
+    # Enquanto esta janela dura, o seguidor NAO obedece o rumo do plano: anda
+    # reto. E' INCONDICIONAL de proposito — nao importa se o plano ruim e'
+    # passageiro (14:09) ou teimoso por 15 s (14:27); um gate de confirmacao
+    # temporal so' salvaria o primeiro caso (erro 99 da §5).
+    # Nao conserta o plano: se ele SEGUIR mandando voltar depois da janela, o
+    # robo vira — 0,8 m longe do vao, onde o pivo cabe. Troca batida por volta.
+    exit_straight_dist: float = 0.8   # m — quanto andar reto apos a devolucao (0 = off)
+    exit_straight_max_t: float = 4.0  # s — teto da janela (robo empacado nao trava aqui)
+    exit_straight_min_clear: float = 0.5  # m — apareceu coisa na frente -> aborta a janela
+
 
 def speed_for_clearance(c: 'FollowConfig', front_clear: float) -> float:
     """Velocidade de cruzeiro em função da folga à frente.
@@ -303,6 +318,10 @@ class DecisiveFollower:
         self._yaw_rate = 0.0      # rad/s, EMA (ruído de pose não vira taxa)
         self._aim_filt = None     # bearing (map) filtrado da mira (só esticado)
         self._arrival_latched = False  # travado na fase de chegada deste goal
+        self._was_preempted = False    # borda de descida da preempcao
+        self._exit_active = False      # janela de saida reta pos-travessia
+        self._exit_anchor = None       # pose (x,y) no inicio da janela
+        self._exit_ticks = 0
         self._latch_goal = None        # (x,y) do goal em que a trava fechou
         self._approaching = False      # aproximação final em curso (histerese)
         self._approach_aiming = False  # mirando o goal dentro da aproximação
@@ -336,6 +355,8 @@ class DecisiveFollower:
             self._aim_filt = None
             self._prev_yaw = None
             self._yaw_rate = 0.0
+            self._was_preempted = True
+            self._exit_active = False     # re-preemptou -> janela recomeça depois
             return Cmd(0.0, 0.0, 'preempted')
         if pose is None or not goal_active or not path or len(path) < 2:
             self.state = 'idle'
@@ -347,6 +368,8 @@ class DecisiveFollower:
             self._latch_goal = None
             self._approaching = False
             self._approach_aiming = False
+            self._was_preempted = False
+            self._exit_active = False
             return Cmd(0.0, 0.0, 'idle')
 
         x, y, yaw = pose
@@ -461,6 +484,30 @@ class DecisiveFollower:
         self.dbg = {'i0': i0, 'ci': ci, 'n': len(path), 'ax': ax, 'ay': ay,
                     'herr_deg': math.degrees(herr), 'dist_aim': dist_aim,
                     'dist_goal': dist_goal, 'la': la}
+
+        # 2b) SAIDA RETA: acabou de ser devolvido pelo door_crossing -> sai de
+        # perto do vao ANDANDO antes de deixar o plano mandar girar. Fica aqui,
+        # depois do carrot/filtro (a mira segue esquentando com o plano atual,
+        # entao quando a janela acaba ela ja' esta' correta) e depois das fases de
+        # chegada (goal perto tem precedencia — nao passar do goal por causa disto).
+        if self._was_preempted:
+            self._was_preempted = False
+            if c.exit_straight_dist > 0.0:
+                self._exit_active = True
+                self._exit_anchor = (x, y)
+                self._exit_ticks = 0
+        if self._exit_active:
+            self._exit_ticks += 1
+            andou = math.hypot(x - self._exit_anchor[0], y - self._exit_anchor[1])
+            if (andou >= c.exit_straight_dist
+                    or self._exit_ticks * c.tick_dt >= c.exit_straight_max_t
+                    or front_clear < c.exit_straight_min_clear):
+                self._exit_active = False
+            else:
+                self.state = 'exit_straight'
+                self._turn_target = None
+                return Cmd(speed_for_clearance(c, front_clear), 0.0,
+                           'exit_straight')
 
         # 3) HISTERESE + ALVO CONGELADO: ao ENTRAR no giro trava o bearing-alvo
         #    (replans ~1Hz moviam o carrot NO MEIO do giro -> caçava alvo móvel,

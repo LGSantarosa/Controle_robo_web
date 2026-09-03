@@ -779,11 +779,23 @@ def test_preemptado_nao_comanda_nada_e_se_declara():
 def test_REGRESSAO_nao_descarrega_mira_velha_na_devolucao():
     """O BO da §2H.28, reduzido: 13 s preemptado olhando um plano que aponta pro
     OESTE e, na devolução, um plano que aponta pro NORTE — que é justamente pra
-    onde o robô já está virado. Ele tem que ANDAR, não girar."""
-    fol = DecisiveFollower(FollowConfig())
+    onde o robô já está virado. Ele tem que ANDAR, não girar.
+
+    2026-09-03: o 1º tick livre agora é `exit_straight` (§2H.32) — que também
+    anda e também não gira. A prova de que a mira NÃO ficou velha é o tick
+    seguinte à janela: com o plano apontando pro norte e o robô virado pro
+    norte, tem que sair `driving` com wz=0. Com a EMA suja daria `turning`."""
+    cfg = FollowConfig()
+    fol = DecisiveFollower(cfg)
     for _ in range(260):                       # 13 s a 20 Hz
         fol.update(POSE_NORTE, PLANO_OESTE, True, None, preempted=True)
     cmd = fol.update(POSE_NORTE, PLANO_NORTE, True, None, preempted=False)
+    assert cmd.state == 'exit_straight'
+    assert cmd.wz == pytest.approx(0.0)
+    assert cmd.vx > 0.0
+    # fecha a janela andando os 0,8 m pro norte e confere a mira
+    longe = (0.0, cfg.exit_straight_dist + 0.01, math.pi / 2)
+    cmd = fol.update(longe, PLANO_NORTE, True, None, preempted=False)
     assert cmd.state == 'driving'
     assert cmd.wz == pytest.approx(0.0)
     assert cmd.vx > 0.0
@@ -803,3 +815,88 @@ def test_sem_preempcao_o_comportamento_nao_muda():
     cmd = fol.update(POSE_NORTE, PLANO_OESTE, True, None)
     assert cmd.state == 'turning'
     assert abs(cmd.wz) > 0.0
+
+
+# ---- Saída reta obrigatória pós-travessia (§2H.32) ------------------------
+# BO: docs/baselines/2026-09-03-arena-fix1-PIOR-travou-na-saida-do-2
+# Nas DUAS corridas que falharam, no instante da devolução o robô estava
+# apontado pro norte com `clear` = 2,55 m livre à frente — e girou 180° pra
+# obedecer um plano que mandava voltar pela fresta. O giro em si o deslocou
+# 41 cm pro lado (skid-steer pivotando) e ele encalhou no cone.
+
+def _anda(fol, pose, plano, n, preempted=False, front_clear=float('inf')):
+    """n ticks na MESMA pose (o teste move a pose à mão quando precisa)."""
+    cmd = None
+    for _ in range(n):
+        cmd = fol.update(pose, plano, True, None,
+                         front_clear=front_clear, preempted=preempted)
+    return cmd
+
+
+def test_saida_reta_arma_na_devolucao_e_ignora_plano_que_manda_voltar():
+    """O caso das 14:27: solto apontando pro norte, plano mandando pro sul."""
+    fol = DecisiveFollower(FollowConfig())
+    _anda(fol, POSE_NORTE, PLANO_OESTE, 100, preempted=True)
+    cmd = fol.update(POSE_NORTE, PLANO_OESTE, True, None, preempted=False)
+    assert cmd.state == 'exit_straight'
+    assert cmd.wz == pytest.approx(0.0)      # ZERO pivô perto do vão
+    assert cmd.vx > 0.0                       # anda pra FRENTE
+
+
+def test_saida_reta_termina_pela_DISTANCIA_e_devolve_o_controle():
+    cfg = FollowConfig()
+    fol = DecisiveFollower(cfg)
+    _anda(fol, POSE_NORTE, PLANO_OESTE, 10, preempted=True)
+    fol.update(POSE_NORTE, PLANO_OESTE, True, None, preempted=False)
+    # anda os 0,8 m pra frente (norte)
+    longe = (0.0, cfg.exit_straight_dist + 0.01, math.pi / 2)
+    cmd = fol.update(longe, PLANO_OESTE, True, None, preempted=False)
+    assert cmd.state != 'exit_straight'
+
+
+def test_saida_reta_termina_por_TIMEOUT_mesmo_parado():
+    cfg = FollowConfig()
+    fol = DecisiveFollower(cfg)
+    _anda(fol, POSE_NORTE, PLANO_OESTE, 10, preempted=True)
+    # robô empacado: nunca percorre a distância. O tempo tem que soltar.
+    n = int(cfg.exit_straight_max_t / cfg.tick_dt) + 5
+    cmd = _anda(fol, POSE_NORTE, PLANO_OESTE, n, preempted=False)
+    assert cmd.state != 'exit_straight'
+
+
+def test_saida_reta_ABORTA_se_aparecer_coisa_na_frente():
+    """Não é pra arar: com pouca folga, devolve pra lógica normal na hora."""
+    cfg = FollowConfig()
+    fol = DecisiveFollower(cfg)
+    _anda(fol, POSE_NORTE, PLANO_OESTE, 10, preempted=True)
+    cmd = fol.update(POSE_NORTE, PLANO_OESTE, True, None,
+                     front_clear=cfg.exit_straight_min_clear - 0.01,
+                     preempted=False)
+    assert cmd.state != 'exit_straight'
+
+
+def test_saida_reta_NAO_arma_sem_travessia():
+    fol = DecisiveFollower(FollowConfig())
+    cmd = fol.update(POSE_NORTE, PLANO_OESTE, True, None)
+    assert cmd.state == 'turning'
+
+
+def test_saida_reta_desligavel():
+    cfg = FollowConfig(exit_straight_dist=0.0)
+    fol = DecisiveFollower(cfg)
+    _anda(fol, POSE_NORTE, PLANO_OESTE, 10, preempted=True)
+    cmd = fol.update(POSE_NORTE, PLANO_OESTE, True, None, preempted=False)
+    assert cmd.state != 'exit_straight'
+
+
+def test_saida_reta_NAO_conserta_plano_ruim_persistente_so_afasta_do_vao():
+    """Honestidade do escopo: se o plano SEGUIR mandando voltar depois da
+    janela, o robô vira — mas 0,8 m longe do vão, em espaço aberto, onde o
+    pivô cabe e não tem cone. A janela troca uma BATIDA por uma volta a mais."""
+    cfg = FollowConfig()
+    fol = DecisiveFollower(cfg)
+    _anda(fol, POSE_NORTE, PLANO_OESTE, 10, preempted=True)
+    fol.update(POSE_NORTE, PLANO_OESTE, True, None, preempted=False)
+    longe = (0.0, cfg.exit_straight_dist + 0.01, math.pi / 2)
+    cmd = fol.update(longe, PLANO_OESTE, True, None, preempted=False)
+    assert cmd.state == 'turning'
