@@ -3743,6 +3743,68 @@ Isto é **uma** corrida, com Fix 1 (§2H.30) **e** saída reta (§2H.32) juntos 
 baseline das 14:09 — não sei qual das duas fez o quê. O dono já disse que vai soltar
 mais voltas.
 
+### 2H.34 🔴🔴 TRAVOU no waypoint pré-porta 1 — o goal nunca conclui por **12° de yaw**
+
+Corrida das 14:57, `docs/baselines/2026-09-03-arena-travado-no-waypoint-pre-porta-1/`.
+Dono: *"ta travado no 1"*.
+
+#### Não é nada do que mexemos hoje
+
+- `preempted` e `exit_straight` **não aparecem** neste `follow_debug` (o
+  `door_crossing` nunca chegou a armar) — o código novo nem foi exercitado.
+- O **mesmo waypoint** (6,40 / 2,25) concluiu em **15 s** na volta boa das 14:47.
+- O `door_crossing` subiu certo: *"2 porta(s) carregada(s)"*.
+
+É intermitente, e é o cluster já aberto dos itens `2g`/`2h`/`2i` + o deadlock de
+point-turn.
+
+#### A cadeia
+
+1. O robô chega no waypoint pré-porta 1 e para a **1,6 cm** dele
+   (`dist_goal = 0,016`, contra `xy_goal_tolerance = 0,15`). O XY está ótimo.
+2. Esse waypoint **exige yaw = 0°** — `ponto_pre_fresta()` devolve o yaw
+   *"encarando o vão"* (`gera_arena_galpao.py:161`), e é de propósito: o
+   `approach_bearing = 70°` do `door_crossing` é medido do yaw do ROBÔ.
+   `yaw_goal_tolerance = 0,35 rad = **20,05°**`.
+3. O seguidor entra em `goal_turn` às 033,31 e gira certinho na direção do alvo:
+   93,6° -> 79,5 -> 62,5 -> 53,1 -> 47,4 -> 43,0 -> **37,8°**.
+4. Às **034,65** ele cai em `idle` com yaw **32,2°** — **12° antes** de entrar na
+   tolerância. O `idle` do `path_follower` só sai de um lugar: o guard do topo,
+   quando `goal_active` é falso. **Ele perdeu o sinal de goal ativo no meio do
+   giro final.**
+5. Sem goal ativo o seguidor **cala** (`path_follower.py:766`, *"Sem goal -> cala"*)
+   — ou seja, **não** está bloqueando o mux; entrega o robô pro Nav2.
+6. O Nav2 então tenta, por **355 s**: **233 replans, 6 backups, 5 spins, 6 waits**
+   (`attempt_checkpoint.json`), com `avg_linear_speed = 0,006 m/s`. **O robô não
+   gira um grau**: yaw congelado em 30,4°, `vx = 0`, `wz = 0`. É o ponto morto do
+   skid-steer — comando de giro do Nav2 abaixo do que a roda precisa.
+7. Como o goal nunca conclui, o `door_crossing` nunca recebe `goal_succeeded`, o
+   `_cleared` fica vazio e o `_pick_door` pula a porta. A DIAG repete pra sempre:
+   `porta 1 distC=0.80 zone=1.10 cleared=False goal_succ=False nav_fwd=True`.
+   **Estando dentro da zona (0,80 < 1,10) o tempo todo.**
+
+Uma volta inteira travada atrás de **12 graus**.
+
+#### 🔴 A pergunta que os logs NÃO respondem
+
+**Por que o `goal_active` virou falso às 034,65?** O `bt_navigator` nunca logou
+`Goal succeeded`, `Goal failed` nem `canceled` pra esse goal, e o
+`attempt_checkpoint.json` mostra o goal ainda **em curso** de 26,3 a 381,3 s. Ou
+seja: o seguidor largou o goal **8 s depois de ele começar**, enquanto o resto do
+sistema o considerava vivo por mais 347 s. Essa discordância é o próximo alvo —
+`path_follower.py:736` monta `goal_active` de `any(status in {ACCEPTED, EXECUTING,
+CANCELING})` sobre **dois** tópicos de ação (`navigate_to_pose` e
+`navigate_through_poses`), e nada loga a transição.
+
+Instrumentação mínima pra fechar: logar cada troca de `goal_active` com o status
+cru dos dois tópicos. Sem isso é chute.
+
+#### Sobre o waypoint pré-porta
+
+`PRE_FRESTA_DIST = 0,8 m` (não 1,0 como a §2H.7 discutiu). A 0,80 m a condição de
+arme (`distC <= zone_radius 1,1`) sobra bem — a DIAG confirma `distC=0.80`
+estável. **O arme não é o problema aqui; a conclusão do goal é.**
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -4068,6 +4130,7 @@ padrão casou com a linha de comando do shell que o executava e ele **se matou**
 | 2o | 🔴🔴 **Porta é uma LINHA; profundidade do vão não é declarável** | ⏳ **novo, 09-03 (§2H.25).** `doors.json` tem só `a`/`b`; `s=0` é o plano dos batentes e **não existe `depth`**. Tudo que decide "onde acaba o vão" é constante GLOBAL (`exit_margin` 0,5 / `zone_radius` 1,1 / `stage_dist` 0,6 / `commit_s` −0,15 / `gap_min` 0,45). Num túnel de 2 m **não há onde clicar** que funcione: boca de entrada → solta 1,5 m dentro; meio → `zone_radius` não alcança a boca. E `will_clear` devolve True incondicional pra `s>=0`, premissa de parede fina, **falsa em túnel**. Exigido pelo dono porque na competição o tamanho varia (de porta fina a túnel de 2 m). Conserto: `depth` por porta (0 = fina) + fases derivadas dela. **Bloqueia o gate do item `2n`** |
 | 2p | ⚠️ **Janela de saída reta arma depois de ABORT do door_crossing** | ⏳ **novo, 09-03 (§2H.33).** O `/door_zone` publica `idle` tanto pra travessia concluída quanto pra abort, e o `path_follower` não distingue — na corrida das 14:47 o episódio #2 armou após um `rotating -> idle` e mandou andar reto com o robô possivelmente apontado PRA DENTRO do vão. A guarda de folga segurou em 0,26 m (`clear` 0,52). Plano B funcionou; plano A está errado. Conserto: `/door_zone` publicar um estado distinto pra saída concluída |
 | 2q | 🔴 **Porta 2 custa 28,5 s no limite-ciclo `staging ↔ rotating`** | ⏳ **novo, 09-03 (§2H.33).** 21 `staging -> rotating` + 17 `rotating -> staging`, 2 `crossing -> reversing`, 1 abort, 3 tentativas de travessia. A porta 1 passa em 8,4 s numa tentativa. NÃO é a "paradinha de 1 s" que o dono nota (essa é a devolução, benigna — §2H.33). Mesmo padrão da §2H.23 (11 ciclos em 2,9 s), agora bem pior. Custa 1/6 do tempo da volta |
+| 2r | 🔴🔴 **`goal_active` do `path_follower` cai no meio do `goal_turn` e trava a volta** | ⏳ **novo, 09-03 (§2H.34).** Corrida 14:57: robô a 1,6 cm do waypoint pré-porta 1, girando pro yaw exigido (0°, *encarando o vão*), chega a 32,2° e **cai em `idle` 12° antes** da `yaw_goal_tolerance` de 20,05°. Sem goal ativo o seguidor cala e o Nav2 assume: **233 replans, 6 backups, 5 spins, 6 waits em 355 s sem girar 1 grau** (ponto morto do skid-steer). Goal nunca conclui -> `door_crossing` nunca recebe `goal_succeeded` -> nunca arma (`cleared=False` eterno com `distC=0.80` dentro da zona). **Volta inteira travada atrás de 12°.** O `bt_navigator` NÃO logou succeeded/failed/canceled, e o `attempt_checkpoint` mostra o goal vivo por mais 347 s — o seguidor e o resto do sistema **discordam**. Próximo passo: logar cada troca de `goal_active` com o status cru dos 2 tópicos de ação. Intermitente: o mesmo waypoint passou em 15 s às 14:47 |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |
