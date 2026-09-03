@@ -3911,6 +3911,84 @@ Uma corrida responde. Procurar por `GOAL_ACTIVE` no `nav2.log`.
 ⚠️ Só depois disso eu proponho conserto — a causa ainda não está confirmada, e a
 regra da casa é confirmar a causa antes da solução.
 
+### 2H.36 A instrumentação **matou minha hipótese** — a lista de status NUNCA é podada
+
+Corrida das 15:17, `docs/baselines/2026-09-03-arena-passou-direto-com-instrumentacao/`.
+Dono: *"dessa vez ele passou direto"*. **7 goals, 7 `Goal succeeded`, volta completa
+em 222 s.** E o `GOAL_ACTIVE` gravou tudo.
+
+#### 🔻 A hipótese do `result_timeout` está MORTA
+
+Eu supus (§2H.35) que os ~14 s eram a **expiração** do goal terminal saindo da
+`status_list`. O log mostra o contrário: **a lista só CRESCE, e os terminados ficam
+lá para sempre.**
+
+```
+n=1  [2]                    -> True     (EXECUTING)
+n=1  [4]                    -> False    (SUCCEEDED)
+n=2  [4,2]                  -> True
+n=2  [4,4]                  -> False
+n=3  [4,4,2]                -> True
+...
+n=7  [4,4,4,4,4,4,2]        -> True
+n=7  [4,4,4,4,4,4,4]        -> False
+```
+
+Um item por goal, de 1 a 7, **nada é removido em 222 s**. Não há poda, logo não há
+expiração para culpar. **Erro 102 da §5.**
+
+#### E nesta corrida o `goal_active` se comportou PERFEITAMENTE
+
+Cada `True -> False` caiu exatamente quando o goal corrente virou **4 (SUCCEEDED)**,
+e cada `False -> True` ~1,5 s depois, quando o próximo foi aceito. Zero anomalia.
+**O bug não reproduziu** — a instrumentação está certa, só não pegou um caso ruim
+ainda.
+
+#### O que isso reposiciona
+
+Sabendo que a lista nunca poda, nas corridas travadas o `any()` só pode ter dado
+falso se o **goal corrente** apareceu como terminal enquanto o `bt_navigator` ainda
+o executava. Duas leituras concorrentes, e eu **não sei** qual é:
+
+- **(A)** o status do goal corrente virou terminal indevidamente (4/5/6) — o
+  problema é o sinal.
+- **(B)** o goal **realmente concluiu** (o goal checker usa a pose dele, que pode
+  diferir uns décimos do TF que eu logo — 22,0° medido contra tolerância 20,05° é
+  perto o bastante para isso importar), o seguidor fez certo em calar, e o BO real é
+  que **o `map_service` não mandou o goal seguinte**. Nas corridas travadas, o
+  `False -> True` de 1,5 s depois **nunca veio**.
+
+(B) mudaria o alvo de `path_follower` para `controle_web/map_service.py`. A
+instrumentação distingue as duas: numa corrida ruim ela vai imprimir a lista crua e
+**qual status** (4, 5 ou 6) o goal corrente tinha.
+
+⏳ **Falta uma corrida RUIM com a instrumentação ligada.** Sem isso continua chute.
+
+#### O nosso pacote, nesta corrida
+
+3 episódios de `exit_straight`, **`wz = 0` nos três**:
+
+| # | andou | terminou por |
+|---|---|---|
+| 1 | 0,79 m | distância |
+| 2 | 0,19 m | **guarda de folga** |
+| 3 | 0,80 m | distância |
+
+O #2 terminar pela guarda de folga é a **segunda corrida seguida** — o item `2p`
+(janela armando depois de *abort* em vez de travessia concluída) é consistente, não
+foi acaso.
+
+Portas, separando o que é nosso do que é velho:
+
+| porta | total | preparação | **travessia** | tentativas |
+|---|---|---|---|---|
+| 1 | 9,6 s | 1,7 s | **8,0 s** | 1 |
+| 2 | 28,0 s | **20,9 s** | **7,0 s** | 2 |
+
+**A travessia é estável em 7-8 s e limpa.** O custo está todo na preparação da porta
+2 (20,9 s de 28,0) — o item `2q`, que é anterior a tudo que mexemos hoje. Porta 2 na
+14:47 foi 28,5 s; agora 28,0 s. Consistente.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -4199,6 +4277,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 99 | 🔴🔴 **Propus um conserto (Fix 2) que os dados da corrida seguinte refutaram** | Ofereci "giro grande exige 0,5-1 s de confirmacao" como defesa contra o plano ruim, assumindo que o plano estava ALTERNANDO no instante da devolucao. Na corrida das 14:27 ele estava **estavel apontando pra tras por 15 s** — um gate de confirmacao so' atrasaria o mesmo giro. Eu extrapolei o padrao de UMA corrida (a das 14:09, onde alternava) pra uma lei | Padrao visto numa corrida e' hipotese, nao mecanismo. Antes de vender um gate temporal, checar se a coisa ruim e' TRANSIENTE — se ela persiste, esperar nao ajuda. Bastava eu ter perguntado "e se o plano ruim durar 15 s?" |
 | 100 | 🔴🔴 **Removi um amortecedor sem remover o solavanco, e chamei isso de conserto** | A EMA de 2 s da mira estava, por acidente, impedindo o robo de se comprometer com o plano ruim: ele balançava e escapava. Limpei o filtro (Fix 1, correto no que se propunha) e o robo passou a obedecer o plano ruim **na hora e inteiro** — girou 180, voltou pra dentro do vao e encalhou 9,8 s. Ficou PIOR que antes do conserto | Quando um sistema sobrevive a uma entrada ruim, parte da sobrevivencia pode vir de lentidao/ruido que ninguem projetou. Antes de limpar um caminho de sinal, perguntar o que a sujeira estava segurando. E a entrada ruim (plano nascendo pra tras) era conhecida desde a §2H.23 — eu tratei o sintoma a jusante dela duas vezes seguidas |
 | 101 | 🔴 **Atribuí a observação do dono ao evento errado** | Ele disse que o robô "deu uma paradinha de 1s e seguiu reto". Eu rotulei os **28,5 s do limite-ciclo de alinhamento** como "a parada que o dono viu" e escrevi isso no diário. São coisas distintas: a paradinha dele são **0,7 s de inércia na devolução** (`exit_straight` comandando `vx=0,3` com a pose ainda parada), benigna; os 28,5 s acontecem **antes de entrar** e são problema anterior. Ele corrigiu: *"Vc está confundindo as coisa, ele errou antes de entrar no obstaculo"* | Quando o dono descreve um sintoma, casar a descrição com o **carimbo de tempo** no log antes de batizar qualquer coisa com ela. "Parada" é ambígua e eu peguei a maior que achei em vez da que ele descreveu — ele disse *1 s* e eu colei num evento de 28 s |
+| 102 | 🔴 **Vendi como hipótese principal uma expiração que não existe** | Na §2H.35 apontei o `result_timeout` do `rcl_action` como causa provável do relógio de ~14 s: o goal terminal expiraria da `status_list` e derrubaria o `any()`. A instrumentação mostrou que **a lista nunca é podada** — cresce de 1 a 7 em 222 s e os `4` ficam lá. A hipótese era falsa, e eu a escrevi no diário, no commit e no dossiê do Codex | Eu tinha o instrumento pronto e escrevi a hipótese **antes** de rodá-lo. Custo zero esperar o dado. Ao menos deixei marcado como hipótese e listei o que ela não explicava — foi isso que permitiu derrubá-la rápido, e é o hábito a manter |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
