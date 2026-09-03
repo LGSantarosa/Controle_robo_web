@@ -3989,6 +3989,63 @@ Portas, separando o que é nosso do que é velho:
 2 (20,9 s de 28,0) — o item `2q`, que é anterior a tudo que mexemos hoje. Porta 2 na
 14:47 foi 28,5 s; agora 28,0 s. Consistente.
 
+### 2H.37 🔴 O giro que sobrou na saída do 2 é **a minha janela envenenando a mira** — não o plano
+
+Corrida das 15:26. Dono: *"ele sai do 2, mesmo longe, ele decide girar, pq ainda
+acontece isso? acho que o plan após o door deve ser zerado e refeito"*.
+
+Ele está certo que algo velho precisa ser jogado fora. **O log diz que é a mira
+(`_aim_filt`), não o plano** — o plano já tinha sido substituído por um bom.
+
+#### O trecho, com o instante de cada coisa
+
+```
+891,0  exit_straight  y=4,91  yaw=88,2  n=137 ci=12  aim=(11,35/3,93)  herr= 179,3
+893,5  exit_straight  y=5,44  yaw=87,9  n=137 ci=12  aim=(11,35/3,93)  herr=-179,9
+894,0  exit_straight  y=5,54  yaw=87,7  n=137 ci=136 aim=(11,57/6,88)  herr=-167,0  <- carrot pula pro GOAL
+894,5  exit_straight  y=5,69  yaw=88,5  n=137 ci=136 aim=(11,57/6,88)  herr=-132,1
+895,0  turning        y=5,72  yaw=54,8  n=24  ci=23  aim=(11,57/6,88)  herr= -73,2  <- janela acaba, GIRA
+895,5  turning        yaw=15,8 | 896,5 yaw=-8,3 | 897,5 yaw=-33,0  <- desce ate -33
+898,0  turning        wz=+3,412  <- inverte e volta
+901,5  driving        yaw=70,9
+```
+
+**6,5 s girando pra ir parar em 70,9°** — praticamente de onde saiu (88°). Giro puro
+desperdiçado, longe do vão.
+
+#### A causa é uma decisão minha, e está escrita na §2H.32
+
+Eu pus a janela **depois** do bloco do filtro, de propósito, com esta
+justificativa: *"a mira segue esquentando com o plano atual, então quando a janela
+acaba ela já está correta"*. **O raciocínio está errado**: durante a janela, "o plano
+atual" é justamente o **plano ruim** que a janela existe para ignorar. Então a EMA
+(tau 2 s) passou 4 s integrando um rumo de ~180°.
+
+Prova no próprio `herr` durante a janela: 179,3 -> 178,4 -> 179,1 -> −179,9 -> −167,0
+-> −132,1. É a EMA saindo devagar do 180°. Quando a janela acaba, ela ainda está a
+−73° do certo — e o seguidor obedece isso.
+
+**Eu reintroduzi, dentro da minha própria correção, exatamente o BO que o Fix 1
+(§2H.30) tinha eliminado.** Erro 103 da §5.
+
+#### 🔻 Por que "zerar o plano" (ideia do dono) NÃO era o necessário
+
+Aos **895,0**, quando a janela acabou, **já existia plano bom**: `n=24`, carrot no
+goal `(11,57 / 6,88)`, 1,2 m ao norte. O Nav2 tinha replanejado sozinho. Com a mira
+crua, o `herr` naquele instante seria **≈ −6,6°** — abaixo do `turn_enter` de 16° —
+e o robô teria **seguido reto**, sem girar nada.
+
+Ou seja: o plano se resolveu sozinho; quem estava velho era o filtro.
+
+#### Conserto proposto (1 linha, simétrico ao Fix 1)
+
+Dentro do ramo da janela, zerar `_aim_filt` a cada tick. Assim a EMA nunca acumula
+durante a janela; cada tick usa o rumo **cru**, e no tick em que a janela acaba o
+`herr` é o do plano **daquele instante**. É exatamente o que o `preempted` já faz —
+a janela tinha ficado como a única parte do caminho que ainda acumulava.
+
+⏳ **Não implementado** — aguardando o dono.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -4278,6 +4335,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 100 | 🔴🔴 **Removi um amortecedor sem remover o solavanco, e chamei isso de conserto** | A EMA de 2 s da mira estava, por acidente, impedindo o robo de se comprometer com o plano ruim: ele balançava e escapava. Limpei o filtro (Fix 1, correto no que se propunha) e o robo passou a obedecer o plano ruim **na hora e inteiro** — girou 180, voltou pra dentro do vao e encalhou 9,8 s. Ficou PIOR que antes do conserto | Quando um sistema sobrevive a uma entrada ruim, parte da sobrevivencia pode vir de lentidao/ruido que ninguem projetou. Antes de limpar um caminho de sinal, perguntar o que a sujeira estava segurando. E a entrada ruim (plano nascendo pra tras) era conhecida desde a §2H.23 — eu tratei o sintoma a jusante dela duas vezes seguidas |
 | 101 | 🔴 **Atribuí a observação do dono ao evento errado** | Ele disse que o robô "deu uma paradinha de 1s e seguiu reto". Eu rotulei os **28,5 s do limite-ciclo de alinhamento** como "a parada que o dono viu" e escrevi isso no diário. São coisas distintas: a paradinha dele são **0,7 s de inércia na devolução** (`exit_straight` comandando `vx=0,3` com a pose ainda parada), benigna; os 28,5 s acontecem **antes de entrar** e são problema anterior. Ele corrigiu: *"Vc está confundindo as coisa, ele errou antes de entrar no obstaculo"* | Quando o dono descreve um sintoma, casar a descrição com o **carimbo de tempo** no log antes de batizar qualquer coisa com ela. "Parada" é ambígua e eu peguei a maior que achei em vez da que ele descreveu — ele disse *1 s* e eu colei num evento de 28 s |
 | 102 | 🔴 **Vendi como hipótese principal uma expiração que não existe** | Na §2H.35 apontei o `result_timeout` do `rcl_action` como causa provável do relógio de ~14 s: o goal terminal expiraria da `status_list` e derrubaria o `any()`. A instrumentação mostrou que **a lista nunca é podada** — cresce de 1 a 7 em 222 s e os `4` ficam lá. A hipótese era falsa, e eu a escrevi no diário, no commit e no dossiê do Codex | Eu tinha o instrumento pronto e escrevi a hipótese **antes** de rodá-lo. Custo zero esperar o dado. Ao menos deixei marcado como hipótese e listei o que ela não explicava — foi isso que permitiu derrubá-la rápido, e é o hábito a manter |
+| 103 | 🔴🔴 **Reintroduzi, dentro do meu próprio conserto, o BO que ele tinha eliminado** | O Fix 1 (§2H.30) existia para o seguidor não acumular mira velha enquanto outro nó dirige. Na janela de saída reta (§2H.32) eu deliberadamente deixei a EMA continuar atualizando, escrevendo no diário que assim *"quando a janela acaba ela já está correta"*. Mas durante a janela o plano é o RUIM — o mesmo que a janela existe pra ignorar. Resultado: 4 s de EMA em 180°, e 6,5 s de giro inútil ao fim da janela. O dono viu na tela | Uma exceção que eu abro "por bom motivo" dentro de uma regra que acabei de criar merece o mesmo teste que a regra. Eu tinha o caso de teste pronto (o do Fix 1) e não o estendi pra janela — se tivesse, ele teria falhado na hora |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |

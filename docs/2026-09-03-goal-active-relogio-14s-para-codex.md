@@ -296,3 +296,29 @@ não pela distância — sinal de que a janela está armando depois de um **abor
 `door_crossing`, não só depois de travessia concluída. O `/door_zone` publica `idle`
 nos dois casos e o seguidor não distingue. Anotado como item `2p` do §6 do diário.
 Opinião do Codex bem-vinda aqui também.
+
+---
+
+## 12. Achado novo (15:26) — a janela de saída reta envenena a mira
+
+Sintoma relatado pelo dono: *"ele sai do 2, mesmo longe, ele decide girar"*.
+
+Na janela `exit_straight` eu deixei a EMA da mira (`_aim_filt`, tau 2 s) continuar
+atualizando, com a justificativa de que assim ela estaria quente no fim da janela.
+Errado: durante a janela o plano é o **ruim** (o que a janela existe para ignorar),
+então a EMA integra ~180° por 4 s. Medido:
+
+```
+891,0  exit_straight  n=137 ci=12  aim=(11,35/3,93)  herr= 179,3
+894,0  exit_straight  n=137 ci=136 aim=(11,57/6,88)  herr=-167,0   <- carrot pula pro goal
+895,0  turning        n=24  ci=23  aim=(11,57/6,88)  herr= -73,2   <- janela acaba, gira
+                      ... 6,5 s de giro (yaw 88 -> -33 -> 70,9) ...
+901,5  driving        yaw=70,9
+```
+
+Aos 895,0 **já havia plano bom** (`n=24`, carrot no goal). Com a mira crua o `herr`
+seria ≈ **−6,6°**, abaixo do `turn_enter` de 16° → teria seguido reto.
+
+Conserto proposto: zerar `_aim_filt` a cada tick **dentro** do ramo da janela,
+simétrico ao que o `preempted` já faz. Opinião do Codex bem-vinda: há razão para
+manter a EMA viva durante uma janela em que o plano é deliberadamente ignorado?
