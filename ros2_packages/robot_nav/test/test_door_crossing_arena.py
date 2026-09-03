@@ -90,18 +90,22 @@ class TestFrestaAMarcadaComoPorta(unittest.TestCase):
         vao = math.hypot(d['b'][0] - d['a'][0], d['b'][1] - d['a'][1])
         self.assertAlmostEqual(vao, 0.90, places=3)
 
-    def test_as_QUATRO_frestas_estao_marcadas(self):
-        """2026-09-02, decisão do dono: marcar todas. Com a porta na QUINA a
-        conta do §4.4-(a) fecha em todas (giro +31,7 a +39,6 cm) — antes, com a
-        marcação no meio do bloco, a de 0,60 dava só +7,1 cm.
+    def test_so_as_frestas_dos_obstaculos_1_e_2_estao_marcadas(self):
+        """2026-09-03, decisão do dono (§2H.29): *"retira os doors 3 e 4, eles
+        não serão utilizados, pode descartar, focamos só no 1 e 2"*.
 
-        ⚠️ A fresta C (0,60) segue sendo tratada como PAREDE pelo Nav2
-        (`robot_radius 0.32`), então a porta dela é zona armada que o planejador
-        não usa. Marcada por pedido do dono; não é erro, é escopo."""
+        Sobram A (0,90 — obstáculo 1) e B (0,70 — obstáculo 2). Saem C (0,60) e
+        D (0,80). A de 0,60 saiu de bônus: ela tinha folga útil ZERO (§2H.26,
+        0,30 − 0,25 de robô − 0,05 de margem) e o Nav2 já a tratava como parede
+        (`robot_radius 0.32`).
+
+        ⚠️ Isto marca apenas quem o `door_crossing` conduz. As frestas C e D
+        continuam existindo no mundo e no mapa, e a rota continua com 5
+        waypoints — o robô ainda passa por elas, só que com Nav2 puro."""
         vaos = sorted(round(math.hypot(d['b'][0] - d['a'][0],
                                        d['b'][1] - d['a'][1]), 2)
                       for d in carrega_portas())
-        self.assertEqual(vaos, [0.60, 0.70, 0.80, 0.90])
+        self.assertEqual(vaos, [0.70, 0.90])
 
     def test_toda_porta_marcada_tem_margem_de_giro_POSITIVA(self):
         """O par que protege a decisão acima: marcar fresta em que o robô bate
@@ -121,9 +125,10 @@ class TestDoorsFile(unittest.TestCase):
     idêntica à de hoje — com a diferença de que eu poderia achar que testei."""
 
     def test_le_a_porta_da_arena_do_disco(self):
+        # 2 portas desde §2H.29 (obstáculos 1 e 2); ids seguem 1 e 2
         d = doors_de_arquivo(DOORS_JSON)
-        self.assertEqual(len(d), 4)
-        self.assertEqual(d[0]['id'], 1)
+        self.assertEqual(len(d), 2)
+        self.assertEqual([x['id'] for x in d], [1, 2])
 
     def test_caminho_vazio_e_sem_portas_nao_e_erro(self):
         """Fora da arena ninguém passa doors_file — não pode explodir."""

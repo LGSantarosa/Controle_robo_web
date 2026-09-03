@@ -741,3 +741,65 @@ def test_perfil_arena_modula_no_cruzeiro_de_0_30():
     assert speed_for_clearance(c, 0.35) == pytest.approx(c.min_speed)
     meio = speed_for_clearance(c, (1.2 + 0.35) / 2)
     assert c.min_speed < meio < 0.30
+
+
+# ---- Fix 1: não carregar estado enquanto OUTRO nó dirige (§2H.28) ----------
+# Baseline do BO: docs/baselines/2026-09-03-arena-giro-apos-boca-obstaculo-2-BASELINE
+# O path_follower ficou 13 s em `turning` com o door_crossing no mux, a EMA da
+# mira (`_aim_filt`, tau=2.0 s) integrando bearings de dois planos opostos, e
+# descarregou tudo na devolução: girou pro lado errado e depois voltou.
+
+from robot_nav.path_follower import follower_preempted          # noqa: E402
+
+# plano reto saindo do robô pro OESTE e pro NORTE (passos de 10 cm)
+PLANO_OESTE = [(-i * 0.1, 0.0) for i in range(40)]
+PLANO_NORTE = [(0.0, i * 0.1) for i in range(40)]
+POSE_NORTE = (0.0, 0.0, math.pi / 2)      # parado na origem, apontando pro norte
+
+
+def test_follower_preempted_so_quando_a_porta_DIRIGE():
+    # estados em que o door_crossing manda no mux
+    for st in ('staging', 'rotating', 'crossing', 'reversing'):
+        assert follower_preempted(st) is True
+    # 'approaching' NÃO: aí quem dirige é o próprio seguidor, e zerar o filtro
+    # dele na aproximação traria de volta o zigue-zague que a EMA resolveu.
+    assert follower_preempted('approaching') is False
+    assert follower_preempted('idle') is False
+    assert follower_preempted('') is False
+    assert follower_preempted(None) is False
+
+
+def test_preemptado_nao_comanda_nada_e_se_declara():
+    fol = DecisiveFollower(FollowConfig())
+    cmd = fol.update(POSE_NORTE, PLANO_NORTE, True, None, preempted=True)
+    assert (cmd.vx, cmd.wz) == (0.0, 0.0)
+    assert cmd.state == 'preempted'
+
+
+def test_REGRESSAO_nao_descarrega_mira_velha_na_devolucao():
+    """O BO da §2H.28, reduzido: 13 s preemptado olhando um plano que aponta pro
+    OESTE e, na devolução, um plano que aponta pro NORTE — que é justamente pra
+    onde o robô já está virado. Ele tem que ANDAR, não girar."""
+    fol = DecisiveFollower(FollowConfig())
+    for _ in range(260):                       # 13 s a 20 Hz
+        fol.update(POSE_NORTE, PLANO_OESTE, True, None, preempted=True)
+    cmd = fol.update(POSE_NORTE, PLANO_NORTE, True, None, preempted=False)
+    assert cmd.state == 'driving'
+    assert cmd.wz == pytest.approx(0.0)
+    assert cmd.vx > 0.0
+
+
+def test_REGRESSAO_devolucao_nao_guarda_alvo_de_giro_congelado():
+    fol = DecisiveFollower(FollowConfig())
+    for _ in range(260):
+        fol.update(POSE_NORTE, PLANO_OESTE, True, None, preempted=True)
+    assert fol._turn_target is None
+    assert fol._aim_filt is None
+
+
+def test_sem_preempcao_o_comportamento_nao_muda():
+    # sanidade: o mesmo plano oeste, sem preempção, TEM que mandar girar
+    fol = DecisiveFollower(FollowConfig())
+    cmd = fol.update(POSE_NORTE, PLANO_OESTE, True, None)
+    assert cmd.state == 'turning'
+    assert abs(cmd.wz) > 0.0

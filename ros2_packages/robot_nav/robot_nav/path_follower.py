@@ -273,6 +273,19 @@ def speed_for_clearance(c: 'FollowConfig', front_clear: float) -> float:
     return c.min_speed + (c.forward_speed - c.min_speed) * frac
 
 
+# 2026-09-03 (§2H.28) — estados do /door_zone em que o door_crossing DIRIGE.
+# 'approaching' fica de fora de proposito: nesses ticks quem dirige e' o proprio
+# seguidor, e zerar a EMA da mira ali traria de volta o zigue-zague que ela
+# resolveu em 07-17. 'idle' idem.
+DOOR_DRIVING = ('staging', 'rotating', 'crossing', 'reversing')
+
+
+def follower_preempted(door_zone_state: Optional[str]) -> bool:
+    """True quando OUTRO no' esta' dirigindo e o comando do seguidor vai pro lixo
+    no twist_mux (door 20 > follow 15)."""
+    return door_zone_state in DOOR_DRIVING
+
+
 @dataclass
 class Cmd:
     vx: float
@@ -305,8 +318,25 @@ class DecisiveFollower:
     def update(self, pose: Optional[Tuple[float, float, float]],
                path: Optional[List[Pt]], goal_active: bool,
                goal_yaw: Optional[float],
-               front_clear: float = float('inf')) -> Cmd:
+               front_clear: float = float('inf'),
+               preempted: bool = False) -> Cmd:
         c = self.cfg
+        # 2026-09-03 (§2H.28): enquanto o door_crossing dirige, este no' NAO
+        # acumula nada. O BO: ele ficou 13 s em `turning` com o mux tomado, a EMA
+        # da mira (tau 2 s) comendo bearings de DOIS planos que alternavam, e o
+        # `_turn_target` congelado de antes da porta. Na devolucao descarregou
+        # tudo — girou 70 graus pro lado errado e depois voltou. Sem memoria, o
+        # 1o tick livre recalcula da pose e do plano DAQUELE instante.
+        # De proposito NAO e' um "hold": se o /door_zone travar em estado sujo, o
+        # pior caso e' o robo PARAR (o seguidor manda zero e ninguem mais publica),
+        # nao sair dirigindo com dado velho.
+        if preempted:
+            self.state = 'idle'
+            self._turn_target = None
+            self._aim_filt = None
+            self._prev_yaw = None
+            self._yaw_rate = 0.0
+            return Cmd(0.0, 0.0, 'preempted')
         if pose is None or not goal_active or not path or len(path) < 2:
             self.state = 'idle'
             self._turn_target = None
@@ -468,6 +498,7 @@ class DecisiveFollower:
 
 def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
     import csv as _csv
+    import json as _json
     import os as _os
     import time as _time
 
@@ -561,6 +592,14 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             self._front_clear = float('inf')
             self._front_clear_t = 0.0
             self._clear_sector = math.radians(g['clear_sector_deg'])
+            # /door_zone (§2H.28): saber QUANDO o door_crossing esta' dirigindo,
+            # pra nao acumular mira/alvo que serao descarregados na devolucao.
+            # latched (TRANSIENT_LOCAL) igual unstuck_supervisor e scan_sanitizer:
+            # o door_crossing so publica na TROCA de estado, entao quem sobe
+            # depois precisa do ultimo valor retido.
+            self._preempted = False
+            self.create_subscription(String, 'door_zone', self._on_door_zone,
+                                     latched)
             self.create_subscription(LaserScan, 'scan_safe', self._on_scan,
                                      qos_profile_sensor_data)
             for topic in ('navigate_to_pose/_action/status',
@@ -627,6 +666,13 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                         except OSError:
                             pass
 
+        def _on_door_zone(self, msg):
+            try:
+                st = _json.loads(msg.data).get('state', 'idle')
+            except (ValueError, AttributeError):
+                st = 'idle'
+            self._preempted = follower_preempted(st)
+
         def _on_scan(self, msg: LaserScan):
             best = float('inf')
             a = msg.angle_min
@@ -665,7 +711,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             if self._time.time() - self._front_clear_t > 1.0:
                 clear = float('inf')   # scan velho/ausente -> não trava o estico
             cmd = self.fol.update(pose, self._path, goal, self._goal_yaw,
-                                  front_clear=clear)
+                                  front_clear=clear,
+                                  preempted=self._preempted)
 
             # SEGURA O MUX: com goal ativo SEMPRE publica (prio 15 não expira ->
             # o controller_server prio 10 nunca assume e briga). Sem goal -> cala.

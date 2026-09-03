@@ -3494,6 +3494,44 @@ robo ainda vai passar por elas indo pro cone_4 e pra chegada — so que com nav2
 sem o `door_crossing`. Para ele "nao tentar passar", a rota e/ou a arena tem que
 mudar tambem; **nao mexi nisso**, e pergunta aberta pro dono.
 
+### 2H.30 ✅ Fix 1 aplicado: o `path_follower` para de acumular estado enquanto o `door_crossing` dirige
+
+Conserto da causa da §2H.28, escolhido pelo dono. **Um comportamento novo, nada
+mais** — o Fix 2 (giro grande exige confirmacao) fica pra depois da volta, pra saber
+qual dos dois resolveu.
+
+**O que mudou.** `path_follower` assina `/door_zone` (latched, mesmo padrao que
+`unstuck_supervisor` e `scan_sanitizer` ja usam). Enquanto o estado for
+`staging|rotating|crossing|reversing` — os 4 em que o `door_crossing` DIRIGE — o
+seguidor zera `_aim_filt`, `_turn_target`, `_prev_yaw`, `_yaw_rate`, poe `state =
+'idle'` e devolve `Cmd(0, 0, 'preempted')`. No 1o tick livre ele recalcula bearing e
+alvo da pose e do plano **daquele instante**.
+
+**`approaching` ficou de FORA de proposito.** Nesse estado quem dirige e' o proprio
+seguidor; zerar a EMA da mira ali traria de volta o zigue-zague que ela resolveu em
+07-17. Por isso NAO reusei o `door_zone_active()` do unstuck, que inclui
+`approaching` — helper novo `follower_preempted()`.
+
+**Nao e' um "hold".** Se o `/door_zone` travar em estado sujo, o pior caso e' o robo
+PARAR (o seguidor manda zero e ninguem mais publica no mux), nao sair dirigindo com
+dado velho. Falha segura foi escolha, nao acidente.
+
+**Estado novo `preempted` no CSV/`/follow_state`** — da' pra medir no `follow_debug`
+quantos ticks o seguidor passou preemptado. Nada no codigo ramifica por esse nome (o
+state so' e' publicado e logado), entao nao quebra consumidor.
+
+**Testes:** 5 novos, sendo 2 de regressao que reproduzem o BO reduzido (260 ticks
+preemptado olhando um plano pro OESTE, devolucao com plano pro NORTE -> tem que
+ANDAR, nao girar). Suite: **155 passam**; seguem os 2 quebrados da §2H.22.
+
+**Baseline pra comparar**, escolhido pelo dono: a corrida das 14:09, salva em
+`docs/baselines/2026-09-03-arena-giro-apos-boca-obstaculo-2-BASELINE/`. Criterio
+escrito no README de la': entre a soltura (`crossing -> idle`) e os ~5 s seguintes, o
+`follow_debug` **nao** pode mostrar `wz` trocando de sinal nem `herr` acima de ~30°.
+Se mostrar, a culpa e' do plano do momento (Fix 2), nao do estado velho.
+
+⏳ **Nao rodado.**
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
