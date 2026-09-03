@@ -3051,6 +3051,134 @@ sequer arma?"** — que agora é a pergunta mais importante. Vale deixar termina
 
 **Erro 94 da §5.**
 
+### 2H.22 Subi a arena no sim para conferir o que o Codex deixou — e achei 2 testes QUEBRADOS
+
+Pedido do dono: *"sobe o gazebo e o web para eu ver como o codex deixou o
+door_crossing"*. Antes de olhar rodando, conferi o que está na working tree.
+
+#### O que o Codex mudou (6 arquivos, nada commitado)
+
+| arquivo | mudança |
+|---|---|
+| `tools/gera_arena_galpao.py` | porta marcada na **BOCA** do túnel (quina, eixo −0,30 m) e não no meio; `PRE_FRESTA_DIST` 1,0 → **0,8 m** (o conserto do erro 94); `MARCADAS_COMO_PORTA` = **as 4 frestas** |
+| `maps/arena_galpao.doors.json` | 1 → **4 portas**; a A saiu de x=7,50 para **x=7,20** |
+| `door_crossing.py` | `_pick_door` ganhou **área de aproximação** (corredor `approach_dist` 1,0 × `approach_half_width` ±0,35) e passa a armar em **`staging`** quando a pose não está pronta, em vez de ir direto pro `rotating` |
+| `nav2.launch.py` + `launch.sh` | `exit_margin` virou launch arg; arena usa **1,0** (com o plano na boca, 0,5 soltava o robô 35 cm DENTRO do túnel de 0,60 m) |
+| `test_door_crossing_arena.py` | reescrito para a nova marcação — **25/25 passam** |
+
+A direção está certa: a §2H.17 dizia que a máquina endireitava o **yaw** e não a
+**lateral**; a área de aproximação é exatamente o lugar onde a lateral passa a
+ser corrigida antes do commit.
+
+#### 🔴 O que ele não conferiu: a suíte ANTIGA quebrou
+
+```
+python3 -m pytest ros2_packages/robot_nav/test/ -q -k "door or arena"
+2 failed, 123 passed
+```
+
+- `test_door_crossing.py::test_restage_when_aligned_but_wont_fit` — esperava
+  `reversing`, recebe **`staging`**.
+- `test_door_crossing.py::test_rotating_is_proportional_slows_near_target` —
+  esperava `rotating`, recebe **`staging`**.
+
+Mesma causa nos dois: **o arme não vai mais direto pro `rotating`**. Não é bug
+novo — é a mudança de comportamento batendo em testes que ninguém atualizou.
+Mas enquanto estiverem vermelhos, a lei proporcional do giro (`rot_k`/`rot_min`,
+validada em 06-19) e o re-estágio por `will_clear` deixaram de ter guarda.
+**Decidir**: o `staging` a d=0,30 é melhor que a ré (corrige lateral em vez de
+recuar) — se for, os testes é que estão velhos e têm que ser reescritos, não a
+máquina.
+
+#### ✅ Correção de um fato que o Codex me passou
+
+Ele relatou que *"o ambiente falhou por falta de numpy"* e que a regeneração do
+`.pgm/.yaml` não roda aqui. **Não procede nesta máquina**: `numpy 1.26.4` está
+instalado e o gerador roda limpo. Regenerei para um diretório temporário e
+comparei: `.pgm`, `.yaml` e `.doors.json` **idênticos** aos do repo — o mapa em
+disco está em dia com o gerador. Margens de point-turn das 4 portas: +0,396 /
++0,341 / +0,317 / +0,368 m.
+
+#### Estado no ar (só subida, nenhuma volta rodada ainda)
+
+`./launch.sh --sim --nav2 --arena` — Gazebo (server+GUI), Nav2 completo,
+`door_crossing` com **4 portas** e `exit_margin:=1.0`, web em `:5000` (HTTP 200),
+`/scan` a ~9 Hz. **Nenhuma volta foi medida nesta sessão.**
+
+⚠️ Achei uma run **antiga de outra sessão** ainda de pé quando comecei (nav2 sem
+o `exit_margin:=1.0`) — matei antes de subir. Se alguém mediu alguma coisa com
+ela no ar, mediu o código velho.
+
+### 2H.23 🔴🔴 Girou 180° DENTRO da fresta 2 e arrastou os dois cones — **o plano do Nav2 nasceu apontando pra trás**
+
+Relato do dono: *"o robô simplesmente ia passar do 2, ele já tinha passado da metade, aí do nada ele decide girar dentro do obstáculo, bate dos dois lados e arrasta tudo, sendo que era só continuar indo reto"*.
+
+Logs desta corrida: `docs/baselines/2026-09-03-arena-giro-180-dentro-da-fresta-2/`
+(`follow_debug.csv`, `nav2.log`, `follow_plan_last.csv`, `unstuck.csv`, `nav_metrics`). Rodou **no sim (Gazebo), na máquina de dev** — nada de Pi.
+
+#### A cadeia, com hora
+
+| t (epoch) | quem | o que |
+|---|---|---|
+| 871,9 → 874,8 | `door_crossing` | `staging ↔ rotating` **11 vezes em 2,9 s**, robô PARADO em (11,433 / 3,613), yaw 88,6° |
+| 874,825 | `door_crossing` | `rotating -> idle` = **`_abort`** (`align_timeout` 15 s estourou). `cleared=True`, `distC=0,69` |
+| 875,5 → 877,8 | **`path_follower`** | com o mux livre, gira o robô no lugar 88,6° → 158,8° (**+70°**) |
+| 877,84 | `door_crossing` | `idle -> rotating` (re-armou: `_cleared` ainda tinha a porta 2) e **desgira de volta** 158,8° → 90,6° |
+| 880,15 | `door_crossing` | `rotating -> crossing`. Atravessa reto: y 3,66 → 4,80 (**1,14 m**), yaw travado em ~88,6° |
+| 884,3 / 885,1 | `controller_server` | `No valid trajectories out of 35!` ×2 → `backup` falha (`Collision Ahead`) → `wait` |
+| **886,273** | `door_crossing` | `crossing -> idle` — **saída legítima**: `s > exit_margin` (0,5 m). Faz `_cleared.discard` + `crossing_cooldown` 8 s. **Solta o robô** |
+| 886,5 → 891+ | **`path_follower`** | `vx=0,0`, `wz` **4,22 → 2,4 rad/s**, em cima de (11,36 / 4,80). yaw 88,5° → 169° → −143° = **giro de ~180° no lugar, com o corpo ainda no vão** |
+
+O giro que arrastou os cones é o da última linha. Não foi o `door_crossing`: ele estava `idle` **em cooldown de 8 s** e não podia retomar.
+
+#### A causa raiz: o plano
+
+`follow_plan_last.csv` (135 pontos, o plano que o seguidor tinha na mão):
+
+```
+idx 0   11,375  4,425      <- nasce onde o robô estava, DENTRO do vão
+idx 1..9  11,375  4,375 → 3,975   <- desce reto para o SUL (volta pela fresta)
+idx 12  11,275  3,825    <- exatamente o carrot que o seguidor mirava
+idx 20  10,875  3,725    <- vira pro OESTE
+idx 59   9,053  4,120
+idx 79   8,992  5,109    <- sobe por fora
+idx 119 10,864  6,520
+idx 135 11,575  6,875    <- goal
+```
+
+O planejador decidiu que a fresta 2 estava **intransponível** (o costmap local tinha os dois batentes inflados em cima do robô — é o mesmo `No valid trajectories` / `start or goal pose are an obstacle` do item 8) e traçou o **contorno**: sair de ré pela fresta, dar a volta por fora e voltar. Só que ele traçou isso **com o robô parado dentro da fresta**.
+
+O `path_follower` só obedece: `i0 = closest_index` = 0, `carrot_point(path, 0, lookahead=0,6)` = **idx 12 = (11,275 / 3,825)**, que está **0,88 m ATRÁS** do robô. `herr = 170,4°` → `turn_enter` (0,28 rad) → estado `turning` → `wz` no teto. Point-turn de 180° na largura do vão.
+
+#### Por que ninguém segurou
+
+1. O `path_follower` já estava mandando `wz=4,223` com `herr=170,4°` **desde 885,8**, ou seja **antes** do `door_crossing` soltar (linhas 885,842 / 886,162 / 886,498 do `follow_debug`: `state=turning`, `wz≈4,22`, e a pose andando pro norte porque quem tinha o mux era o `door_crossing`). O giro estava **engatilhado**, esperando o mux. `exit_margin=0,5` foi só o gatilho.
+2. `exit_margin = 0,5` mede o **centro** do robô a 0,5 m da linha da porta. Com meio-corpo ~0,25 m + os batentes, a traseira ainda está no vão. "Soltou" ≠ "saiu".
+3. O `crossing_cooldown` de 8 s garante que o `door_crossing` **não** possa recuperar o robô nesse exato intervalo.
+4. O `ci=12` nunca avançou porque o seguidor ficou em `turning` de 865 a 889 — os `wz` dele eram descartados pelo mux, o `herr` nunca caiu, e ele nunca chegou a `driving`. Passou geometricamente a 0,20 m do idx 12 (em t=880) **sem nunca marcar como cumprido**.
+
+#### O que este BO NÃO é
+
+- **Não** é erro de pose/AMCL: o `door_crossing` atravessou reto e certo (yaw travado, 1,14 m).
+- **Não** é o `door_crossing` girando dentro do vão: o giro dele (877,8→880,1) foi *para* alinhar, e foi **para trás do vão**, não dentro.
+- **Não** é a fresta apertada: ele passou. O estrago é **pós-travessia**.
+
+#### Fatos que ficam medidos
+
+- `exit_margin=0,5 m` **não** tira o corpo do vão; largura livre pra girar 180° ali precisa de ≥ meia-diagonal do robô (0,5×0,5 → ~0,354 m de raio) contra vão de 0,60–0,90 m → **o point-turn não cabe** com folga de projeto.
+- O thrash `staging↔rotating` de 11 ciclos em 2,9 s (871,9–874,8) queimou o `align_timeout` de 15 s **sem sair do lugar** e é o que abriu a porta pro `_abort`.
+- A corrida terminou com o `bt_navigator` cancelando o goal em 895,75.
+
+#### 3 candidatos de conserto (nenhum aplicado — decisão do dono)
+
+| # | Onde | O quê | Custo/risco |
+|---|---|---|---|
+| A | `door_crossing.py` `exit_margin` | subir 0,5 → **~0,9 m** (meio-corpo + meia-diagonal + margem), pra soltar o robô já **fora** do vão | 1 número; muda o ponto de entrega em toda porta |
+| B | `path_follower` | **proibir point-turn enquanto `clear` lateral for pequeno** (no `follow_debug`, `clear` cai de 2,74 pra **0,36** exatamente no giro) — girar no lugar só com folga ≥ meia-diagonal; senão andar reto até abrir | mais cirúrgico, ataca a CLASSE do BO (vale pra qualquer vão, não só porta marcada) |
+| C | `path_follower` | **rejeitar plano que nasce pra trás**: se o carrot exige `herr > ~120°` e o plano na saída da porta aponta pro lado de onde viemos, esperar replan em vez de obedecer | ataca a causa raiz, mas é heurística nova |
+
+O item 8 do §6 (`start/goal is an obstacle`) é a **origem** do plano torto e continua aberto — A/B/C só evitam que ele custe os cones.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -3332,6 +3460,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 92 | 🔁 **"Não precisa de X" testado num shell que já tinha X** — o erro 78, de novo | Pus a validação do `doors.json` no `launch.sh` importando do `door_crossing`, que importa `numpy` no topo. Num ambiente sem numpy o `--arena` aborta com `ModuleNotFoundError` **antes de olhar o JSON** — a falha fechada dispara pelo motivo errado e culpa o arquivo. Passou porque meu shell sempre tem numpy; achado por review que rodou em outro ambiente | Caminho de validação leve não importa módulo de runtime. E o teste da afirmação "isto roda em qualquer lugar" é rodar **em qualquer lugar** — `env -i` custa uma linha |
 | 93 | 🔴🔴 **Transformei em CÓDIGO E TESTE uma tese que eu mesmo refutei no mesmo dia** | O WARN de boot e a `janela_de_alinhamento_ok()` cravavam o passo de 7,16° (`rot_min/rate_hz`), conta derrubada pela §2H.13. O WARN dizia "vai abortar por align_timeout" e **apareceu nas 2 voltas que atravessaram sem abort**. Eu tinha listado esse risco exato na minha própria agenda (§2H.15, item 5) e não fui conferir — e o dado que confirmava estava nos logs das voltas que eu mesmo rodei | Retratar no diário **não desfaz** o que já virou código. Ao derrubar uma tese, o passo seguinte é `grep` por ela no repo — teste e comentário que a repetem são a forma mais durável do erro, porque parecem verificação |
 | 94 | 🔴🔴 **Escolhi a distância do waypoint por UMA condição e havia DUAS** | A §2H.7 fixou 1,0 m otimizando a margem do point-turn, e eu nunca conferi a **condição de arme** (`dist <= zone_radius 1,1` no instante do `SUCCEEDED`). A 1,0 m sobram 0,09 m de folga contra um `xy_goal_tolerance` de 0,15 — o robô pode concluir o goal FORA da zona. Na `lim1` foi o que aconteceu: `cleared=False`, zero transições, travessia igual à de antes da máquina. E rebaixa a `porta1`/`torta1`: elas armaram por sorte de parada | Quando um ponto tem que satisfazer 2 restrições, otimizar 1 e não listar a outra é o mesmo que escolher no chute. A hora de listar as restrições é **antes** de escolher o número — e a segunda estava escrita no código que eu tinha acabado de ler (`zone_radius`, `_pick_door`) |
+| 95 | 🔴 **Fui puxar os logs por `ssh` na Pi quando a corrida era no SIM, na própria máquina** | O dono pediu "os logs atuais"; eu abri um `until ssh robo@robo-desktop.local` sem antes olhar `controle_web/logs/`, que tinha os CSVs de 3 minutos atrás. Levei uma bronca merecida: *"EU TO USANDO O GAZEBO, TA TUDO NA MAQUINA"*. O baseline mais recente no repo (10:45) também era local — o sinal estava na minha frente | Antes de escolher a FONTE do log, olhar o carimbo de tempo do que já está no disco local. `ssh` é o caminho quando o real rodou; presumir o real porque o projeto tem um robô é presumir |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
@@ -3340,6 +3469,12 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 73 | Chamei o `/doors` de **"o bloqueador de integração"** (singular) | Havia um segundo, decisivo e testado: `_pick_door` exige `_cleared`, populado só por um goal **SUCCEEDED dentro da zona** (`:330`, `:359-367`, `test_door_crossing.py:529`). Com `doors_file` e o launch ligado, o nó ainda ficaria `idle` a volta inteira — e eu poderia ler a volta como "a máquina não achou necessário atuar". Achado pelo revisor | Antes de declarar UM bloqueador, percorrer **todos** os `continue`/`return` do caminho de arme e checar cada pré-condição contra a rota real |
 
 ---
+
+**95.** (09-02) Rodei `pkill -f "gz sim"` de dentro do meu próprio shell — o
+padrão casou com a linha de comando do shell que o executava e ele **se matou**
+(exit 144), deixando o `launch.sh` sem subir e um `app.py` órfão vivo. Usar
+`pkill -f '[g]z sim'` (colchete quebra o auto-match). Irmão do erro do
+`meus_scripts_dirigem_o_robo`: eu sou um processo na lista também.
 
 ## 6. Aberto
 
@@ -3359,6 +3494,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 2l | **1º goal da volta perdido por `server_timeout` (200 ms)** | ⏳ **novo, 09-01 (§2G.4).** `contornoA3`: `Timed out while waiting for action server to acknowledge goal request for compute_path_to_pose` → `Goal failed` em 0 s, com o robô parado na largada em espaço livre. **Não é** o item 8 (`start/goal is an obstacle`): o planejador não recusou plano, não respondeu o handshake. 1 em 4 voltas. Barato de mitigar (subir `server_timeout` / esperar o `compute_path_to_pose` antes do 1º goal), mas **na prova custa um cone** |
 | 2m | **`launch.sh` mata Gazebo de OUTRO launch** | ⏳ **novo, 09-01 (§2G.9).** O `trap cleanup EXIT` termina com `pkill -9 -f "gz sim"` **global, sem filtrar por PID** (`launch.sh:414-416`). Como o trap é lento (`sleep 1` + 5 s de escalação por nó), quem roda voltas em sequência tem o Gazebo da volta seguinte morto pela limpeza da anterior — `exit -9`, zero log. Custou 3 voltas hoje. Não mexi: é decisão à parte (filtrar por PID quebra o papel de "rede de segurança contra órfão") |
 | 2j | 🔴🔴 **`motion_guard` bloqueia o robô na arena** | ⏳ **novo, 08-31 (§2B.7).** Vigia de PESSOA ligado numa prova **sem pessoa**; zera o giro entre `auto_vel_pre` e `auto_vel_raw`. Medido: **26,9 s** (`hist3`) e **52,1 s** (`aprox2`); nos episódios, ~505 comandos entraram e **1** saiu. Os 3 episódios duram 25,7–26,9 s = `hold_still_max` 20 + `clear_time` 5 + settle, sempre com um **cone** como único vizinho — a vigília roda até o teto em cima do cone. Só dispara nas voltas com aproximação (que adiciona point-turn perto de cone). ✅ **DESLIGADO na arena por decisão do dono 08-31** (`motion_guard:=false`, §2B.8); 3 voltas sem ele na §2B.9 — parado 0,0 s em 14/15 goals, mas **1 das 3 bateu na fresta A** (item 2k), então **não** está validado. 🔴 **`--arena` vale no REAL também**: sem `--sim` o robô físico sobe sem vigia de pessoa — exige pista controlada + E-STOP na mão |
+| 2n | 🔴🔴 **Giro de 180° dentro da fresta, arrastando os dois cones** | ⏳ **novo, 09-03 (§2H.23).** Robô ATRAVESSA certo, o `door_crossing` solta em `exit_margin=0,5 m` (traseira ainda no vão) e o `path_follower` executa um point-turn de ~180° que já estava engatilhado desde 885,8 — porque o plano global do Nav2 **nasceu apontando pra trás** (contorno pela fresta, `idx 0..12` descendo pro sul), efeito do item 8. `door_crossing` em `crossing_cooldown` 8 s não pode retomar. `clear` lateral no giro: **0,36 m** contra meia-diagonal 0,354 — não cabe. 3 consertos candidatos (A: `exit_margin`→0,9; B: proibir point-turn com `clear` pequeno; C: rejeitar plano que nasce pra trás) listados na §2H.23, **nenhum aplicado, aguardando decisão** |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |
