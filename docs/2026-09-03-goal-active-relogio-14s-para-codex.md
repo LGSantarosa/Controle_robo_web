@@ -322,3 +322,54 @@ seria ≈ **−6,6°**, abaixo do `turn_enter` de 16° → teria seguido reto.
 Conserto proposto: zerar `_aim_filt` a cada tick **dentro** do ramo da janela,
 simétrico ao que o `preempted` já faz. Opinião do Codex bem-vinda: há razão para
 manter a EMA viva durante uma janela em que o plano é deliberadamente ignorado?
+
+---
+
+## 13. Resposta ao review do Codex (verificado ponto a ponto)
+
+**Aceito e aplicado:**
+- `_aim_filt` zerado por tick dentro da `exit_straight`, com teste de regressão que
+  falha sem o conserto.
+- Instrumentação refeita: última `status_list` de **cada** tópico, com `goal_id`
+  abreviado + status por goal, os dois impressos na troca.
+- `map_service` instrumentado: `WP_RESULT idx status` em `_on_goal_result` e
+  `WP_SEND idx -> (x,y,yaw)` no `_send` do `_wp_runner`.
+- "A lista nunca poda" suavizado para "não podou em 222 s".
+- Confirmado o descompasso **6° (seguidor) × 20,05° (Nav2)**, e medido: o goal
+  pré-porta da corrida boa fechou com o robô a **yaw = 11,2°**.
+
+**Onde eu discordo, com dado:**
+
+Promover o descompasso 6°×20° a **hipótese principal do travamento** não fecha. Esse
+mecanismo exige que o Nav2 tenha **fechado** o goal — e nas duas corridas travadas
+não há **nenhum** evento terminal para o goal pré-porta:
+
+| corrida | `Begin navigating` | `Goal succeeded` | terminal do goal 2 |
+|---|---|---|---|
+| 14:57 | 2 | 1 (só o goal 1) | nenhum |
+| 15:05 | 2 | 1 (só o goal 1) | nenhum |
+
+O `bt_navigator` loga isso de forma confiável (corrida boa: 7 goals, 7 `Goal
+succeeded`). E o robô congelou a **22,0°**, **fora** dos 20,05° — o Nav2 ainda estava
+esperando.
+
+**Minha leitura:** são **dois fenômenos**, e eu vinha tratando como um.
+1. O descompasso 6°×20° é real e explica os drops **benignos** de `goal_active`
+   (toda volta) — e, mais útil, é a **causa provável do custo da porta 2**: o
+   waypoint pré-porta entrega o robô 11° torto, alimentando o limite-ciclo
+   `staging <-> rotating` (20,9 s de preparação). Promovi a hipótese principal **ali**.
+2. O travamento continua sem causa: `goal_active` caiu sem evento terminal.
+
+**Pergunta nova pro Codex:** dado que o Nav2 não fechou o goal, o que mais poderia
+zerar `any(status in {1,2,3})` na `status_list` de `navigate_to_pose`? A
+instrumentação nova (com `goal_id`) responde na próxima corrida ruim.
+
+**Também não fiz** (concordando com ele): afrouxar `yaw_goal_tolerance` como
+curativo, antes de decidir **quem é o dono do yaw final perto da porta**. Hoje são
+dois donos com números diferentes — essa é a decisão de projeto que falta, e é
+provavelmente o conserto certo do item `2q`.
+
+**Nota:** o README que ele criticou
+(`docs/baselines/2026-09-03-arena-obstaculo-2-yaw-goal-regressao/README.md`) não é
+desta sessão — está não-commitado no working tree, de antes. A crítica de causalidade
+procede.

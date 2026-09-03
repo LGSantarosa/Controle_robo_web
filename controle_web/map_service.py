@@ -1135,6 +1135,14 @@ class MapBridge:
         except Exception as e:
             log.warning(f"[MapBridge] erro no get_result: {e}")
             self._wp_goal_status = GoalStatus.STATUS_ABORTED
+        # 2026-09-03 (§2H.38, pedido do review do Codex) — INSTRUMENTAÇÃO.
+        # Hipótese B do BO do travamento: o goal conclui e o próximo NÃO é
+        # enviado. Sem este log não dá pra separar "o Nav2 nunca fechou o goal"
+        # de "fechou e o runner não seguiu". Status: 4=SUCCEEDED, 5=CANCELED,
+        # 6=ABORTED (action_msgs/GoalStatus).
+        log.warning(
+            "[MapBridge] WP_RESULT idx=%s status=%s",
+            self._wp_current_idx, self._wp_goal_status)
         self._wp_goal_handle = None
         self._wp_goal_done.set()
 
@@ -1162,7 +1170,13 @@ class MapBridge:
                 return
             time.sleep(0.5)
             if not self._wp_stop.is_set():
+                # §2H.38 — par do WP_RESULT: prova que o runner ENVIOU o
+                # waypoint seguinte (hipótese B do travamento).
+                log.warning("[MapBridge] WP_SEND idx=%d/%d -> (%.2f, %.2f, yaw=%.3f)",
+                            i, total, wp['x'], wp['y'], wp.get('yaw', 0.0))
                 self._wp_send_goal_action(wp['x'], wp['y'], wp.get('yaw', 0.0))
+            else:
+                log.warning("[MapBridge] WP_SEND idx=%d ABORTADO (_wp_stop set)", i)
 
         def _advance() -> bool:
             """Avança idx; retorna False quando a rota terminou (sem loop)."""

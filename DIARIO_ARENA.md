@@ -4046,6 +4046,89 @@ a janela tinha ficado como a única parte do caminho que ainda acumulava.
 
 ⏳ **Não implementado** — aguardando o dono.
 
+### 2H.38 Review do Codex — 3 acertos dele, 2 erros meus, 1 contra-evidência que ele não tinha
+
+O dono passou o review do Codex. Verifiquei ponto a ponto **antes** de aceitar.
+
+#### ✅ Onde ele está certo, e eu conferi
+
+**1. O descompasso de tolerâncias é REAL e é o achado mais importante do review.**
+
+| quem | tolerância de yaw no goal |
+|---|---|
+| `path_follower` | `goal_yaw_tol = 0,10 rad` = **6°** (`path_follower.py:197`, `:583`) |
+| Nav2 | `yaw_goal_tolerance = 0,35 rad` = **20,05°** (`nav2_params_arena.yaml:152`) |
+
+O Nav2 fecha o goal **antes** do seguidor terminar o alinhamento fino. E medi na
+corrida boa das 15:17: o goal pré-porta `(6,40 / 2,25)` concluiu com o robô a
+**yaw = 11,2°** — dentro dos 20° do Nav2, **fora** dos 6° do seguidor.
+
+**Consequência que ninguém tinha ligado:** o waypoint pré-porta existe pra entregar o
+robô alinhado com o vão, e ele está sendo entregue **11° torto** porque o refino do
+seguidor é cortado. Isso alimenta direto o limite-ciclo `staging ↔ rotating` do item
+`2q` (20,9 s de preparação na porta 2). **Provável raiz do custo da porta 2.**
+
+**2. Minha instrumentação não fazia o que meu texto dizia.** Eu escrevi "lista crua
+dos DOIS tópicos" e o código era `for t, m in ((topic, msg.status_list),)` — tupla de
+**um** elemento, só o tópico que disparou a callback. Erro real, meu, em código e em
+documento. **Erro 104 da §5.**
+
+**3. "A lista nunca poda" está forte demais.** O dado prova "não podou em 222 s na
+corrida das 15:17". Basta pra matar a hipótese do relógio, não pra afirmar
+comportamento eterno. Corrigido no diário e no dossiê. Ele ainda achou que o default
+documentado do `rcl_action` é `result_timeout = 10 s`, o que torna a ausência de poda
+**mais** estranha, não menos — fica anotado.
+
+#### 🔻 Onde a tese principal dele NÃO fecha com os dados
+
+Ele propõe promover o descompasso 6°×20° a **hipótese principal do travamento**,
+antes do `GoalStatusArray`. O mecanismo seria: o Nav2 fecha o goal com 20°, o
+`goal_active` cai, e o seguidor para no meio do `goal_turn`.
+
+**Isso exige que o Nav2 tenha FECHADO o goal. Ele não fechou.** Nas duas corridas
+travadas:
+
+| corrida | `Begin navigating` | `Goal succeeded` | terminal do goal 2 |
+|---|---|---|---|
+| 14:57 | 2 | **1** (só o goal 1) | **nenhum** |
+| 15:05 | 2 | **1** (só o goal 1) | **nenhum** |
+
+Zero `Goal succeeded`, `Goal failed` ou `Goal canceled` para o goal pré-porta. E o
+`bt_navigator` loga isso de forma confiável — na corrida boa foram **7 goals, 7
+`Goal succeeded`**. Além disso o robô congelou a **22,0°**, que está **fora** dos
+20,05° do Nav2: ele ainda estava esperando.
+
+Então o descompasso explica muito bem os drops **benignos** (o seguidor para de
+refinar porque o Nav2 fechou — acontece toda volta), mas **não** o travamento, onde
+o `goal_active` caiu sem nenhum evento terminal.
+
+**Provavelmente são dois fenômenos diferentes que eu vinha tratando como um só.**
+
+#### ✅ Aplicado agora
+
+- **`_aim_filt` zerado a cada tick dentro da janela** (§2H.37), + teste de regressão
+  que falha sem o conserto. Codex endorsou ("mudaria já").
+- **Instrumentação refeita**: guarda a última `status_list` de **cada** tópico, com
+  **`goal_id` abreviado + status por goal**, e imprime os dois na troca. Sem o
+  `goal_id` não dá pra dizer se foi o goal CORRENTE que virou terminal.
+- **`map_service` instrumentado** (pedido dele): `WP_RESULT idx status` no
+  `_on_goal_result` e `WP_SEND idx -> (x,y,yaw)` no `_send` do `_wp_runner`. É o par
+  que separa "o Nav2 nunca fechou" de "fechou e o runner não seguiu" — a hipótese B.
+
+Suíte: **163 passam**; seguem os 2 quebrados da §2H.22.
+
+#### Não aplicado, e por quê
+
+- **Não promovi o 6°×20° a hipótese principal do travamento** — a contra-evidência
+  acima. Promovi a **hipótese principal do custo da porta 2** (item `2q`), que é onde
+  os dados o sustentam.
+- **Não afrouxei `yaw_goal_tolerance`.** Concordo com ele: é curativo enquanto não se
+  decidir **quem é o dono do yaw final perto da porta**. Hoje são dois donos com
+  números diferentes, e essa é a decisão de projeto que falta.
+- O README que ele criticou (`docs/baselines/2026-09-03-arena-obstaculo-2-yaw-goal-regressao/`)
+  **não é meu** — está `??` (não commitado), veio de antes desta sessão. A crítica de
+  causalidade dele procede; só não é texto que eu escrevi.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -4336,6 +4419,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 101 | 🔴 **Atribuí a observação do dono ao evento errado** | Ele disse que o robô "deu uma paradinha de 1s e seguiu reto". Eu rotulei os **28,5 s do limite-ciclo de alinhamento** como "a parada que o dono viu" e escrevi isso no diário. São coisas distintas: a paradinha dele são **0,7 s de inércia na devolução** (`exit_straight` comandando `vx=0,3` com a pose ainda parada), benigna; os 28,5 s acontecem **antes de entrar** e são problema anterior. Ele corrigiu: *"Vc está confundindo as coisa, ele errou antes de entrar no obstaculo"* | Quando o dono descreve um sintoma, casar a descrição com o **carimbo de tempo** no log antes de batizar qualquer coisa com ela. "Parada" é ambígua e eu peguei a maior que achei em vez da que ele descreveu — ele disse *1 s* e eu colei num evento de 28 s |
 | 102 | 🔴 **Vendi como hipótese principal uma expiração que não existe** | Na §2H.35 apontei o `result_timeout` do `rcl_action` como causa provável do relógio de ~14 s: o goal terminal expiraria da `status_list` e derrubaria o `any()`. A instrumentação mostrou que **a lista nunca é podada** — cresce de 1 a 7 em 222 s e os `4` ficam lá. A hipótese era falsa, e eu a escrevi no diário, no commit e no dossiê do Codex | Eu tinha o instrumento pronto e escrevi a hipótese **antes** de rodá-lo. Custo zero esperar o dado. Ao menos deixei marcado como hipótese e listei o que ela não explicava — foi isso que permitiu derrubá-la rápido, e é o hábito a manter |
 | 103 | 🔴🔴 **Reintroduzi, dentro do meu próprio conserto, o BO que ele tinha eliminado** | O Fix 1 (§2H.30) existia para o seguidor não acumular mira velha enquanto outro nó dirige. Na janela de saída reta (§2H.32) eu deliberadamente deixei a EMA continuar atualizando, escrevendo no diário que assim *"quando a janela acaba ela já está correta"*. Mas durante a janela o plano é o RUIM — o mesmo que a janela existe pra ignorar. Resultado: 4 s de EMA em 180°, e 6,5 s de giro inútil ao fim da janela. O dono viu na tela | Uma exceção que eu abro "por bom motivo" dentro de uma regra que acabei de criar merece o mesmo teste que a regra. Eu tinha o caso de teste pronto (o do Fix 1) e não o estendi pra janela — se tivesse, ele teria falhado na hora |
+| 104 | 🔴 **Meu comentário e meu documento afirmavam que a instrumentação logava os DOIS tópicos; o código logava UM** | `for t, m in ((topic, msg.status_list),)` é uma tupla de um elemento — só o tópico que disparou a callback. Escrevi "lista CRUA dos dois tópicos" no comentário, no diário e no dossiê do Codex. Ele pegou lendo o código. Pior: sem `goal_id` a instrumentação não separava as duas hipóteses que ela existia pra separar | Instrumentação também é código e merece ser lida uma vez depois de escrita. Eu descrevi a intenção e conferi que compilava — não conferi que ela produzia o dado que eu prometi. E documento que descreve instrumentação herda o erro sem ninguém notar |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
@@ -4372,7 +4456,7 @@ padrão casou com a linha de comando do shell que o executava e ele **se matou**
 | 2n | 🔴🔴 **Giro de 180° dentro da fresta, arrastando os dois cones** | ⏳ **novo, 09-03 (§2H.23).** Robô ATRAVESSA certo, o `door_crossing` solta em `exit_margin=0,5 m` (traseira ainda no vão) e o `path_follower` executa um point-turn de ~180° que já estava engatilhado desde 885,8 — porque o plano global do Nav2 **nasceu apontando pra trás** (contorno pela fresta, `idx 0..12` descendo pro sul), efeito do item 8. `door_crossing` em `crossing_cooldown` 8 s não pode retomar. `clear` lateral no giro: **0,36 m** contra meia-diagonal 0,354 — não cabe. 3 consertos candidatos (A: `exit_margin`→0,9; B: proibir point-turn com `clear` pequeno; C: rejeitar plano que nasce pra trás) listados na §2H.23, **nenhum aplicado, aguardando decisão** |
 | 2o | 🔴🔴 **Porta é uma LINHA; profundidade do vão não é declarável** | ⏳ **novo, 09-03 (§2H.25).** `doors.json` tem só `a`/`b`; `s=0` é o plano dos batentes e **não existe `depth`**. Tudo que decide "onde acaba o vão" é constante GLOBAL (`exit_margin` 0,5 / `zone_radius` 1,1 / `stage_dist` 0,6 / `commit_s` −0,15 / `gap_min` 0,45). Num túnel de 2 m **não há onde clicar** que funcione: boca de entrada → solta 1,5 m dentro; meio → `zone_radius` não alcança a boca. E `will_clear` devolve True incondicional pra `s>=0`, premissa de parede fina, **falsa em túnel**. Exigido pelo dono porque na competição o tamanho varia (de porta fina a túnel de 2 m). Conserto: `depth` por porta (0 = fina) + fases derivadas dela. **Bloqueia o gate do item `2n`** |
 | 2p | ⚠️ **Janela de saída reta arma depois de ABORT do door_crossing** | ⏳ **novo, 09-03 (§2H.33).** O `/door_zone` publica `idle` tanto pra travessia concluída quanto pra abort, e o `path_follower` não distingue — na corrida das 14:47 o episódio #2 armou após um `rotating -> idle` e mandou andar reto com o robô possivelmente apontado PRA DENTRO do vão. A guarda de folga segurou em 0,26 m (`clear` 0,52). Plano B funcionou; plano A está errado. Conserto: `/door_zone` publicar um estado distinto pra saída concluída |
-| 2q | 🔴 **Porta 2 custa 28,5 s no limite-ciclo `staging ↔ rotating`** | ⏳ **novo, 09-03 (§2H.33).** 21 `staging -> rotating` + 17 `rotating -> staging`, 2 `crossing -> reversing`, 1 abort, 3 tentativas de travessia. A porta 1 passa em 8,4 s numa tentativa. NÃO é a "paradinha de 1 s" que o dono nota (essa é a devolução, benigna — §2H.33). Mesmo padrão da §2H.23 (11 ciclos em 2,9 s), agora bem pior. Custa 1/6 do tempo da volta |
+| 2q | 🔴 **Porta 2 custa ~28 s no limite-ciclo `staging ↔ rotating`** | ⏳ **novo, 09-03 (§2H.33).** 🔎 **Causa provável achada 09-03 (§2H.38, review do Codex):** o waypoint pré-porta é entregue **11,2° torto** (medido) porque o Nav2 fecha o goal com 20° enquanto o refino do seguidor exige 6° — o robô entra na aproximação já desalinhado. 21 `staging -> rotating` + 17 `rotating -> staging`, 2 `crossing -> reversing`, 1 abort, 3 tentativas de travessia. A porta 1 passa em 8,4 s numa tentativa. NÃO é a "paradinha de 1 s" que o dono nota (essa é a devolução, benigna — §2H.33). Mesmo padrão da §2H.23 (11 ciclos em 2,9 s), agora bem pior. Custa 1/6 do tempo da volta |
 | 2r | 🔴🔴🔴 **`goal_active` cai no meio do `goal_turn` e trava a volta — é um RELÓGIO de ~14 s** | 🔥 **PRIORIDADE MÁXIMA por ordem do dono 09-03 (§2H.34 + §2H.35).** Medido em 3/3 corridas: a queda acontece **13,8 / 14,8 / 14,9 s após o `Goal succeeded` anterior**, sempre saindo de `goal_turn` — inclusive na corrida BOA, que só passou porque o goal concluiu 1,7 s antes do relógio bater. Provável mesmo fenômeno do item `2g`. Instrumentação de `GOAL_ACTIVE` já no ar. Detalhe original: Corrida 14:57: robô a 1,6 cm do waypoint pré-porta 1, girando pro yaw exigido (0°, *encarando o vão*), chega a 32,2° e **cai em `idle` 12° antes** da `yaw_goal_tolerance` de 20,05°. Sem goal ativo o seguidor cala e o Nav2 assume: **233 replans, 6 backups, 5 spins, 6 waits em 355 s sem girar 1 grau** (ponto morto do skid-steer). Goal nunca conclui -> `door_crossing` nunca recebe `goal_succeeded` -> nunca arma (`cleared=False` eterno com `distC=0.80` dentro da zona). **Volta inteira travada atrás de 12°.** O `bt_navigator` NÃO logou succeeded/failed/canceled, e o `attempt_checkpoint` mostra o goal vivo por mais 347 s — o seguidor e o resto do sistema **discordam**. Próximo passo: logar cada troca de `goal_active` com o status cru dos 2 tópicos de ação. Intermitente: o mesmo waypoint passou em 15 s às 14:47 |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |

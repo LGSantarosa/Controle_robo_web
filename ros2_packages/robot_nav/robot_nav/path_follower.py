@@ -506,6 +506,15 @@ class DecisiveFollower:
             else:
                 self.state = 'exit_straight'
                 self._turn_target = None
+                # 2026-09-03 (§2H.37): ZERA a mira a cada tick da janela. Eu
+                # tinha deixado a EMA viva aqui "pra chegar quente no fim" — mas
+                # durante a janela o plano e' justamente o RUIM que ela existe
+                # pra ignorar, entao a EMA (tau 2 s) integrava ~180 graus e
+                # descarregava no fim: 6,5 s de giro inutil, medido. Era o BO do
+                # Fix 1 reintroduzido dentro do proprio conserto. Zerado, o tick
+                # que encerra a janela usa o rumo CRU do plano daquele instante
+                # — simetrico ao que o `preempted` faz.
+                self._aim_filt = None
                 return Cmd(speed_for_clearance(c, front_clear), 0.0,
                            'exit_straight')
 
@@ -616,6 +625,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             self._path: Optional[List[Pt]] = None
             self._goal_yaw: Optional[float] = None
             self._goal_active = {}
+            self._last_status = {}   # ultima status_list crua por topico (§2H.38)
 
             self.tf_buffer = Buffer()
             self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -739,21 +749,25 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             # 2026-09-03 (§2H.35) — INSTRUMENTACAO, nao muda comportamento.
             # Medido em 3 corridas: o seguidor larga o goal 13,8 / 14,8 / 14,9 s
             # depois do `Goal succeeded` ANTERIOR, sempre saindo de `goal_turn`.
-            # E' relogio, nao acaso, e trava a volta inteira quando o giro final
-            # ainda nao entrou na tolerancia (§2H.34). Falta saber POR QUE a
-            # lista fica sem nenhum status ativo: aqui sai a lista CRUA dos dois
-            # topicos na troca, que e' o que decide entre "goal expirou da lista"
-            # e "goal virou terminal".
+            # ainda nao entrou na tolerancia (§2H.34).
+            # 2026-09-03 (review do Codex, §2H.38): a versao anterior dizia
+            # "lista crua dos DOIS topicos" e logava so' o que disparou a
+            # callback — nao separava as hipoteses. Agora guarda a ultima lista
+            # de CADA topico, com goal_id abreviado + status por goal, e imprime
+            # os dois na troca. Sem o goal_id nao da' pra dizer se foi o goal
+            # CORRENTE que virou terminal ou se e' outro goal da lista.
+            self._last_status[topic] = [
+                ('%s:%d' % (bytes(st.goal_info.goal_id.uuid)[:4].hex(),
+                            st.status))
+                for st in msg.status_list]
             if active != self._goal_active_any:
                 det = ' | '.join(
-                    '%s=[%s]' % (t.split('/')[0],
-                                 ','.join(str(x.status) for x in m)
-                                 if m else 'VAZIA')
-                    for t, m in ((topic, msg.status_list),))
+                    '%s=[%s]' % (t.split('/')[0], ','.join(v) if v else 'VAZIA')
+                    for t, v in sorted(self._last_status.items()))
                 self.get_logger().warn(
-                    'GOAL_ACTIVE %s -> %s (mudou por %s) n=%d %s ; dict=%s'
+                    'GOAL_ACTIVE %s -> %s (disparou %s) %s ; dict=%s'
                     % (self._goal_active_any, active, topic.split('/')[0],
-                       len(msg.status_list), det, self._goal_active))
+                       det, self._goal_active))
             if active and not self._goal_active_any:
                 # novo goal -> libera o snapshot do primeiro plano longo
                 self._plan_snapped = False

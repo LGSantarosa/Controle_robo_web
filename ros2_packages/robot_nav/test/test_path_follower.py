@@ -900,3 +900,26 @@ def test_saida_reta_NAO_conserta_plano_ruim_persistente_so_afasta_do_vao():
     longe = (0.0, cfg.exit_straight_dist + 0.01, math.pi / 2)
     cmd = fol.update(longe, PLANO_OESTE, True, None, preempted=False)
     assert cmd.state == 'turning'
+
+
+def test_REGRESSAO_janela_nao_envenena_a_mira_com_o_plano_RUIM():
+    """§2H.37 — o BO que eu criei DENTRO do meu próprio conserto.
+
+    Durante a `exit_straight` o plano é justamente o ruim que a janela existe
+    para ignorar. Se a EMA continuar integrando ele, no fim da janela a mira
+    aponta pra trás e o robô gira (medido: 6,5 s de giro inútil). O filtro tem
+    que ficar zerado durante a janela, igual ao `preempted`."""
+    cfg = FollowConfig()
+    fol = DecisiveFollower(cfg)
+    _anda(fol, POSE_NORTE, PLANO_OESTE, 10, preempted=True)
+    # janela ativa, olhando o plano RUIM (oeste) por vários ticks
+    for _ in range(60):
+        cmd = fol.update(POSE_NORTE, PLANO_OESTE, True, None, preempted=False)
+        assert cmd.state == 'exit_straight'
+        assert fol._aim_filt is None      # não pode acumular NADA aqui
+    # janela acaba (andou os 0,8 m) e agora o plano BOM aponta pro norte,
+    # que é pra onde o robô já está virado -> tem que ANDAR, não girar
+    longe = (0.0, cfg.exit_straight_dist + 0.01, math.pi / 2)
+    cmd = fol.update(longe, PLANO_NORTE, True, None, preempted=False)
+    assert cmd.state == 'driving'
+    assert cmd.wz == pytest.approx(0.0)
