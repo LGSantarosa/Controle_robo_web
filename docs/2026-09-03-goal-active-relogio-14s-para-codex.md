@@ -474,8 +474,29 @@ apenas plano **vazio**.
 1. Concorda com o conserto? Há razão para a fase de chegada exigir 2 pontos?
 2. Um plano de 1 ponto é sinal legítimo de outra coisa (planner degenerado) que
    deveria ser tratada, em vez de tolerada?
-3. O `goal_yaw` vem do goal do Nav2, não do plano — confere? Se sim, a fase de
-   chegada é totalmente independente do plano depois do latch.
+3. ~~O `goal_yaw` vem do goal do Nav2, não do plano~~ — **pergunta errada, retirada.**
+   O Codex conferiu: `_on_plan` tira o `goal_yaw` da orientação da **última pose do
+   `Path`** (`path_follower.py:704`). Ressalva real do conserto: com plano de 1 pose,
+   o `goal_yaw` sai daquela única pose. Nas corridas travadas ele estava correto, mas
+   não é garantia — fica para vigiar.
 
 ⚠️ Mexe no guard principal do `update()`. Vai com TDD: teste que põe `goal_turn` em
 andamento e derruba o plano para 1 ponto — tem que **continuar girando**.
+
+---
+
+## 16. Conserto aplicado (estreito, como recomendado)
+
+| antes | depois |
+|---|---|
+| `if pose is None or not goal_active or not path or len(path) < 2:` | `if pose is None or not goal_active or not path:` |
+| — | corte `len(path) < 2` desceu para logo antes do bloco do carrot |
+
+- Chegada/`goal_turn` rodam com **1 pose**; o carrot segue exigindo 2.
+- `len(path) == 1` **não** habilita o seguidor inteiro.
+- O retorno novo **não zera `_arrival_latched`**.
+- `idle_reason` (`pose` / `goal_inactive` / `path_empty` / `path_short`) + log
+  `FOLLOW_IDLE motivo=... n_plan=... goal=...` na transição.
+- 4 testes novos; suíte **167 passa**.
+- Prova do plano de 1 pose arquivada: `PROVA_plano_1_ponto.md` no baseline.
+- Itens `2q` e `2r` do diário reescritos; pergunta 3 da §15 retirada.

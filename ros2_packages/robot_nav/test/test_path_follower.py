@@ -923,3 +923,54 @@ def test_REGRESSAO_janela_nao_envenena_a_mira_com_o_plano_RUIM():
     cmd = fol.update(longe, PLANO_NORTE, True, None, preempted=False)
     assert cmd.state == 'driving'
     assert cmd.wz == pytest.approx(0.0)
+
+
+# ---- Plano colapsado: a chegada não pode morrer com ele (§2H.40) -----------
+# BO: docs/baselines/2026-09-03-arena-travado-CAUSA-plano-encolhe/
+# O plano global encolhe conforme o robô converge (n=4 -> 3 -> 2 -> 1). Quando
+# chegou a 1 pose, o guard `len(path) < 2` jogou o seguidor em `idle` NO MEIO do
+# goal_turn (yaw 39,6° girando a -2,4 rad/s). O robô ficou fora do
+# yaw_goal_tolerance, o Nav2 nunca fechou o goal e a volta travou pra sempre.
+# Prova versionada do plano de 1 pose: PROVA_plano_1_ponto.md no baseline.
+
+def test_REGRESSAO_goal_turn_sobrevive_ao_plano_de_1_PONTO():
+    """A fase de chegada usa só `path[-1]` e `goal_yaw` — não precisa de carrot.
+    Com o plano colapsado ela TEM que continuar girando."""
+    fol = DecisiveFollower(FollowConfig())
+    pose = (0.0, 0.0, 0.0)
+    cmd = fol.update(pose, [(0.0, 0.0)], True, math.pi / 2)   # 1 pose só
+    assert cmd.state == 'goal_turn'
+    assert abs(cmd.wz) > 0.0
+    assert cmd.vx == pytest.approx(0.0)
+
+
+def test_plano_de_1_ponto_NAO_habilita_o_seguidor_inteiro():
+    """O oposto do teste acima: longe do goal, sem carrot possível, ele PARA.
+    `len(path) == 1` vale para finalizar a chegada, não para dirigir."""
+    fol = DecisiveFollower(FollowConfig())
+    cmd = fol.update((0.0, 0.0, 0.0), [(5.0, 0.0)], True, None)
+    assert cmd.state == 'idle'
+    assert (cmd.vx, cmd.wz) == (0.0, 0.0)
+
+
+def test_plano_VAZIO_continua_matando():
+    fol = DecisiveFollower(FollowConfig())
+    assert fol.update((0.0, 0.0, 0.0), [], True, None).state == 'idle'
+    assert fol.update((0.0, 0.0, 0.0), None, True, None).state == 'idle'
+
+
+def test_idle_reason_diz_QUAL_condicao_disparou():
+    """Pedido do review do Codex: sem isto, provar a causa depende de `dbg`
+    velho e de arquivo volátil. Foi exatamente o que custou 2h na §2H.40."""
+    fol = DecisiveFollower(FollowConfig())
+    fol.update(None, [(0.0, 0.0), (1.0, 0.0)], True, None)
+    assert fol.idle_reason == 'pose'
+    fol.update((0.0, 0.0, 0.0), [(0.0, 0.0), (1.0, 0.0)], False, None)
+    assert fol.idle_reason == 'goal_inactive'
+    fol.update((0.0, 0.0, 0.0), [], True, None)
+    assert fol.idle_reason == 'path_empty'
+    fol.update((0.0, 0.0, 0.0), [(5.0, 0.0)], True, None)
+    assert fol.idle_reason == 'path_short'
+    # e some quando volta a andar
+    fol.update((0.0, 0.0, 0.0), [(1.0, 0.0), (2.0, 0.0)], True, None)
+    assert fol.idle_reason is None

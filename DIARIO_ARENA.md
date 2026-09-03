@@ -4268,6 +4268,48 @@ plano colapsado — que é exatamente o momento em que ele mais precisa terminar
 corrida: `goal_turn` em andamento + plano caindo pra 1 ponto -> tem que **continuar
 girando**.
 
+### 2H.41 ✅ Conserto do travamento aplicado — guard estreito + `idle_reason`
+
+Feito como o Codex recomendou (*"o conserto deve ser estreito, não um simples remover
+`len(path) < 2` do guard"*), e conferido contra o código:
+
+**O que mudou em `path_follower.update()`:**
+
+| antes | depois |
+|---|---|
+| `if pose is None or not goal_active or not path or len(path) < 2:` | `if pose is None or not goal_active or not path:` |
+| — | corte `len(path) < 2` desceu para **logo antes do bloco do carrot** |
+
+A fase de chegada (`goal_approach` / `goal_turn`) passa a rodar com **1 pose** — ela
+só usa `path[-1]` e o `goal_yaw`, e depois do `_arrival_latched` usa o `_latch_goal`.
+O carrot continua exigindo 2 pontos, porque interpola. **`len(path) == 1` não
+habilita o seguidor inteiro**, como o Codex pediu: sem chegada em andamento, ainda
+cai em `idle`.
+
+Cuidado tomado: o retorno novo **não zera `_arrival_latched`** — um plano curto
+passageiro não pode desarmar uma chegada em andamento.
+
+**`idle_reason` + log `FOLLOW_IDLE`** (pedido dele): a classe pura marca qual ramo
+matou o tick (`pose` / `goal_inactive` / `path_empty` / `path_short`) e o nó loga na
+transição, com o tamanho do plano. Sem isso, provar a causa dependia de `dbg` velho e
+de arquivo volátil — foi exatamente o que me custou 2 h mirando na condição errada.
+
+**4 testes novos**, incluindo o que reproduz a corrida (`goal_turn` + plano de 1 pose
+-> tem que continuar girando) e o inverso (longe do goal + 1 pose -> `idle`).
+Suíte: **167 passam**; seguem os 2 quebrados da §2H.22.
+
+**Correções de documentação** que ele apontou:
+- Itens `2q` e `2r` do §6 reescritos — estavam contradizendo a análise nova.
+- Pergunta 3 do dossiê estava **conceitualmente errada**: eu disse que o `goal_yaw`
+  vem do goal do Nav2. Não vem — `_on_plan` o tira da orientação da **última pose do
+  `Path`** (`path_follower.py:704`). Corrigido. ⚠️ Isso é uma ressalva real do
+  conserto: com plano de 1 pose, o `goal_yaw` sai daquela única pose. Nas corridas
+  travadas ele estava certo (o alvo implícito era ≈ 0°, o exigido), mas **isso não é
+  garantia** e fica anotado para vigiar.
+- Prova do plano de 1 pose arquivada e versionada antes de ser sobrescrita.
+
+⏳ **Não rodado.**
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -4595,8 +4637,8 @@ padrão casou com a linha de comando do shell que o executava e ele **se matou**
 | 2n | 🔴🔴 **Giro de 180° dentro da fresta, arrastando os dois cones** | ⏳ **novo, 09-03 (§2H.23).** Robô ATRAVESSA certo, o `door_crossing` solta em `exit_margin=0,5 m` (traseira ainda no vão) e o `path_follower` executa um point-turn de ~180° que já estava engatilhado desde 885,8 — porque o plano global do Nav2 **nasceu apontando pra trás** (contorno pela fresta, `idx 0..12` descendo pro sul), efeito do item 8. `door_crossing` em `crossing_cooldown` 8 s não pode retomar. `clear` lateral no giro: **0,36 m** contra meia-diagonal 0,354 — não cabe. 3 consertos candidatos (A: `exit_margin`→0,9; B: proibir point-turn com `clear` pequeno; C: rejeitar plano que nasce pra trás) listados na §2H.23, **nenhum aplicado, aguardando decisão** |
 | 2o | 🔴🔴 **Porta é uma LINHA; profundidade do vão não é declarável** | ⏳ **novo, 09-03 (§2H.25).** `doors.json` tem só `a`/`b`; `s=0` é o plano dos batentes e **não existe `depth`**. Tudo que decide "onde acaba o vão" é constante GLOBAL (`exit_margin` 0,5 / `zone_radius` 1,1 / `stage_dist` 0,6 / `commit_s` −0,15 / `gap_min` 0,45). Num túnel de 2 m **não há onde clicar** que funcione: boca de entrada → solta 1,5 m dentro; meio → `zone_radius` não alcança a boca. E `will_clear` devolve True incondicional pra `s>=0`, premissa de parede fina, **falsa em túnel**. Exigido pelo dono porque na competição o tamanho varia (de porta fina a túnel de 2 m). Conserto: `depth` por porta (0 = fina) + fases derivadas dela. **Bloqueia o gate do item `2n`** |
 | 2p | ⚠️ **Janela de saída reta arma depois de ABORT do door_crossing** | ⏳ **novo, 09-03 (§2H.33).** O `/door_zone` publica `idle` tanto pra travessia concluída quanto pra abort, e o `path_follower` não distingue — na corrida das 14:47 o episódio #2 armou após um `rotating -> idle` e mandou andar reto com o robô possivelmente apontado PRA DENTRO do vão. A guarda de folga segurou em 0,26 m (`clear` 0,52). Plano B funcionou; plano A está errado. Conserto: `/door_zone` publicar um estado distinto pra saída concluída |
-| 2q | 🔴 **Porta 2 custa ~28 s no limite-ciclo `staging ↔ rotating`** | ⏳ **novo, 09-03 (§2H.33).** 🔎 **Causa provável achada 09-03 (§2H.38, review do Codex):** o waypoint pré-porta é entregue **11,2° torto** (medido) porque o Nav2 fecha o goal com 20° enquanto o refino do seguidor exige 6° — o robô entra na aproximação já desalinhado. 21 `staging -> rotating` + 17 `rotating -> staging`, 2 `crossing -> reversing`, 1 abort, 3 tentativas de travessia. A porta 1 passa em 8,4 s numa tentativa. NÃO é a "paradinha de 1 s" que o dono nota (essa é a devolução, benigna — §2H.33). Mesmo padrão da §2H.23 (11 ciclos em 2,9 s), agora bem pior. Custa 1/6 do tempo da volta |
-| 2r | ✅🔴 **CAUSA ACHADA 09-03 (§2H.40): o PLANO encolhe abaixo de 2 pontos e o guard mata o `goal_turn`** — não era `goal_active` nem relógio nenhum | 🔥 **PRIORIDADE MÁXIMA por ordem do dono 09-03 (§2H.34 + §2H.35).** Medido em 3/3 corridas: a queda acontece **13,8 / 14,8 / 14,9 s após o `Goal succeeded` anterior**, sempre saindo de `goal_turn` — inclusive na corrida BOA, que só passou porque o goal concluiu 1,7 s antes do relógio bater. Provável mesmo fenômeno do item `2g`. Instrumentação de `GOAL_ACTIVE` já no ar. Detalhe original: Corrida 14:57: robô a 1,6 cm do waypoint pré-porta 1, girando pro yaw exigido (0°, *encarando o vão*), chega a 32,2° e **cai em `idle` 12° antes** da `yaw_goal_tolerance` de 20,05°. Sem goal ativo o seguidor cala e o Nav2 assume: **233 replans, 6 backups, 5 spins, 6 waits em 355 s sem girar 1 grau** (ponto morto do skid-steer). Goal nunca conclui -> `door_crossing` nunca recebe `goal_succeeded` -> nunca arma (`cleared=False` eterno com `distC=0.80` dentro da zona). **Volta inteira travada atrás de 12°.** O `bt_navigator` NÃO logou succeeded/failed/canceled, e o `attempt_checkpoint` mostra o goal vivo por mais 347 s — o seguidor e o resto do sistema **discordam**. Próximo passo: logar cada troca de `goal_active` com o status cru dos 2 tópicos de ação. Intermitente: o mesmo waypoint passou em 15 s às 14:47 |
+| 2q | 🔴 **Porta 2 custa ~28 s no limite-ciclo `staging ↔ rotating`** | ⏳ **novo, 09-03 (§2H.33).** 21 `staging -> rotating` + 17 `rotating -> staging`, 2 rés, 1 abort, 3 tentativas; a porta 1 passa em 8,4 s numa tentativa. 🔎 **Causa provável (§2H.38, achado do Codex, número corrigido na §2H.39):** o waypoint pré-porta é entregue **torto** porque o Nav2 fecha o goal com `yaw_goal_tolerance` de **20,05°** enquanto o refino do `path_follower` exige **6°** — o robô entra na aproximação já desalinhado. Medido na corrida 15:17: **5 de 7 goals fecharam com erro de yaw entre 14,3° e 19,9°**; o pré-porta 1 fechou a **19,7°**, colado no teto. ⏳ **Falta a decisão de projeto: quem é o dono do yaw final perto da porta?** Afrouxar `yaw_goal_tolerance` é curativo e foi rejeitado por mim e pelo Codex até essa decisão. ⚠️ O valor "11,2°" que publiquei antes estava ERRADO (erro 105) |
+| 2r | ✅ **RESOLVIDO 09-03 (§2H.40/§2H.41): o PLANO encolhe a 1 pose e o guard `len(path) < 2` mata o `goal_turn`** | ✅ **Causa confirmada e conserto aplicado.** O plano global encolhe conforme o robô converge (`n=4 -> 3 -> 2 -> 1`, prova versionada em `docs/baselines/2026-09-03-arena-travado-CAUSA-plano-encolhe/PROVA_plano_1_ponto.md`). Ao colapsar, o guard jogava o seguidor em `idle` **no meio do giro final** (yaw 39,6° girando a −2,4 rad/s) → robô fora do `yaw_goal_tolerance` → Nav2 nunca fecha o goal → app nunca manda o próximo → travado. Assinatura idêntica em 3/3 corridas travadas. **Conserto:** guard estreito — `pose is None`, `not goal_active` e plano **vazio** seguem matando; a fase de chegada roda com 1 pose (usa `path[-1]` e `goal_yaw`); o corte de 2 pontos desceu pro bloco do carrot. + `idle_reason`/`FOLLOW_IDLE` dizendo qual ramo disparou. 4 testes novos. 🔻 **A narrativa anterior deste item estava errada**: não era `goal_active` caindo (a instrumentação provou que ele nunca caiu) nem "relógio de ~14 s" (era tempo de percurso). Erros 106 e 107 |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |

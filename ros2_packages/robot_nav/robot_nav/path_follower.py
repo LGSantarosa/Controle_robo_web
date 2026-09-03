@@ -322,6 +322,7 @@ class DecisiveFollower:
         self._exit_active = False      # janela de saida reta pos-travessia
         self._exit_anchor = None       # pose (x,y) no inicio da janela
         self._exit_ticks = 0
+        self.idle_reason = None        # qual ramo do guard matou o tick (§2H.40)
         self._latch_goal = None        # (x,y) do goal em que a trava fechou
         self._approaching = False      # aproximação final em curso (histerese)
         self._approach_aiming = False  # mirando o goal dentro da aproximação
@@ -358,7 +359,19 @@ class DecisiveFollower:
             self._was_preempted = True
             self._exit_active = False     # re-preemptou -> janela recomeça depois
             return Cmd(0.0, 0.0, 'preempted')
-        if pose is None or not goal_active or not path or len(path) < 2:
+        # 2026-09-03 (§2H.40) — GUARD ESTREITO. Antes exigia `len(path) >= 2`
+        # aqui, e isso MATAVA a fase de chegada: o plano global encolhe conforme
+        # o robo converge (medido: n=4 -> 3 -> 2 -> 1 pose) e, quando colapsou, o
+        # `goal_turn` morreu no meio do giro (yaw 39,6 graus a -2,4 rad/s). O robo
+        # ficou fora do `yaw_goal_tolerance`, o Nav2 nunca fechou o goal e a volta
+        # travou pra sempre — 3 corridas seguidas.
+        # Quem precisa de 2 pontos e' o CARROT (interpola), nao a chegada: ela usa
+        # `path[-1]` e o `goal_yaw`, e depois do `_arrival_latched` usa o
+        # `_latch_goal`. O corte de `len(path) < 2` desceu pro bloco 2.
+        if pose is None or not goal_active or not path:
+            self.idle_reason = ('pose' if pose is None
+                                else 'goal_inactive' if not goal_active
+                                else 'path_empty')
             self.state = 'idle'
             self._turn_target = None
             self._prev_yaw = None
@@ -372,6 +385,7 @@ class DecisiveFollower:
             self._exit_active = False
             return Cmd(0.0, 0.0, 'idle')
 
+        self.idle_reason = None
         x, y, yaw = pose
         if self._prev_yaw is not None and c.tick_dt > 0.0:
             inst = wrap(yaw - self._prev_yaw) / c.tick_dt
@@ -444,6 +458,18 @@ class DecisiveFollower:
             self.state = 'arrived'
             self._turn_target = None
             return Cmd(0.0, 0.0, 'arrived')
+
+        # 2026-09-03 (§2H.40): o corte de 2 pontos mora AQUI agora — plano
+        # degenerado (1 pose) nao habilita o seguidor inteiro, so' deixa a fase de
+        # chegada acima terminar. Sem chegada e sem carrot possivel, nao ha o que
+        # dirigir. NAO zera `_arrival_latched`: plano curto passageiro nao pode
+        # desarmar uma chegada em andamento.
+        if len(path) < 2:
+            self.idle_reason = 'path_short'
+            self.state = 'idle'
+            self._turn_target = None
+            self._aim_filt = None
+            return Cmd(0.0, 0.0, 'idle')
 
         # 2) CARROT no plano a ~lookahead à frente (segue a FORMA do caminho).
         #    ADAPTATIVO (07-08): se o plano até lookahead_far é RETO (desvio da
@@ -804,6 +830,14 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 m.angular.z = cmd.wz
                 self.pub.publish(m)
             if cmd.state != self._last_state:
+                # §2H.40 — POR QUE caiu em idle. Sem isto, provar a causa
+                # depende de `dbg` velho e de arquivo volatil; foi o que custou
+                # 2 h e tres secoes de diario mirando na condicao errada.
+                if cmd.state == 'idle' and self.fol.idle_reason:
+                    self.get_logger().warn(
+                        'FOLLOW_IDLE motivo=%s (n_plan=%d goal=%s)'
+                        % (self.fol.idle_reason,
+                           len(self._path) if self._path else 0, goal))
                 self._last_state = cmd.state
                 self.pub_state.publish(String(data=cmd.state))
 
