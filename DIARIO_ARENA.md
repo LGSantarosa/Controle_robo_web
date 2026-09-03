@@ -3799,6 +3799,38 @@ CANCELING})` sobre **dois** tópicos de ação (`navigate_to_pose` e
 Instrumentação mínima pra fechar: logar cada troca de `goal_active` com o status
 cru dos dois tópicos. Sem isso é chute.
 
+#### 📌 HANDOFF — este item vai pra OUTRA sessão (decisão do dono, 09-03)
+
+O dono abriu uma sessão separada só pra isto. Quem pegar:
+
+**O sintoma em uma linha:** o `goal_active` do `path_follower` vira falso no meio do
+`goal_turn` e a volta trava pra sempre, porque o goal nunca conclui e o
+`door_crossing` depende de `goal_succeeded` pra armar.
+
+**Comece por:** `path_follower.py:736` (`self._goal_active[topic] = any(st.status in
+ACTIVE ...)`) e `path_follower.py:755` (`goal = any(self._goal_active.values())`).
+`ACTIVE = {1, 2, 3}`. São **dois** tópicos: `navigate_to_pose/_action/status` e
+`navigate_through_poses/_action/status`.
+
+**Logs da ocorrência:** `docs/baselines/2026-09-03-arena-travado-no-waypoint-pre-porta-1/`
+(`follow_debug.csv`, `nav2.log`, `attempt_checkpoint.json`). O instante é
+`t = 1788458034,65`, quando o `follow_debug` troca `goal_turn` -> `idle` com
+`yaw = 32,2°`.
+
+**Primeiro passo sugerido (não implementado):** logar cada troca de `goal_active`
+com o status cru dos dois tópicos. Uma linha, não muda comportamento. Sem isso,
+qualquer causa é chute.
+
+**⚠️ NÃO reverter** o que foi feito hoje no `path_follower` (§2H.30 `preempted` e
+§2H.32 `exit_straight`) nem no `door_crossing` (§2H.27 `exit_margin` 0,60). Nada
+disso participa deste BO — está provado: os estados `preempted` e `exit_straight`
+**não aparecem** no `follow_debug` desta corrida. Esse trabalho está sendo medido em
+paralelo, em outra sessão, com baselines próprios.
+
+**Contexto vizinho que provavelmente é a mesma família:** itens `2g` (16 s em `idle`
+entre goals), `2h`, `2i` (reset do goal checker pós-recovery) e o deadlock de
+point-turn abaixo da zona-morta do skid-steer.
+
 #### Sobre o waypoint pré-porta
 
 `PRE_FRESTA_DIST = 0,8 m` (não 1,0 como a §2H.7 discutiu). A 0,80 m a condição de
