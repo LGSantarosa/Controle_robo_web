@@ -3655,6 +3655,70 @@ do escopo). Suíte: **162 passam**; seguem os 2 quebrados da §2H.22.
 
 ⏳ **Não rodado.**
 
+### 2H.33 ✅ Saída reta VALIDADA no sim — volta completa, zero pivô perto do vão (n=1)
+
+Corrida das 14:47, `docs/baselines/2026-09-03-arena-saida-reta-OK-volta-completa/`.
+Dono: *"ele passou e só seguiu reto após sair do obstaculo... ao inves de girar ele
+vai reto, otimo!"*
+
+**A volta fechou:** 7 goals, 7 `Goal succeeded`, chegada alcançada (última amostra em
+(1,454 / 2,52), `dist_goal` 0,05). Duração ~248 s.
+
+**Os 3 episódios de `exit_straight`, com `wz = 0` nos três:**
+
+| # | andou | durou | `clear` mín | terminou por |
+|---|---|---|---|---|
+| 1 | **0,80 m** | 3,78 s | 2,74 | distância |
+| 2 | 0,26 m | 1,93 s | **0,52** | **guarda de folga** |
+| 3 | **0,80 m** | 4,04 s | 1,76 | distância |
+
+Zero pivô perto do vão nas três. Comparando com a 14:27, que terminou encalhada
+9,8 s no cone: **não houve encalhe**.
+
+#### ⚠️ Achado 1 — a janela arma depois de ABORT, não só depois de travessia
+
+O episódio #2 armou às 535,7, logo após um `rotating -> idle` que é **abort**, não
+travessia concluída. O `/door_zone` publica `idle` nos dois casos e o seguidor **não
+consegue distinguir**. Ali o robô podia estar apontado PRA DENTRO do vão, e a janela
+mandou andar reto.
+
+Quem segurou foi a guarda de folga: andou 0,26 m e parou quando o `clear` cruzou
+0,50 (último valor logado 0,52). **A guarda fez o trabalho dela, mas isso foi o
+plano B funcionando, não o plano A estar certo.** A janela deveria armar só em
+travessia CONCLUÍDA. Exige o `/door_zone` distinguir "saiu" de "desisti" — hoje não
+distingue.
+
+#### ⚠️ Achado 2 — a parada que o dono viu: o obstáculo 2 custou 28,5 s
+
+É o limite-ciclo `staging ↔ rotating`, o mesmo padrão da §2H.23 (lá 11 ciclos em
+2,9 s), agora bem pior:
+
+| transição | vezes |
+|---|---|
+| `staging -> rotating` | **21** |
+| `rotating -> staging` | **17** |
+| `crossing -> reversing` | 2 |
+| `reversing -> staging` | 3 |
+| `rotating -> crossing` | 3 |
+| `rotating -> idle` (abort) | 1 |
+
+Três tentativas de travessia, duas rés, um abort, e ~20 flips de alinhamento — **28,5 s**
+na porta 2. O obstáculo 1 passou limpo em **8,4 s**, uma tentativa só.
+
+Parado total na volta: **26,6 s** (pose congelada >1,5 s), com o maior bloco de
+5,6 s em (11,45 / 3,67), na preparação da porta 2.
+
+#### O que continua igual (esperado — não mexemos nisso)
+
+`No valid trajectories` 2x, `start/goal is an obstacle` + `Could not generate path`
+7x. O plano ruim segue nascendo; a janela só impede que ele custe um cone.
+
+#### ⚠️ n=1 e DUAS mudanças
+
+Isto é **uma** corrida, com Fix 1 (§2H.30) **e** saída reta (§2H.32) juntos contra o
+baseline das 14:09 — não sei qual das duas fez o quê. O dono já disse que vai soltar
+mais voltas.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -3977,6 +4041,8 @@ padrão casou com a linha de comando do shell que o executava e ele **se matou**
 | 2j | 🔴🔴 **`motion_guard` bloqueia o robô na arena** | ⏳ **novo, 08-31 (§2B.7).** Vigia de PESSOA ligado numa prova **sem pessoa**; zera o giro entre `auto_vel_pre` e `auto_vel_raw`. Medido: **26,9 s** (`hist3`) e **52,1 s** (`aprox2`); nos episódios, ~505 comandos entraram e **1** saiu. Os 3 episódios duram 25,7–26,9 s = `hold_still_max` 20 + `clear_time` 5 + settle, sempre com um **cone** como único vizinho — a vigília roda até o teto em cima do cone. Só dispara nas voltas com aproximação (que adiciona point-turn perto de cone). ✅ **DESLIGADO na arena por decisão do dono 08-31** (`motion_guard:=false`, §2B.8); 3 voltas sem ele na §2B.9 — parado 0,0 s em 14/15 goals, mas **1 das 3 bateu na fresta A** (item 2k), então **não** está validado. 🔴 **`--arena` vale no REAL também**: sem `--sim` o robô físico sobe sem vigia de pessoa — exige pista controlada + E-STOP na mão |
 | 2n | 🔴🔴 **Giro de 180° dentro da fresta, arrastando os dois cones** | ⏳ **novo, 09-03 (§2H.23).** Robô ATRAVESSA certo, o `door_crossing` solta em `exit_margin=0,5 m` (traseira ainda no vão) e o `path_follower` executa um point-turn de ~180° que já estava engatilhado desde 885,8 — porque o plano global do Nav2 **nasceu apontando pra trás** (contorno pela fresta, `idx 0..12` descendo pro sul), efeito do item 8. `door_crossing` em `crossing_cooldown` 8 s não pode retomar. `clear` lateral no giro: **0,36 m** contra meia-diagonal 0,354 — não cabe. 3 consertos candidatos (A: `exit_margin`→0,9; B: proibir point-turn com `clear` pequeno; C: rejeitar plano que nasce pra trás) listados na §2H.23, **nenhum aplicado, aguardando decisão** |
 | 2o | 🔴🔴 **Porta é uma LINHA; profundidade do vão não é declarável** | ⏳ **novo, 09-03 (§2H.25).** `doors.json` tem só `a`/`b`; `s=0` é o plano dos batentes e **não existe `depth`**. Tudo que decide "onde acaba o vão" é constante GLOBAL (`exit_margin` 0,5 / `zone_radius` 1,1 / `stage_dist` 0,6 / `commit_s` −0,15 / `gap_min` 0,45). Num túnel de 2 m **não há onde clicar** que funcione: boca de entrada → solta 1,5 m dentro; meio → `zone_radius` não alcança a boca. E `will_clear` devolve True incondicional pra `s>=0`, premissa de parede fina, **falsa em túnel**. Exigido pelo dono porque na competição o tamanho varia (de porta fina a túnel de 2 m). Conserto: `depth` por porta (0 = fina) + fases derivadas dela. **Bloqueia o gate do item `2n`** |
+| 2p | ⚠️ **Janela de saída reta arma depois de ABORT do door_crossing** | ⏳ **novo, 09-03 (§2H.33).** O `/door_zone` publica `idle` tanto pra travessia concluída quanto pra abort, e o `path_follower` não distingue — na corrida das 14:47 o episódio #2 armou após um `rotating -> idle` e mandou andar reto com o robô possivelmente apontado PRA DENTRO do vão. A guarda de folga segurou em 0,26 m (`clear` 0,52). Plano B funcionou; plano A está errado. Conserto: `/door_zone` publicar um estado distinto pra saída concluída |
+| 2q | 🔴 **Porta 2 custa 28,5 s no limite-ciclo `staging ↔ rotating`** | ⏳ **novo, 09-03 (§2H.33).** 21 `staging -> rotating` + 17 `rotating -> staging`, 2 `crossing -> reversing`, 1 abort, 3 tentativas de travessia. A porta 1 passa em 8,4 s numa tentativa. É a "parada" que o dono nota. Mesmo padrão da §2H.23 (11 ciclos em 2,9 s), agora bem pior. Custa 1/6 do tempo da volta |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |
