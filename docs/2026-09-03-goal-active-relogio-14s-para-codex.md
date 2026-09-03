@@ -335,8 +335,9 @@ manter a EMA viva durante uma janela em que o plano é deliberadamente ignorado?
 - `map_service` instrumentado: `WP_RESULT idx status` em `_on_goal_result` e
   `WP_SEND idx -> (x,y,yaw)` no `_send` do `_wp_runner`.
 - "A lista nunca poda" suavizado para "não podou em 222 s".
-- Confirmado o descompasso **6° (seguidor) × 20,05° (Nav2)**, e medido: o goal
-  pré-porta da corrida boa fechou com o robô a **yaw = 11,2°**.
+- Confirmado o descompasso **6° (seguidor) × 20,05° (Nav2)**. ⚠️ O valor "11,2°" que
+  eu publiquei estava **ERRADO** (amostra pega depois da troca de goal). Medição
+  refeita na §14.
 
 **Onde eu discordo, com dado:**
 
@@ -373,3 +374,47 @@ provavelmente o conserto certo do item `2q`.
 (`docs/baselines/2026-09-03-arena-obstaculo-2-yaw-goal-regressao/README.md`) não é
 desta sessão — está não-commitado no working tree, de antes. A crítica de causalidade
 procede.
+
+---
+
+## 14. Correções do 2º review + a medição refeita do descompasso de yaw
+
+**Os 3 defeitos apontados foram corrigidos:**
+1. Comentário da `exit_straight` reescrito (ainda descrevia o comportamento antigo).
+2. `WP_SEND` agora diz "despachando" e o texto avisa que é **tentativa**; adicionado
+   **`WP_ACCEPT`** no `_on_goal_response` (aceito / REJEITADO).
+3. O `yaw = 11,2°` estava errado — meu script pegou a amostra **posterior** ao
+   `Goal succeeded` (`dist_goal = 4,51 m` denunciava). Refeito abaixo.
+
+### Erro de yaw no instante em que o Nav2 fechou cada goal (corrida 15:17)
+
+Método: última amostra do `follow_debug.csv` com `t <= t(Goal succeeded)`, comparada
+com o yaw **exigido pelo waypoint** (`maps/routes/arena_galpao.json` + `ponto_pre_fresta()`
+para os pré-porta).
+
+| alvo | yaw do robô | yaw exigido | **erro** | vs. seguidor (6°) |
+|---|---|---|---|---|
+| cone_1 `(5,10 / 0,90)` | 23,3° | 8,1° | **15,2°** | FORA |
+| **pré-porta 1** `(6,40 / 2,25)` | 19,7° | 0,0° | **19,7°** | FORA |
+| cone_2 `(10,90 / 2,40)` | −17,4° | 2,5° | **19,9°** | FORA |
+| **pré-porta 2** `(11,40 / 3,50)` | 104,3° | 90,0° | **14,3°** | FORA |
+| cone_3 `(11,60 / 6,90)` | 78,9° | 83,0° | 4,1° | ok |
+| cone_4 `(5,60 / 7,80)` | 173,0° | 177,6° | 4,6° | ok |
+| chegada `(1,50 / 2,50)` | −141,1° | −123,4° | **17,7°** | FORA |
+
+**5 de 7 goals fecharam com erro entre 14,3° e 19,9°** — colados no teto de 20,05°
+do Nav2 e todos fora dos 6° do seguidor.
+
+Ou seja: o descompasso é **sistemático**, e o número real é **pior** que o que eu
+tinha publicado. O pré-porta 1 fechou a 19,7°, praticamente no teto do Nav2.
+
+**Estado das frentes:**
+- **Custo da porta 2 (`2q`):** causa provável agora bem medida. Falta a decisão de
+  projeto: **quem é o dono do yaw final perto da porta?** Nenhum de nós quer
+  afrouxar `yaw_goal_tolerance` como curativo antes disso.
+- **Travamento (`2r`):** sem causa. Instrumentação completa em 3 pontos
+  (`GOAL_ACTIVE` com `goal_id` por tópico; `WP_SEND`; `WP_ACCEPT`; `WP_RESULT`).
+  Falta a corrida ruim.
+
+Suíte rodada aqui (o Codex não tinha `pytest`): **163 passam**, com 2 falhas
+pré-existentes da §2H.22 que já falhavam em `3c2b051`.

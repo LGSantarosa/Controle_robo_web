@@ -1121,10 +1121,14 @@ class MapBridge:
             self._wp_goal_done.set()
             return
         if not handle.accepted:
-            log.warning("[MapBridge] goal rejeitado pelo Nav2")
+            # §2H.38 — fecha a lacuna entre WP_SEND (tentativa) e WP_RESULT
+            # (conclusao): aqui se sabe se o Nav2 ACEITOU o goal.
+            log.warning("[MapBridge] WP_ACCEPT idx=%s REJEITADO pelo Nav2",
+                        self._wp_current_idx)
             self._wp_goal_status = GoalStatus.STATUS_ABORTED
             self._wp_goal_done.set()
             return
+        log.warning("[MapBridge] WP_ACCEPT idx=%s aceito", self._wp_current_idx)
         self._wp_goal_handle = handle
         handle.get_result_async().add_done_callback(self._on_goal_result)
 
@@ -1170,9 +1174,11 @@ class MapBridge:
                 return
             time.sleep(0.5)
             if not self._wp_stop.is_set():
-                # §2H.38 — par do WP_RESULT: prova que o runner ENVIOU o
-                # waypoint seguinte (hipótese B do travamento).
-                log.warning("[MapBridge] WP_SEND idx=%d/%d -> (%.2f, %.2f, yaw=%.3f)",
+                # §2H.38 — prova que o runner DESPACHOU o waypoint seguinte.
+                # Atenção: isto é TENTATIVA, não aceitação — se o send_goal_async
+                # for rejeitado ou o servidor falhar, este log sai do mesmo jeito.
+                # Quem prova aceitação é o WP_ACCEPT (_on_goal_response).
+                log.warning("[MapBridge] WP_SEND idx=%d/%d despachando -> (%.2f, %.2f, yaw=%.3f)",
                             i, total, wp['x'], wp['y'], wp.get('yaw', 0.0))
                 self._wp_send_goal_action(wp['x'], wp['y'], wp.get('yaw', 0.0))
             else:

@@ -81,6 +81,7 @@ Divergência real medida entre os dois pacotes:
 |---|---|---|
 | `config/nav2_params_pi.yaml` | 273 | virou `nav2_params_arena.yaml` |
 | `path_follower.py` | 104 | só o `speed_for_clearance` veio |
+| 105 | 🔴🔴 **Publiquei "medido: 11,2°" e o número estava errado — e usei ele pra promover uma hipótese** | Meu script pegou a amostra do `follow_debug` **posterior** ao `Goal succeeded`, já com o goal trocado. O próprio resultado gritava: `dist_goal = 4,51 m` no instante de "concluir" um goal. Eu não olhei a coluna que estava na minha frente. O valor certo é **19,7°**, e o padrão real (5 de 7 goals entre 14° e 20°) é mais forte que o que eu tinha afirmado. Achado pelo Codex, que foi conferir nos artefatos arquivados | Número que sai de script meu tem que passar por uma checagem de sanidade contra outra coluna do mesmo CSV antes de virar afirmação — ainda mais quando ele vai sustentar uma hipótese. `dist_goal` alto num instante de chegada é absurdo na cara e eu passei batido. E "medido" é uma palavra forte: se eu não conferi, é "estimado" |
 | `launch/nav2.launch.py` | 88 | só o `rear_half_width` veio |
 | `unstuck_supervisor.py` | 64 | **nada** — diferia só pelo guard arrancado |
 | `freeze_capture.py` | 15 | **nada** — idem |
@@ -4059,9 +4060,30 @@ O dono passou o review do Codex. Verifiquei ponto a ponto **antes** de aceitar.
 | `path_follower` | `goal_yaw_tol = 0,10 rad` = **6°** (`path_follower.py:197`, `:583`) |
 | Nav2 | `yaw_goal_tolerance = 0,35 rad` = **20,05°** (`nav2_params_arena.yaml:152`) |
 
-O Nav2 fecha o goal **antes** do seguidor terminar o alinhamento fino. E medi na
-corrida boa das 15:17: o goal pré-porta `(6,40 / 2,25)` concluiu com o robô a
-**yaw = 11,2°** — dentro dos 20° do Nav2, **fora** dos 6° do seguidor.
+O Nav2 fecha o goal **antes** do seguidor terminar o alinhamento fino.
+
+🔻 **Correção (erro 105):** eu publiquei "medido: yaw = 11,2°" e o número estava
+errado — meu script pegou a amostra **depois** da troca de goal (dava
+`dist_goal = 4,51 m`, o que por si já denunciava). O Codex pegou. Medição refeita
+pegando a última amostra **anterior** a cada `Goal succeeded`, e comparando com o yaw
+**exigido por aquele waypoint** (rota + `ponto_pre_fresta`), corrida das 15:17:
+
+| alvo | yaw do robô | yaw exigido | **erro** | vs. seguidor (6°) |
+|---|---|---|---|---|
+| cone_1 `(5,10 / 0,90)` | 23,3° | 8,1° | **15,2°** | FORA |
+| **pré-porta 1** `(6,40 / 2,25)` | 19,7° | 0,0° | **19,7°** | FORA |
+| cone_2 `(10,90 / 2,40)` | −17,4° | 2,5° | **19,9°** | FORA |
+| **pré-porta 2** `(11,40 / 3,50)` | 104,3° | 90,0° | **14,3°** | FORA |
+| cone_3 `(11,60 / 6,90)` | 78,9° | 83,0° | 4,1° | ok |
+| cone_4 `(5,60 / 7,80)` | 173,0° | 177,6° | 4,6° | ok |
+| chegada `(1,50 / 2,50)` | −141,1° | −123,4° | **17,7°** | FORA |
+
+**5 de 7 goals fecharam com erro entre 14,3° e 19,9°** — colados no teto de 20,05°
+do Nav2 e todos fora dos 6° do seguidor.
+
+O número certo é **pior** que o que eu tinha publicado, e o descompasso é
+**sistemático**, não ocasional. O pré-porta 1 fechou a **19,7°** — praticamente no
+limite dos 20,05°.
 
 **Consequência que ninguém tinha ligado:** o waypoint pré-porta existe pra entregar o
 robô alinhado com o vão, e ele está sendo entregue **11° torto** porque o refino do
@@ -4128,6 +4150,38 @@ Suíte: **163 passam**; seguem os 2 quebrados da §2H.22.
 - O README que ele criticou (`docs/baselines/2026-09-03-arena-obstaculo-2-yaw-goal-regressao/`)
   **não é meu** — está `??` (não commitado), veio de antes desta sessão. A crítica de
   causalidade dele procede; só não é texto que eu escrevi.
+
+### 2H.39 Segundo review do Codex — 3 defeitos reais, incluindo um NÚMERO MEU ERRADO
+
+**Aceitos e corrigidos:**
+
+1. **O comentário da `exit_straight` estava desatualizado.** Ele ainda dizia *"a mira
+   segue esquentando com o plano atual"* — justamente a frase que causou o BO da
+   §2H.37 — enquanto o código já fazia o oposto. Reescrito, com o porquê.
+2. **`WP_SEND` prometia demais.** Prova *tentativa de despacho*, não aceitação: se o
+   `send_goal_async` for rejeitado, o log sai igual. Texto corrigido e **adicionado
+   `WP_ACCEPT`** no `_on_goal_response` (aceito / REJEITADO), que fecha a lacuna
+   entre despacho e aceitação.
+3. **O `yaw = 11,2°` não estava medido.** Erro meu, ver correção na §2H.38 e o
+   **erro 105** da §5.
+
+**O que ele confirmou:** o fix do `_aim_filt`, o teste novo, a instrumentação
+refeita, e — importante — **a minha contra-evidência contra o 6°×20° como causa do
+travamento**: *"nos logs ruins o goal 2 não fecha, então esse mecanismo não basta
+para explicar o drop"*.
+
+**Estado das duas frentes:**
+- **Custo da porta 2 (item `2q`):** causa provável estabelecida e agora bem medida —
+  5 de 7 goals entregues com 14-20° de erro de yaw. Falta decidir **quem é o dono do
+  yaw final perto da porta**; nenhum de nós dois quer afrouxar `yaw_goal_tolerance`
+  como curativo antes disso.
+- **Travamento (item `2r`):** sem causa. Instrumentação completa nos 3 pontos
+  (`GOAL_ACTIVE` com `goal_id` por tópico, `WP_SEND`, `WP_ACCEPT`, `WP_RESULT`).
+  **Falta a corrida RUIM.** Os dois concordamos que o desenho está bom e só falta o
+  caso.
+
+Nota: o Codex não conseguiu rodar a suíte (sem `pytest` no ambiente dele). Rodei
+aqui: **163 passam**, seguem os 2 quebrados da §2H.22.
 
 ## 3. Medições
 

@@ -486,10 +486,13 @@ class DecisiveFollower:
                     'dist_goal': dist_goal, 'la': la}
 
         # 2b) SAIDA RETA: acabou de ser devolvido pelo door_crossing -> sai de
-        # perto do vao ANDANDO antes de deixar o plano mandar girar. Fica aqui,
-        # depois do carrot/filtro (a mira segue esquentando com o plano atual,
-        # entao quando a janela acaba ela ja' esta' correta) e depois das fases de
-        # chegada (goal perto tem precedencia — nao passar do goal por causa disto).
+        # perto do vao ANDANDO antes de deixar o plano mandar girar.
+        # Fica DEPOIS das fases de chegada (goal perto tem precedencia — nao
+        # passar do goal por causa disto). Esta' depois do bloco do carrot/filtro
+        # por posicao no codigo, mas a janela ZERA `_aim_filt` a cada tick (ver
+        # abaixo): a mira NAO acumula aqui. O comentario anterior dizia o
+        # contrario ("segue esquentando com o plano atual") e essa era a
+        # justificativa do BO da §2H.37 — durante a janela o plano e' o RUIM.
         if self._was_preempted:
             self._was_preempted = False
             if c.exit_straight_dist > 0.0:
