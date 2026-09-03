@@ -3179,6 +3179,59 @@ O `path_follower` só obedece: `i0 = closest_index` = 0, `carrot_point(path, 0, 
 
 O item 8 do §6 (`start/goal is an obstacle`) é a **origem** do plano torto e continua aberto — A/B/C só evitam que ele custe os cones.
 
+### 2H.24 Decisão do dono: **bater é o pior caso — girar em espaço apertado é PROIBIDO; se tem que sair, sai de RÉ**
+
+Fala do dono sobre a §2H.23:
+
+> "ele não deveria nunca ter batido ali, bater é o pior caso, mata a run inteira,
+> mesmo que ele fosse burro e achasse que não passasse mais lá, que desse ré então
+> pra sair, mas o giro matou tudo"
+
+Isto **não** é um pedido de ajuste de número. É uma ordem de precedência que passa a
+valer acima da eficiência de trajeto:
+
+1. **Não bater** — um contato mata a volta inteira. Vale mais que qualquer atalho.
+2. Se o robô concluir (mesmo erradamente) que não passa mais, a saída legítima é
+   **ré pelo mesmo eixo** — desfazer o caminho por onde entrou.
+3. **Point-turn dentro de vão é proibido**, independentemente de o plano pedir.
+   O robô pode obedecer a um plano ruim andando; não pode obedecer *pivotando*.
+
+Consequência de desenho: o conserto **não** é o `exit_margin` (opção A da §2H.23).
+`exit_margin` só desloca o ponto de entrega — o giro engatilhado continua lá, e o
+plano continua nascendo pra trás. O conserto é **proibir o pivô** e dar **ré** como
+alternativa.
+
+#### 🔻 Correção do que eu tinha proposto na §2H.23 (opção B)
+
+Eu propus "proibir point-turn quando o `clear` lateral for pequeno, no
+`follow_debug` ele cai de 2,74 pra 0,36 exatamente no giro". **Está errado em dois
+pontos, e o erro inverte a conclusão:**
+
+- O `clear` do `path_follower` **não é lateral**. É o mínimo do `/scan_safe` num
+  **setor frontal de ±40°** (`clear_sector_deg=40.0`, `path_follower.py:634`).
+- E ele **não** era pequeno na hora da decisão. Sequência medida:
+
+  | t | yaw | `clear` |
+  |---|---|---|
+  | 886,498 | 88,5° | **2,74** |
+  | 886,825 | 88,5° | **2,74** |
+  | 887,142 | 106,3° | 2,74 |
+  | 887,488 | 120,8° | **0,37** |
+
+  Em 886,5 o robô olhava pro norte, corredor aberto: 2,74 m. O `clear` só desabou
+  **depois de ~32° já girados**, quando o feixe frontal encontrou o batente. Um gate
+  `if clear < X: não gira` **não teria impedido este BO** — no melhor caso abortaria
+  o giro com 32° feitos, já raspando.
+
+O sinal correto para "cabe um pião aqui?" é **omnidirecional**: mínimo do `/scan_safe`
+em **volta inteira** (ou ao menos ±180° útil do LiDAR), comparado com a **meia-diagonal**
+do robô — 0,5×0,5 m → `hypot(0,25; 0,25) = 0,354 m` — mais margem. Dentro da fresta,
+a distância do centro ao batente é `vão/2` = **0,30 a 0,45 m**, então o teste dispara
+no instante certo, ANTES de girar. O `clear` frontal existente não serve; precisa de
+um segundo agregado do mesmo scan que o nó já assina.
+
+**Erro 96 da §5.**
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -3461,6 +3514,7 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 93 | 🔴🔴 **Transformei em CÓDIGO E TESTE uma tese que eu mesmo refutei no mesmo dia** | O WARN de boot e a `janela_de_alinhamento_ok()` cravavam o passo de 7,16° (`rot_min/rate_hz`), conta derrubada pela §2H.13. O WARN dizia "vai abortar por align_timeout" e **apareceu nas 2 voltas que atravessaram sem abort**. Eu tinha listado esse risco exato na minha própria agenda (§2H.15, item 5) e não fui conferir — e o dado que confirmava estava nos logs das voltas que eu mesmo rodei | Retratar no diário **não desfaz** o que já virou código. Ao derrubar uma tese, o passo seguinte é `grep` por ela no repo — teste e comentário que a repetem são a forma mais durável do erro, porque parecem verificação |
 | 94 | 🔴🔴 **Escolhi a distância do waypoint por UMA condição e havia DUAS** | A §2H.7 fixou 1,0 m otimizando a margem do point-turn, e eu nunca conferi a **condição de arme** (`dist <= zone_radius 1,1` no instante do `SUCCEEDED`). A 1,0 m sobram 0,09 m de folga contra um `xy_goal_tolerance` de 0,15 — o robô pode concluir o goal FORA da zona. Na `lim1` foi o que aconteceu: `cleared=False`, zero transições, travessia igual à de antes da máquina. E rebaixa a `porta1`/`torta1`: elas armaram por sorte de parada | Quando um ponto tem que satisfazer 2 restrições, otimizar 1 e não listar a outra é o mesmo que escolher no chute. A hora de listar as restrições é **antes** de escolher o número — e a segunda estava escrita no código que eu tinha acabado de ler (`zone_radius`, `_pick_door`) |
 | 95 | 🔴 **Fui puxar os logs por `ssh` na Pi quando a corrida era no SIM, na própria máquina** | O dono pediu "os logs atuais"; eu abri um `until ssh robo@robo-desktop.local` sem antes olhar `controle_web/logs/`, que tinha os CSVs de 3 minutos atrás. Levei uma bronca merecida: *"EU TO USANDO O GAZEBO, TA TUDO NA MAQUINA"*. O baseline mais recente no repo (10:45) também era local — o sinal estava na minha frente | Antes de escolher a FONTE do log, olhar o carimbo de tempo do que já está no disco local. `ssh` é o caminho quando o real rodou; presumir o real porque o projeto tem um robô é presumir |
+| 96 | 🔴 **Propus um gate usando um sinal que eu não conferi — e que não teria pegado o BO** | Na §2H.23 ofereci "proibir point-turn quando o `clear` lateral for pequeno: cai de 2,74 pra 0,36 no giro". O `clear` é **frontal ±40°**, não lateral, e os 0,36 aparecem **depois** de 32° de giro; na hora da decisão valia **2,74**. Eu li a queda na coluna e assumi causa, quando ela é **consequência** do próprio giro | Antes de propor um gate, checar o valor do sinal **no instante da decisão**, não depois. Coluna que despenca durante o evento é candidata a consequência — e o nome da variável (`clear`, sem sufixo) não diz o referencial: fui olhar `clear_sector_deg` só quando o dono aprovou o conserto |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
