@@ -82,6 +82,8 @@ Divergência real medida entre os dois pacotes:
 | `config/nav2_params_pi.yaml` | 273 | virou `nav2_params_arena.yaml` |
 | `path_follower.py` | 104 | só o `speed_for_clearance` veio |
 | 105 | 🔴🔴 **Publiquei "medido: 11,2°" e o número estava errado — e usei ele pra promover uma hipótese** | Meu script pegou a amostra do `follow_debug` **posterior** ao `Goal succeeded`, já com o goal trocado. O próprio resultado gritava: `dist_goal = 4,51 m` no instante de "concluir" um goal. Eu não olhei a coluna que estava na minha frente. O valor certo é **19,7°**, e o padrão real (5 de 7 goals entre 14° e 20°) é mais forte que o que eu tinha afirmado. Achado pelo Codex, que foi conferir nos artefatos arquivados | Número que sai de script meu tem que passar por uma checagem de sanidade contra outra coluna do mesmo CSV antes de virar afirmação — ainda mais quando ele vai sustentar uma hipótese. `dist_goal` alto num instante de chegada é absurdo na cara e eu passei batido. E "medido" é uma palavra forte: se eu não conferi, é "estimado" |
+| 106 | 🔴🔴🔴 **Investiguei 3 seções e ~2h a causa errada por nomear UMA das quatro condições de um `if`** | O guard é `if pose is None or not goal_active or not path or len(path) < 2`. Vi o seguidor em `idle`, escrevi na §2H.34 que *"o `idle` só sai do guard do topo, quando `goal_active` é falso"* e segui daí: dossiê pro Codex, instrumentação do `GoalStatusArray`, hipótese de `result_timeout`, hipótese A×B com o `map_service`. A instrumentação provou que `goal_active` **nunca caiu** — era `len(path) < 2`. A condição certa estava na mesma linha que eu li | Quando um estado tem várias portas de entrada, **listar todas** antes de escolher a culpada, e instrumentar a que decide, não a que eu suspeito. Foi barato ter instrumentado — mas eu instrumentei a hipótese, não o `if`. Um log de QUAL condição disparou teria custado 1 linha e economizado tudo |
+| 107 | 🔴 **Inventei um "relógio de ~14 s" a partir de 3 amostras** | Medi 13,8 / 14,8 / 14,9 s entre o `Goal succeeded` anterior e a queda, e escrevi em caixa alta que era *"um RELÓGIO, não acaso"*. Não é: é o **tempo de percurso** entre dois waypoints fixos, naturalmente parecido toda volta. A regularidade tinha explicação trivial que eu não procurei porque a coincidência era bonita demais | Antes de chamar regularidade de mecanismo, procurar a explicação **chata** primeiro: mesma distância, mesma velocidade, mesmo tempo. E 3 amostras não sustentam a palavra "relógio" |
 | `launch/nav2.launch.py` | 88 | só o `rear_half_width` veio |
 | `unstuck_supervisor.py` | 64 | **nada** — diferia só pelo guard arrancado |
 | `freeze_capture.py` | 15 | **nada** — idem |
@@ -4183,6 +4185,89 @@ para explicar o drop"*.
 Nota: o Codex não conseguiu rodar a suíte (sem `pytest` no ambiente dele). Rodei
 aqui: **163 passam**, seguem os 2 quebrados da §2H.22.
 
+### 2H.40 ✅ CAUSA DO TRAVAMENTO ACHADA: **o plano encolhe abaixo de 2 pontos e o guard mata o giro final**
+
+Corrida das 15:49, com a instrumentação completa.
+`docs/baselines/2026-09-03-arena-travado-CAUSA-plano-encolhe/`
+
+#### O que a instrumentação provou — e o que ela DERRUBOU
+
+```
+GOAL_ACTIVE False -> True  [e7ca7131:2]                 t=301,88
+GOAL_ACTIVE True  -> False [e7ca7131:4]                 t=321,24   (goal 1 concluiu, correto)
+GOAL_ACTIVE False -> True  [e7ca7131:4, a6443faf:2]     t=322,76   (goal 2 executando)
+                        ... e MAIS NADA ...
+```
+
+**O `goal_active` NUNCA caiu.** Ficou `True` do 322,76 até o fim. Mas o seguidor foi
+pra `idle` aos **337,16** e ficou lá.
+
+Ou seja: **toda a minha linha de investigação desde a §2H.34 estava mirando na coisa
+errada.** Erros 106 e 107 da §5.
+
+#### A causa real
+
+O guard do topo do `update()` tem **quatro** condições:
+
+```python
+if pose is None or not goal_active or not path or len(path) < 2:
+    ... return Cmd(0.0, 0.0, 'idle')
+```
+
+Eu escrevi na §2H.34 que *"o `idle` só sai do guard do topo, quando `goal_active` é
+falso"* — nomeei **uma** das quatro. A que disparou foi **`len(path) < 2`**.
+
+O plano global **encolhe** conforme o robô converge no goal. Medido, tick a tick:
+
+```
+333,9  goal_approach  n=4   yaw= 88,3
+334,0  goal_approach  n=3   yaw= 90,7
+335,7  goal_turn      n=3   yaw=116,1  wz=-4,5    <- giro final comeca
+336,1  goal_turn      n=2   yaw= 75,6  wz=-3,958
+337,0  goal_turn      n=2   yaw= 39,6  wz=-2,4    <- ainda girando, indo bem
+337,2  idle           n=2*  yaw= 37,2  wz= 0,0    <- plano caiu pra 1 ponto -> MORREU
+```
+
+(`n=2` na linha do `idle` é **valor velho**: o guard retorna antes de atualizar o
+`dbg`.)
+
+**A cadeia completa:** o plano cai pra 1 ponto → `len(path) < 2` → `idle` → o
+seguidor solta o robô **no meio do `goal_turn`** → o robô fica fora do
+`yaw_goal_tolerance` → o Nav2 nunca fecha o goal → o app nunca manda o próximo →
+travado para sempre.
+
+#### A assinatura bate nas TRÊS corridas travadas
+
+| corrida | último `goal_turn` | yaw ao morrer | `dist_goal` |
+|---|---|---|---|
+| 14:57 | **n=2** | 32,2° | 0,016 |
+| 15:05 | **n=2** | 23,7° | 0,014 |
+| 15:49 | **n=2** | 38,0° | 0,018 |
+
+Idêntica. E nas corridas **boas** o `goal_turn` também roda quase todo em `n=2`
+(154 e 112 amostras) — **é uma corrida contra o relógio**: ou o giro final termina
+antes do plano cair pra 1 ponto, ou o robô fica travado. Por isso é intermitente.
+
+#### 🔻 E o "relógio de ~14 s" (§2H.35) não existe
+
+Os 13,8 / 14,8 / 14,9 s não são um temporizador: são o **tempo de percurso** do
+waypoint anterior até este, que é parecido toda corrida porque é a mesma distância.
+Eu vi regularidade em 3 amostras e batizei de relógio. **Erro 107.**
+
+#### O conserto (não implementado — decisão do dono)
+
+O `len(path) < 2` existe para o **carrot**, que precisa de 2 pontos para interpolar.
+A **fase de chegada não precisa do plano**: `gx, gy = path[-1]` funciona com 1 ponto,
+e depois de `_arrival_latched` ela usa `self._latch_goal`, que já está guardado.
+
+Conserto mínimo: **exigir 2 pontos só onde o carrot é calculado**, e deixar o guard
+do topo barrar apenas plano **vazio**. Assim o `goal_turn` termina o giro mesmo com o
+plano colapsado — que é exatamente o momento em que ele mais precisa terminar.
+
+⚠️ Mexe no guard principal do `update()`. Vai com TDD e com um teste que reproduz a
+corrida: `goal_turn` em andamento + plano caindo pra 1 ponto -> tem que **continuar
+girando**.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -4511,7 +4596,7 @@ padrão casou com a linha de comando do shell que o executava e ele **se matou**
 | 2o | 🔴🔴 **Porta é uma LINHA; profundidade do vão não é declarável** | ⏳ **novo, 09-03 (§2H.25).** `doors.json` tem só `a`/`b`; `s=0` é o plano dos batentes e **não existe `depth`**. Tudo que decide "onde acaba o vão" é constante GLOBAL (`exit_margin` 0,5 / `zone_radius` 1,1 / `stage_dist` 0,6 / `commit_s` −0,15 / `gap_min` 0,45). Num túnel de 2 m **não há onde clicar** que funcione: boca de entrada → solta 1,5 m dentro; meio → `zone_radius` não alcança a boca. E `will_clear` devolve True incondicional pra `s>=0`, premissa de parede fina, **falsa em túnel**. Exigido pelo dono porque na competição o tamanho varia (de porta fina a túnel de 2 m). Conserto: `depth` por porta (0 = fina) + fases derivadas dela. **Bloqueia o gate do item `2n`** |
 | 2p | ⚠️ **Janela de saída reta arma depois de ABORT do door_crossing** | ⏳ **novo, 09-03 (§2H.33).** O `/door_zone` publica `idle` tanto pra travessia concluída quanto pra abort, e o `path_follower` não distingue — na corrida das 14:47 o episódio #2 armou após um `rotating -> idle` e mandou andar reto com o robô possivelmente apontado PRA DENTRO do vão. A guarda de folga segurou em 0,26 m (`clear` 0,52). Plano B funcionou; plano A está errado. Conserto: `/door_zone` publicar um estado distinto pra saída concluída |
 | 2q | 🔴 **Porta 2 custa ~28 s no limite-ciclo `staging ↔ rotating`** | ⏳ **novo, 09-03 (§2H.33).** 🔎 **Causa provável achada 09-03 (§2H.38, review do Codex):** o waypoint pré-porta é entregue **11,2° torto** (medido) porque o Nav2 fecha o goal com 20° enquanto o refino do seguidor exige 6° — o robô entra na aproximação já desalinhado. 21 `staging -> rotating` + 17 `rotating -> staging`, 2 `crossing -> reversing`, 1 abort, 3 tentativas de travessia. A porta 1 passa em 8,4 s numa tentativa. NÃO é a "paradinha de 1 s" que o dono nota (essa é a devolução, benigna — §2H.33). Mesmo padrão da §2H.23 (11 ciclos em 2,9 s), agora bem pior. Custa 1/6 do tempo da volta |
-| 2r | 🔴🔴🔴 **`goal_active` cai no meio do `goal_turn` e trava a volta — é um RELÓGIO de ~14 s** | 🔥 **PRIORIDADE MÁXIMA por ordem do dono 09-03 (§2H.34 + §2H.35).** Medido em 3/3 corridas: a queda acontece **13,8 / 14,8 / 14,9 s após o `Goal succeeded` anterior**, sempre saindo de `goal_turn` — inclusive na corrida BOA, que só passou porque o goal concluiu 1,7 s antes do relógio bater. Provável mesmo fenômeno do item `2g`. Instrumentação de `GOAL_ACTIVE` já no ar. Detalhe original: Corrida 14:57: robô a 1,6 cm do waypoint pré-porta 1, girando pro yaw exigido (0°, *encarando o vão*), chega a 32,2° e **cai em `idle` 12° antes** da `yaw_goal_tolerance` de 20,05°. Sem goal ativo o seguidor cala e o Nav2 assume: **233 replans, 6 backups, 5 spins, 6 waits em 355 s sem girar 1 grau** (ponto morto do skid-steer). Goal nunca conclui -> `door_crossing` nunca recebe `goal_succeeded` -> nunca arma (`cleared=False` eterno com `distC=0.80` dentro da zona). **Volta inteira travada atrás de 12°.** O `bt_navigator` NÃO logou succeeded/failed/canceled, e o `attempt_checkpoint` mostra o goal vivo por mais 347 s — o seguidor e o resto do sistema **discordam**. Próximo passo: logar cada troca de `goal_active` com o status cru dos 2 tópicos de ação. Intermitente: o mesmo waypoint passou em 15 s às 14:47 |
+| 2r | ✅🔴 **CAUSA ACHADA 09-03 (§2H.40): o PLANO encolhe abaixo de 2 pontos e o guard mata o `goal_turn`** — não era `goal_active` nem relógio nenhum | 🔥 **PRIORIDADE MÁXIMA por ordem do dono 09-03 (§2H.34 + §2H.35).** Medido em 3/3 corridas: a queda acontece **13,8 / 14,8 / 14,9 s após o `Goal succeeded` anterior**, sempre saindo de `goal_turn` — inclusive na corrida BOA, que só passou porque o goal concluiu 1,7 s antes do relógio bater. Provável mesmo fenômeno do item `2g`. Instrumentação de `GOAL_ACTIVE` já no ar. Detalhe original: Corrida 14:57: robô a 1,6 cm do waypoint pré-porta 1, girando pro yaw exigido (0°, *encarando o vão*), chega a 32,2° e **cai em `idle` 12° antes** da `yaw_goal_tolerance` de 20,05°. Sem goal ativo o seguidor cala e o Nav2 assume: **233 replans, 6 backups, 5 spins, 6 waits em 355 s sem girar 1 grau** (ponto morto do skid-steer). Goal nunca conclui -> `door_crossing` nunca recebe `goal_succeeded` -> nunca arma (`cleared=False` eterno com `distC=0.80` dentro da zona). **Volta inteira travada atrás de 12°.** O `bt_navigator` NÃO logou succeeded/failed/canceled, e o `attempt_checkpoint` mostra o goal vivo por mais 347 s — o seguidor e o resto do sistema **discordam**. Próximo passo: logar cada troca de `goal_active` com o status cru dos 2 tópicos de ação. Intermitente: o mesmo waypoint passou em 15 s às 14:47 |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |

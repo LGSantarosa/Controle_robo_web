@@ -418,3 +418,64 @@ tinha publicado. O pré-porta 1 fechou a 19,7°, praticamente no teto do Nav2.
 
 Suíte rodada aqui (o Codex não tinha `pytest`): **163 passam**, com 2 falhas
 pré-existentes da §2H.22 que já falhavam em `3c2b051`.
+
+---
+
+## 15. ✅ CAUSA ACHADA — e não era nada do que este documento supunha
+
+A corrida ruim com a instrumentação completa (15:49) fechou o caso, e **derruba a
+premissa do documento inteiro**.
+
+```
+GOAL_ACTIVE False -> True  [e7ca7131:2]                 t=301,88
+GOAL_ACTIVE True  -> False [e7ca7131:4]                 t=321,24   (goal 1, correto)
+GOAL_ACTIVE False -> True  [e7ca7131:4, a6443faf:2]     t=322,76   (goal 2 executando)
+                        ... e MAIS NADA ...
+```
+
+**`goal_active` nunca caiu.** Ficou `True` até o fim. O seguidor foi pra `idle` aos
+337,16 por **outra** condição do mesmo guard:
+
+```python
+if pose is None or not goal_active or not path or len(path) < 2:
+```
+
+Foi **`len(path) < 2`**. O plano global encolhe conforme o robô converge:
+
+```
+333,9  goal_approach  n=4   yaw= 88,3
+334,0  goal_approach  n=3   yaw= 90,7
+335,7  goal_turn      n=3   yaw=116,1  wz=-4,5
+336,1  goal_turn      n=2   yaw= 75,6
+337,0  goal_turn      n=2   yaw= 39,6  wz=-2,4   <- girando bem
+337,2  idle           n=2*  yaw= 37,2  wz= 0,0   <- plano caiu pra 1 ponto
+```
+
+Cadeia: plano -> 1 ponto -> `idle` -> o giro final morre no meio -> robô fica fora do
+`yaw_goal_tolerance` -> Nav2 não fecha -> app não manda o próximo -> travado.
+
+Assinatura idêntica nas **três** corridas travadas (último `goal_turn` sempre com
+`n=2`, `dist_goal` 0,014-0,018). Nas boas, o `goal_turn` também roda quase todo em
+`n=2` — **é uma corrida**: ou o giro termina antes do plano colapsar, ou trava.
+
+**O "relógio de ~14 s" não existe**: é o tempo de percurso entre waypoints, parecido
+toda volta porque é a mesma distância. Erro meu (107).
+
+### Conserto proposto
+
+`len(path) < 2` existe para o **carrot** (precisa de 2 pontos para interpolar). A fase
+de chegada **não precisa do plano**: `gx, gy = path[-1]` funciona com 1 ponto, e
+depois de `_arrival_latched` ela usa `self._latch_goal`, já guardado.
+
+Mínimo: exigir 2 pontos **só onde o carrot é calculado**; o guard do topo barra
+apenas plano **vazio**.
+
+**Perguntas pro Codex:**
+1. Concorda com o conserto? Há razão para a fase de chegada exigir 2 pontos?
+2. Um plano de 1 ponto é sinal legítimo de outra coisa (planner degenerado) que
+   deveria ser tratada, em vez de tolerada?
+3. O `goal_yaw` vem do goal do Nav2, não do plano — confere? Se sim, a fase de
+   chegada é totalmente independente do plano depois do latch.
+
+⚠️ Mexe no guard principal do `update()`. Vai com TDD: teste que põe `goal_turn` em
+andamento e derruba o plano para 1 ponto — tem que **continuar girando**.
