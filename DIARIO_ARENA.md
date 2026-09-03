@@ -3837,6 +3837,80 @@ point-turn abaixo da zona-morta do skid-steer.
 arme (`distC <= zone_radius 1,1`) sobra bem — a DIAG confirma `distC=0.80`
 estável. **O arme não é o problema aqui; a conclusão do goal é.**
 
+### 2H.35 🔴🔴🔴 O travamento é um **RELÓGIO de ~14 s**, e ele dispara em TODA corrida
+
+Reproduziu na corrida das 15:05. Dono: *"fudeu, ele repetiu a mesma coisa, vamos ter
+que dar atenção máxima a isso"*.
+
+#### A medição que muda tudo
+
+Tempo entre o `Goal succeeded` **anterior** e o instante em que o `path_follower`
+larga o goal (cai em `idle` vindo de `goal_turn`):
+
+| corrida | queda em `idle` | resultado |
+|---|---|---|
+| 14:47 (a **BOA**) | **+14,87 s** | goal concluiu 1,7 s depois assim mesmo -> volta seguiu |
+| 14:57 | **+14,82 s** | travou 355 s |
+| 15:05 | **+13,80 s** | travou |
+
+**3 de 3, sempre entre 13,8 e 14,9 s, sempre saindo de `goal_turn`.** Não é acaso —
+é um **relógio**. E dispara também na corrida que deu certo: lá o robô já tinha
+satisfeito o goal quando o relógio bateu, então passou. **A volta boa foi ganha por
+1,7 segundo.**
+
+Isto quase certamente é o mesmo fenômeno do item `2g` ("16 s em `idle` entre dois
+goals", 08-31) — que estava catalogado como buraco entre goals e é, na verdade,
+este relógio.
+
+#### Como o travamento acontece, tick a tick (15:05)
+
+O `goal_turn` estava **funcionando**, girando pro yaw exigido a 2,4 rad/s:
+
+```
+720,65  goal_turn  yaw=83,0   wz=-4,344
+721,45  goal_turn  yaw=44,2   wz=-2,4
+722,02  goal_turn  yaw=32,7   wz=-2,4
+722,33  goal_turn  yaw=25,6   wz=-2,4     <- 5,5° da tolerancia (20,05°)
+722,44  idle       yaw=22,9   wz= 0,0     <- PERDEU O GOAL
+```
+
+**Faltava um tick.** O robô congela a 22,0° com `yaw_goal_tolerance = 20,05°` —
+**2 graus** fora. XY perfeito (`dist_goal = 0,014` contra tolerância 0,15).
+
+No `nav2.log` do mesmo instante: **nada**. Só `Passing new path to controller` a
+cada segundo. Nenhum `Goal succeeded`, `failed` ou `canceled`.
+
+#### Onde mora
+
+`path_follower.py:735` — `_on_status`:
+
+```python
+self._goal_active[topic] = any(st.status in ACTIVE for st in msg.status_list)
+```
+
+`ACTIVE = {1, 2, 3}` (ACCEPTED, EXECUTING, CANCELING), sobre **dois** tópicos
+(`navigate_to_pose` e `navigate_through_poses`), e `goal = any(dict.values())`.
+
+O sinal é **por evento**: o dict só muda quando chega mensagem de status. Se numa
+mensagem a lista vier sem nenhum ativo, o seguidor cala **e não tem como voltar**
+enquanto nenhuma outra mensagem chegar — e com o goal seguindo em execução, não
+chega. Um único status ruim mata a volta.
+
+`result_timeout` **não está setado** no `nav2_params_arena.yaml` — fica no default do
+`rcl_action`. Os ~14-15 s medidos batem com uma expiração de goal terminal na lista.
+**Isto é hipótese, não fato**: falta ver a lista crua.
+
+#### ✅ Instrumentação aplicada (não muda comportamento)
+
+`_on_status` agora loga `WARN` em **toda troca** de `goal_active`, com o tópico que
+mudou, o **tamanho e o conteúdo cru** da `status_list` e o dict resultante. É o que
+decide entre "o goal sumiu da lista por expiração" e "o goal virou terminal".
+
+Uma corrida responde. Procurar por `GOAL_ACTIVE` no `nav2.log`.
+
+⚠️ Só depois disso eu proponho conserto — a causa ainda não está confirmada, e a
+regra da casa é confirmar a causa antes da solução.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -4162,7 +4236,7 @@ padrão casou com a linha de comando do shell que o executava e ele **se matou**
 | 2o | 🔴🔴 **Porta é uma LINHA; profundidade do vão não é declarável** | ⏳ **novo, 09-03 (§2H.25).** `doors.json` tem só `a`/`b`; `s=0` é o plano dos batentes e **não existe `depth`**. Tudo que decide "onde acaba o vão" é constante GLOBAL (`exit_margin` 0,5 / `zone_radius` 1,1 / `stage_dist` 0,6 / `commit_s` −0,15 / `gap_min` 0,45). Num túnel de 2 m **não há onde clicar** que funcione: boca de entrada → solta 1,5 m dentro; meio → `zone_radius` não alcança a boca. E `will_clear` devolve True incondicional pra `s>=0`, premissa de parede fina, **falsa em túnel**. Exigido pelo dono porque na competição o tamanho varia (de porta fina a túnel de 2 m). Conserto: `depth` por porta (0 = fina) + fases derivadas dela. **Bloqueia o gate do item `2n`** |
 | 2p | ⚠️ **Janela de saída reta arma depois de ABORT do door_crossing** | ⏳ **novo, 09-03 (§2H.33).** O `/door_zone` publica `idle` tanto pra travessia concluída quanto pra abort, e o `path_follower` não distingue — na corrida das 14:47 o episódio #2 armou após um `rotating -> idle` e mandou andar reto com o robô possivelmente apontado PRA DENTRO do vão. A guarda de folga segurou em 0,26 m (`clear` 0,52). Plano B funcionou; plano A está errado. Conserto: `/door_zone` publicar um estado distinto pra saída concluída |
 | 2q | 🔴 **Porta 2 custa 28,5 s no limite-ciclo `staging ↔ rotating`** | ⏳ **novo, 09-03 (§2H.33).** 21 `staging -> rotating` + 17 `rotating -> staging`, 2 `crossing -> reversing`, 1 abort, 3 tentativas de travessia. A porta 1 passa em 8,4 s numa tentativa. NÃO é a "paradinha de 1 s" que o dono nota (essa é a devolução, benigna — §2H.33). Mesmo padrão da §2H.23 (11 ciclos em 2,9 s), agora bem pior. Custa 1/6 do tempo da volta |
-| 2r | 🔴🔴 **`goal_active` do `path_follower` cai no meio do `goal_turn` e trava a volta** | ⏳ **novo, 09-03 (§2H.34).** Corrida 14:57: robô a 1,6 cm do waypoint pré-porta 1, girando pro yaw exigido (0°, *encarando o vão*), chega a 32,2° e **cai em `idle` 12° antes** da `yaw_goal_tolerance` de 20,05°. Sem goal ativo o seguidor cala e o Nav2 assume: **233 replans, 6 backups, 5 spins, 6 waits em 355 s sem girar 1 grau** (ponto morto do skid-steer). Goal nunca conclui -> `door_crossing` nunca recebe `goal_succeeded` -> nunca arma (`cleared=False` eterno com `distC=0.80` dentro da zona). **Volta inteira travada atrás de 12°.** O `bt_navigator` NÃO logou succeeded/failed/canceled, e o `attempt_checkpoint` mostra o goal vivo por mais 347 s — o seguidor e o resto do sistema **discordam**. Próximo passo: logar cada troca de `goal_active` com o status cru dos 2 tópicos de ação. Intermitente: o mesmo waypoint passou em 15 s às 14:47 |
+| 2r | 🔴🔴🔴 **`goal_active` cai no meio do `goal_turn` e trava a volta — é um RELÓGIO de ~14 s** | 🔥 **PRIORIDADE MÁXIMA por ordem do dono 09-03 (§2H.34 + §2H.35).** Medido em 3/3 corridas: a queda acontece **13,8 / 14,8 / 14,9 s após o `Goal succeeded` anterior**, sempre saindo de `goal_turn` — inclusive na corrida BOA, que só passou porque o goal concluiu 1,7 s antes do relógio bater. Provável mesmo fenômeno do item `2g`. Instrumentação de `GOAL_ACTIVE` já no ar. Detalhe original: Corrida 14:57: robô a 1,6 cm do waypoint pré-porta 1, girando pro yaw exigido (0°, *encarando o vão*), chega a 32,2° e **cai em `idle` 12° antes** da `yaw_goal_tolerance` de 20,05°. Sem goal ativo o seguidor cala e o Nav2 assume: **233 replans, 6 backups, 5 spins, 6 waits em 355 s sem girar 1 grau** (ponto morto do skid-steer). Goal nunca conclui -> `door_crossing` nunca recebe `goal_succeeded` -> nunca arma (`cleared=False` eterno com `distC=0.80` dentro da zona). **Volta inteira travada atrás de 12°.** O `bt_navigator` NÃO logou succeeded/failed/canceled, e o `attempt_checkpoint` mostra o goal vivo por mais 347 s — o seguidor e o resto do sistema **discordam**. Próximo passo: logar cada troca de `goal_active` com o status cru dos 2 tópicos de ação. Intermitente: o mesmo waypoint passou em 15 s às 14:47 |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |

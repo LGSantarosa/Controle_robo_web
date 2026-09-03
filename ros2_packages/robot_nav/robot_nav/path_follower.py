@@ -736,6 +736,24 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             self._goal_active[topic] = any(st.status in ACTIVE
                                            for st in msg.status_list)
             active = any(self._goal_active.values())
+            # 2026-09-03 (§2H.35) — INSTRUMENTACAO, nao muda comportamento.
+            # Medido em 3 corridas: o seguidor larga o goal 13,8 / 14,8 / 14,9 s
+            # depois do `Goal succeeded` ANTERIOR, sempre saindo de `goal_turn`.
+            # E' relogio, nao acaso, e trava a volta inteira quando o giro final
+            # ainda nao entrou na tolerancia (§2H.34). Falta saber POR QUE a
+            # lista fica sem nenhum status ativo: aqui sai a lista CRUA dos dois
+            # topicos na troca, que e' o que decide entre "goal expirou da lista"
+            # e "goal virou terminal".
+            if active != self._goal_active_any:
+                det = ' | '.join(
+                    '%s=[%s]' % (t.split('/')[0],
+                                 ','.join(str(x.status) for x in m)
+                                 if m else 'VAZIA')
+                    for t, m in ((topic, msg.status_list),))
+                self.get_logger().warn(
+                    'GOAL_ACTIVE %s -> %s (mudou por %s) n=%d %s ; dict=%s'
+                    % (self._goal_active_any, active, topic.split('/')[0],
+                       len(msg.status_list), det, self._goal_active))
             if active and not self._goal_active_any:
                 # novo goal -> libera o snapshot do primeiro plano longo
                 self._plan_snapped = False
