@@ -3532,6 +3532,77 @@ Se mostrar, a culpa e' do plano do momento (Fix 2), nao do estado velho.
 
 ⏳ **Nao rodado.**
 
+### 2H.31 🔴🔴 O Fix 1 funcionou **e piorou a corrida** — a EMA era um amortecedor que eu tirei sem tirar o solavanco
+
+Corrida das 14:27, `docs/baselines/2026-09-03-arena-fix1-PIOR-travou-na-saida-do-2/`.
+Veredito do dono: *"ele foi pior"*. Esta certo.
+
+#### O Fix 1 fez exatamente o que foi projetado pra fazer
+
+Provado no `follow_debug`, na devolucao do obstaculo 2 (`crossing -> idle` em
+441,513):
+
+| t | estado | `herr` | de onde vem |
+|---|---|---|---|
+| 441,4 | `preempted` | 93,3° | valor VELHO (durante `preempted` o `dbg` nao e' recalculado) |
+| **441,7** | `turning` | **175,5°** | recalculado do zero, plano e pose do instante |
+
+Sem lag, sem alvo congelado. 512 ticks (25,6 s) em `preempted` na volta. O conserto
+esta correto e faz o que diz.
+
+#### E foi justamente por isso que piorou
+
+O `follow_plan_last.csv` da corrida:
+
+```
+idx 0   11,375  4,625   <- nasce onde o robo estava, ja' passado do vao
+idx 1..12  11,375  4,575 -> 4,025   <- desce reto pro SUL, de volta pela fresta
+idx 12  11,375  4,025   <- exatamente o carrot (0,88 m ATRAS do robo)
+idx 24  10,887  3,728   <- vira pro oeste
+idx 124 10,825  6,275   <- volta por fora
+```
+
+**O plano nasceu apontando pra tras outra vez** — o mesmo modo de falha da §2H.23
+(item 8 do §6). Com o filtro limpo, o seguidor obedeceu **na hora e com conviccao**:
+girou 180° (yaw 93° -> −108° entre 441,7 e 446,4) e saiu dirigindo pro sul, de volta
+pra dentro do vao.
+
+Resultado: **travou**. De 447,0 a 456,8 — **9,8 s** — a pose ficou congelada em
+(11,832 / 4,725) com `vx = 0,224` comandado, `clear` 0,36-0,39, empurrando contra o
+cone. O `nav2.log` do mesmo trecho: `Either of the start or goal pose are an
+obstacle!`, `Could not generate path between the given poses`, `spin failed —
+Collision Ahead`. A corrida acaba ali.
+
+No baseline das 14:09, com o filtro sujo, ele **balançou e seguiu** — chegou no
+cone_3, no cone_4 e continuou. Nesta, com o filtro limpo, ele **cometeu** e encalhou.
+
+#### A licao, que e' contra-intuitiva
+
+A EMA de 2 s da mira estava, **por acidente**, funcionando como amortecedor: ela
+mediava os dois planos que alternavam e atrasava a resposta, entao o robo nunca se
+comprometia inteiro com o plano ruim — balançava e escapava. Eu tirei o
+amortecedor **sem tirar o solavanco**. Obedecer rapido a um plano errado e' pior que
+obedecer devagar.
+
+#### 🔻 E derruba o Fix 2 que EU propus
+
+Eu tinha oferecido como Fix 2 "giro grande exige ~0,5-1 s de confirmacao". **Nao
+teria salvado esta corrida.** O plano aqui nao estava alternando no momento da
+devolucao — ele ficou **estavel apontando pra tras de 441,7 a 456,8**, 15 s. Um
+gate de confirmacao de 1 s so atrasaria o mesmo giro de 180° em 1 s. **Erro 99 da §5.**
+
+#### O que sobra, de verdade
+
+O problema nao e' o filtro nem o timing do giro: e' que **o robo aceita um plano que
+manda ele voltar pra dentro da fresta que acabou de atravessar**. Ataques possiveis,
+nenhum aplicado:
+
+| | onde | o quê |
+|---|---|---|
+| A | reverter | volta pro comportamento das 14:09 (balança mas passa). Nao conserta nada, so' nao piora |
+| B | `path_follower` | **compromisso pos-travessia**: depois de `crossing -> idle`, segurar o rumo da travessia por ~1-2 m ou ate' o plano parar de apontar pra tras. Nao deixa desfazer o que acabou de fazer |
+| C | costmap/inflacao | o item 8 do §6 — a fresta ser considerada bloqueada com o robo em cima dela. E' a RAIZ; sem isso A e B sao curativo |
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -3817,6 +3888,8 @@ log/sim_ab/<tag>/nav2.log` tem que dar **0**.
 | 96 | 🔴 **Propus um gate usando um sinal que eu não conferi — e que não teria pegado o BO** | Na §2H.23 ofereci "proibir point-turn quando o `clear` lateral for pequeno: cai de 2,74 pra 0,36 no giro". O `clear` é **frontal ±40°**, não lateral, e os 0,36 aparecem **depois** de 32° de giro; na hora da decisão valia **2,74**. Eu li a queda na coluna e assumi causa, quando ela é **consequência** do próprio giro | Antes de propor um gate, checar o valor do sinal **no instante da decisão**, não depois. Coluna que despenca durante o evento é candidata a consequência — e o nome da variável (`clear`, sem sufixo) não diz o referencial: fui olhar `clear_sector_deg` só quando o dono aprovou o conserto |
 | 97 | 🔴🔴 **Ofereci como "recomendado" uma correção que o robô NÃO consegue fazer** | Perguntei ao dono se mantinha a "correção fina de yaw andando" do `crossing` (`cross_k_lat=1,5`, `cross_k_yaw=2,0`), chamando-a de *comportamento validado em campo*. O robô é skid-steer com zona-morta e **não esterça andando**: `arc_calib` (06-25) mediu **≤19%** de fidelidade, e tanto o `ESTADO_PROJETO.md:1866` quanto o `README.md:1024` **e a minha própria memória** ("NUNCA giro em ARCO") dizem isso. O dono corrigiu: *"esse robô não corrige yaw andando lembra"* | Eu tratei um ganho escrito no código como capacidade do robô. Código que comanda `wz` junto com `vx` **não é prova** de que o robô arqueia — é prova de que alguém escreveu isso. Antes de pôr um comportamento numa pergunta como "validado", conferir se o ATUADOR entrega; a medição existia no repo há 2 meses |
 | 98 | 🔴 **Virei um conserto de um numero num projeto de 7 passos** | O BO da §2H.23 se conserta com `exit_margin` 0,50 -> 0,60. Eu produzi 4 secoes de diario, um plano em `docs/`, um schema novo de `doors.json`, 21 testes de geometria e uma pergunta de arquitetura — com o dono a 2 dias do prazo e querendo so a volta passando. Ele cortou: *"Vc ta atropelando coisas, eu quero que ele so passe do 1 e 2 e passe em todos os outros obj, so isso"* | Levantamento bom nao autoriza escopo grande. Quando o pedido e um RESULTADO com prazo, a entrega e a menor mudanca que produz o resultado — o resto vira arquivo e espera. E a hora de perguntar "quanto disso voce quer agora?" e ANTES de escrever o plano, nao depois |
+| 99 | 🔴🔴 **Propus um conserto (Fix 2) que os dados da corrida seguinte refutaram** | Ofereci "giro grande exige 0,5-1 s de confirmacao" como defesa contra o plano ruim, assumindo que o plano estava ALTERNANDO no instante da devolucao. Na corrida das 14:27 ele estava **estavel apontando pra tras por 15 s** — um gate de confirmacao so' atrasaria o mesmo giro. Eu extrapolei o padrao de UMA corrida (a das 14:09, onde alternava) pra uma lei | Padrao visto numa corrida e' hipotese, nao mecanismo. Antes de vender um gate temporal, checar se a coisa ruim e' TRANSIENTE — se ela persiste, esperar nao ajuda. Bastava eu ter perguntado "e se o plano ruim durar 15 s?" |
+| 100 | 🔴🔴 **Removi um amortecedor sem remover o solavanco, e chamei isso de conserto** | A EMA de 2 s da mira estava, por acidente, impedindo o robo de se comprometer com o plano ruim: ele balançava e escapava. Limpei o filtro (Fix 1, correto no que se propunha) e o robo passou a obedecer o plano ruim **na hora e inteiro** — girou 180, voltou pra dentro do vao e encalhou 9,8 s. Ficou PIOR que antes do conserto | Quando um sistema sobrevive a uma entrada ruim, parte da sobrevivencia pode vir de lentidao/ruido que ninguem projetou. Antes de limpar um caminho de sinal, perguntar o que a sujeira estava segurando. E a entrada ruim (plano nascendo pra tras) era conhecida desde a §2H.23 — eu tratei o sintoma a jusante dela duas vezes seguidas |
 | 74 | Calculei o `will_clear` com o yaw da **chegada**, quando ele só roda depois do alinhamento | Usei `−7,7°` e publiquei `0,178`. A trava só é chamada com `|yaw_err| ≤ 3°` (`:439-446`) e o point-turn não muda `s`/`d` — a projeção real é uma **janela** (0,228–0,290 para `d=0,259`; 0,089–0,151 para `d=0,120`). Achado pelo revisor, **na correção que eu tinha acabado de escrever para outro erro do mesmo tipo** (BO 71) | Ao avaliar uma guarda, usar o estado **no ponto de chamada**, não o estado de entrada. E se a entrada é um intervalo (±3°), o resultado é **intervalo**, não ponto — "passa" e "reprova" só valem se a janela inteira concordar |
 | 75 | Disse que o point-turn acontece **"onde o robô entra na zona"** | Entrar no raio de 1,1 m não arma: falta `_cleared` + goal ativo + `nav_forward`. Meu exemplo (7,00; 1,99) mostra que o **conjunto de poses permitidas** contém posições perigosas — não que a rota giraria ali. Eu tinha **acabado de documentar** o gate `_cleared` no item ao lado (BO 73) e mesmo assim escrevi a frase ignorando ele | Corrigir um gate esquecido e depois raciocinar como se ele não existisse é o mesmo erro duas vezes no mesmo parágrafo. Depois de mapear as pré-condições, **reescrever as conclusões que foram tiradas sem elas** — inclusive as da mesma página |
 | 70 | 🔁 **Copiei o diagrama de estados da docstring em vez de ler a máquina** — e ele está desatualizado desde 19/06 | O desenho da fresta A afirma `IDLE → STAGING → ROTATING(|lat|<8cm E |yaw|<3°)`. O código arma **direto em `rotating`** (`door_crossing.py:381`) e o gate é `yaw` + `will_clear()`; `align_lat` **não é lido por decisão nenhuma** (`grep` → 1 ocorrência, numa string de log, `:613`). Achado pelo revisor. Pior: eu **já tinha anotado** na §5.4 do próprio desenho que a docstring estava errada em outro número (`|yaw|<5°`) e não desconfiei do diagrama 4 linhas acima | Docstring é comentário datado, igual ao caso da odom do Gazebo. O diagrama de estados se lê **do `update()`**, e um parâmetro só existe se `grep cfg.<nome>` achar um **uso**, não uma declaração |
