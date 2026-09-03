@@ -3232,6 +3232,95 @@ um segundo agregado do mesmo scan que o nó já assina.
 
 **Erro 96 da §5.**
 
+### 2H.25 🔴🔴 O modelo de porta é uma **LINHA**, não um volume — e por isso "o tamanho da área" não é ajustável
+
+Pedido do dono, em cima da §2H.24:
+
+> "A ideia da área do obstaculo é que depois que começou a passar não mexe, mexe
+> antes de entrar, mas depois segue reto. Outra coisa, eu ainda não posso mudar o
+> tamanho dessa área, preciso ter esse poder, pois na competição o tamanho vai ser
+> diferente, vai ver lá tenha um que seja só uma porta mesmo, sem área nenhuma, pode
+> acontecer, pode ter um com 2 metros de tunel, entende o problema?"
+
+Ele está certo, e a limitação é **estrutural**, não um número mal escolhido.
+
+#### O que o modelo é hoje (medido no código e no JSON)
+
+`maps/arena_galpao.doors.json` — o schema tem **só dois pontos por porta**:
+
+```json
+{"id": 2, "a": [11.05, 4.30], "b": [11.75, 4.30]}
+```
+
+| porta | largura medida |
+|---|---|
+| 1 | 0,90 m |
+| 2 | 0,70 m |
+| 3 | 0,60 m |
+| 4 | 0,80 m |
+
+`door_geometry()` (`door_crossing.py:118`) transforma isso em centro + meia-largura +
+tangente + normal. **Não existe campo de profundidade.** `s = 0` é o **plano dos
+batentes** — uma linha de espessura zero. A porta não tem "dentro".
+
+#### Consequência: tudo que decide "onde acaba o vão" é constante GLOBAL
+
+| constante | valor | papel |
+|---|---|---|
+| `zone_radius` | 1,1 m | raio, **do centro**, que arma a manobra |
+| `approach_dist` | 1,0 m | quanto antes do plano ainda vale dirigir |
+| `stage_dist` | 0,6 m | ponto de preparação antes do centro |
+| `commit_s` | −0,15 m | ponto de não-retorno |
+| **`exit_margin`** | **0,5 m** | além do centro pra **soltar o robô** |
+| `cross_lat_off_s` | 0,0 m | onde zera a correção lateral |
+| `gap_min` | 0,45 m | vão mínimo à frente |
+
+Nenhuma é por-porta. Todas medem a partir de uma linha.
+
+#### Por que isso quebra nos dois extremos que o dono citou
+
+**Túnel de 2 m.** `a`/`b` só marcam **uma boca**. Se clicar a boca de entrada,
+`s=0` é a entrada e `exit_margin=0,5` solta o robô **1,5 m antes de sair** — dentro
+do túnel, que é exatamente o BO da §2H.23, só que garantido em vez de azarado. Se
+clicar o meio, o `zone_radius` de 1,1 m mal alcança a boca (centro a 1,0 m dela) e a
+manobra quase não arma — é o erro 94 de novo, por outro caminho. **Não há onde
+clicar que funcione.**
+
+Pior: `will_clear()` (`door_crossing.py:148`) devolve **True incondicional** para
+`s >= 0` — comentário: *"já passou do ponto mais estreito -> sempre passa"*. Isso é
+verdade numa parede fina e **FALSO num túnel**, onde `s >= 0` ainda é apertado por
+2 m. A trava "passo aqui?" fica cega justamente onde mais importa.
+
+**Porta fina sem área nenhuma.** Aí a linha modela bem a geometria, mas os 0,5 m de
+`exit_margin` + 0,6 de `stage_dist` + 1,1 de `zone_radius` são um envelope inventado
+em cima de nada. Funciona por acidente de calibração nesta arena, não por projeto.
+
+#### O que falta, em uma frase
+
+A porta precisa deixar de ser uma linha e virar um **corredor com profundidade
+declarada por porta** — `depth` (0 = parede fina, retrocompatível) — e as fases têm
+que ser **derivadas** dela em vez de constantes globais:
+
+- `s < −depth/2 − folga` → **fora, ANTES**: aqui é onde se corrige e se gira
+- `−depth/2 ≤ s ≤ +depth/2` → **DENTRO**: não mexe, reto (regra do dono, §2H.24)
+- `s > +depth/2 + meio_corpo + margem` → **saiu de verdade**: só aqui solta
+
+E `will_clear` tem que projetar até a boca de **saída** (`s = +depth/2`), não até `s=0`.
+
+#### ⚠️ Conflito a resolver com o dono antes de codar
+
+"Depois que começou a passar não mexe" colide com o que o `crossing` faz hoje:
+`wz = −cross_k_lat·d − cross_k_yaw·yaw_err` (`k_lat=1,5`, `k_yaw=2,0`, teto
+`cross_wz_max`). Ou seja, **o código corrige lateral e yaw andando dentro do vão**,
+de propósito (comentário de campo 06-19). Na volta da §2H.23 essa correção foi
+inofensiva — o yaw ficou travado em ~88,6° na travessia inteira — mas ela existe e
+contraria a regra. Não zerei nada: é decisão dele se "não mexe" significa `wz = 0`
+duro dentro do vão ou só "não pivota".
+
+**Nada implementado nesta seção** — é levantamento. O gate da §2H.24 (passo 1: só
+negar o pivô, só em zona de porta) fica **em espera**, porque "zona de porta" é
+justamente a coisa que não existe direito.
+
 ## 3. Medições
 
 ### 3.1 Geometria do robô
@@ -3549,6 +3638,7 @@ padrão casou com a linha de comando do shell que o executava e ele **se matou**
 | 2m | **`launch.sh` mata Gazebo de OUTRO launch** | ⏳ **novo, 09-01 (§2G.9).** O `trap cleanup EXIT` termina com `pkill -9 -f "gz sim"` **global, sem filtrar por PID** (`launch.sh:414-416`). Como o trap é lento (`sleep 1` + 5 s de escalação por nó), quem roda voltas em sequência tem o Gazebo da volta seguinte morto pela limpeza da anterior — `exit -9`, zero log. Custou 3 voltas hoje. Não mexi: é decisão à parte (filtrar por PID quebra o papel de "rede de segurança contra órfão") |
 | 2j | 🔴🔴 **`motion_guard` bloqueia o robô na arena** | ⏳ **novo, 08-31 (§2B.7).** Vigia de PESSOA ligado numa prova **sem pessoa**; zera o giro entre `auto_vel_pre` e `auto_vel_raw`. Medido: **26,9 s** (`hist3`) e **52,1 s** (`aprox2`); nos episódios, ~505 comandos entraram e **1** saiu. Os 3 episódios duram 25,7–26,9 s = `hold_still_max` 20 + `clear_time` 5 + settle, sempre com um **cone** como único vizinho — a vigília roda até o teto em cima do cone. Só dispara nas voltas com aproximação (que adiciona point-turn perto de cone). ✅ **DESLIGADO na arena por decisão do dono 08-31** (`motion_guard:=false`, §2B.8); 3 voltas sem ele na §2B.9 — parado 0,0 s em 14/15 goals, mas **1 das 3 bateu na fresta A** (item 2k), então **não** está validado. 🔴 **`--arena` vale no REAL também**: sem `--sim` o robô físico sobe sem vigia de pessoa — exige pista controlada + E-STOP na mão |
 | 2n | 🔴🔴 **Giro de 180° dentro da fresta, arrastando os dois cones** | ⏳ **novo, 09-03 (§2H.23).** Robô ATRAVESSA certo, o `door_crossing` solta em `exit_margin=0,5 m` (traseira ainda no vão) e o `path_follower` executa um point-turn de ~180° que já estava engatilhado desde 885,8 — porque o plano global do Nav2 **nasceu apontando pra trás** (contorno pela fresta, `idx 0..12` descendo pro sul), efeito do item 8. `door_crossing` em `crossing_cooldown` 8 s não pode retomar. `clear` lateral no giro: **0,36 m** contra meia-diagonal 0,354 — não cabe. 3 consertos candidatos (A: `exit_margin`→0,9; B: proibir point-turn com `clear` pequeno; C: rejeitar plano que nasce pra trás) listados na §2H.23, **nenhum aplicado, aguardando decisão** |
+| 2o | 🔴🔴 **Porta é uma LINHA; profundidade do vão não é declarável** | ⏳ **novo, 09-03 (§2H.25).** `doors.json` tem só `a`/`b`; `s=0` é o plano dos batentes e **não existe `depth`**. Tudo que decide "onde acaba o vão" é constante GLOBAL (`exit_margin` 0,5 / `zone_radius` 1,1 / `stage_dist` 0,6 / `commit_s` −0,15 / `gap_min` 0,45). Num túnel de 2 m **não há onde clicar** que funcione: boca de entrada → solta 1,5 m dentro; meio → `zone_radius` não alcança a boca. E `will_clear` devolve True incondicional pra `s>=0`, premissa de parede fina, **falsa em túnel**. Exigido pelo dono porque na competição o tamanho varia (de porta fina a túnel de 2 m). Conserto: `depth` por porta (0 = fina) + fases derivadas dela. **Bloqueia o gate do item `2n`** |
 | 3 | Executor que não pula ponto após falha | ⏳ |
 | 4 | Aproximação final ao cone (A2) | ⏳ o `PolygonFront` bloqueia o avanço a ~0,67 m do centro do cone, **antes** dos 20 cm |
 | 5 | LED/relé | ⏳ interface já existe: `/light/marker` (pino 8) e `/light/cmd` (pino 7) no `mega_bridge` |
