@@ -113,7 +113,7 @@ que só existe naquele disco.
 | B | `git merge origin/main` | **Não.** Arrasta 45 commits, dos quais **11 mudam comportamento de navegação** (`path_follower`, `motion_guard`, `door_crossing`, `trekking_runner`) que este robô nunca rodou. Trocar a navegação horas antes de um teste é risco sem contrapartida. |
 | C | `git checkout main` na Pi | **Não.** A árvore de trabalho volta ao estado da `main` e os fixes de campo somem do disco (ficam no git, mas o robô passa a rodar sem eles). |
 | D | Copiar 4 arquivos por `scp` | **Era a minha proposta, e está errada.** Ver abaixo. |
-| E | **Cherry-pick de 3 commits** | **Recomendado.** |
+| E | **Cherry-pick de 1 commit** (`9390c73`) + patch das correções de hoje (`33c4a3d`) | **Recomendado.** Aprovado em 2 revisões |
 
 ### Por que D está errada
 
@@ -220,21 +220,33 @@ em dois commits:
 
 ```
 ee4c3c4  fix(relê): módulo é ativo-BAIXO — a luz nascia acesa em todo boot
-fa8c4a8  fix(imu2): a regra do teste de sinal dava a resposta invertida
+33c4a3d  fix(imu2): comparar as taxas CORRIGIDAS, não os gz crus   <- É ESTE que viaja
+530ce6a  docs(campo): roteiro — regra do sinal corrigida + valores medidos
 ```
 
 O `ee4c3c4` (relê) **já está fisicamente na Pi** desde o `scp` de hoje e entra
-pelo commit do passo 2 — não deve ser aplicado de novo. O `fa8c4a8` (regra +
-ferramenta) tem que ir por patch, **depois** do cherry-pick, pra pousar em cima
-do `imu2_check.py` novo.
+pelo commit do passo 2 — não deve ser aplicado de novo. O **`33c4a3d`** (só
+código: `pose_estimator.py` + `imu2_check.py`) vai por patch, **depois** do
+cherry-pick, pra pousar em cima do `imu2_check.py` novo. O `530ce6a` (roteiro)
+**fica aqui**: o `ROTEIRO_CAMPO.md` é de 08-27 e não existe na branch da Pi —
+foi por isso que a versão anterior deste plano precisava de um `--exclude`, que
+agora é desnecessário.
 
 ```bash
-# --- 0. backup DURÁVEL, antes de qualquer coisa (do PC) ---
+# --- 0. preparo, do PC ---
+
+# 0a. o patch NÃO existe no disco: tem que ser gerado do commit
+git format-patch -1 -o /tmp 33c4a3d
+scp /tmp/0001-fix-imu2-*.patch robo@robo-desktop.local:/tmp/
+
+# 0b. o backup antigo do firmware, SE ainda existir. O `/tmp` costuma ser
+#     limpo no boot, e a Pi foi desligada — mas isso depende de como ele está
+#     montado ali, e desligar não prova que sumiu. Tentar sem depender:
 ssh robo@robo-desktop.local \
-  'cp -r /tmp/mega_bridge.bak-2048 ~/backup_firmware_2026-09-03'
-#    /tmp não é backup: o systemd limpa no boot. O .hex antigo está lá dentro,
-#    e é ele que desfaz a gravação da MEGA num rollback.
-scp /tmp/.../0001-fix-imu2-*.patch robo@robo-desktop.local:/tmp/
+  '[ -d /tmp/mega_bridge.bak-2048 ] && cp -r /tmp/mega_bridge.bak-2048 ~/backup_firmware_2026-09-03 \
+   && echo "backup salvo" || echo "backup nao existe mais — nao faz falta"'
+#     NÃO faz falta mesmo: o rollback do firmware não depende dele. O fonte
+#     antigo está no git, em 860ce20 — ver o bloco de rollback no fim da seção.
 
 # --- na Pi ---
 cd ~/workspace/Controle_robo_web
@@ -259,8 +271,13 @@ git cherry-pick 9390c73
 #          BNO. NÃO usar --theirs: apagaria o histórico específico deste robô.
 #      GUIA_RAPIDO.md   — manter AUSENTE. O arquivo não existe nesta branch;
 #          aceitar a versão do commit importaria um guia inteiro de 243 linhas
-#          que nunca esteve aqui.  ->  git rm --cached GUIA_RAPIDO.md && rm -f
+#          que nunca esteve aqui.  ->  git rm (o comando está logo abaixo)
 #    robot.launch.py e firmware/ NÃO conflitam (medido).
+
+#    E os comandos que FECHAM o cherry-pick, depois de editar o ESTADO_PROJETO:
+git add ESTADO_PROJETO.md
+git rm GUIA_RAPIDO.md
+git cherry-pick --continue
 
 # 4. as correções de hoje, por cima da ferramenta nova.
 #    O patch é SÓ CÓDIGO (33c4a3d): pose_estimator.py + imu2_check.py. A
@@ -322,7 +339,9 @@ checksum).
 
 - Não mexe em `path_follower`, `motion_guard`, `door_crossing` nem
   `trekking_runner`.
-- Não troca a branch da Pi.
+- Não troca a branch da Pi por uma da `main`. **Cria** a `pi-bno-2026-09-03`
+  a partir da `seguir-pessoa`, que passa a ser o estado operacional deste robô —
+  e que **não** deve ser mesclada na `main` depois (§11).
 - Não descarta nada do trabalho de campo não commitado.
 - Não liga a âncora de heading magnético — **mas só porque agora ela é
   desligada explicitamente** (`use_imu2_heading:=false`). O default é `true`, e
@@ -337,7 +356,7 @@ Aceito integralmente. O que a revisão derrubou:
 
 | achado | veredito |
 |---|---|
-| A correção do `imu2_check.py` não está nos commits → a Pi receberia a ferramenta antiga, que manda inverter o sinal | **Bloqueador, procede.** Virou o commit `fa8c4a8`, aplicado por patch depois do cherry-pick |
+| A correção do `imu2_check.py` não está nos commits → a Pi receberia a ferramenta antiga, que manda inverter o sinal | **Bloqueador, procede.** Virou commit aplicado por patch depois do cherry-pick — depois partido em `33c4a3d` (código) e `530ce6a` (doc) na 2ª revisão |
 | `698590a` não é necessário; "tocar os mesmos arquivos" não cria dependência | **Procede.** Fora do conjunto |
 | `git checkout -- firmware/` antes do backup descarta o fix do relê e ainda deixa os arquivos não rastreados | **Procede.** O `checkout` sumiu do plano |
 | São 13 modificados e 11 não rastreados, não 8 | **Procede.** Confirmado; a contagem antiga era anterior ao meu próprio `scp` |
@@ -367,7 +386,7 @@ produz. Depois, `cherry-pick 9390c73` e `am` do patch.
 | arquivo | tipo | resolução |
 |---|---|---|
 | `ESTADO_PROJETO.md` | conteúdo | manual (doc, sem risco funcional) |
-| `GUIA_RAPIDO.md` | modify/delete | trivial: o arquivo **não existe** em `860ce20`, é posterior. Ficar com a versão do commit |
+| `GUIA_RAPIDO.md` | modify/delete | **manter AUSENTE** (`git rm`). Esta simulação resolveu ficando com a versão do commit; a 2ª revisão apontou que isso importaria um guia inteiro de 243 linhas que nunca esteve nesta branch, e o plano final foi corrigido (§11) |
 
 **`robot.launch.py` não conflita** (confirma a revisão externa, derruba a v1).
 **`firmware/mega_bridge/` não conflita** (derruba o meu §6.5).
@@ -383,8 +402,10 @@ Patch failed at 0001
 O `ROTEIRO_CAMPO.md` foi escrito em 08-27, **depois** do commit em que a Pi
 está, e nunca existiu naquele disco. O patch de hoje toca esse arquivo (é onde
 os valores medidos foram anotados), então o `am` aborta inteiro — inclusive as
-duas correções de código, que são o ponto. Com `--exclude=ROTEIRO_CAMPO.md`
-aplica limpo; verificado.
+duas correções de código, que são o ponto. Na época esta seção resolvia com
+`--exclude=ROTEIRO_CAMPO.md`. **Superado:** o commit foi partido em código
+(`33c4a3d`) e doc (`530ce6a`), então o patch que viaja já é só código e o
+`am` roda sem flag nenhuma (§11).
 
 **Estado final da simulação:** `333 testes passam` (`pytest test/ -q` no
 `robot_nav`), e o `imu2_check.py` fica com a regra corrigida — imprimindo
@@ -403,7 +424,7 @@ confirmados como certos pra primeira subida.
 |---|---|
 | Separar o `fa8c4a8` em commit de código e commit de doc, em vez de usar `--exclude` | Feito: `33c4a3d` (código, é o que viaja) e `530ce6a` (roteiro, fica aqui) |
 | `ESTADO_PROJETO.md` não pode ser resolvido com `--theirs` | No plano: ficar com a versão da Pi e acrescentar só a seção da BNO |
-| `GUIA_RAPIDO.md` deve seguir ausente, não importar 243 linhas | No plano: `git rm --cached` + `rm` |
+| `GUIA_RAPIDO.md` deve seguir ausente, não importar 243 linhas | No plano: `git rm GUIA_RAPIDO.md` durante a resolução |
 | O `wip` deve ir pra branch própria (`pi-bno-2026-09-03`), e não ser mesclado na main depois | No plano, passo 2 |
 | O rollback não restaura o firmware antigo daquele diretório | Corrigido, e por outro caminho — ver abaixo |
 | 333 vs 337 explicado: `beef797` traz 1 teste, `698590a` traz 3 | Fecha. Nada faltando |
@@ -420,3 +441,30 @@ compilando aqui (0,8 s, 12886 bytes).
 `wip` commitado, cherry-pick resolvido, `git am` do patch de código **sem
 `--exclude`**, `333 testes passam`, `imu2_check.py` com a regra corrigida e
 `GUIA_RAPIDO.md` ausente. O plano está executável como está escrito.
+
+---
+
+## 12. Terceira passada (Codex) — plano aprovado para execução
+
+Aprovado: **só `9390c73` + patch `33c4a3d`, peso 0.5, `use_imu2_heading:=false`.**
+Confirmou também, testando, que o `git checkout 860ce20 -- firmware/mega_bridge`
+realmente deixa os arquivos rastreados da BNO pra trás — o worktree isolado é a
+saída.
+
+Três falhas operacionais apontadas na §7 e corrigidas nesta versão:
+
+| falha | correção |
+|---|---|
+| O passo do backup contradizia o adendo. Desligar a Pi **não prova** que o `/tmp` sumiu — depende de como está montado | Passo 0b agora é condicional (`[ -d ... ] && cp`), e o texto diz explicitamente que o rollback **não depende** dele |
+| O patch `0001-*.patch` não existe no disco do PC; faltava gerá-lo | Passo 0a: `git format-patch -1 -o /tmp 33c4a3d` antes do `scp` |
+| Faltavam os comandos que **fecham** o cherry-pick depois da resolução | Passo 3 agora termina com `git add ESTADO_PROJETO.md`, `git rm GUIA_RAPIDO.md`, `git cherry-pick --continue` |
+
+E quatro textos velhos que confundiriam o próximo operador, limpos: a tabela da
+§4 dizia "3 commits", a §7 citava o `fa8c4a8` em vez do `33c4a3d`, a §8 dizia
+que o plano não troca de branch (agora cria a `pi-bno-2026-09-03`) e a §10
+mostrava a resolução antiga do `GUIA_RAPIDO.md` e o `--exclude`. Os trechos da
+§10 foram marcados como superados em vez de reescritos: ela é o registro do que
+a simulação mostrou **naquele momento**, e apagar isso apagaria o motivo de o
+plano ter mudado.
+
+**Push pro `origin` não é necessário** — a revisão acontece neste mesmo checkout.

@@ -153,3 +153,29 @@ volta a nascer acesa em todo boot.
 
 Plano em `TRANSPLANTE_BNO_2026-09-03.md` v4 (§7 é a sequência, §11 é esta
 rodada). Nada executado na Pi. Aguardando ela ser religada.
+
+---
+
+# Adendo 2 — 3ª passada respondida
+
+As três falhas operacionais estão corrigidas na §7 do plano:
+
+- **Passo 0a**: `git format-patch -1 -o /tmp 33c4a3d` antes do `scp`. Você está
+  certo — o patch só existia num diretório de scratch desta sessão, que some.
+- **Passo 0b**: o backup virou condicional
+  (`[ -d /tmp/mega_bridge.bak-2048 ] && cp ...`). Você tem razão de novo: eu
+  afirmei que ele sumiu, e desligar a Pi **não prova** isso — depende de como o
+  `/tmp` está montado. O texto agora tenta salvar se existir e diz explicitamente
+  que o rollback não depende dele.
+- **Passo 3**: fecha com `git add ESTADO_PROJETO.md`, `git rm GUIA_RAPIDO.md`,
+  `git cherry-pick --continue`.
+
+Os quatro textos velhos foram limpos (tabela da §4, `fa8c4a8` na §7, a §8 que
+dizia não trocar de branch, e a §10). Uma escolha que eu fiz e vale dizer: na
+§10 **marquei como superado** em vez de reescrever. Ela é o registro do que a
+simulação mostrou naquele momento, e reescrever apagaria o motivo de o plano ter
+mudado. Quem executa lê a §7; quem quer entender por quê lê a §10 com as marcas.
+
+Estado: **plano executável como está escrito**, e a Pi está desligada (o dono
+desligou pra poupar bateria). Nada será tocado sem a palavra dele — a tua
+aprovação técnica não substitui a decisão de mexer no robô hoje.
