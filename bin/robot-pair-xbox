@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Roda no OUTRO PC: pareia o controle Xbox Series X|S no robô via SSH, num só
+# comando. Irmão do robot-pair-ps4.
+#
+# Pre-req:
+#   1) Controle JÁ em modo pareamento: ligue no botão Xbox, depois segure o
+#      botão PAIR (aresta de cima, ao lado do USB-C) por 3-5s até o botão Xbox
+#      piscar RÁPIDO.
+#   2) SSH passwordless configurado (ssh-copy-id) pro robô.
+#   3) Sudo cacheado no robô — o script roda `ssh ... sudo -v` pra você.
+#
+# Uso:
+#   robot-pair-xbox
+#
+# Config (variáveis de ambiente, iguais às do robot-connect):
+#   ROBOT_HOST   default: robo-desktop.local
+#   ROBOT_USER   default: robo
+#
+# Por que existe: o pareamento do Xbox tem 2 pegadinhas próprias além das 6 do
+# PS4 (ver pair-xbox.sh §cabeçalho) — o Series é BLE e precisa de
+# ControllerMode=dual, e o agent tem que ser NoInputNoOutput, senão dá
+# "auth failed with status 0x05".
+set -euo pipefail
+
+HOST_MDNS="robo-desktop.local"
+REMOTE_USER="${ROBOT_USER:-robo}"
+
+# Mesma política de resolução do bin/robot-pair-ps4: override > mDNS, sem IP
+# hardcoded (cada rede tem o seu).
+if [ -n "${ROBOT_HOST:-}" ]; then
+    HOST="$ROBOT_HOST"
+elif timeout 2 getent hosts "$HOST_MDNS" >/dev/null 2>&1; then
+    HOST="$HOST_MDNS"
+else
+    cat >&2 <<EOF
+ERRO: $HOST_MDNS não resolveu via mDNS.
+  Passe o IP explicitamente:  ROBOT_HOST=<ip-do-robô> robot-pair-xbox
+  (veja no painel do roteador, ou rode 'hostname -I' no robô).
+EOF
+    exit 1
+fi
+
+cat <<EOF
+
+=== Pareamento do Xbox em ${REMOTE_USER}@${HOST} ===
+
+Pre-checks:
+  - Controle JÁ em modo pareamento? (botão Xbox piscando RÁPIDO)
+  - Console/PC/celular que já pareou com ele: desligado ou longe?
+
+EOF
+read -r -p "Pronto? Enter pra começar (Ctrl+C cancela)... " _
+
+echo "→ Localizando o repo no robô (via symlink em /usr/local/bin/robot-up)..."
+REMOTE_REPO=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "${REMOTE_USER}@${HOST}" \
+    'dirname "$(dirname "$(readlink -f /usr/local/bin/robot-up 2>/dev/null)")"' 2>/dev/null || true)
+
+if [ -z "$REMOTE_REPO" ] || ! ssh -o BatchMode=yes "${REMOTE_USER}@${HOST}" \
+        "test -f '$REMOTE_REPO/pair-xbox.sh' && test -f '$REMOTE_REPO/scripts/_bluez_fixes.sh'" 2>/dev/null; then
+    cat >&2 <<EOF
+ERRO: não encontrei o repo no robô ou pair-xbox.sh/scripts/_bluez_fixes.sh ausentes.
+  Rode no robô antes:
+    cd ~/workspace/Controle_robo_web && git pull
+EOF
+    exit 1
+fi
+echo "  repo: ${REMOTE_USER}@${HOST}:${REMOTE_REPO}"
+
+echo "→ Cacheando sudo + executando pair-xbox.sh no robô (mesmo PTY)..."
+echo "  (vai pedir a senha de ${REMOTE_USER} 1x)"
+echo
+# sudo cache é por-PTY: `sudo -v` e o script precisam do mesmo `ssh -t`.
+ssh -t "${REMOTE_USER}@${HOST}" \
+    "sudo -v && cd '$REMOTE_REPO' && bash pair-xbox.sh --no-prompt"

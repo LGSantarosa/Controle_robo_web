@@ -14,6 +14,9 @@ cd "$REPO_DIR"
 
 # SSH não-interativo não lê o ~/.bashrc → ROS pode não estar sourceado.
 # Tenta o workspace primeiro; senão cai pra distro base (/opt/ros/*/setup.bash).
+# `set -u` + setup.bash do colcon = 'COLCON_TRACE: unbound variable'.
+# Os scripts gerados leem variáveis não definidas; desliga só no source.
+set +u
 if [ -f install/setup.bash ]; then
     # shellcheck disable=SC1091
     source install/setup.bash
@@ -24,10 +27,14 @@ else
     done
 fi
 
+set -u
+
 if ! command -v ros2 >/dev/null 2>&1; then
     echo "ERRO: 'ros2' não encontrado. Source /opt/ros/<distro>/setup.bash ou rode ./start.sh pra compilar o workspace." >&2
     exit 1
 fi
 
-exec ros2 run teleop_twist_keyboard teleop_twist_keyboard \
-    --ros-args -r cmd_vel:=key_vel
+# Nó próprio, não o teleop_twist_keyboard: aquele republica o último comando
+# pra sempre (sem dead-man) e sobe com speed=0.5/turn=1.0, errados pra este
+# chassi. Em 2026-08-06 uma ré ficou presa e o robô bateu.
+exec ros2 run robot_nav key_teleop --ros-args -r __node:=key_teleop "$@"

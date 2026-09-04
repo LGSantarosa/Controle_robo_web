@@ -93,10 +93,6 @@ class TrekkingRunner(Node):
 
         # --- Loop ---
         self.declare_parameter('control_hz', 30.0)
-        # Detector de travamento (2026-08-26, campo). Ver _control_tick.
-        self.declare_parameter('stall_timeout', 3.0)    # s sem progresso
-        self.declare_parameter('stall_min_dist', 0.04)  # m que contam como progresso
-        self.declare_parameter('stall_min_deg', 5.0)    # graus que contam como progresso
 
         self.kp_h    = float(self.get_parameter('kp_heading').value)
         self.kd_h    = float(self.get_parameter('kd_heading').value)
@@ -117,10 +113,6 @@ class TrekkingRunner(Node):
         self.cone_confirm_frames  = int(self.get_parameter('cone_confirm_frames').value)
         self.cone_stable_eps      = float(self.get_parameter('cone_stable_eps').value)
         self.cone_unique_radius   = float(self.get_parameter('cone_unique_radius').value)
-        self.stall_timeout  = float(self.get_parameter('stall_timeout').value)
-        self.stall_min_dist = float(self.get_parameter('stall_min_dist').value)
-        self.stall_min_yaw  = math.radians(
-            float(self.get_parameter('stall_min_deg').value))
 
         # --- Estado do robô ---
         # _state_lock protege x/y/yaw/have_pose/cones — escritos pelos callbacks
@@ -153,8 +145,6 @@ class TrekkingRunner(Node):
         self.led_until = 0.0       # walltime até quando manter LED de chegada
         self._last_led = None      # última cor publicada (dedup do _led_tick 1 Hz)
         self.last_msg = ''
-        # (t, x, y, yaw) do último instante em que houve progresso real no PLAY.
-        self._stall_ref = None
 
         # --- Subs ---
         self.create_subscription(PoseStamped, 'trekking/pose', self._on_pose, 20)
@@ -389,7 +379,6 @@ class TrekkingRunner(Node):
         self._reset_cone_fix()
         self.last_to_target = None
         self.prev_heading_err = 0.0
-        self._stall_ref = None
         self.last_msg = f'PLAY {len(self.waypoints)} waypoints'
 
     def _reset_cone_fix(self):
@@ -460,36 +449,6 @@ class TrekkingRunner(Node):
             self.last_to_target = None
             self.prev_heading_err = 0.0
             return
-
-        # 2b) TRAVAMENTO — aborta se parou de progredir (2026-08-26, campo).
-        # Sem isto o runner empurra pra sempre: num teste real ele encostou
-        # num cone a 27 cm do waypoint (tolerância 25 cm) e ficou 100 s
-        # publicando vx=+0.144 wz=-0.476 idêntico até a 3ª casa. O wz pedido
-        # (0,48 rad/s) está MUITO abaixo da zona-morta real do skid (~1,7),
-        # então a correção de rumo nunca sai do papel e ele não contorna o
-        # obstáculo — só empurra. O modo --trekking não sobe unstuck_supervisor,
-        # então não há mais ninguém pra perceber. Só o dono cortando na mão.
-        now = time.monotonic()
-        if self._stall_ref is None:
-            self._stall_ref = (now, x, y, yaw)
-        else:
-            t0, x0, y0, yaw0 = self._stall_ref
-            moved = math.hypot(x - x0, y - y0)
-            turned = abs(_wrap_pi(yaw - yaw0))
-            if moved > self.stall_min_dist or turned > self.stall_min_yaw:
-                self._stall_ref = (now, x, y, yaw)
-            elif now - t0 > self.stall_timeout:
-                self.mode = MODE_IDLE
-                self._stop_robot()
-                self._flash_led(1.0, 0.0, 0.0, mode=1)
-                self.last_msg = (
-                    'TRAVADO: andou %.0f cm / girou %.0f° em %.1f s — abortado '
-                    'a %.0f cm do wp%d' % (moved * 100.0, math.degrees(turned),
-                                           now - t0, dist * 100.0,
-                                           self.current_idx))
-                self.get_logger().warn(self.last_msg)
-                self._stall_ref = None
-                return
 
         # 3) PID de heading + velocidade adaptativa
         desired_heading = math.atan2(dy, dx)

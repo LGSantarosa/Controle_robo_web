@@ -40,18 +40,6 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'lidar_offset_x': LaunchConfiguration('lidar_offset_x'),
-            # 2026-08-26 (campo): os defaults do no aceitavam como cone
-            # qualquer cluster de 2 pontos / 4 cm num raio de 5 m e 360
-            # graus — perna de cadeira, batente e quina de parede viravam
-            # cone. Como o auto-fit do mapa web enquadra os cones
-            # (trekking.js:43), cada falso positivo fazia o mapa pular.
-            # Apertado pro cone de verdade: base 10-25 cm, a frente, perto.
-            'min_cluster_points': 4,
-            'min_cluster_width': 0.07,
-            'max_cluster_width': 0.45,
-            'range_max': 2.5,
-            'angle_min': -1.2,
-            'angle_max': 1.2,
         }],
     )
 
@@ -64,15 +52,9 @@ def generate_launch_description():
             'v_max': LaunchConfiguration('v_max'),
             'enable_cone_pose_fix': LaunchConfiguration('enable_cone_pose_fix'),
         }],
-        # Saída do PID vai pra auto_vel (entrada 'autonomy' do twist_mux em
-        # robot.launch.py, prioridade 10) — assim o controle e o teclado
-        # assumem por cima do autonomo.
-        # 2026-08-26 (campo): estava remapeado pra 'nav_vel', que NAO existe
-        # mais como entrada do mux — a entrada de autonomia foi renomeada pra
-        # 'auto_vel' e este launch nao acompanhou. Resultado: /nav_vel com 1
-        # publisher e 0 subscribers, e o Play do trekking rodava a maquina de
-        # estado inteira sem nunca mover a roda.
-        remappings=[('cmd_vel', 'auto_vel')],
+        # Saída do PID vai pra nav_vel (entrada de menor prioridade do twist_mux
+        # em robot.launch.py) — assim o PS4 pode assumir por cima do autônomo.
+        remappings=[('cmd_vel', 'nav_vel')],
     )
 
     return LaunchDescription([

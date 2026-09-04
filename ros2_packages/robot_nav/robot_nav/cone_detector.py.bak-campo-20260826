@@ -115,16 +115,8 @@ class ConeDetector(Node):
         key = (ranges.size, scan.angle_min, scan.angle_increment)
         if self._angles_key != key:
             self._angles_key = key
-            _raw = scan.angle_min + np.arange(
+            self._angles = scan.angle_min + np.arange(
                 ranges.size, dtype=np.float32) * scan.angle_increment
-            # 2026-08-26 (campo): o LD06 entrega angle_min=0 / angle_max=2pi,
-            # mas a_min/a_max foram escritos assumindo +-pi com 0 = frente do
-            # robo. Sem normalizar, uma janela [-1.2, +1.2] so deixava passar
-            # 0..69 graus, e o default [-pi, +pi] descartava calado TUDO entre
-            # 180 e 360 graus — metade direita do scan, desde sempre. Como
-            # cos/sin nao mudam com o wrap, xs/ys ficam identicos: so o filtro
-            # angular passa a significar o que a doc do parametro promete.
-            self._angles = (_raw + np.pi) % (2.0 * np.pi) - np.pi
         angles = self._angles
         valid = (
             np.isfinite(ranges)

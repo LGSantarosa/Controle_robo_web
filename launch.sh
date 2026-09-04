@@ -26,10 +26,25 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROS2_SETUP="$SCRIPT_DIR/install/setup.bash"
 
+# --- Domain DDS ---
+# Não depender do ~/.bashrc: sessão tmux nova herda o ambiente do SERVIDOR tmux,
+# não o da sessão ssh, então a stack subia no domain 0 e se misturava com o
+# OUTRO robô ROS2 da rede (nós hoverboard_*/laser_mapping/livox_*, publicando
+# /tf e o mesmo frame base_link -> árvore de transformadas corrompida).
+# Respeita override explícito: ROS_DOMAIN_ID=7 ./launch.sh ...
+: "${ROS_DOMAIN_ID:=42}"
+export ROS_DOMAIN_ID
+
 # --- Argumentos ---
 NO_LIDAR=false
 LIDAR_PORT="/dev/lidar"
 MODE="teleop"                     # teleop | slam | nav2 | trekking
+# Quantas flags de modo vieram. Os modos são EXCLUSIVOS e cada flag
+# sobrescrevia a anterior calado: `--slam --teleop` subia em TELEOP puro
+# (sem slam_toolbox, sem /map) e dava pra queimar um run inteiro achando
+# que estava mapeando. O teleop de teclado é processo SEPARADO
+# (bin/robot-key, publica em key_vel) — não precisa de flag de modo.
+MODE_FLAGS=0
 WEB_TELEOP="off"                  # off = web só visualização; --web-teleop reativa
 MAP_FILE="$SCRIPT_DIR/maps/hotmilk_portas.yaml"
 PI_PROFILE=false
@@ -44,10 +59,10 @@ FLASH_MEGA="auto"
 
 for arg in "$@"; do
     case $arg in
-        --teleop)          MODE="teleop" ;;
-        --slam)            MODE="slam" ;;
-        --nav2)            MODE="nav2" ;;
-        --trekking)        MODE="trekking" ;;
+        --teleop)          MODE="teleop";   MODE_FLAGS=$((MODE_FLAGS + 1)) ;;
+        --slam)            MODE="slam";     MODE_FLAGS=$((MODE_FLAGS + 1)) ;;
+        --nav2)            MODE="nav2";     MODE_FLAGS=$((MODE_FLAGS + 1)) ;;
+        --trekking)        MODE="trekking"; MODE_FLAGS=$((MODE_FLAGS + 1)) ;;
         --web-teleop)      WEB_TELEOP="on" ;;
         --sim)             SIM=true ;;
         --world=*)         WORLD_FILE="${arg#*=}" ;;
@@ -78,6 +93,13 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+if [ "$MODE_FLAGS" -gt 1 ]; then
+    echo "ERRO: os modos são exclusivos — você passou mais de um." >&2
+    echo "      Pra dirigir no teclado durante SLAM: ./launch.sh --slam" >&2
+    echo "      e num segundo terminal SSH: robot-key" >&2
+    exit 1
+fi
 
 # Auto-detecta Pi (arm64) se o usuário não passou --pi explicitamente.
 if [ "$PI_PROFILE" = false ] && [ "$(uname -m)" = "aarch64" ]; then
@@ -266,8 +288,25 @@ kill_known_nodes
 # processo ATUAL ($$) e o pai ($PPID) pra não se auto-matar.
 pkill -9 -f 'python3 app.py'          2>/dev/null
 pkill -9 -f 'ros2 launch robot_nav'   2>/dev/null
+# Protege a cadeia INTEIRA de ancestrais, não só $$ e $PPID: o servidor tmux
+# que hospeda a sessão herda a cmdline "tmux new -s robot ./launch.sh ..." e
+# casa nesse pgrep. Como ele é o AVÔ (tmux -> sh -c -> launch.sh), o kill -9
+# derrubava o servidor e a stack inteira morria logo após o colcon build.
+_ancestors=" "
+_p=$$
+while [ -n "$_p" ] && [ "$_p" -gt 1 ] 2>/dev/null; do
+    _ancestors="$_ancestors$_p "
+    _p=$(ps -o ppid= -p "$_p" 2>/dev/null | tr -d ' ')
+done
 for _pid in $(pgrep -f '[l]aunch\.sh' 2>/dev/null); do
-    [ "$_pid" != "$$" ] && [ "$_pid" != "$PPID" ] && kill -9 "$_pid" 2>/dev/null
+    case "$_ancestors" in *" $_pid "*) continue ;; esac
+    # Nunca matar tmux: TANTO o servidor QUANTO o cliente herdam a cmdline
+    # "tmux new -s robo ./launch.sh ..." do robot-up e casam nesse pgrep. O
+    # servidor é avô (já coberto pelos ancestrais acima), mas o CLIENTE não está
+    # na árvore — era ele que morria, e o robot-up terminava em "Killed".
+    _comm=$(ps -o comm= -p "$_pid" 2>/dev/null)
+    case "$_comm" in tmux*) continue ;; esac
+    kill -9 "$_pid" 2>/dev/null
 done
 
 # --- [opcional] Flash da MEGA (firmware/mega_bridge) ---
