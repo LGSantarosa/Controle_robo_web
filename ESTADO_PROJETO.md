@@ -1,7 +1,121 @@
 # Estado do Projeto — Controle_robo_web
 
 > Documento vivo. Resumo do que está acontecendo, BOs abertos, avanços e o que falta.
-> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-08-26**.
+> Acessível de qualquer PC (está versionado na `main`). Atualizado em **2026-09-03**.
+
+---
+
+## 🧭✅ 2026-09-03 — A BNO055 ENTRA NO ROBÔ DE VERDADE: montada, gravada, transplantada pro ROS e validada
+
+Dia inteiro de bancada com o robô presente. A BNO055 saiu de "implementada em
+software, nada validado em hardware" (08-16) e de "não foi montada" (08-26) pra
+**viva dentro do yaw do robô**, medida.
+
+### O que estava travando
+
+A MEGA já publicava o frame da BNO 50×/s depois do firmware de hoje. O lado ROS
+da Pi **jogava tudo fora calado**: o checkout de lá é de 22/07, o dispatch do
+decodificador é `if/elif` sem `else` (`mega_bridge.py:372-377`), e frame
+desconhecido some sem log. A navegação se comportava **exatamente** como se o
+sensor não estivesse parafusado.
+
+### A regra do sinal estava escrita errada em 4 lugares — e teria quebrado o sensor
+
+O item mais importante do dia, porque era um BO silencioso e caro esperando
+acontecer em campo.
+
+O `ROTEIRO_CAMPO.md` §0.4 dizia: *"sinais opostos → suba com
+`imu2_yaw_sign:=-1.0`"*. **Seguir isso quebraria a BNO.** O `pose_estimator` não
+compara os valores crus: ele funde `gz1 × imu_yaw_sign` com `gz2 × imu2_yaw_sign`,
+e **`imu_yaw_sign` já é −1.0 neste robô** porque a MPU está de ponta-cabeça
+(`pose_estimator.py:169`). Os crus saírem opostos é o sintoma da montagem
+**certa**. Com `-1.0` a média das duas IMUs daria **zero**: o robô giraria no
+chão sem girar no mapa.
+
+Corrigido nos 4 lugares onde estava errado (tabela do roteiro, comentário do
+`pose_estimator`, docstring do `imu2_check.py` e a mensagem de erro do nó), e o
+`imu2_check.py` passou a imprimir as taxas **já corrigidas**, pra a regra
+"mesmo sinal" voltar a ser verdadeira.
+
+### O transplante (e por que não foi um merge)
+
+O checkout da Pi está **45 commits atrás** da `main`, com 24 arquivos de trabalho
+de campo **nunca commitados** — inclusive o detector de travamento do
+`trekking_runner`, escrito no campo de 08-26 e que nunca rodou. Merge da `main`
+arrastaria 11 commits que **mudam comportamento de navegação** que este robô
+nunca rodou. Cópia por `scp` de arquivos soltos foi considerada e descartada.
+
+O que foi feito: **branch nova na Pi + 1 cherry-pick**. Plano revisado 3× pelo
+Codex antes de tocar no robô, e uma 4ª vez depois de executado.
+
+| commit na Pi | o quê |
+|---|---|
+| `1b2da85` | 23 arquivos de campo, commitados enfim. **É o ponto de rollback** |
+| `42f79ba` | cherry-pick do `9390c73` — a BNO, sozinha |
+| `9f40b92` | as correções do sinal, de hoje |
+| `f8f3c51` | `.gitignore` do clone do LiDAR |
+
+Branch **`pi-bno-2026-09-03`**, que **não deve ser mesclada na `main`** — ela
+isola o estado operacional deste robô. Os fixes de campo se promovem separados.
+Build em 7,89 s.
+
+Duas surpresas na execução, as duas resolvidas:
+
+- **O `ldlidar_stl_ros2` é um repositório git ANINHADO.** `git add -A` teria
+  registrado um gitlink em vez dos 58 arquivos — a rede de segurança teria um
+  buraco do tamanho do driver do LiDAR, e **pareceria salva**. Tinha um fix local
+  não commitado lá (`#include <pthread.h>`, sem ele não compila no ARM). Hoje
+  está commitado dentro do próprio clone e a pasta entrou no `.gitignore`
+  versionado — o `setup_pi.sh:119-138` é quem cuida dela, clonando e reaplicando
+  o patch sozinho.
+- **Conflito no `ESTADO_PROJETO.md`** (este arquivo). Resolvido mantendo o
+  histórico da Pi e acrescentando só a seção da BNO.
+
+### O que a estreia mediu
+
+Subiu conservadora: **âncora magnética DESLIGADA**, peso do giro 0.5
+(`use_flow:=false use_imu2_heading:=false`).
+
+| medida | valor | significado |
+|---|---|---|
+| `/imu2/data` | **50,007 Hz** | o tópico **não existia** neste robô |
+| `/imu/data` | **49,685 Hz** | o I²C compartilhado não quebrou |
+| `gz1` (MPU × −1), pico | **+50,4 °/s** | giro de 90° na mão, pra esquerda |
+| `gz2` (BNO × +1), pico | **+53,3 °/s** | **mesmo sinal**, módulos a 5% |
+| discordâncias de sinal | **0** | `src=imu+imu2` em toda linha: fundiu de ponta a ponta |
+| `yaw_abs` num giro de 90° real | **+88,4°** | contra `+89,7°` do `yaw_odom` — 1,3° de diferença |
+| `|B|` | 40 µT parado, 22 µT girando | offset de ferro-duro do chassi, já esperado |
+| `calib mag` | **0** | irrelevante hoje: a âncora está desligada |
+
+**`imu2_yaw_sign = 1.0` confirmado no robô montado**, dentro do ROS — não só na
+sonda serial.
+
+**Um blip registrado:** um único `BNO055 stale (age=0.31 s > 0.30 s)` em 153 s no
+ar — 10 ms acima do limiar, resolvido em 40 ms, com a degradação projetada (yaw
+voltou pro MPU sozinho). Um evento em ~7.600 frames. Se virar rotina em campo, o
+limiar de 0,30 s é que está apertado pra um frame de 50 Hz que divide I²C.
+
+### ⏭️ O que falta — e é metade do sensor
+
+Ligou a **segunda taxa de giro** (menos ruído; uma IMU morrer não leva o yaw
+junto). A **âncora magnética** — a parte que mata a deriva no trekking longo, e o
+motivo de ter comprado uma BNO em vez de outra MPU — **continua desligada**.
+
+1. Calibrar o mag: mover o robô em ∞ no ar ~20 s até `mag=3`.
+2. **Com motores ligados**, ver se `mag` e `|B|` se seguram. O `|B|` já cai de 40
+   pra 22 µT só girando na mão (ferro do chassi); com motor pode ser EMI, e aí o
+   veredito honesto é deixar a âncora desligada naquele ambiente.
+3. Rota de trekking longa comparando a deriva final com e sem âncora. É **a**
+   métrica que justifica o sensor.
+
+Isso é campo, não bancada.
+
+### Documentos do dia
+
+- `TRANSPLANTE_BNO_2026-09-03.md` — o plano, com as 3 revisões do Codex e a
+  simulação de ponta a ponta que derrubou uma previsão errada minha.
+- `EXECUCAO_BNO_2026-09-03.md` — o que aconteceu de verdade, as duas decisões
+  que fugiram do plano e a 4ª revisão do Codex em cima delas.
 
 ---
 
@@ -350,11 +464,15 @@ nó real com BNO055 sintética — âncora derrubou a deriva de 20 s de bias 0,0
 de zerar.
 
 ### ⏭️ Falta fazer (bancada, com o sensor na mão)
-1. Montar a BNO055 **longe dos motores** e conferir a fiação (`CONEXOES.txt`).
-2. `pio run -t upload` na MEGA e `ros2 topic hz /imu2/data` (~50 Hz).
-3. **Sinal:** `tools/imu2_check.py`, girar pra esquerda, ver se `gz1`/`gz2` têm o
-   mesmo sinal. Se não: `imu2_yaw_sign:=-1.0`.
-4. **Magnitude:** girar 90° reais e ver `yaw_abs` andar ~90°.
+> **Itens 1 a 4: FEITOS em 2026-09-03.** Ver a seção do dia. O item 3 estava
+> escrito ERRADO aqui (`Se não: imu2_yaw_sign:=-1.0`) — a comparação certa é
+> entre as taxas CORRIGIDAS, não as cruas, e o valor medido foi o default `+1.0`.
+> Itens 5 a 7 continuam abertos: dependem de campo, não de bancada.
+
+1. ~~Montar a BNO055 **longe dos motores** e conferir a fiação (`CONEXOES.txt`).~~ ✅
+2. ~~`pio run -t upload` na MEGA e `ros2 topic hz /imu2/data` (~50 Hz).~~ ✅ 50,007 Hz
+3. ~~**Sinal:** `tools/imu2_check.py`, girar pra esquerda...~~ ✅ `imu2_yaw_sign = +1.0`
+4. ~~**Magnitude:** girar 90° reais e ver `yaw_abs` andar ~90°.~~ ✅ 88,4° em 90°
 5. Calibrar o mag (∞ no ar) até `mag=3` e confirmar `heading_anchored=true`.
 6. Com **motores ligados**, ver se `mag` e `|B|` se seguram — se caírem, é EMI e
    o veredito é `use_imu2_heading:=false` naquele ambiente.
