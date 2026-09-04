@@ -291,8 +291,12 @@ git am /tmp/0001-fix-imu2-*.patch
 colcon build --base-paths ros2_packages --symlink-install --packages-select robot_nav
 source install/setup.bash
 
-# 6. estreia conservadora: âncora magnética DESLIGADA, peso 0.5
-ros2 launch robot_nav robot.launch.py use_flow:=false use_imu2_heading:=false
+# 6. estreia conservadora: âncora magnética DESLIGADA, peso 0.5.
+#    Em SEGUNDO PLANO com log em arquivo: o `ros2 launch` segura o terminal, e
+#    a validação abaixo precisa de outra sessão. Assim uma sessão só resolve.
+nohup ros2 launch robot_nav robot.launch.py \
+      use_flow:=false use_imu2_heading:=false > /tmp/estreia_bno.log 2>&1 &
+sleep 10 && tail -20 /tmp/estreia_bno.log     # confere que subiu sem erro
 ```
 
 Validação, na ordem:
@@ -456,6 +460,7 @@ Três falhas operacionais apontadas na §7 e corrigidas nesta versão:
 | falha | correção |
 |---|---|
 | O passo do backup contradizia o adendo. Desligar a Pi **não prova** que o `/tmp` sumiu — depende de como está montado | Passo 0b agora é condicional (`[ -d ... ] && cp`), e o texto diz explicitamente que o rollback **não depende** dele |
+| A validação precisa de outro terminal: o `ros2 launch` fica em primeiro plano | Passo 6 sobe com `nohup ... &` e log em `/tmp/estreia_bno.log` |
 | O patch `0001-*.patch` não existe no disco do PC; faltava gerá-lo | Passo 0a: `git format-patch -1 -o /tmp 33c4a3d` antes do `scp` |
 | Faltavam os comandos que **fecham** o cherry-pick depois da resolução | Passo 3 agora termina com `git add ESTADO_PROJETO.md`, `git rm GUIA_RAPIDO.md`, `git cherry-pick --continue` |
 
