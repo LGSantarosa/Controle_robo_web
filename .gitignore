@@ -35,3 +35,8 @@ pov_*.mjpeg
 
 # relatório solto na raiz (dono mandou ignorar 07-16)
 Relat*rio rob* educa*.pdf
+
+# Driver do LiDAR: clone raso do upstream, com .git próprio dentro. Quem versiona
+# é o setup_pi.sh (clona em :119-129 e reaplica o patch do pthread.h em :132-138).
+# Sem esta linha, um `git add -A` registra um gitlink vazio em vez do conteúdo.
+/ros2_packages/ldlidar_stl_ros2/
