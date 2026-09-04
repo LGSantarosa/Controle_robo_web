@@ -175,7 +175,11 @@ ros2 topic hz /imu/data      # MPU    — tem que continuar viva
 | **as duas caíram** | aí sim é o barramento: fio trocado, curto mecânico na emenda, ou alimentação afundando. Desligue a BNO055 e confirme que a MPU volta |
 | muito abaixo de 50 Hz | fio ruim / contato intermitente na derivação |
 
-- [ ] `/imu2/data` a ~50 Hz. **Se não passar, pule pra "Plano B" no fim e rode o dia sem a IMU nova.**
+- [x] `/imu2/data` a ~50 Hz. **Se não passar, pule pra "Plano B" no fim e rode o dia sem a IMU nova.**
+      2026-09-03: medido **49,2 Hz** na serial (frame `0x85`), com a MPU a 49,2 Hz
+      no mesmo barramento. `sensor_flags = 0x05` → `imu2_ok=True`. O tópico
+      `/imu2/data` em si ainda NÃO existe: o `mega_bridge.py` da Pi é de 22/07 e
+      não decodifica o frame — a validação saiu por sonda serial avulsa.
 
 ### 0.4 — SINAL 🔴 (o mais importante do dia)
 
@@ -185,10 +189,21 @@ python3 ros2_packages/robot_nav/tools/imu2_check.py
 
 **Gire o robô PRA ESQUERDA** (na mão, rodas no ar). Olhe `gz1` e `gz2`:
 
+> ⚠️ Os `gz` que o `imu2_check.py` imprime já vêm **corrigidos** pelos sinais de
+> montagem (`gz1*imu_yaw_sign`, `gz2*imu2_yaw_sign`) — é sobre eles que a tabela
+> vale. **Não use os valores crus** de `ros2 topic echo /imu/data` e
+> `/imu2/data`: o MPU deste robô está de ponta-cabeça (`imu_yaw_sign=-1.0`),
+> então os crus saem **opostos justamente quando as duas estão certas**.
+
 | resultado | ação |
 |---|---|
 | **mesmo sinal** | ✅ passou |
 | **sinais opostos** | a BNO055 está montada girada. Suba com `imu2_yaw_sign:=-1.0` (não precisa reflashear) e repita |
+
+**Medido no robô em 2026-09-03** (giro único de ~90° na mão, 87 amostras acima
+do limiar): pico `gz1 = +1.268` contra `gz2 = -1.328` rad/s — crus opostos,
+módulos a 5% um do outro, ou seja **as duas mediram o mesmo giro**. Corrigidos,
+concordam. Sinal usado: **`imu2_yaw_sign = 1.0` (o default — nada a passar)**.
 
 > Enquanto discordarem, o `pose_estimator` **ignora** a BNO055 e loga erro —
 > isso é proposital, não é bug. Com o sinal trocado a média das duas daria
@@ -199,7 +214,7 @@ python3 ros2_packages/robot_nav/tools/imu2_check.py
 ros2 launch robot_nav robot.launch.py imu2_yaw_sign:=-1.0 use_flow:=false
 ```
 
-- [ ] `gz1` e `gz2` com o mesmo sinal.  Sinal usado: `imu2_yaw_sign = ________`
+- [x] `gz1` e `gz2` com o mesmo sinal.  Sinal usado: `imu2_yaw_sign = 1.0 (default)`
 
 ### 0.5 — MAGNITUDE
 
@@ -210,7 +225,8 @@ Gire o robô **90° reais** (marque no chão / use um canto de mesa como referê
 | **~90°**, no mesmo sentido do `yaw_odom` | ✅ passou |
 | ~45° ou ~180° | **a montagem não está plana.** Volte e endireite o chip |
 
-- [ ] 90° reais → `yaw_abs` andou `________°`
+- [x] 90° reais → `yaw_abs` andou `-94.0°` (giro pra DIREITA; horário = negativo,
+      que é a convenção certa do ROS). 4% de erro contra um 90° marcado a olho.
 
 ### 0.6 — CALIBRAÇÃO do magnetômetro
 
