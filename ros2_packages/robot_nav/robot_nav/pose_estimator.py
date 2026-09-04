@@ -168,8 +168,15 @@ class PoseEstimator(Node):
         self.declare_parameter('use_imu2', True)
         # Sinal da taxa de yaw da BNO055 (gyro Z + heading), pra casar a
         # montagem — mesma ideia do imu_yaw_sign. Confira na bancada com
-        # tools/imu2_check.py: girando pra ESQUERDA, gz das duas IMUs tem que
-        # ter o MESMO sinal. Se saírem opostos, inverta ESTE parâmetro.
+        # tools/imu2_check.py: girando pra ESQUERDA, as taxas CORRIGIDAS
+        # (gz1*imu_yaw_sign e gz2*imu2_yaw_sign — que é o que a ferramenta
+        # imprime) têm que ter o MESMO sinal. Se saírem opostas, inverta ESTE
+        # parâmetro.
+        # CUIDADO com a versão preguiçosa dessa regra: comparar os gz CRUS dos
+        # tópicos dá a resposta INVERTIDA neste robô, porque o MPU está de
+        # ponta-cabeça e já carrega imu_yaw_sign=-1.0. Medido em 2026-09-03:
+        # giro único, pico gz1=+1.268 contra gz2=-1.328 rad/s (módulos a 5% um
+        # do outro, sinais crus opostos) — e o valor certo é este default, +1.0.
         self.declare_parameter('imu2_yaw_sign', 1.0)
         self.declare_parameter('imu2_timeout', 0.3)   # s — BNO055 a 50 Hz
         # Peso da BNO055 na taxa fundida quando as DUAS IMUs estão frescas.
@@ -637,7 +644,9 @@ class PoseEstimator(Node):
             self.get_logger().error(
                 'IMUs DISCORDAM no sinal do giro — BNO055 ignorada. '
                 'Provável imu2_yaw_sign invertido: rode tools/imu2_check.py e, '
-                'girando pra esquerda, confira se os dois gz têm o mesmo sinal.',
+                'girando pra esquerda, confira se os dois gz que ELE imprime '
+                '(já corrigidos pelos sinais de montagem) têm o mesmo sinal. '
+                'Os gz crus dos tópicos saem opostos com a montagem CERTA.',
                 throttle_duration_sec=10.0,
             )
             self._disagree_logged = True

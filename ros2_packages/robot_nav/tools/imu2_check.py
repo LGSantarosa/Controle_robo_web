@@ -17,10 +17,19 @@ Lê:
 O QUE CONFERIR, na ordem:
 
 1) SINAL (o mais importante — é o parâmetro imu2_yaw_sign):
-   gire o robô PRA ESQUERDA. `gz1` e `gz2` têm que ter o MESMO sinal.
-   Saíram opostos → suba com `imu2_yaw_sign:=-1.0`. Enquanto estiverem
-   discordando, o pose_estimator IGNORA a BNO055 e loga erro (proposital: com o
-   sinal trocado a média das duas daria zero e o robô giraria sem girar no mapa).
+   gire o robô PRA ESQUERDA. Os dois `gz` impressos aqui já vêm CORRIGIDOS
+   (gz1*imu_yaw_sign e gz2*imu2_yaw_sign, os mesmos sinais que o pose_estimator
+   aplica) e têm que ter o MESMO sinal. Saíram opostos → inverta `imu2_yaw_sign`.
+
+   NÃO compare os valores crus dos tópicos: o `/imu/data` é o MPU sem correção
+   de montagem, e neste robô ele está DE PONTA-CABEÇA (imu_yaw_sign=-1.0). Os
+   crus saem opostos justamente quando as duas IMUs estão CERTAS — medido no
+   robô em 2026-09-03, com pico gz1=+1.268 contra gz2=-1.328 rad/s no mesmo
+   giro, e o parâmetro correto sendo o default +1.0.
+
+   Enquanto discordarem de verdade, o pose_estimator IGNORA a BNO055 e loga erro
+   (proposital: com o sinal trocado a média das duas daria zero e o robô giraria
+   sem girar no mapa).
 
 2) MAGNITUDE: gire 90° reais; `yaw_abs` tem que andar ~90° (e no mesmo sentido
    do `yaw_odom`). Se andar 45° ou 180°, a montagem não é plana.
@@ -61,6 +70,13 @@ class Mon(Node):
         self.calib = {}
         self.health = {}
         self.got1 = self.got2 = False
+        # Sinais de montagem, os MESMOS que o pose_estimator aplica. Sem eles a
+        # comparação é entre um sensor corrigido e outro cru — que é como a
+        # regra "mesmo sinal" passou a mentir neste robô (MPU de ponta-cabeça).
+        self.declare_parameter('imu_yaw_sign', -1.0)
+        self.declare_parameter('imu2_yaw_sign', 1.0)
+        self.s1 = float(self.get_parameter('imu_yaw_sign').value)
+        self.s2 = float(self.get_parameter('imu2_yaw_sign').value)
 
         # /imu/data e /imu2/data são BEST_EFFORT (sensor_data) — casar o QoS ou
         # nada chega (o clássico "robô sem IMU").
@@ -109,13 +125,15 @@ class Mon(Node):
         # Sinais opostos com giro REAL nos dois = imu2_yaw_sign errado. Mesma
         # regra do blend_yaw_rate (0.15 rad/s ≈ 8.6°/s), pra bater com o que o
         # pose_estimator decide.
+        c1 = self.gz1 * self.s1
+        c2 = self.gz2 * self.s2
         flag = ''
-        if abs(self.gz1) > 8.6 and abs(self.gz2) > 8.6 and (self.gz1 > 0) != (self.gz2 > 0):
+        if abs(c1) > 8.6 and abs(c2) > 8.6 and (c1 > 0) != (c2 > 0):
             flag = '  <<< SINAIS OPOSTOS: inverta imu2_yaw_sign'
         cal = self.calib or {}
         print(
             f"[imu1:{s1} imu2:{s2}] "
-            f"gz1={self.gz1:+7.1f} gz2={self.gz2:+7.1f} deg/s | "
+            f"gz1={c1:+7.1f} gz2={c2:+7.1f} deg/s (sinais {self.s1:+.0f}/{self.s2:+.0f}) | "
             f"yaw_abs={self.yaw_abs:+7.1f} yaw_odom={self.yaw_odom:+7.1f} deg | "
             f"|B|={self.bmag:5.1f}uT calib(sys/g/a/mag)="
             f"{cal.get('sys','-')}/{cal.get('gyro','-')}/{cal.get('accel','-')}/{cal.get('mag','-')} | "
