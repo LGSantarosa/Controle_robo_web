@@ -306,7 +306,11 @@
         if (data.done) {
           wpStatusEl.textContent = 'concluído ✓';
         } else if (data.timeout) {
-          wpStatusEl.textContent = `⚠ timeout — indo para ${data.index + 1}/${data.total}`;
+          wpStatusEl.textContent = `⚠ timeout — repetindo ${data.index + 1}/${data.total}`;
+        } else if (data.retry) {
+          // 2026-09-05: o runner não pula mais waypoint nenhum — ele repete até
+          // conseguir. Sem mostrar a tentativa, insistir parece travamento.
+          wpStatusEl.textContent = `↻ waypoint ${data.index + 1}/${data.total} — tentativa ${data.retry + 1}`;
         } else if (data.active) {
           wpStatusEl.textContent = `waypoint ${data.index + 1}/${data.total}`;
         } else {

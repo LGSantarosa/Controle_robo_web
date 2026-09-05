@@ -59,6 +59,11 @@ from door_geom import (
 
 log = logging.getLogger(__name__)
 
+# 2026-09-05 — espera entre as retentativas de um waypoint abortado pelo Nav2.
+# Módulo (e não literal no runner) pra que o teste do "nunca desiste" possa
+# derrubar a espera sem esperar 2 s por tentativa.
+WP_RETRY_SLEEP = 2.0
+
 
 def _occupancy_to_png_b64(grid: OccupancyGrid) -> str:
     """Converte um OccupancyGrid em PNG grayscale (base64).
@@ -1156,7 +1161,16 @@ class MapBridge:
                                # cancelava o goal no meio da travessia ("CANCELED
                                # em 120.4s"). O usuário não quer que o robô desista
                                # do ponto; parar = cancelar pela UI.
-        MAX_RETRIES  = 2      # tentativas extras quando o Nav2 aborta
+        # 2026-09-05 (dono, campo da arena): NÃO EXISTE MAIS "pular waypoint".
+        # Era MAX_RETRIES=2 e, esgotado, o runner avançava pro ponto seguinte —
+        # foi assim que a rota de 12:09 abandonou (-5.96, 5.94) e (2.09, -9.54)
+        # depois de 3 abortos cada (nav2.log, `Goal failed` 964/969/973 e
+        # 977/987/992). A causa dos abortos era o LD06 mudo por 1-3 s (o AMCL
+        # para de publicar map->odom -> o controller_server não transforma a pose
+        # -> aborta), ou seja: falha TRANSITÓRIA que a 4ª tentativa teria pego.
+        # Agora ele repete o MESMO ponto pra sempre; quem desiste é o dono, pelo
+        # botão de parar da UI (STATUS_CANCELED, abaixo).
+        RETRY_GRITA   = 10    # a cada N tentativas o aviso sobe de tom no log
 
         def _send(i: int):
             self._wp_current_idx = i
@@ -1198,15 +1212,18 @@ class MapBridge:
 
         idx = 0
         retries = 0
+        self_canceled = False   # o cancelamento foi NOSSO (timeout), não do dono
         _send(idx)
         t0 = time.monotonic()
 
         while not self._wp_stop.is_set():
             # Espera o Nav2 responder. Se demorar além de TIMEOUT, cancela e
-            # pula — cobre o caso do action server travar sem devolver status.
+            # RE-ENVIA O MESMO PONTO — cobre o caso do action server travar sem
+            # devolver status. 2026-09-05: antes daqui saía um _advance(), ou
+            # seja o relógio de 1 h também era uma forma de desistir do ponto.
             if not self._wp_goal_done.wait(timeout=0.5):
                 if time.monotonic() - t0 > TIMEOUT:
-                    log.warning(f"[MapBridge] timeout {TIMEOUT}s waypoint {idx + 1}/{total} — cancelando")
+                    log.warning(f"[MapBridge] timeout {TIMEOUT}s waypoint {idx + 1}/{total} — cancelando e REPETINDO o mesmo ponto")
                     if self._wp_goal_handle is not None:
                         try:
                             self._wp_goal_handle.cancel_goal_async()
@@ -1215,8 +1232,10 @@ class MapBridge:
                     self._sock.emit('waypoint_status', {
                         'active': True, 'index': idx, 'total': total, 'timeout': True,
                     })
-                    if not _advance():
-                        break
+                    # O cancelamento devolve um STATUS_CANCELED pelo callback de
+                    # resultado; como ele é nosso (e não do botão de parar), não
+                    # pode cair no `break` lá embaixo.
+                    self_canceled = True
                     _send(idx)
                     t0 = time.monotonic()
                 continue
@@ -1235,32 +1254,37 @@ class MapBridge:
 
             elif status == GoalStatus.STATUS_ABORTED:
                 retries += 1
-                if retries <= MAX_RETRIES:
-                    log.warning(f"[MapBridge] waypoint {idx + 1}/{total} abortado — tentativa {retries}/{MAX_RETRIES}")
-                    self._sock.emit('waypoint_status', {
-                        'active': True, 'index': idx, 'total': total, 'retry': retries,
-                    })
-                    time.sleep(2.0)  # dá tempo do Nav2 se recuperar
-                    _send(idx)
-                    t0 = time.monotonic()
-                else:
-                    log.warning(f"[MapBridge] pulando waypoint {idx + 1}/{total} após {MAX_RETRIES} tentativas")
-                    self._sock.emit('waypoint_status', {
-                        'active': True, 'index': idx, 'total': total, 'skipped': True,
-                    })
-                    if not _advance():
-                        break
-                    _send(idx)
-                    t0 = time.monotonic()
+                nivel = log.error if retries % RETRY_GRITA == 0 else log.warning
+                nivel(f"[MapBridge] waypoint {idx + 1}/{total} abortado — "
+                      f"tentativa {retries} (NÃO pula; repete até conseguir ou "
+                      f"até o dono parar pela UI)")
+                self._sock.emit('waypoint_status', {
+                    'active': True, 'index': idx, 'total': total, 'retry': retries,
+                })
+                time.sleep(WP_RETRY_SLEEP)  # dá tempo do Nav2 se recuperar
+                _send(idx)
+                t0 = time.monotonic()
 
             elif status == GoalStatus.STATUS_CANCELED:
+                if self_canceled:
+                    # Foi o cancelamento do TIMEOUT logo acima, não o botão de
+                    # parar: o ponto já foi re-despachado, então este resultado
+                    # é lixo do goal velho. Volta a esperar o goal novo.
+                    self_canceled = False
+                    self._wp_goal_done.clear()
+                    continue
                 # Cancelado externamente (stop_waypoints) — sai do loop.
                 break
 
             else:
-                log.warning(f"[MapBridge] status inesperado do goal: {status}")
-                if not _advance():
-                    break
+                # Nem sucesso, nem abort, nem cancelamento: REPETE o mesmo ponto.
+                # 2026-09-05: aqui também havia um _advance() — status estranho
+                # do action server abandonava o waypoint calado.
+                log.warning(f"[MapBridge] status inesperado do goal: {status} — repetindo waypoint {idx + 1}/{total}")
+                self._sock.emit('waypoint_status', {
+                    'active': True, 'index': idx, 'total': total, 'retry': retries,
+                })
+                time.sleep(WP_RETRY_SLEEP)
                 _send(idx)
                 t0 = time.monotonic()
 

@@ -93,3 +93,65 @@ def test_runner_nao_pisca_luz_no_waypoint_tecnico():
     fb._wp_goal_status = 4  # GoalStatus.STATUS_SUCCEEDED
     MapBridge._wp_runner(fb)
     fb._pulse_goal_light.assert_not_called()
+
+
+def _fake_bridge_2wp(status, para_apos):
+    """Bridge falsa com 2 pontos onde TODO goal termina em `status`.
+
+    `para_apos` = quantos despachos deixar acontecer antes de mandar o runner
+    parar (senão o loop repete pra sempre — que é justamente o novo contrato).
+    """
+    srv = Mock()
+    srv.wait_for_service.return_value = False
+    fb = _fake_bridge(srv)
+    fb._wp_list = [{'x': 1.0, 'y': 2.0, 'yaw': 0.0},
+                   {'x': 3.0, 'y': 4.0, 'yaw': 0.0}]
+
+    def _despacha(x, y, yaw=0.0):
+        fb._wp_goal_status = status
+        fb._wp_goal_done.set()
+        if fb._wp_send_goal_action.call_count >= para_apos:
+            fb._wp_stop.set()
+
+    fb._wp_send_goal_action = Mock(side_effect=_despacha)
+    fb._wp_goal_status = status
+    fb._wp_goal_done.set()
+    return fb
+
+
+def test_runner_nunca_pula_waypoint_abortado(monkeypatch):
+    """2026-09-05 (dono): o robô NÃO pode desistir de ponto nenhum.
+
+    Antes: 2 retentativas e o runner avançava (`skipped`) — foi assim que a
+    rota da arena abandonou 2 dos 3 pontos quando o LD06 ficou mudo 1-3 s.
+    Agora: repete o MESMO índice indefinidamente, e só o stop da UI encerra.
+    """
+    import map_service
+    monkeypatch.setattr(map_service, 'WP_RETRY_SLEEP', 0.0)
+    monkeypatch.setattr(map_service.time, 'sleep', lambda _s: None)
+
+    fb = _fake_bridge_2wp(6, para_apos=6)  # 6 = GoalStatus.STATUS_ABORTED
+    MapBridge._wp_runner(fb)
+
+    # Todos os despachos foram pro MESMO ponto (o primeiro): nunca avançou.
+    assert fb._wp_send_goal_action.call_count >= 6
+    assert all(c.args[:2] == (1.0, 2.0)
+               for c in fb._wp_send_goal_action.call_args_list)
+    # E a UI nunca recebeu "pulei este ponto".
+    emitidos = [c.args[1] for c in fb._sock.emit.call_args_list
+                if c.args[0] == 'waypoint_status']
+    assert not any(e.get('skipped') for e in emitidos)
+    assert any(e.get('retry') for e in emitidos)
+
+
+def test_runner_repete_no_status_inesperado(monkeypatch):
+    """Status que não é sucesso/abort/cancel também NÃO pode pular o ponto."""
+    import map_service
+    monkeypatch.setattr(map_service, 'WP_RETRY_SLEEP', 0.0)
+    monkeypatch.setattr(map_service.time, 'sleep', lambda _s: None)
+
+    fb = _fake_bridge_2wp(2, para_apos=4)  # 2 = STATUS_EXECUTING (inesperado aqui)
+    MapBridge._wp_runner(fb)
+
+    assert all(c.args[:2] == (1.0, 2.0)
+               for c in fb._wp_send_goal_action.call_args_list)
