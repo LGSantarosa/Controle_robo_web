@@ -237,6 +237,20 @@ guard, door_crossing e velocidade-por-folga ficam de pé):
 Exige **restart** — `ros2 param set /path_follower forward_speed 0.30` é no-op
 silencioso (o nó lê parâmetro só no `__init__`).
 
+**Faixa aceita: `[0.22, 0.35]`.** O piso é o `min_speed` do follower, e não é
+frescura: abaixo dele o `speed_for_clearance` **inverte**. Ele interpola entre
+`min_speed` (folga ≤ `clear_min`) e `forward_speed` (folga ≥ `clear_full`), então
+com `forward_speed = 0.10` o robô anda **mais rápido no apertado**. Medido com o
+código real:
+
+| folga frontal | cruzeiro com `forward_speed=0.10` |
+|---|---|
+| 0.30 m (apertado) | **0.220 m/s** |
+| 0.60 m | 0.185 m/s |
+| 1.20 m (livre) | **0.100 m/s** |
+
+Pra andar mais devagar de propósito, o botão é o `min_speed` — junto.
+
 ### Reprova
 
 Qualquer `rec` != `0/0/0`, qualquer `status` != 4, ou **qualquer cone fora da

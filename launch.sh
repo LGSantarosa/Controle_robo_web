@@ -83,16 +83,29 @@ for arg in "$@"; do
                     echo "ERRO: --follow-speed='$FOLLOW_SPEED' nao e' um numero." >&2
                     exit 1 ;;
             esac
-            # TETO 0.35 (2026-09-05): e' o degrau em teste, e o unico valor com
-            # baseline pra comparar. Acima disso ninguem mediu frenagem REAL —
-            # o follow_vel nao passa pelo velocity_smoother, entao o decel_lim_x
-            # do YAML nao prova nada. Pra subir o teto: medir primeiro
-            # (docs/baselines/2026-09-05-arena-velocidade-teto-035/) e so' entao
-            # mexer AQUI, de proposito.
-            if [ "$(awk -v v="$FOLLOW_SPEED" 'BEGIN{print (v>0 && v<=0.35)?1:0}')" != 1 ]; then
-                echo "ERRO: --follow-speed=$FOLLOW_SPEED fora da faixa (0, 0.35]." >&2
-                echo "      0.35 e' o degrau em teste; acima disso nao ha medicao" >&2
-                echo "      de frenagem real. Ver docs/baselines/2026-09-05-arena-velocidade-teto-035/" >&2
+            # FAIXA [0.22, 0.35].
+            #
+            # TETO 0.35: e' o degrau em teste, e o unico valor com baseline pra
+            # comparar. Acima disso ninguem mediu frenagem REAL — o follow_vel
+            # nao passa pelo velocity_smoother, entao o decel_lim_x do YAML nao
+            # prova nada. Pra subir: medir primeiro
+            # (docs/baselines/2026-09-05-arena-velocidade-teto-035/).
+            #
+            # PISO 0.22 = min_speed do path_follower (achado do review 09-05).
+            # Abaixo dele o speed_for_clearance INVERTE, nao so' rasteja: ele
+            # interpola entre min_speed (folga <= clear_min) e forward_speed
+            # (folga >= clear_full), entao com forward_speed 0.10 o robo anda
+            # 0.22 APERTADO e 0.10 LIVRE — mais rapido onde e' perigoso. Medido
+            # com o codigo real: folga 0.30 m -> 0.220 | 1.20 m -> 0.100.
+            # (O mesmo vale pra freada de chegada da linha 588, que tambem tem
+            # piso em min_speed.) E 0.11 ja' e' zona-morta do chassi: nao anda.
+            # Pra andar mais devagar de proposito, o botao e' min_speed, junto.
+            if [ "$(awk -v v="$FOLLOW_SPEED" 'BEGIN{print (v>=0.22 && v<=0.35)?1:0}')" != 1 ]; then
+                echo "ERRO: --follow-speed=$FOLLOW_SPEED fora da faixa [0.22, 0.35]." >&2
+                echo "      Teto 0.35: e' o degrau em teste; acima nao ha medicao de frenagem real." >&2
+                echo "      Piso 0.22: e' o min_speed do path_follower — abaixo dele a" >&2
+                echo "      velocidade-por-folga INVERTE (anda mais rapido no apertado)." >&2
+                echo "      Ver docs/baselines/2026-09-05-arena-velocidade-teto-035/" >&2
                 exit 1
             fi ;;
         --fecha-fresta)    FECHA_FRESTA=true ;;
@@ -109,7 +122,8 @@ for arg in "$@"; do
             echo "                   tools/mapa_passagens.py. NAO cobre raspao em point-turn."
             echo "  --follow-speed=X teto de velocidade do path_follower (m/s). E' o teto EFETIVO"
             echo "                   da autonomia; o max_vel_x do nav2_params NAO manda no robo."
-            echo "                   Default: 0.35 com --arena, 0.30 sem. Rollback de campo do"
+            echo "                   Faixa [0.22, 0.35]. Default: 0.35 com --arena, 0.30 sem."
+            echo "                   Rollback de campo do"
             echo "                   degrau SEM desmontar o perfil (restart e' obrigatorio: o no"
             echo "                   le parametro so no __init__, 'ros2 param set' nao funciona)."
             echo "  --fecha-fresta   BOTAO DE PANICO: troca o mapa do --arena pelo TAMPADO"

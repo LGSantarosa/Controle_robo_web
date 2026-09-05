@@ -481,7 +481,7 @@ class TestFollowForwardSpeed(unittest.TestCase):
         """O numero vai DIRETO pro teto do no' que dirige o robo: um dedo gordo
         (3.5 em vez de 0.35) nao pode passar calado. Teto 0.35 = o degrau em
         teste, unico valor com baseline; acima disso ninguem mediu frenagem."""
-        for ruim in ('3.5', '0.40', '1.0', '0'):
+        for ruim in ('3.5', '0.40', '1.0', '0', '0.21', '0.10', '0.01'):
             rc, out = self._launch('--nav2', '--follow-speed=' + ruim)
             self.assertEqual(rc, 1, 'aceitou %s: %s' % (ruim, out))
             self.assertIn('fora da faixa', out)
@@ -493,9 +493,37 @@ class TestFollowForwardSpeed(unittest.TestCase):
             self.assertIn("nao e' um numero", out)
 
     def test_follow_speed_ACEITA_a_faixa_valida(self):
-        for bom in ('0.30', '0.35', '0.22'):
+        for bom in ('0.30', '0.35', '0.22'):  # 0.22 = min_speed, o piso exato
             rc, out = self._launch('--nav2', '--follow-speed=' + bom)
             self.assertEqual(rc, 0, 'recusou %s: %s' % (bom, out))
+
+    def test_o_piso_da_faixa_E_o_min_speed_do_follower(self):
+        """Review 2026-09-05: abaixo de `min_speed` o `speed_for_clearance`
+        NAO so' rasteja — ele INVERTE. Ele interpola entre `min_speed` (folga
+        <= clear_min) e `forward_speed` (folga >= clear_full); com
+        forward_speed 0.10 o robo anda 0.22 no APERTADO e 0.10 no LIVRE, ou
+        seja mais rapido onde e' perigoso. Se alguem mexer no min_speed, o piso
+        do launch.sh tem que acompanhar — este teste amarra os dois."""
+        sys.path.insert(0, os.path.join(RAIZ, 'ros2_packages', 'robot_nav'))
+        from robot_nav.path_follower import FollowConfig, speed_for_clearance
+
+        self.assertEqual(FollowConfig().min_speed, 0.22)
+        with open(os.path.join(RAIZ, 'launch.sh')) as f:
+            self.assertIn('v>=0.22 && v<=0.35', f.read())
+
+        # a inversao que o piso existe pra impedir, exercitada no codigo real
+        ruim = FollowConfig(forward_speed=0.10, min_speed=0.22,
+                            clear_full=1.2, clear_min=0.35)
+        apertado = speed_for_clearance(ruim, 0.30)
+        livre = speed_for_clearance(ruim, 2.00)
+        self.assertGreater(apertado, livre,
+                           'sem o piso, folga menor daria velocidade MAIOR')
+
+        # e com um valor da faixa valida a ordem e' a certa
+        bom = FollowConfig(forward_speed=0.35, min_speed=0.22,
+                           clear_full=1.2, clear_min=0.35)
+        self.assertLess(speed_for_clearance(bom, 0.30),
+                        speed_for_clearance(bom, 2.00))
 
     def test_o_no_NAO_aceita_param_a_quente(self):
         """Trava de documentação (review 2026-09-05): enquanto não existir
