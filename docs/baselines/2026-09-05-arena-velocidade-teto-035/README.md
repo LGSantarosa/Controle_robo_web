@@ -169,27 +169,54 @@ a pose **ground truth do Gazebo** (SAT contra OBB). No robô real não existe ne
 SDF nem pose verdadeira — **ele não roda**. A versão anterior deste critério
 pedia uma medição impossível.
 
-### O que dá pra medir no robô real
+### O que dá pra medir no robô real — e o que cada instrumento NÃO vê
 
-Não há ground truth automático. O contato se mede **fisicamente**, e os dados
-já logados corroboram:
+Não há ground truth automático no real. **Cada linha abaixo tem um cego
+declarado**; o protocolo só fecha porque os cegos não se sobrepõem.
 
-| o quê | como | fonte |
+| o quê | como | NÃO vê |
 |---|---|---|
-| **Contato (ground truth)** | fita no chão marcando a base de cada cone ANTES da 1ª volta. Cone fora da marca no fim = tocou. É o único juiz de verdade. | olho + fita |
-| **Instante do contato** | pico de corrente / `STALL` no `PowerMonitor` casado com o `t` da volta | `logs/power/power_*.csv` |
-| **Quase-contato (raspão)** | menor `clear` da volta — coluna já gravada pelo follower | `follow_debug.csv` |
-| **Distância de parada REAL** | achar o tick em que `vx` cai de 0.35 → 0 e integrar `hypot(dx,dy)` das colunas `x`,`y` até a pose congelar. Mede a frenagem FÍSICA — que é o número que falta pra sequer discutir 0.40. | `follow_debug.csv` |
-| **Odometria confiável?** | `max_linear_speed` do NavMetrics acima do comando de 0.35 = a odom infla e a régua de velocidade precisa de outra fonte | `nav_metrics_*.csv` |
+| **Frenagem (cadeia inteira)** | `freeze_capture.csv` — grava `t_wall,topic,vx,wz,px,py` para `follow_vel → auto_vel_pre → auto_vel_raw → auto_vel → cmd_vel` **e** `odom`. Achar o `t` em que **`cmd_vel`** (não `follow_vel`) zera e integrar `hypot(dx,dy)` do `odom` até a pose congelar. | — |
+| **Contato em cone** | fita no chão marcando a base de cada cone antes da 1ª volta | parede/batente; cone que **entorta e volta** |
+| **Instante suspeito** | pico de corrente / `STALL` no `power_*.csv` | não distingue contato de **patinagem em pivô** — foi exatamente isso às 17:25:14 deste baseline |
+| **Quase-contato frontal** | menor `clear` do `follow_debug.csv` | é um **setor de 40°** à frente (`clear_sector_deg`), medido do centro do LiDAR: não é folga do corpo, e **não pega raspão lateral nem durante pivô** |
+| **Odometria confiável?** | `max_linear_speed` do NavMetrics acima do comando | — |
 
-O `follow_debug.csv` tem `t,state,x,y,yaw_deg,…,dist_goal,vx,wz,la,clear` — as
-duas medições que faltavam (parada real e folga real) saem **dele**, sem
-instrumentação nova.
+⚠️ **`follow_debug.csv:vx` NÃO serve pra medir frenagem** (achado do review):
+é o comando *desejado* pelo follower, **a montante** do `collision_monitor` e do
+mux. O que chega no motor é `cmd_vel`, e só o `freeze_capture.csv` tem os dois
+lados. O `freeze_capture` já sobe em toda corrida `--nav2`
+(`nav2.launch.py:216`), sem flag.
+
+⚠️ **Nenhum destes mede distância física.** `freeze_capture` + `odom` dão a
+frenagem *segundo a odometria* — que este mesmo baseline mostrou ser suspeita
+(perna de 0.324 m/s acima do comando de 0.30). Para o número físico é
+**vídeo ou régua/marcação no chão**: parar o robô a 0.35 sobre uma marca e medir
+onde ele para, umas 3 vezes. Sem isso, "distância de parada" é estimativa.
+
+⚠️ **O buraco que continua aberto:** raspão em **pivô colado numa parede** não é
+visto por instrumento nenhum da lista — nem pela fita (não é cone), nem pelo
+`clear` (setor frontal), nem pelo `PolygonFront` (o próprio
+`nav2_params_arena.yaml` admite isso em "O QUE ESTE DESENHO NÃO COBRE"). É
+observação do dono, a olho, ou não é medido.
+
+### Rollback de campo
+
+`--follow-speed=0.30` volta o degrau **sem desmontar o perfil da arena** (mapa,
+guard, door_crossing e velocidade-por-folga ficam de pé):
+
+```bash
+./launch.sh --nav2 --arena --map=maps/oficial.yaml --follow-speed=0.30
+```
+
+Exige **restart** — `ros2 param set /path_follower forward_speed 0.30` é no-op
+silencioso (o nó lê parâmetro só no `__init__`).
 
 ### Reprova
 
 Qualquer `rec` != `0/0/0`, qualquer `status` != 4, ou **qualquer cone fora da
-marca de fita**.
+marca de fita**. Contato em parede/batente e raspão em pivô ficam por conta da
+observação do dono — não há instrumento pra eles.
 
 ## Achado colateral: o STALL é do `path_follower`, e ele PROVA quem dirigia
 

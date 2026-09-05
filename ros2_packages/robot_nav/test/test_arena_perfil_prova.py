@@ -391,11 +391,12 @@ class TestFollowForwardSpeed(unittest.TestCase):
     Executa o BLOCO REAL do launch.sh entre os marcadores, não uma cópia (BO 63).
     """
 
-    def _roda(self, arena):
+    def _roda(self, arena, follow_speed=''):
         with open(os.path.join(RAIZ, 'launch.sh')) as f:
             texto = f.read()
         bloco = texto.split(MARCA_FOLLOW_INI)[1].split(MARCA_FOLLOW_FIM)[0]
-        script = ('ARENA=%s\n' % ('true' if arena else 'false')) + bloco + \
+        script = ('ARENA=%s\nFOLLOW_SPEED="%s"\n'
+                  % ('true' if arena else 'false', follow_speed)) + bloco + \
                  '\necho "ARG=$ARENA_FOLLOW_ARG"\n'
         r = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -440,6 +441,33 @@ class TestFollowForwardSpeed(unittest.TestCase):
         bloco = launch[i:i + 900]
         self.assertIn("'forward_speed'", bloco)
         self.assertIn("LaunchConfiguration('follow_forward_speed')", bloco)
+
+    def test_follow_speed_e_o_rollback_SEM_desmontar_a_arena(self):
+        """O rollback de campo (review 2026-09-05): `ros2 param set` e' no-op e
+        subir sem --arena trocaria junto mapa, guard, door_crossing E a
+        velocidade-por-folga. `--follow-speed=0.30` tem que baixar SO' a
+        velocidade e deixar o resto do perfil em pe'."""
+        out = self._roda(True, follow_speed='0.30')
+        self.assertIn('follow_forward_speed:=0.30', out)
+        self.assertNotIn('follow_forward_speed:=0.35', out)
+        # o resto do perfil da arena continua intacto
+        self.assertIn('follow_clear_full:=1.2', out)
+        self.assertIn('follow_clear_min:=0.35', out)
+
+    def test_follow_speed_vale_fora_da_arena_tambem(self):
+        """Sem --arena o arg e' vazio; com --follow-speed ele carrega SO' a
+        velocidade — nada do perfil da arena vaza junto."""
+        out = self._roda(False, follow_speed='0.42')
+        self.assertIn('follow_forward_speed:=0.42', out)
+        self.assertNotIn('clear_full', out)
+
+    def test_a_flag_existe_no_parser_e_no_help(self):
+        """Botao que o operador nao acha e' botao que nao existe — ainda mais
+        sendo o rollback de um teste de campo."""
+        with open(os.path.join(RAIZ, 'launch.sh')) as f:
+            sh = f.read()
+        self.assertIn('--follow-speed=*)', sh)
+        self.assertIn('--follow-speed=X', sh)
 
     def test_o_no_NAO_aceita_param_a_quente(self):
         """Trava de documentação (review 2026-09-05): enquanto não existir

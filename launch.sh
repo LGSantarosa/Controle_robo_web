@@ -43,6 +43,13 @@ SPAWN_Z="0.2"
 # Firmware MEGA: 'auto' = flasheia só se hash de firmware/mega_bridge mudou.
 # --flash-mega força; --no-flash-mega pula sempre.
 FLASH_MEGA="auto"
+# Teto de velocidade do path_follower (o teto EFETIVO da autonomia — ele ganha
+# o twist_mux_auto do nav_vel). Vazio = cada perfil usa o seu default:
+# --arena 0.35, resto o default do launch (0.30). `--follow-speed=X` sobrescreve
+# SEM desmontar o perfil: e' o rollback de campo do degrau de velocidade, ja que
+# `ros2 param set` nao funciona (o no' le' parametro so' no __init__) e subir
+# sem --arena trocaria junto mapa, guard, door_crossing e velocidade-por-folga.
+FOLLOW_SPEED=""
 # O operador passou o argumento na mao? So' entao o --arena NAO sobrescreve.
 MAP_EXPLICITO=false
 WORLD_EXPLICITO=false
@@ -66,11 +73,12 @@ for arg in "$@"; do
         --pi)              PI_PROFILE=true ;;
         --no-pi)           PI_PROFILE=false ;;
         --arena)           ARENA=true ;;
+        --follow-speed=*)  FOLLOW_SPEED="${arg#*=}" ;;
         --fecha-fresta)    FECHA_FRESTA=true ;;
         --flash-mega)      FLASH_MEGA="force" ;;
         --no-flash-mega)   FLASH_MEGA="off" ;;
         --help|-h)
-            echo "Uso: $0 [--teleop|--slam|--nav2|--trekking] [--sim] [--arena] [--fecha-fresta] [--web-teleop] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
+            echo "Uso: $0 [--teleop|--slam|--nav2|--trekking] [--sim] [--arena] [--follow-speed=X] [--fecha-fresta] [--web-teleop] [--no-lidar] [--lidar-port=/dev/...] [--map=...] [--world=...] [--pi|--no-pi] [--flash-mega|--no-flash-mega]"
             echo ""
             echo "  --arena          perfil da prova do galpao (05/09): mundo arena_galpao.sdf,"
             echo "                   mapa arena_galpao.yaml (fresta A ABERTA -> o robo PASSA),"
@@ -78,6 +86,11 @@ for arg in "$@"; do
             echo "                   inflacao maior, PolygonFront unico. Na geometria continua"
             echo "                   isso fecha vao < 0.64 m — CONFIRME no mapa rasterizado com"
             echo "                   tools/mapa_passagens.py. NAO cobre raspao em point-turn."
+            echo "  --follow-speed=X teto de velocidade do path_follower (m/s). E' o teto EFETIVO"
+            echo "                   da autonomia; o max_vel_x do nav2_params NAO manda no robo."
+            echo "                   Default: 0.35 com --arena, 0.30 sem. Rollback de campo do"
+            echo "                   degrau SEM desmontar o perfil (restart e' obrigatorio: o no"
+            echo "                   le parametro so no __init__, 'ros2 param set' nao funciona)."
             echo "  --fecha-fresta   BOTAO DE PANICO: troca o mapa do --arena pelo TAMPADO"
             echo "                   (arena_galpao_semA.yaml). A fresta A de 0,90 m fica FECHADA"
             echo "                   so' pro planejador (o vao segue aberto no mundo) e o robo"
@@ -653,6 +666,13 @@ case "$MODE" in
         # >>> PERFIL_ARENA_FOLLOW
         ARENA_FOLLOW_ARG=""
         [ "$ARENA" = true ] && ARENA_FOLLOW_ARG="follow_clear_full:=1.2 follow_clear_min:=0.35 follow_forward_speed:=0.35"
+        # `--follow-speed=X` vence o default do perfil e NAO desmonta nada mais:
+        # o resto do ARENA_FOLLOW_ARG (clear_full/clear_min), o mapa, o guard e o
+        # door_crossing ficam de pe'. Vale com ou sem --arena.
+        if [ -n "$FOLLOW_SPEED" ]; then
+            ARENA_FOLLOW_ARG="$(echo "$ARENA_FOLLOW_ARG" | sed 's/ *follow_forward_speed:=[^ ]*//')"
+            ARENA_FOLLOW_ARG="${ARENA_FOLLOW_ARG:+$ARENA_FOLLOW_ARG }follow_forward_speed:=$FOLLOW_SPEED"
+        fi
         # <<< PERFIL_ARENA_FOLLOW
         # motion_guard DESLIGADO na arena (dono, 2026-08-31). Ele e' o vigia de
         # PESSOA; a arena da prova nao tem pessoa, tem CONE — e a vigilia fechava
