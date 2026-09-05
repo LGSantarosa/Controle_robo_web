@@ -69,6 +69,24 @@ def generate_launch_description():
         'follow_clear_min', default_value='0.35',
         description='m — folga em que o path_follower ja esta no min_speed')
 
+    # TETO DE VELOCIDADE REAL DA AUTONOMIA (2026-09-05, fase VELOCIDADE reaberta).
+    # ⚠️ Nao adianta mexer em max_vel_x/max_speed_xy/velocity_smoother do YAML: o
+    # path_follower publica follow_vel com prio 15 no twist_mux_auto e o nav_vel
+    # (DWB/RotationShim/smoother) so' tem 10 — a cadeia do controller_server PERDE
+    # o mux enquanto este no' publicar. Quem dita a velocidade e' o forward_speed
+    # daqui. Baseline do 0.30 medido em 3 voltas no real:
+    # docs/baselines/2026-09-05-arena-velocidade-teto-035/
+    #
+    # Default 0.30 = o valor validado, igual ao FollowConfig do path_follower.py.
+    # NAO subir aqui: o degrau 0.35 e' do perfil ARENA e entra pelo ./launch.sh
+    # --arena, exatamente como o follow_clear_full — o `--nav2` normal nao herda
+    # velocidade que nao foi medida no cenario dele.
+    follow_forward_speed_arg = DeclareLaunchArgument(
+        'follow_forward_speed', default_value='0.30',
+        description='m/s — cruzeiro do path_follower no trecho reto. Este e o '
+                    'teto EFETIVO da autonomia (prio 15 > nav_vel 10 no mux), '
+                    'nao o max_vel_x do nav2_params')
+
     # motion_guard LIGADO por default (é o vigia de pessoa do robô no galpão/sala).
     # `--arena` DESLIGA (dono, 2026-08-31): a arena da prova não tem pessoa
     # nenhuma — tem CONE — e a vigília do guard fechava em cima do cone e ZERAVA
@@ -229,6 +247,8 @@ def generate_launch_description():
                     LaunchConfiguration('follow_clear_full'), value_type=float),
                 'clear_min': ParameterValue(
                     LaunchConfiguration('follow_clear_min'), value_type=float),
+                'forward_speed': ParameterValue(
+                    LaunchConfiguration('follow_forward_speed'), value_type=float),
             }],
         ),
         # Travessia de porta: alinha no eixo de porta MARCADA e atravessa
@@ -383,6 +403,7 @@ def generate_launch_description():
     return LaunchDescription([map_arg, use_sim_time_arg, params_arg,
                               init_pose_arg, init_x_arg, init_y_arg, init_yaw_arg,
                               follow_clear_full_arg, follow_clear_min_arg,
+                              follow_forward_speed_arg,
                               motion_guard_arg,
                               door_crossing_arg,
                               doors_file_arg,

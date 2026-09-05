@@ -630,8 +630,17 @@ case "$MODE" in
         fi
         # A velocidade-por-folga do path_follower nao mora no params_file (o nó
         # nao le' ele) — entra por launch arg, so' no perfil ARENA.
+        # 2026-09-05 (fase VELOCIDADE reaberta): follow_forward_speed 0.30 -> 0.35
+        # SO' na arena. Este e' o teto EFETIVO — o path_follower ganha o
+        # twist_mux_auto (prio 15) do nav_vel (10), entao mexer no max_vel_x do
+        # nav2_params NAO acelera o robo. 0.35 apenas alinha o follower aos tetos
+        # que a cadeia nav_vel ja tem; nada mais precisa se mover.
+        # ⚠️ NAO subir pra 0.50/0.60 sem medir frenagem REAL: o follow_vel nao
+        # passa pelo velocity_smoother, entao o decel_lim_x do YAML nao prova a
+        # desaceleracao fisica. Baseline do 0.30 e a analise inteira em
+        # docs/baselines/2026-09-05-arena-velocidade-teto-035/.
         ARENA_FOLLOW_ARG=""
-        [ "$ARENA" = true ] && ARENA_FOLLOW_ARG="follow_clear_full:=1.2 follow_clear_min:=0.35"
+        [ "$ARENA" = true ] && ARENA_FOLLOW_ARG="follow_clear_full:=1.2 follow_clear_min:=0.35 follow_forward_speed:=0.35"
         # motion_guard DESLIGADO na arena (dono, 2026-08-31). Ele e' o vigia de
         # PESSOA; a arena da prova nao tem pessoa, tem CONE — e a vigilia fechava
         # em cima do cone e ZERAVA o comando por ~27 s (3 episodios em 11 voltas,
