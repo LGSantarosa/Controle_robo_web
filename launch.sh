@@ -73,7 +73,28 @@ for arg in "$@"; do
         --pi)              PI_PROFILE=true ;;
         --no-pi)           PI_PROFILE=false ;;
         --arena)           ARENA=true ;;
-        --follow-speed=*)  FOLLOW_SPEED="${arg#*=}" ;;
+        --follow-speed=*)
+            FOLLOW_SPEED="${arg#*=}"
+            # Este numero vai DIRETO pro teto de velocidade do no' que dirige o
+            # robo. Um dedo gordo (3.5 em vez de 0.35) seria aceito calado e
+            # mandado pro path_follower. Valida formato E faixa.
+            case "$FOLLOW_SPEED" in
+                ''|*[!0-9.]*|*.*.*)
+                    echo "ERRO: --follow-speed='$FOLLOW_SPEED' nao e' um numero." >&2
+                    exit 1 ;;
+            esac
+            # TETO 0.35 (2026-09-05): e' o degrau em teste, e o unico valor com
+            # baseline pra comparar. Acima disso ninguem mediu frenagem REAL —
+            # o follow_vel nao passa pelo velocity_smoother, entao o decel_lim_x
+            # do YAML nao prova nada. Pra subir o teto: medir primeiro
+            # (docs/baselines/2026-09-05-arena-velocidade-teto-035/) e so' entao
+            # mexer AQUI, de proposito.
+            if [ "$(awk -v v="$FOLLOW_SPEED" 'BEGIN{print (v>0 && v<=0.35)?1:0}')" != 1 ]; then
+                echo "ERRO: --follow-speed=$FOLLOW_SPEED fora da faixa (0, 0.35]." >&2
+                echo "      0.35 e' o degrau em teste; acima disso nao ha medicao" >&2
+                echo "      de frenagem real. Ver docs/baselines/2026-09-05-arena-velocidade-teto-035/" >&2
+                exit 1
+            fi ;;
         --fecha-fresta)    FECHA_FRESTA=true ;;
         --flash-mega)      FLASH_MEGA="force" ;;
         --no-flash-mega)   FLASH_MEGA="off" ;;
@@ -657,9 +678,11 @@ case "$MODE" in
         # o path_follower le os parametros UMA VEZ no __init__ e congela em
         # self.cfg (path_follower.py:642); nao ha add_on_set_parameters_callback.
         # `ros2 param set /path_follower forward_speed 0.30` muda o valor no
-        # servidor de parametros e o no' SEGUE A 0.35 — silenciosamente. Pra
-        # voltar: Ctrl-C e subir sem --arena, ou
-        # `ros2 launch robot_nav nav2.launch.py ... follow_forward_speed:=0.30`.
+        # servidor de parametros e o no' SEGUE A 0.35 — silenciosamente.
+        # Pra voltar: Ctrl-C e subir de novo com `--follow-speed=0.30`, que
+        # mantem o perfil inteiro. NAO subir sem --arena pra baixar velocidade:
+        # isso troca junto mapa, motion_guard, door_crossing e a
+        # velocidade-por-folga — era a recomendacao velha, e estava errada.
         #
         # O test_arena_perfil_prova.py EXECUTA o bloco entre os marcadores
         # abaixo (em vez de reimplementar a logica e virar tautologia — BO 63).

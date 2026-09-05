@@ -469,6 +469,34 @@ class TestFollowForwardSpeed(unittest.TestCase):
         self.assertIn('--follow-speed=*)', sh)
         self.assertIn('--follow-speed=X', sh)
 
+    def _launch(self, *args):
+        """Roda o ./launch.sh de verdade com --help (nao sobe nada) so' pra
+        exercitar o PARSER de argumentos."""
+        r = subprocess.run(['bash', os.path.join(RAIZ, 'launch.sh'),
+                            *args, '--help'],
+                           capture_output=True, text=True, cwd=RAIZ)
+        return r.returncode, r.stdout + r.stderr
+
+    def test_follow_speed_RECUSA_valor_fora_da_faixa(self):
+        """O numero vai DIRETO pro teto do no' que dirige o robo: um dedo gordo
+        (3.5 em vez de 0.35) nao pode passar calado. Teto 0.35 = o degrau em
+        teste, unico valor com baseline; acima disso ninguem mediu frenagem."""
+        for ruim in ('3.5', '0.40', '1.0', '0'):
+            rc, out = self._launch('--nav2', '--follow-speed=' + ruim)
+            self.assertEqual(rc, 1, 'aceitou %s: %s' % (ruim, out))
+            self.assertIn('fora da faixa', out)
+
+    def test_follow_speed_RECUSA_o_que_nao_e_numero(self):
+        for ruim in ('abc', '', '0.1.2', '-0.1'):
+            rc, out = self._launch('--nav2', '--follow-speed=' + ruim)
+            self.assertEqual(rc, 1, 'aceitou %r: %s' % (ruim, out))
+            self.assertIn("nao e' um numero", out)
+
+    def test_follow_speed_ACEITA_a_faixa_valida(self):
+        for bom in ('0.30', '0.35', '0.22'):
+            rc, out = self._launch('--nav2', '--follow-speed=' + bom)
+            self.assertEqual(rc, 0, 'recusou %s: %s' % (bom, out))
+
     def test_o_no_NAO_aceita_param_a_quente(self):
         """Trava de documentação (review 2026-09-05): enquanto não existir
         `add_on_set_parameters_callback`, `ros2 param set /path_follower ...`
@@ -482,4 +510,8 @@ class TestFollowForwardSpeed(unittest.TestCase):
         # callback pra explicar que ele não existe.
         self.assertNotIn('.add_on_set_parameters_callback(', follower)
         with open(os.path.join(RAIZ, 'launch.sh')) as f:
-            self.assertIn('ROLLBACK E\' RESTART', f.read())
+            sh = f.read()
+        self.assertIn('ROLLBACK E\' RESTART', sh)
+        # e o conselho tem que ser o --follow-speed, nao o "sobe sem --arena"
+        # (que troca mapa/guard/door junto — recomendacao velha, errada).
+        self.assertIn('subir de novo com `--follow-speed=0.30`', sh)

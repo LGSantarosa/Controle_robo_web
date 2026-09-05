@@ -200,6 +200,31 @@ visto por instrumento nenhum da lista — nem pela fita (não é cone), nem pelo
 `nav2_params_arena.yaml` admite isso em "O QUE ESTE DESENHO NÃO COBRE"). É
 observação do dono, a olho, ou não é medido.
 
+### ⛔ BLOQUEADORES ABERTOS antes de rodar (review 2026-09-05)
+
+A suíte do `robot_nav` está **8 vermelhos** — todos PRE-EXISTENTES a este
+trabalho (confirmado com `git stash`), mas dois deles são de comportamento e
+tocam a arena:
+
+| teste | o que quebra | desde |
+|---|---|---|
+| `test_door_crossing::test_rotating_is_proportional_slows_near_target` | esperava `rotating`, veio **`staging`** | `3c2b051` |
+| `test_door_crossing::test_restage_when_aligned_but_wont_fit` | esperava `wz == 0`, veio **2.827 rad/s** | `3c2b051` |
+| `test_arena_perfil_prova::TestMargemDoPointTurn` (2) | rota commitada diverge do gerador; margem do cone 1 = **0.325 m** contra 0.75 exigidos | — |
+| `test_rota_pre_fresta::TestRotaPreFresta` (4) | geometria da rota | — |
+
+Bisect dos dois de porta: `c313a31` **53 passed** (verde) → `3c2b051`
+**2 failed, 51 passed**. Entraram no `3c2b051`
+("fix(door): restore passing arena state for obstacles 1 and 2").
+
+Isto importa porque o `--arena` sobe com `door_crossing` LIGADO em 2 portas do
+`oficial.doors.json` — girar quando devia estagiar, e mandar 2.8 rad/s quando
+devia mandar 0, são exatamente os modos de falha que o campo já pagou.
+
+**Não rodar o degrau de velocidade com estes vermelhos abertos.** Um robô mais
+rápido com a máquina de estados da porta em dúvida junta duas variáveis novas
+na mesma corrida.
+
 ### Rollback de campo
 
 `--follow-speed=0.30` volta o degrau **sem desmontar o perfil da arena** (mapa,
