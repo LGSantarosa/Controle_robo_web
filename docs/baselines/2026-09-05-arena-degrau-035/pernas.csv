@@ -1,0 +1,7 @@
+fase,perna,nav_id,goal_x,goal_y,goal_yaw,dist_m,duracao_s,vel_media_ms,max_odom_ms,parado_s,replans,rec_b,rec_s,rec_w,status,obs
+aborto,1,fd17e0e9,4.10,6.74,1.549,1.420,4.62,0.343,0.474,0.888,4,0,0,0,ABORTED,TF map->odom congelado + scan 1s velho
+aborto,1,c54f2b77,4.10,6.74,1.549,0.000,0.34,0.000,0.000,0.000,0,0,0,0,ABORTED,replan imediato falhou
+aborto,1,0e74da43,4.10,6.74,1.549,0.000,0.29,0.000,0.000,0.000,0,0,0,0,ABORTED,idem; dono parou pela UI
+volta,1,ef2f3adf,4.10,6.74,1.549,8.023,23.88,0.327,0.593,6.238,22,0,0,0,SUCCEEDED,
+volta,2,7026cb0d,-5.86,5.81,-3.079,13.188,38.30,0.349,0.586,8.239,36,0,0,0,SUCCEEDED,
+volta,3,4ffef41c,2.51,-9.01,-1.612,21.009,59.95,0.371,0.577,13.874,55,0,0,0,SUCCEEDED,

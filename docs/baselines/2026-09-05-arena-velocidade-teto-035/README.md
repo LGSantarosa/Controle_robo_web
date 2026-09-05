@@ -28,6 +28,13 @@
 >
 > Ver §"Quem realmente dirige" e §"O degrau correto" abaixo.
 
+> ✅ **O degrau 0.35 JÁ RODOU** (2026-09-05 19:35): volta 145.6 s → **125.75 s
+> (−13,6 %)**, `cmd_vel` máx 0.350 exato, frenagem máx 0.185 m contra 0.250 m
+> de aviso. Resultados e ressalvas em
+> `../2026-09-05-arena-degrau-035/`. Lá também está a **prova de que a
+> odometria infla 69 %** — o que torna os números de velocidade DESTE
+> documento comparativos, nunca absolutos.
+
 Ponto de comparação para a **fase VELOCIDADE reaberta**. Rota `teste7.json`
 (3 waypoints), mapa `maps/oficial.yaml`, perfil `--arena` no robô real
 (`./launch.sh --nav2 --arena --map=maps/oficial.yaml`), 3 voltas seguidas.
