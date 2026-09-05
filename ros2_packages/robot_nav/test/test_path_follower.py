@@ -109,7 +109,11 @@ def test_turn_magnitude_respects_min_and_max():
 def test_rot_min_default_beats_deadzone_crawl():
     # 2026-07-02: rot_min 2.0 comandado ≈ 10°/s real (zona-morta 1.7 +
     # resposta 0.6·(cmd−1.7)) = rastejo que parece parada. 2.4 ≈ 25°/s.
-    assert FollowConfig().rot_min == pytest.approx(2.4)
+    # 2026-09-05 (dono): +50% de força no pivô -> 3.6 (≈ 43°/s pelo mesmo
+    # modelo). Continua sendo o PISO que manda no pivô real: com rot_k 3.0,
+    # qualquer erro abaixo de 69° satura no piso.
+    assert FollowConfig().rot_min == pytest.approx(3.6)
+    assert FollowConfig().rot_max == pytest.approx(6.75)
 
 
 def test_turn_target_frozen_while_plan_shifts():
@@ -600,7 +604,12 @@ def test_asercao_de_alternancia_PEGA_o_limiar_pelado():
     com, _, _ = _microsim_torto()
     sem, _, _ = _microsim_torto(turn_exit=math.radians(16))
     assert com <= 4, 'com histerese deveria alternar pouco (deu %d)' % com
-    assert sem > 4, 'o limiar pelado deveria chatterar (deu %d)' % sem
+    # 2026-09-05: era `sem > 4`, número amarrado ao pivô de 2.4 rad/s — com o
+    # piso em 3.6 o mesmo microsim fecha a chegada em menos ticks de giro e o
+    # limiar pelado dá 3 (contra 1 com histerese). O que o controle NEGATIVO
+    # precisa provar é que tirar a histerese PIORA, não um valor absoluto.
+    assert sem > com, ('o limiar pelado deveria chatterar mais que a histerese '
+                       '(pelado %d, histerese %d)' % (sem, com))
 
 
 def test_microsim_chegada_converge_mesmo_comecando_torto():

@@ -222,10 +222,18 @@ class FollowConfig:
                                     # (folga de 9 cm até o checker do Nav2: cabe
                                     # a deriva de ~2 cm do giro seguinte)
     rot_k: float = 3.0              # ganho P do giro (rad/s por rad)
-    rot_min: float = 2.4            # rad/s — piso do giro (2.0 dava ~10°/s real =
+    # 2026-09-05 (dono, pós-arena): +50% de FORÇA no pivô — rot_min 2.4->3.6 e
+    # rot_max 4.5->6.75. O que o dono vê como "giro fraco" é o PISO: no
+    # follow_debug da run de 12:09 todo pivô saiu a 2.4 rad/s exatos (herr ~23°
+    # x rot_k 3.0 = 1.2 < piso), então quem manda no pivô é o rot_min, não o
+    # ganho. O rot_k fica em 3.0: mexer nele só adiantaria a saturação.
+    # ⚠️ rot_max 6.75 passa do teto angular do resto da pilha (max_vel_theta
+    # 6.0, velocity_smoother 6.0, teleop 6.0). Aqui não morde: o path_follower
+    # publica em follow_vel, que entra no twist_mux SEM passar pelo smoother.
+    rot_min: float = 3.6            # rad/s — piso do giro (2.0 dava ~10°/s real =
                                     # rastejo na zona-morta 1.7; 2.4 ≈ 25°/s,
                                     # ver spec fluidez 07-02)
-    rot_max: float = 4.5            # rad/s — teto do giro
+    rot_max: float = 6.75           # rad/s — teto do giro
     slow_radius: float = 0.4        # m — começa a frear o avanço perto do goal
     # 2026-06-26: 0.10 -> 0.22. CAMPO: perto do goal o ramp baixava p/ ~0.10-0.11
     # m/s, ABAIXO da zona-morta linear do robô real (pesado) -> mandava 0.11 e NÃO
@@ -621,7 +629,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
                 ('goal_moved_tol', 0.30), ('unlatch_dist', 0.45),
                 ('approach_enter', 0.10), ('approach_exit', 0.06),
-                ('rot_k', 3.0), ('rot_min', 2.4), ('rot_max', 4.5),
+                # 2026-09-05: +50% no pivô — casa com o FollowConfig acima.
+                ('rot_k', 3.0), ('rot_min', 3.6), ('rot_max', 6.75),
                 ('slow_radius', 0.4), ('min_speed', 0.22), ('rate_hz', 20.0),
                 ('clear_full', 0.0), ('clear_min', 0.35),
                 ('turn_stop_tau', 0.10), ('aim_tau', 2.0),
