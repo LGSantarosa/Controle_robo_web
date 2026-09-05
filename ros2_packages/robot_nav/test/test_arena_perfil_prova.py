@@ -370,3 +370,88 @@ class TestLaunchArenaDoorsInvalido(unittest.TestCase):
         rc, out = self._com_doors('{"doors": []}')
         self.assertEqual(rc, 0, out)
         self.assertIn('door_crossing:=true', out)
+
+
+MARCA_FOLLOW_INI = '# >>> PERFIL_ARENA_FOLLOW'
+MARCA_FOLLOW_FIM = '# <<< PERFIL_ARENA_FOLLOW'
+
+
+class TestFollowForwardSpeed(unittest.TestCase):
+    """O teto EFETIVO da autonomia é o `forward_speed` do path_follower, não o
+    `max_vel_x` do nav2_params: o follower publica `follow_vel` com prio 15 no
+    `twist_mux_auto` e o `nav_vel` (DWB/RotationShim/smoother) tem 10 — a cadeia
+    do controller_server PERDE o mux enquanto o follower publicar.
+
+    Em 2026-09-05 uma análise minha propôs subir os três tetos do YAML (a cadeia
+    perdedora) e o dono derrubou na revisão. Estes testes existem para que o
+    degrau de velocidade não volte a ser aplicado no lugar errado, e para
+    prender o 0.35 ao perfil ARENA — o `--nav2` normal não herda velocidade que
+    não foi medida no cenário dele.
+
+    Executa o BLOCO REAL do launch.sh entre os marcadores, não uma cópia (BO 63).
+    """
+
+    def _roda(self, arena):
+        with open(os.path.join(RAIZ, 'launch.sh')) as f:
+            texto = f.read()
+        bloco = texto.split(MARCA_FOLLOW_INI)[1].split(MARCA_FOLLOW_FIM)[0]
+        script = ('ARENA=%s\n' % ('true' if arena else 'false')) + bloco + \
+                 '\necho "ARG=$ARENA_FOLLOW_ARG"\n'
+        r = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return r.stdout.strip().split('\n')[-1]
+
+    def test_arena_passa_o_degrau_035(self):
+        out = self._roda(True)
+        self.assertIn('follow_forward_speed:=0.35', out)
+        # o degrau não pode ter atropelado a velocidade-por-folga que já morava aqui
+        self.assertIn('follow_clear_full:=1.2', out)
+        self.assertIn('follow_clear_min:=0.35', out)
+
+    def test_sem_arena_NAO_passa_velocidade_nenhuma(self):
+        """Sem --arena o arg sai vazio e o nó cai no default do launch (0.30).
+        Se um dia isto falhar, o `--nav2` normal começou a herdar um degrau
+        medido só na arena."""
+        self.assertEqual(self._roda(False), 'ARG=')
+
+    def test_o_default_do_launch_e_o_valor_validado(self):
+        """O default do `follow_forward_speed` no nav2.launch.py tem que ser o
+        mesmo `forward_speed` do FollowConfig — senão subir o launch sem --arena
+        muda a velocidade de quem nunca pediu."""
+        with open(os.path.join(RAIZ, 'ros2_packages', 'robot_nav', 'launch',
+                               'nav2.launch.py')) as f:
+            launch = f.read()
+        i = launch.index("'follow_forward_speed'")
+        trecho = launch[i:i + 200]
+        self.assertIn("default_value='0.30'", trecho)
+
+        with open(os.path.join(RAIZ, 'ros2_packages', 'robot_nav', 'robot_nav',
+                               'path_follower.py')) as f:
+            follower = f.read()
+        self.assertIn('forward_speed: float = 0.30', follower)
+
+    def test_o_arg_chega_no_no(self):
+        """Declarar o arg sem ligá-lo ao Node seria um botão morto: o launch
+        aceitaria `follow_forward_speed:=0.35` e o robô andaria a 0.30."""
+        with open(os.path.join(RAIZ, 'ros2_packages', 'robot_nav', 'launch',
+                               'nav2.launch.py')) as f:
+            launch = f.read()
+        i = launch.index("executable='path_follower'")
+        bloco = launch[i:i + 900]
+        self.assertIn("'forward_speed'", bloco)
+        self.assertIn("LaunchConfiguration('follow_forward_speed')", bloco)
+
+    def test_o_no_NAO_aceita_param_a_quente(self):
+        """Trava de documentação (review 2026-09-05): enquanto não existir
+        `add_on_set_parameters_callback`, `ros2 param set /path_follower ...`
+        é um NO-OP silencioso e não serve de rollback. Se alguém adicionar o
+        callback, este teste falha — e aí o rollback a quente passa a valer e a
+        nota do launch.sh precisa ser reescrita."""
+        with open(os.path.join(RAIZ, 'ros2_packages', 'robot_nav', 'robot_nav',
+                               'path_follower.py')) as f:
+            follower = f.read()
+        # a CHAMADA, não a palavra: o comentário do próprio nó cita o nome do
+        # callback pra explicar que ele não existe.
+        self.assertNotIn('.add_on_set_parameters_callback(', follower)
+        with open(os.path.join(RAIZ, 'launch.sh')) as f:
+            self.assertIn('ROLLBACK E\' RESTART', f.read())

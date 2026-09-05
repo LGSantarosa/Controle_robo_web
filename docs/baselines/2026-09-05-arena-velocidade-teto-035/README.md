@@ -17,8 +17,9 @@
 >    andou.
 > 3. **`SUCCEEDED` + `rec=0/0/0` NÃO provam ausência de colisão.**
 >    `HANDOFF_NAV2_TREKKING.md:66` documenta uma corrida **8/8 goals com 11
->    colisões**. Contato é medido pelo `colisao.py` (ground truth SAT), que
->    NÃO rodou aqui. A frase "zero contato" foi removida.
+>    colisões**. A frase "zero contato" foi removida. E o `colisao.py` é
+>    ground truth do **Gazebo** — no robô real ele NÃO roda; ver a tabela de
+>    medição possível no critério de aceite.
 > 4. **A métrica de velocidade não prova saturação.** `nav_metrics.py:301`
 >    integra pose do `/odom` (slip de skid-steer). A perna de **0.324 m/s**
 >    excede o comando máximo de 0.30 do follower — ou é erro de escala da
@@ -129,7 +130,8 @@ por perna, e a volta mediana de 145.6 s. É um registro reprodutível do estado
 
 - *"Zero contato."* `rec=0/0/0` e `status=4` não medem colisão.
   `HANDOFF_NAV2_TREKKING.md:66` traz uma corrida **8/8 goals + 11 colisões**.
-  Contato é o `colisao.py` (SAT contra ground truth), que não rodou aqui.
+  Contato aqui não foi medido por instrumento nenhum: o `colisao.py` é
+  ground truth do Gazebo e não roda no real.
 - *"84 % de saturação."* A distância vem de integração de pose do `/odom`
   (`nav_metrics.py:301`), sujeita a slip. E a perna de **0.324 m/s excede o
   comando máximo de 0.30** — ou a odom infla, ou houve trecho em que o follower
@@ -155,22 +157,39 @@ comportamento do `--nav2` normal.
 Só depois de três voltas limpas a 0.35 se discute 0.40. **0.50 e 0.60 estão fora
 de pauta** até existir medição de frenagem real.
 
-## Critério de aceite da próxima corrida
+## Critério de aceite da próxima corrida (`forward_speed = 0.35`)
 
 A versão original pedia "~110 s por volta". **Descartado** — vinha da premissa
 errada de que o teto era 0.35 no DWB.
 
-Medir, além do tempo:
+### ⚠️ `colisao.py` NÃO serve aqui (achado do review 2026-09-05)
 
-1. **Distância de parada real** do `path_follower` (não a do smoother): comando
-   → parada, com o robô a 0.35.
-2. **Folga real** frente-a-obstáculo no pior tick da volta.
-3. **Contato**, com `colisao.py` — sem isso não se afirma "sem bater".
-4. Do `nav_metrics_*.csv`: `max_linear_speed`, `time_stopped_s`,
-   `direction_reversals`. Se `max_linear_speed` seguir acima do comando, a
-   odometria está inflando e a régua de velocidade precisa de outra fonte.
+`tools/sim_ab/colisao.py` lê os `<collision>` de um **`<mundo.sdf>`** e cruza com
+a pose **ground truth do Gazebo** (SAT contra OBB). No robô real não existe nem
+SDF nem pose verdadeira — **ele não roda**. A versão anterior deste critério
+pedia uma medição impossível.
 
-Reprova: qualquer `rec` != `0/0/0`, qualquer `status` != 4, ou qualquer contato.
+### O que dá pra medir no robô real
+
+Não há ground truth automático. O contato se mede **fisicamente**, e os dados
+já logados corroboram:
+
+| o quê | como | fonte |
+|---|---|---|
+| **Contato (ground truth)** | fita no chão marcando a base de cada cone ANTES da 1ª volta. Cone fora da marca no fim = tocou. É o único juiz de verdade. | olho + fita |
+| **Instante do contato** | pico de corrente / `STALL` no `PowerMonitor` casado com o `t` da volta | `logs/power/power_*.csv` |
+| **Quase-contato (raspão)** | menor `clear` da volta — coluna já gravada pelo follower | `follow_debug.csv` |
+| **Distância de parada REAL** | achar o tick em que `vx` cai de 0.35 → 0 e integrar `hypot(dx,dy)` das colunas `x`,`y` até a pose congelar. Mede a frenagem FÍSICA — que é o número que falta pra sequer discutir 0.40. | `follow_debug.csv` |
+| **Odometria confiável?** | `max_linear_speed` do NavMetrics acima do comando de 0.35 = a odom infla e a régua de velocidade precisa de outra fonte | `nav_metrics_*.csv` |
+
+O `follow_debug.csv` tem `t,state,x,y,yaw_deg,…,dist_goal,vx,wz,la,clear` — as
+duas medições que faltavam (parada real e folga real) saem **dele**, sem
+instrumentação nova.
+
+### Reprova
+
+Qualquer `rec` != `0/0/0`, qualquer `status` != 4, ou **qualquer cone fora da
+marca de fita**.
 
 ## Achado colateral: o STALL é do `path_follower`, e ele PROVA quem dirigia
 

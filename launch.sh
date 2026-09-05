@@ -639,8 +639,21 @@ case "$MODE" in
         # passa pelo velocity_smoother, entao o decel_lim_x do YAML nao prova a
         # desaceleracao fisica. Baseline do 0.30 e a analise inteira em
         # docs/baselines/2026-09-05-arena-velocidade-teto-035/.
+        #
+        # ⚠️ ROLLBACK E' RESTART, NAO `ros2 param set` (achado do review 09-05):
+        # o path_follower le os parametros UMA VEZ no __init__ e congela em
+        # self.cfg (path_follower.py:642); nao ha add_on_set_parameters_callback.
+        # `ros2 param set /path_follower forward_speed 0.30` muda o valor no
+        # servidor de parametros e o no' SEGUE A 0.35 — silenciosamente. Pra
+        # voltar: Ctrl-C e subir sem --arena, ou
+        # `ros2 launch robot_nav nav2.launch.py ... follow_forward_speed:=0.30`.
+        #
+        # O test_arena_perfil_prova.py EXECUTA o bloco entre os marcadores
+        # abaixo (em vez de reimplementar a logica e virar tautologia — BO 63).
+        # >>> PERFIL_ARENA_FOLLOW
         ARENA_FOLLOW_ARG=""
         [ "$ARENA" = true ] && ARENA_FOLLOW_ARG="follow_clear_full:=1.2 follow_clear_min:=0.35 follow_forward_speed:=0.35"
+        # <<< PERFIL_ARENA_FOLLOW
         # motion_guard DESLIGADO na arena (dono, 2026-08-31). Ele e' o vigia de
         # PESSOA; a arena da prova nao tem pessoa, tem CONE — e a vigilia fechava
         # em cima do cone e ZERAVA o comando por ~27 s (3 episodios em 11 voltas,

@@ -615,6 +615,16 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
     class PathFollowerNode(Node):
         def __init__(self):
             super().__init__('path_follower')
+            # ⚠️ PARAMETROS SAO LIDOS UMA VEZ, AQUI (achado do review 2026-09-05).
+            # Nao existe add_on_set_parameters_callback neste no': o dict `g`
+            # abaixo vira `self.cfg` (um FollowConfig congelado) e o
+            # DecisiveFollower guarda a referencia. Logo
+            # `ros2 param set /path_follower <qualquer_coisa>` altera o servidor
+            # de parametros e o no' SEGUE COM O VALOR ANTIGO — sem erro, sem
+            # aviso. Trocar qualquer parametro daqui exige RESTART do no'.
+            # Se um dia precisar de ajuste a quente (util em campo), o lugar e'
+            # um callback que reescreva self.cfg — tarefa separada, porque mexe
+            # no no' que DIRIGE o robo.
             g = {}
             for name, default in (
                 ('forward_speed', 0.30), ('lookahead', 0.6),
