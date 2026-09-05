@@ -1,5 +1,32 @@
 # BASELINE 2026-09-05 17:20-17:30 — velocidade com teto `max_vel_x = 0.35`
 
+> ## ⛔ CORREÇÃO 2026-09-05 (revisão do dono) — LEIA ANTES DE USAR ESTE BASELINE
+>
+> **Os NÚMEROS medidos abaixo valem. A CONCLUSÃO original estava ERRADA e foi
+> reescrita.** O que caiu, verificado no código:
+>
+> 1. **Quem dirige não é o DWB.** `nav2.launch.py:225` sobe o `path_follower`
+>    sem `condition`, e o `twist_mux_auto.yaml` dá a ele prioridade **15**
+>    contra **10** do `nav_vel`. O teto real da corrida é
+>    `path_follower.py:88 forward_speed = 0.30` — **não** `max_vel_x = 0.35`.
+>    Os três parâmetros propostos na versão original governam a cadeia que
+>    PERDE o mux; mexer neles não teria acelerado o robô.
+> 2. **A conta de frenagem era inválida.** Ela usava `decel_lim_x = -1.0` do
+>    `velocity_smoother`, e o `follow_vel` **não passa** pelo smoother (vai
+>    direto pro `twist_mux_auto`). A "folga de 7 cm" não descreve o robô que
+>    andou.
+> 3. **`SUCCEEDED` + `rec=0/0/0` NÃO provam ausência de colisão.**
+>    `HANDOFF_NAV2_TREKKING.md:66` documenta uma corrida **8/8 goals com 11
+>    colisões**. Contato é medido pelo `colisao.py` (ground truth SAT), que
+>    NÃO rodou aqui. A frase "zero contato" foi removida.
+> 4. **A métrica de velocidade não prova saturação.** `nav_metrics.py:301`
+>    integra pose do `/odom` (slip de skid-steer). A perna de **0.324 m/s**
+>    excede o comando máximo de 0.30 do follower — ou é erro de escala da
+>    odom, ou o follower parou de publicar (timeout 0,5 s) e o DWB assumiu.
+>    **Este log não distingue os dois.**
+>
+> Ver §"Quem realmente dirige" e §"O degrau correto" abaixo.
+
 Ponto de comparação para a **fase VELOCIDADE reaberta**. Rota `teste7.json`
 (3 waypoints), mapa `maps/oficial.yaml`, perfil `--arena` no robô real
 (`./launch.sh --nav2 --arena --map=maps/oficial.yaml`), 3 voltas seguidas.
@@ -21,9 +48,12 @@ commitado.
 
 | parâmetro | arquivo | linha | valor |
 |---|---|---|---|
-| `FollowPath.max_vel_x` | `nav2_params_arena.yaml` | 223 | **0.35** |
-| `FollowPath.max_speed_xy` | idem | 236 | **0.35** |
-| `velocity_smoother.max_velocity[0]` | idem | 589 | **0.35** |
+| `path_follower.forward_speed` ⬅ **TETO REAL** | `path_follower.py` | 88 | **0.30** |
+| `path_follower.min_speed` | `path_follower.py` | 247 | 0.22 |
+| `clear_full` / `clear_min` (LIGADO por `--arena`) | `launch.sh` | 634 | 1.2 / 0.35 |
+| `FollowPath.max_vel_x` (cadeia `nav_vel`, perde o mux) | `nav2_params_arena.yaml` | 223 | 0.35 |
+| `FollowPath.max_speed_xy` (idem) | idem | 236 | 0.35 |
+| `velocity_smoother.max_velocity[0]` (idem) | idem | 589 | 0.35 |
 | `acc_lim_x` / `decel_lim_x` | idem | 238/240 | 1.0 / -1.0 |
 | `sim_time` | idem | 256 | 1.2 |
 | `vtheta_samples` | idem | 252 | 1 (DWB só anda reto) |
@@ -58,90 +88,115 @@ commitado.
 | volta 3 (relógio) | 139.1 s |
 | **volta mediana (relógio)** | **145.6 s ≈ 2'26"** |
 | **velocidade média global** | **0.294 m/s** (126.98 m / 431.4 s) |
-| melhor perna | 0.324 m/s (93 % do teto) |
+| melhor perna | 0.324 m/s ⚠️ **acima do comando máx 0.30 do follower** — ver correção |
 | pior perna | 0.210 m/s (a do STALL) |
-| recoveries em 9 pernas | **0** |
+| recoveries em 9 pernas | **0** (≠ ausência de colisão — ver correção) |
 | status em 9 pernas | **9 × SUCCEEDED (4)** |
 
-## A conclusão que este baseline estabelece
-
-**O gargalo é o teto de 0.35, não a arena.**
-
-Média global de **0.294 m/s num teto de 0.35 = 84 % de saturação** — e isso
-*incluindo* os point-turns parados. A melhor perna fica a 93 % do teto. O robô
-passa a rota praticamente inteira grudado no limite.
-
-Não é costmap, não é planner, não é o reflexo:
-
-- `replans=26` em 27.5 s ≈ **1 Hz** — é a taxa nominal do planner, não sintoma.
-- `rec(b/s/w) = 0/0/0` nas **nove** pernas — nenhum backup, spin ou wait.
-- 9/9 `SUCCEEDED`. Zero contato, zero travamento.
-
-A pista está sobrando. Subir o teto converte diretamente em tempo.
-
-## O degrau proposto: 0.35 → 0.50 m/s (NÃO 0.60)
-
-Três números que **têm que andar juntos** — subir um só faz o outro cortar e o
-ganho não aparece:
-
-| onde | linha | de → para |
-|---|---|---|
-| `FollowPath.max_vel_x` | 223 | 0.35 → **0.50** |
-| `FollowPath.max_speed_xy` | 236 | 0.35 → **0.50** |
-| `velocity_smoother.max_velocity[0]` | 589 | 0.35 → **0.50** |
-
-**Por que 0.50 é seguro sem tocar em mais nada:** o `PolygonFront` foi
-redimensionado em 2026-08-27 (frente `0.40 -> 0.50`) **para 0.60 m/s**, e em
-2026-08-28 a velocidade caiu pra 0.35 sem a caixa encolher de volta. Sobra
-margem de frenagem. Conta a 0.50 m/s:
+## Quem realmente dirige (verificado 2026-09-05)
 
 ```
-parada  = v²/2a = 0.25 / 2.0        = 0.125 m   (decel_lim_x -1.0)
-reação  = scan 10 Hz + ciclo        ≈ 0.05  m
-total                               ≈ 0.18  m
-aviso da caixa (x 0.25..0.50)       = 0.25  m   -> ~7 cm de folga
+path_follower(follow_vel, prio 15)  ─┐
+door_crossing(door_vel,   prio 20)  ─┤─> [twist_mux_auto] -> auto_vel_raw
+velocity_smoother(nav_vel, prio 10) ─┘        -> [collision_monitor] -> auto_vel
+        ^ DWB/RotationShim                    -> [twist_mux FINAL] -> cmd_vel
+          PERDE pro follower
 ```
 
-A 0.60 a mesma conta dá ~0.25 m = **folga zero**. Por isso o degrau é 0.50.
+- `nav2.launch.py:225` — o `path_follower` sobe **sem `condition`** (os nós
+  condicionais deste arquivo usam `IfCondition`; ver linhas 254 e 284). Ele está
+  vivo em toda corrida `--nav2`.
+- `twist_mux_auto.yaml` — `follower` **15** > `navigation` **10**. Enquanto o
+  follower publicar, o `controller_server` é ignorado. O próprio comentário do
+  launch diz isso: *"Publica follow_vel (prio 15 no twist_mux, > nav_vel:
+  ignora o controller_server)"*.
+- `path_follower.py:88` — `forward_speed = 0.30`. **Este é o teto da corrida.**
+- `launch.sh:634` — com `--arena`, `follow_clear_full:=1.2`. Isso LIGA o
+  `speed_for_clearance` (`path_follower.py:284`), que interpola o cruzeiro entre
+  `min_speed 0.22` e `forward_speed 0.30` sempre que a folga frontal < 1.2 m.
+  Logo o teto efetivo **não era 0.30 achatado — era 0.30 modulado pra baixo**
+  em boa parte da rota.
+- `follow_vel` **não passa** pelo `velocity_smoother`. `acc_lim_x`/`decel_lim_x`
+  do YAML não descrevem a aceleração física desta corrida.
 
-**Não mexer** (um parâmetro por vez): `acc_lim_x` (1.0 já rampa até 0.50 em
-0.5 s), `PolygonFront` (já dimensionado), `sim_time` (1.2 s × 0.50 = 0.60 m de
-horizonte, sobra), nada de angular.
+## O que este baseline PODE e NÃO PODE afirmar
+
+**Pode:** 9/9 `SUCCEEDED`, 0 recoveries, os tempos e as distâncias de odometria
+por perna, e a volta mediana de 145.6 s. É um registro reprodutível do estado
+`forward_speed = 0.30`.
+
+**Não pode:**
+
+- *"Zero contato."* `rec=0/0/0` e `status=4` não medem colisão.
+  `HANDOFF_NAV2_TREKKING.md:66` traz uma corrida **8/8 goals + 11 colisões**.
+  Contato é o `colisao.py` (SAT contra ground truth), que não rodou aqui.
+- *"84 % de saturação."* A distância vem de integração de pose do `/odom`
+  (`nav_metrics.py:301`), sujeita a slip. E a perna de **0.324 m/s excede o
+  comando máximo de 0.30** — ou a odom infla, ou houve trecho em que o follower
+  parou de publicar (timeout 0.5 s) e o DWB assumiu. O log não separa os casos.
+
+O que sobra, honestamente: o robô parece rodar **perto do teto do follower**,
+mas o número exato não está provado e o teto de comparação é **0.30**, não 0.35.
+
+## O degrau correto (revisão do dono, 2026-09-05)
+
+**`path_follower.forward_speed`: 0.30 → 0.35.** É o parâmetro que efetivamente
+manda no robô, e 0.35 apenas o alinha aos tetos que a cadeia `nav_vel` já tem —
+nada mais precisa se mover.
+
+**NÃO** subir `max_vel_x` / `max_speed_xy` / `velocity_smoother.max_velocity[0]`:
+governam a cadeia que perde o mux. Deixá-los em 0.35 mantém o fallback coerente.
+
+Implementação: `forward_speed` é param ROS declarado (`path_follower.py:620`)
+mas **não tem launch arg** — só `clear_full`/`clear_min` têm. Preferir adicionar
+um arg espelhando `follow_clear_full`, para o `--arena` setar sem alterar o
+comportamento do `--nav2` normal.
+
+Só depois de três voltas limpas a 0.35 se discute 0.40. **0.50 e 0.60 estão fora
+de pauta** até existir medição de frenagem real.
 
 ## Critério de aceite da próxima corrida
 
-- **Tempo esperado:** volta mediana **145.6 s → ~110 s (≈1'50")**. Não é o
-  escalonamento linear 0.35/0.50 (que daria 102 s): ~15 % do tempo é point-turn
-  e rampa, que **não** escalam com o teto linear. Se o tempo *não* cair pra essa
-  faixa, alguma coisa está capando — é diagnóstico, não motivo pra subir mais.
-- **Precisão — o que reprova:** qualquer `rec(b/s/w)` diferente de `0/0/0`, ou
-  qualquer `status` != 4. O baseline é 0 e 9/9; a régua é essa.
-- **Sinal de perda de precisão a olho:** o DWB está com `vtheta_samples: 1` —
-  ele **só anda reto**, todo giro é point-turn do RotationShim, disparado quando
-  o erro de heading passa de 0.30 rad (~17°). Mais rápido = mais metros
-  percorridos antes da correção disparar = desvio maior da linha. Se aparecer
-  zig-zag ou corte de quina, o próximo botão é `angular_dist_threshold`
-  0.30 → 0.22 — **não** voltar a velocidade.
+A versão original pedia "~110 s por volta". **Descartado** — vinha da premissa
+errada de que o teto era 0.35 no DWB.
 
-## Achado colateral: o custo real está no giro, não na reta
+Medir, além do tempo:
+
+1. **Distância de parada real** do `path_follower` (não a do smoother): comando
+   → parada, com o robô a 0.35.
+2. **Folga real** frente-a-obstáculo no pior tick da volta.
+3. **Contato**, com `colisao.py` — sem isso não se afirma "sem bater".
+4. Do `nav_metrics_*.csv`: `max_linear_speed`, `time_stopped_s`,
+   `direction_reversals`. Se `max_linear_speed` seguir acima do comando, a
+   odometria está inflando e a régua de velocidade precisa de outra fonte.
+
+Reprova: qualquer `rec` != `0/0/0`, qualquer `status` != 4, ou qualquer contato.
+
+## Achado colateral: o STALL é do `path_follower`, e ele PROVA quem dirigia
 
 A perna mais lenta das nove (volta 2 perna 1, **0.210 m/s**, 44.9 s pra 9.41 m
-contra 24.8 s pra 8.02 m na volta 3) é exatamente a que traz:
+contra 24.8 s pra 8.02 m na volta 3) traz:
 
 ```
 17:25:14 [PowerMonitor] STALL: vF=40.6V vR=40.0V setL/R=360/-360
-         meas=(74.0, -40.0, 0.0, -76.0)
 ```
 
-`±360` é um point-turn comandando **3.6 rad/s**. O chassi precisa de ~6.0
-(±600 unid/roda) pra vencer o atrito de repouso — está documentado no próprio
-`nav2_params_arena.yaml` (linha ~186) e em `[[project_hover_enable_gira_na_mao]]`.
-O `rotate_to_heading_angular_vel` está em **4.0** (foi baixado 4.2 → 4.0 em
-2026-06-19 por causa do grip das fitas). Resultado: patina, não gira, perde
-~20 s na perna.
+`±360` unid/roda = **ω = 3.6 rad/s**. Isso é exatamente
+`path_follower.py:633 rot_min = 3.6` — o piso do `_turn_cmd`
+(`mag = min(rot_max, max(rot_min, |herr|·rot_k))`, linha 343), subido de
+2.4 → 3.6 hoje mesmo no commit `a8b35fd`.
 
-**Onde se perde tempo e precisão hoje é o giro parado, não a reta.** Próximo
-alvo depois de fechar a velocidade linear. Não mexer agora — um parâmetro por vez.
+**Não é** o `rotate_to_heading_angular_vel = 4.0` do RotationShim (que daria
+±400 e pertence à cadeia que perde o mux). Ou seja: o próprio log confirma, pelo
+número no barramento, que **quem estava dirigindo era o `path_follower`** — é a
+evidência independente da revisão no topo deste documento.
+
+O chassi precisa de ~6.0 rad/s (±600) pra vencer o atrito de repouso; o pivô
+arranca em 3.6, patina e não gira. Custou ~20 s nessa perna.
+
+**Onde se perde tempo e precisão hoje é o pivô parado, não a reta.** O botão é
+`rot_min` (piso de arranque), não `rotate_to_heading_angular_vel`. Alvo seguinte
+depois de fechar o `forward_speed` — um parâmetro por vez.
 
 ## Arquivos
 
