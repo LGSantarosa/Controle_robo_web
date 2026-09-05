@@ -1,0 +1,103 @@
+# Log colado pelo dono, sessao 2026-09-05 17:20-17:30, robo real (robo@robo-desktop).
+# Comando: ./launch.sh --nav2 --arena --map=maps/oficial.yaml
+robo@robo-desktop:~/workspace/Controle_robo_web$ ./launch.sh --nav2 --arena --map=maps/oficial.yaml
+Detectado arm64 — usando perfil --pi automaticamente (override com --no-pi).
+[MEGA] firmware atualizado (hash bate) — pulando flash.
+[1/4] Iniciando nós do robô (MEGA bridge, URDF, odometria, cmd_vel->wheels)...
+      PID: 2550  |  Log: /home/robo/workspace/Controle_robo_web/controle_web/logs/robot_nodes.log
+[2/4] Iniciando LiDAR LD06 em /dev/lidar...
+      [lidar] tentativa 1/5...
+  [wait_for_topic] timeout 5 s aguardando /scan
+      [lidar] caiu / sem /scan — matando e repetindo.
+      [lidar] tentativa 2/5...
+      [lidar] OK — /scan publicando (PID 2760, tentativa 2).
+[3/4] Modo NAV2 (perfil ARENA) — params: /home/robo/workspace/Controle_robo_web/install/robot_nav/share/robot_nav/config/nav2_params_arena.yaml
+      ⚠️  ARENA no ROBO REAL: motion_guard DESLIGADO (vigia de pessoa).
+          Exija pista sem gente e E-STOP na mao. Ligar de volta:
+          rode sem --arena, ou passe motion_guard:=true no launch.
+      [ARENA] door_crossing LIGADO — 2 porta(s) em oficial.doors.json
+      PID: 2819  |  Log: /home/robo/workspace/Controle_robo_web/controle_web/logs/nav2.log
+
+[4/4] Iniciando servidor web em http://0.0.0.0:5000 (modo: nav2)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  MODO NAV2 — clique no mapa web para enviar o robô a um destino.
+  Mapa: maps/oficial.yaml
+  AMCL publicando map→odom. bt_navigator consome /goal_pose.
+  LiDAR LD06 publicando em: /scan
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [lidar-watchdog] ativo (PID 3109 — checa o LD06 a cada 15s).
+Logs dos nós em /home/robo/workspace/Controle_robo_web/controle_web/logs/
+
+[ROS2Controller] WEB_TELEOP=off — nó vivo, SEM publicar em /web_vel (movimento via PS4/WASD; web é só visualização).
+[2026-09-05 17:20:05,386] INFO: [MapBridge] inicializado (modo=nav2, maps_dir=/home/robo/workspace/Controle_robo_web/maps)
+[2026-09-05 17:20:05,404] INFO: [Camera] /dev/video0 ausente — POV desabilitado (replug ativa sozinho)
+[2026-09-05 17:20:05,812] INFO: [NavMetrics] coletor iniciado. CSV dir: /home/robo/workspace/Controle_robo_web/controle_web/logs/nav_metrics
+[2026-09-05 17:20:06,408] INFO: [PowerMonitor] iniciado. CSV: /home/robo/workspace/Controle_robo_web/controle_web/logs/power/power_2026-09-05_172005.csv
+[2026-09-05 17:20:06,725] INFO: [MapBridge] /map 608x711 @ 0.050 m/px emitido
+[2026-09-05 17:20:40,573] INFO: [MapBridge] rota carregada: /home/robo/workspace/Controle_robo_web/maps/routes/teste7.json (3 pontos)
+
+# ---------------- VOLTA 1 ----------------
+[2026-09-05 17:21:16,223] INFO: [MapBridge] waypoints: 3 pontos, loop=False
+[2026-09-05 17:21:17,708] WARNING: [MapBridge] WP_SEND idx=0/3 despachando -> (4.22, 7.07, yaw=1.549)
+[2026-09-05 17:21:17,751] INFO: [MapBridge] NavigateToPose → (4.22, 7.07, yaw=1.55)
+[2026-09-05 17:21:17,762] INFO: [NavMetrics] início nav c166f85c
+[2026-09-05 17:21:17,796] WARNING: [MapBridge] WP_ACCEPT idx=0 aceito
+[2026-09-05 17:21:45,262] WARNING: [MapBridge] WP_RESULT idx=0 status=4
+[2026-09-05 17:21:45,278] INFO: [MapBridge] waypoint 1/3 concluído
+[2026-09-05 17:21:45,313] INFO: [NavMetrics] nav c166f85c → SUCCEEDED em 27.5s | replans=26 | rec(b/s/w)=0/0/0 | dist=8.15m
+[2026-09-05 17:21:45,354] INFO: [MapBridge] luz do objetivo acionada (waypoint 1/3)
+[2026-09-05 17:21:46,918] WARNING: [MapBridge] WP_SEND idx=1/3 despachando -> (-5.86, 5.81, yaw=-3.079)
+[2026-09-05 17:21:46,946] INFO: [NavMetrics] início nav b4ca6c75
+[2026-09-05 17:21:46,995] WARNING: [MapBridge] WP_ACCEPT idx=1 aceito
+[2026-09-05 17:22:38,980] WARNING: [MapBridge] WP_RESULT idx=1 status=4
+[2026-09-05 17:22:39,006] INFO: [NavMetrics] nav b4ca6c75 → SUCCEEDED em 52.0s | replans=49 | rec(b/s/w)=0/0/0 | dist=13.83m
+[2026-09-05 17:22:40,631] WARNING: [MapBridge] WP_SEND idx=2/3 despachando -> (2.51, -9.01, yaw=-1.612)
+[2026-09-05 17:22:40,670] INFO: [NavMetrics] início nav 7cc9d82a
+[2026-09-05 17:22:40,707] WARNING: [MapBridge] WP_ACCEPT idx=2 aceito
+[2026-09-05 17:23:43,270] WARNING: [MapBridge] WP_RESULT idx=2 status=4
+[2026-09-05 17:23:43,310] INFO: [NavMetrics] nav 7cc9d82a → SUCCEEDED em 62.6s | replans=57 | rec(b/s/w)=0/0/0 | dist=20.26m
+[2026-09-05 17:23:43,433] INFO: [MapBridge] luz do objetivo acionada (waypoint 3/3)
+
+# ---------------- VOLTA 2 ----------------
+[2026-09-05 17:24:24,231] INFO: [MapBridge] /initialpose → (0.05, -0.02, yaw=0.00)
+[2026-09-05 17:24:37,554] INFO: [MapBridge] waypoints: 3 pontos, loop=False
+[2026-09-05 17:24:39,107] WARNING: [MapBridge] WP_SEND idx=0/3 despachando -> (4.22, 7.07, yaw=1.549)
+[2026-09-05 17:24:39,136] INFO: [NavMetrics] início nav 212b9e31
+[2026-09-05 17:24:39,373] WARNING: [MapBridge] WP_ACCEPT idx=0 aceito
+[2026-09-05 17:25:14,791] WARNING: [PowerMonitor] STALL: vF=40.6V vR=40.0V setL/R=360/-360 meas=(74.0, -40.0, 0.0, -76.0)
+[2026-09-05 17:25:24,047] WARNING: [MapBridge] WP_RESULT idx=0 status=4
+[2026-09-05 17:25:24,083] INFO: [NavMetrics] nav 212b9e31 → SUCCEEDED em 44.9s | replans=43 | rec(b/s/w)=0/0/0 | dist=9.41m
+[2026-09-05 17:25:25,727] WARNING: [MapBridge] WP_SEND idx=1/3 despachando -> (-5.86, 5.81, yaw=-3.079)
+[2026-09-05 17:25:25,820] INFO: [NavMetrics] início nav 1218454d
+[2026-09-05 17:25:25,835] WARNING: [MapBridge] WP_ACCEPT idx=1 aceito
+[2026-09-05 17:26:09,686] WARNING: [MapBridge] WP_RESULT idx=1 status=4
+[2026-09-05 17:26:09,699] INFO: [NavMetrics] nav 1218454d → SUCCEEDED em 43.8s | replans=41 | rec(b/s/w)=0/0/0 | dist=13.29m
+[2026-09-05 17:26:11,286] WARNING: [MapBridge] WP_SEND idx=2/3 despachando -> (2.51, -9.01, yaw=-1.612)
+[2026-09-05 17:26:11,365] INFO: [NavMetrics] início nav da94908d
+[2026-09-05 17:26:11,400] WARNING: [MapBridge] WP_ACCEPT idx=2 aceito
+[2026-09-05 17:27:16,408] INFO: [NavMetrics] nav da94908d → SUCCEEDED em 65.0s | replans=60 | rec(b/s/w)=0/0/0 | dist=20.40m
+[2026-09-05 17:27:16,410] WARNING: [MapBridge] WP_RESULT idx=2 status=4
+[2026-09-05 17:27:16,604] INFO: [MapBridge] luz do objetivo acionada (waypoint 3/3)
+
+# ---------------- VOLTA 3 ----------------
+[2026-09-05 17:27:57,250] INFO: [MapBridge] /initialpose → (0.40, 0.68, yaw=-0.02)
+[2026-09-05 17:28:03,526] INFO: [MapBridge] /initialpose → (0.34, 0.08, yaw=0.00)
+[2026-09-05 17:28:08,320] INFO: [MapBridge] waypoints: 3 pontos, loop=False
+[2026-09-05 17:28:09,858] WARNING: [MapBridge] WP_SEND idx=0/3 despachando -> (4.10, 6.74, yaw=1.549)
+[2026-09-05 17:28:09,922] INFO: [NavMetrics] início nav 1eecf1b9
+[2026-09-05 17:28:09,930] WARNING: [MapBridge] WP_ACCEPT idx=0 aceito
+[2026-09-05 17:28:34,680] WARNING: [MapBridge] WP_RESULT idx=0 status=4
+[2026-09-05 17:28:34,712] INFO: [NavMetrics] nav 1eecf1b9 → SUCCEEDED em 24.8s | replans=23 | rec(b/s/w)=0/0/0 | dist=8.02m
+[2026-09-05 17:28:36,331] WARNING: [MapBridge] WP_SEND idx=1/3 despachando -> (-5.86, 5.81, yaw=-3.079)
+[2026-09-05 17:28:36,356] INFO: [NavMetrics] início nav a6db7fa2
+[2026-09-05 17:28:36,395] WARNING: [MapBridge] WP_ACCEPT idx=1 aceito
+[2026-09-05 17:29:18,719] WARNING: [MapBridge] WP_RESULT idx=1 status=4
+[2026-09-05 17:29:18,753] INFO: [NavMetrics] nav a6db7fa2 → SUCCEEDED em 42.3s | replans=40 | rec(b/s/w)=0/0/0 | dist=12.90m
+[2026-09-05 17:29:20,371] WARNING: [MapBridge] WP_SEND idx=2/3 despachando -> (2.51, -9.01, yaw=-1.612)
+[2026-09-05 17:29:20,434] INFO: [NavMetrics] início nav a5e2aa3b
+[2026-09-05 17:29:20,463] WARNING: [MapBridge] WP_ACCEPT idx=2 aceito
+[2026-09-05 17:30:28,992] WARNING: [MapBridge] WP_RESULT idx=2 status=4
+[2026-09-05 17:30:29,000] INFO: [NavMetrics] nav a5e2aa3b → SUCCEEDED em 68.5s | replans=63 | rec(b/s/w)=0/0/0 | dist=20.72m
+[2026-09-05 17:30:29,086] INFO: [MapBridge] luz do objetivo acionada (waypoint 3/3)
