@@ -652,14 +652,19 @@ def test_no_rearm_right_after_crossing():
     assert c.state == 'idle'
 
 
-def test_rearm_allowed_after_crossing_cooldown_expires():
-    # regressão: o cooldown é temporário — passado ele, re-aproximar re-arma normal
-    # (ex.: viagem de volta cruzando a mesma porta no outro sentido).
+def test_passou_nao_rearma_nem_com_o_cooldown_vencido():
+    """2026-09-06, DECISÃO DO DONO: depois de PASSAR, não tenta de novo.
+
+    Este teste dizia o contrário até hoje ("cooldown é temporário — re-aproximar
+    re-arma normal"), e era o comportamento que o campo mostrou de perto: o robô
+    passava a porta 2 e voltava por ela. Agora quem quer atravessar de novo tem
+    que SAIR da zona e voltar (test_sair_da_zona_e_voltar_e_travessia_nova) —
+    o cooldown vencido, sozinho, não basta."""
     dc = mk()
     t = _ate_crossing(dc)
     step(dc, t + 1.0, (1.5, 2.0 + CFG.exit_margin + 0.05, math.pi / 2))   # cruzou
     c = step(dc, t + 1.0 + CFG.crossing_cooldown + 0.5, (1.5, 1.4, math.pi / 2))
-    assert c.state == 'rotating'                        # cooldown expirou -> re-arma
+    assert c.state == 'idle'
 
 
 # ---- profundidade do vão + pivô limitado (§2H.25/§2H.26) -------------------
@@ -856,3 +861,71 @@ def test_o_canal_da_re_nao_e_o_do_unstuck():
         src = f.read()
     assert "'door_escape_vel'" in src
     assert 'unstuck_vel' not in src
+
+
+# ---- "passou -> não passa de novo" (2026-09-06, campo) -----------------------
+# O robô atravessava a porta 2 e, no waypoint seguinte, tentava atravessar de
+# VOLTA por ela. Causa: o waypoint logo atrás da porta caía DENTRO da zona
+# (0.598 m do centro, zona 1.1), então concluir esse goal contava como
+# "pré-porta cumprido" e rearmava a travessia — agora ao contrário.
+
+D2 = {'id': 2, 'a': [-6.2413, -5.2871], 'b': [-5.4960, -5.2871]}   # porta real
+NORTE = (-5.8686, -4.4871, -math.pi / 2)   # pré-porta, encarando a porta
+SUL = (-5.8786, -5.8851, -math.pi / 2)     # waypoint pós-porta DA ROTA (na zona)
+LONGE = (-5.8786, -9.0, -math.pi / 2)      # fora da zona
+
+
+def _passo(dc, t, pose, cleared=False):
+    return dc.update(t, pose, [D2], True, True, math.inf, True,
+                     math.inf, math.inf, goal_succeeded=cleared)
+
+
+def test_depois_de_passar_nao_tenta_passar_de_novo():
+    dc = DoorCrossing(DoorCrossConfig())
+    _passo(dc, 0.0, NORTE, cleared=True)       # cumpriu o pré-porta -> pode armar
+    assert dc._cleared == {2}
+    _passo(dc, 1.0, SUL)                        # PASSOU (mudou de lado)
+    assert 2 in dc._crossed and dc._cleared == set()
+    # a manobra acaba (do jeito que for) e vem o waypoint seguinte
+    dc.state, dc.door, dc.geom = 'idle', None, None
+    # o goal do waypoint pós-porta conclui DENTRO da zona (0.598 m do centro, é o
+    # da rota real): NÃO vale como pré-porta cumprido
+    t = 2.0 + DoorCrossConfig().crossing_cooldown + 1.0     # cooldown já vencido
+    c = _passo(dc, t, SUL, cleared=True)
+    assert dc._cleared == set()
+    assert c.state == 'idle'                    # não rearma pra voltar
+
+
+def test_sair_da_zona_e_voltar_e_travessia_nova():
+    """A trava é 'não passa DE NOVO agora', não 'nunca mais': quem sai da zona e
+    volta com o pré-porta cumprido atravessa outra vez."""
+    dc = DoorCrossing(DoorCrossConfig())
+    _passo(dc, 0.0, NORTE, cleared=True)
+    _passo(dc, 1.0, SUL)
+    assert 2 in dc._crossed
+    _passo(dc, 2.0, LONGE)                      # saiu da zona -> esquece tudo
+    assert dc._crossed == set() and dc._cleared == set()
+    _passo(dc, 3.0, SUL, cleared=True)          # volta e cumpre o pré-porta
+    assert dc._cleared == {2}
+
+
+def test_travessia_conta_mesmo_quando_quem_dirigiu_foi_o_nav2():
+    """A porta 2 do campo foi atravessada pelo nav2 no braço, com o `crossing`
+    abortado. Mesmo assim tem que contar como passada."""
+    dc = DoorCrossing(DoorCrossConfig())
+    _passo(dc, 0.0, NORTE, cleared=True)
+    dc.state = 'idle'                            # a máquina fina nunca conduziu
+    _passo(dc, 1.0, SUL)
+    assert 2 in dc._crossed
+
+
+def test_tremida_em_cima_do_vao_nao_conta_como_travessia():
+    """Parado no meio do vão o sinal de `s` treme; sem deadband uma travessia
+    viraria várias e a porta se trancaria sozinha no meio da manobra."""
+    cfg = DoorCrossConfig()
+    dc = DoorCrossing(cfg)
+    _passo(dc, 0.0, NORTE, cleared=True)
+    meio = cfg.side_deadband * 0.5
+    for i, dy in enumerate((+meio, -meio, +meio, -meio)):
+        _passo(dc, 1.0 + i, (-5.8686, -5.2871 + dy, -math.pi / 2))
+    assert dc._crossed == set() and dc._cleared == {2}

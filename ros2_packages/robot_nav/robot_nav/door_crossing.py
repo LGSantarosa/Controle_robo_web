@@ -421,6 +421,11 @@ class DoorCrossConfig:
     # giro acontece FORA do vao. Conta em exit_s_min().
     exit_margin: float = 0.6        # m — além do centro pra soltar
     total_timeout: float = 40.0     # s — manobra inteira (revertido de 600; ver align_timeout)
+    # 2026-09-06 (campo): depois de PASSAR a porta o robô tentava passar de novo,
+    # de volta. Este deadband é a faixa em torno do plano da porta onde o lado não
+    # é atualizado — sem ele o sinal de `s` treme com o robô parado em cima do vão
+    # e uma travessia vira várias.
+    side_deadband: float = 0.10     # m — |s| menor que isto: não decide de que lado está
     retrigger_cooldown: float = 3.0  # s — após abort, não rearmar na hora
     crossing_cooldown: float = 8.0   # s — após CRUZAR, não re-armar (campo 06-22: a ré pós-porta trazia o robô de volta pra zona e re-armava a door — sendo que ele já estava do OUTRO lado)
     # Ré de ESCAPE (2026-06-16): sem a ré do unstuck (calado na região da
@@ -548,6 +553,8 @@ class DoorCrossing:
         self._esc_anchor = (0.0, 0.0)   # âncora de progresso DA RÉ (≠ _esc_start)
         self._esc_t0 = 0.0              # desde quando a ré não sai do lugar
         self._cleared: set = set()      # ids de portas com o pré-porta cumprido (pendência C)
+        self._side_of: dict = {}        # id -> lado em que o robô foi visto por último
+        self._crossed: set = set()      # id -> JÁ PASSOU; não tenta de novo até sair da zona
 
     # -- helpers ------------------------------------------------------------
     def _abort(self, now: float) -> Cmd:
@@ -647,9 +654,35 @@ class DoorCrossing:
         if pose is not None and doors:
             nd = nearest_door_in_zone(pose, doors, cfg.zone_radius)
             if nd is None:
+                # saiu da zona de todas: esquece tudo, inclusive a trava de "já
+                # passei" — voltar depois, de fora, é travessia nova e legítima.
                 self._cleared.clear()
-            elif goal_succeeded:
-                self._cleared.add(nd['id'])
+                self._side_of.clear()
+                self._crossed.clear()
+            else:
+                # PASSOU? Decidido pela GEOMETRIA (o robô mudou de lado do plano
+                # da porta), não por qual caminho de saída a máquina tomou. Vale
+                # se quem dirigiu foi a travessia fina, o nav2 ou o humano — e
+                # vale mesmo quando o `crossing` abortou no meio.
+                # 2026-09-06, campo: sem isto, o robô passava a porta 2 e, no
+                # waypoint seguinte, tentava passar de VOLTA por ela.
+                did = nd['id']
+                g = door_geometry(tuple(nd['a']), tuple(nd['b']))
+                raw = (pose[0] - g.cx) * g.nx + (pose[1] - g.cy) * g.ny
+                if abs(raw) >= cfg.side_deadband:
+                    lado = 1 if raw > 0 else -1
+                    anterior = self._side_of.get(did)
+                    self._side_of[did] = lado
+                    if anterior is not None and lado != anterior:
+                        self._crossed.add(did)
+                        self._cleared.discard(did)
+                        self._cooldown_until = max(
+                            self._cooldown_until, now + cfg.crossing_cooldown)
+                # porta já passada não volta a armar enquanto o robô não sair da
+                # zona: o pré-porta cumprido DEPOIS de passar (waypoint logo
+                # atrás da porta, ainda dentro da zona) não conta.
+                if goal_succeeded and did not in self._crossed:
+                    self._cleared.add(did)
 
         if self.state == 'idle':
             if (pose is None or not goal_active or not nav_forward
