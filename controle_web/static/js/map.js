@@ -151,6 +151,7 @@
   const btnWpNoLightMode = document.getElementById('btn-wp-no-light-mode');
   const btnWpEarlier = document.getElementById('btn-wp-earlier');
   const btnWpLater   = document.getElementById('btn-wp-later');
+  const btnWpDel    = document.getElementById('btn-wp-del');
   const btnWpClear  = document.getElementById('btn-wp-clear');
   const btnWpStart  = document.getElementById('btn-wp-start');
   const btnWpStop   = document.getElementById('btn-wp-stop');
@@ -161,7 +162,7 @@
   const wpLoopChk   = document.getElementById('wp-loop');
   const wpStatusEl  = document.getElementById('wp-status');
 
-  const HINT_NAV2 = '(clique num ponto = selecionar/ordenar · arraste = mover o mapa · 🎯 Ir para = mandar o robô)';
+  const HINT_NAV2 = '(clique num ponto = selecionar/ordenar/apagar · arraste = mover o mapa · 🎯 Ir para = mandar o robô)';
 
   function waypointType(wp) {
     return (wp && (wp.light === false || wp._light === false))
@@ -194,6 +195,30 @@
       wpStatusEl.textContent =
         `ordem alterada: ${waypointType(waypoints[to])} agora é o ponto ` +
         `${to + 1}/${waypoints.length}`;
+    }
+    render();
+  }
+
+  // 2026-09-06: apagar UM ponto. Antes, tirar um ponto errado do meio exigia
+  // "Limpar" e redesenhar a rota inteira — o mesmo custo que o arrasto de
+  // 09-05 tinha resolvido só pra CORRIGIR posição.
+  function deleteSelectedWaypoint() {
+    if (wpActive) return;                       // rota rodando: não mexe
+    const idx = wpSelectedIdx;
+    if (idx < 0 || idx >= waypoints.length) return;
+    const tipo = waypointType(waypoints[idx]);
+    waypoints.splice(idx, 1);
+    // a seleção FICA no mesmo índice (que agora é o ponto seguinte), pra dar
+    // pra apagar vários seguidos sem reclicar; apagou o último -> sobe um.
+    wpSelectedIdx = waypoints.length === 0
+      ? -1
+      : Math.min(idx, waypoints.length - 1);
+    if (waypoints.length === 0) lastGoal = null;
+    updateWpButtons();
+    if (wpStatusEl) {
+      wpStatusEl.textContent = waypoints.length
+        ? `${tipo} ${idx + 1} apagado — restam ${waypoints.length} ponto(s)`
+        : 'rota vazia';
     }
     render();
   }
@@ -263,6 +288,7 @@
     if (btnWpEarlier) btnWpEarlier.disabled = wpActive || !selected || wpSelectedIdx === 0;
     if (btnWpLater) btnWpLater.disabled =
       wpActive || !selected || wpSelectedIdx === waypoints.length - 1;
+    if (btnWpDel) btnWpDel.disabled = wpActive || !selected;
   }
 
   waitForSocket((socket) => {
@@ -414,6 +440,7 @@
       setWpMode(!(wpMode && !wpLight), false));
     if (btnWpEarlier) btnWpEarlier.addEventListener('click', () => moveSelectedWaypoint(-1));
     if (btnWpLater) btnWpLater.addEventListener('click', () => moveSelectedWaypoint(+1));
+    if (btnWpDel) btnWpDel.addEventListener('click', deleteSelectedWaypoint);
     if (btnGoal) btnGoal.addEventListener('click', () => setGoalMode(!goalMode));
     if (btnSetPose) btnSetPose.addEventListener('click', () => setSetPoseMode(!setPoseMode));
     socket.on('set_pose_ack', (data) => {

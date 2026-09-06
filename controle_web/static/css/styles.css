@@ -275,6 +275,10 @@ body.layout-wide .layout { max-width: 1280px; grid-template-columns: 400px minma
 .wp-toolbar .wp-start:hover:not(:disabled) { background: #047857; }
 .wp-toolbar .wp-stop { background: var(--danger-bg); border-color: var(--danger); }
 .wp-toolbar .wp-stop:hover:not(:disabled) { background: #991b1b; }
+/* Apagar UM ponto: destrutivo, mas de escopo pequeno — borda vermelha sem o
+   fundo cheio do Parar, pra não competir com ele no olhar. */
+.wp-toolbar .wp-del { border-color: var(--danger); color: #fca5a5; }
+.wp-toolbar .wp-del:hover:not(:disabled) { background: var(--danger-bg); color: #fff; }
 .wp-loop-label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .wp-status { font-size: 12px; color: #60a5fa; margin-left: 4px; align-self: center; }
 .wp-select { background: var(--panel-2); color: var(--text); border: 1px solid #374151; border-radius: 4px; padding: 5px 8px; font-size: 13px; cursor: pointer; }

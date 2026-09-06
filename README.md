@@ -984,7 +984,11 @@ Em modo NAV2, além do click-to-go simples, a UI tem uma **toolbar de waypoints*
 2. Cada click adiciona um ponto. Goals são somente posicionais: o yaw final é
    ignorado; chegar em `(x,y)` basta. Arraste um ponto existente para movê-lo.
    Para mudar a sequência, clique no marcador e use **← Antes** ou **Depois →**;
-   os números e a linha da rota são atualizados na hora.
+   os números e a linha da rota são atualizados na hora. Para tirar um ponto
+   errado, clique nele e use **✕ Apagar ponto** — o **Limpar** continua sendo a
+   rota inteira. A seleção fica no mesmo lugar depois de apagar, então dá pra
+   tirar vários seguidos sem reclicar. Nenhum dos dois funciona com a rota
+   rodando (dessincronizaria a lista da UI da que o robô está executando).
 3. Marque **Loop** se quiser que a rota repita.
 4. Clique em **▶ Iniciar** — o `MapBridge._wp_runner` envia os goals em sequência via `navigate_to_pose`.
 
