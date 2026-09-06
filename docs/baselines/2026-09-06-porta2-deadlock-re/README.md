@@ -15,11 +15,10 @@ Esta é a **medição que a spec de 01/09 §4.6 pediu e nunca tinha sido feita**
 
 Resposta: **não foi atenuada, foi zerada. 35 s.**
 
-> ⚠️ **`nav2.log` desta corrida ainda NÃO foi copiado pra cá** — a Pi foi
-> desligada antes. `launch.sh:801` abre o log com `>` (trunca), então o próximo
-> `./launch.sh --nav2` destrói a evidência. Copiar ANTES de subir de novo:
-> `cp controle_web/logs/nav2.log docs/baselines/2026-09-06-porta2-deadlock-re/`
-> Os números abaixo foram lidos direto do log na Pi, por ssh, antes disso.
+O **`nav2.log` desta corrida está aqui do lado**, salvo antes de qualquer novo
+launch — `launch.sh:801` abre o log com `>` (trunca), então a próxima subida
+teria destruído a evidência. Todos os números abaixo saem dele; os horários do
+log são epoch (`1788709070` = 12:37:50).
 
 ## VEREDITO CURTO
 
