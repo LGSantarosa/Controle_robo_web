@@ -267,6 +267,7 @@ body.layout-wide .layout { max-width: 1280px; grid-template-columns: 400px minma
 .tb-group:nth-of-type(2) .tb-label { color: #94a3b8; }
 .tb-group:nth-of-type(3) .tb-label { color: #86efac; }
 .wp-toolbar .map-btn.active { background: #1d4ed8; border-color: #3b82f6; color: #fff; }
+.wp-toolbar .wp-no-light.active { background: #6b21a8; border-color: #c084fc; }
 /* Toggles de camada: bolinha de estado ON/OFF antes do texto */
 .map-btn.toggle::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #475569; margin-right: 6px; vertical-align: 1px; transition: background 0.15s, box-shadow 0.15s; }
 .map-btn.toggle.active::before { background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,0.8); }

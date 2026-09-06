@@ -5,9 +5,10 @@ wait_for_service (nó rclpy já destruído durante o retry do runner).
 """
 import threading
 import types
+import json
 from unittest.mock import Mock
 
-from map_service import MapBridge
+from map_service import MapBridge, _waypoint_wants_light
 
 
 def _fake_bridge(srv):
@@ -70,7 +71,7 @@ def test_expand_route_via_plan_cai_na_reta_quando_o_plan_contorna_a_porta():
     assert len(out) == 2
     assert out[0]['x'] == 9.3
     assert out[0]['y'] == 7.5
-    assert out[0]['_light'] is False
+    assert out[0]['light'] is False
     assert out[1]['x'] == 5.6 and out[1]['y'] == 7.8
 
 
@@ -84,15 +85,77 @@ def test_runner_pisca_luz_no_waypoint_real_sucesso():
     fb._pulse_goal_light.assert_called_once()
 
 
-def test_runner_nao_pisca_luz_no_waypoint_tecnico():
+def test_runner_nao_pisca_luz_no_waypoint_sem_led():
     srv = Mock()
     srv.wait_for_service.return_value = False
     fb = _fake_bridge(srv)
-    fb._wp_list = [{'x': 1.0, 'y': 2.0, 'yaw': 0.0, '_light': False}]
+    fb._wp_list = [{'x': 1.0, 'y': 2.0, 'yaw': 0.0, 'light': False}]
     fb._wp_goal_done.set()
     fb._wp_goal_status = 4  # GoalStatus.STATUS_SUCCEEDED
     MapBridge._wp_runner(fb)
     fb._pulse_goal_light.assert_not_called()
+
+
+def test_rota_passa_no_sem_led_e_pisca_so_no_obstaculo(monkeypatch):
+    import map_service
+    monkeypatch.setattr(map_service.time, 'sleep', lambda _s: None)
+    srv = Mock()
+    srv.wait_for_service.return_value = True
+    fb = _fake_bridge(srv)
+    fb._wp_list = [
+        {'x': 1.0, 'y': 2.0, 'yaw': 0.0, 'light': False},
+        {'x': 3.0, 'y': 4.0, 'yaw': 0.0, 'light': True},
+    ]
+
+    def succeed(_x, _y, _yaw=0.0):
+        fb._wp_goal_status = 4
+        fb._wp_goal_done.set()
+
+    fb._wp_send_goal_action = Mock(side_effect=succeed)
+    MapBridge._wp_runner(fb)
+
+    assert [c.args[:2] for c in fb._wp_send_goal_action.call_args_list] == [
+        (1.0, 2.0), (3.0, 4.0),
+    ]
+    fb._pulse_goal_light.assert_called_once_with('waypoint 2/2')
+
+
+def test_campo_antigo_light_privado_continua_sem_piscar():
+    """Rotas/restauracoes produzidas antes do campo publico nao mudam sentido."""
+    assert _waypoint_wants_light({'_light': False}) is False
+    assert _waypoint_wants_light({}) is True
+
+
+def test_goal_sem_led_continua_obrigatorio_na_expansao_de_porta():
+    """A passagem do usuario nao e' filtrada: ganha pre-porta e segue na rota."""
+    fb = types.SimpleNamespace()
+    fb._doors = types.SimpleNamespace(doors=[{
+        'id': 3, 'a': [1.0, -0.5], 'b': [1.0, 0.5],
+    }])
+    fb._plan_path_xy = Mock(return_value=[(0.0, 0.0), (2.0, 0.0)])
+    fb._clear_pre_door_point = Mock(side_effect=lambda door, wx, wy: (wx, wy))
+    passagem = {'x': 2.0, 'y': 0.0, 'yaw': 0.0, 'light': False}
+
+    out = MapBridge._expand_route_via_plan(fb, (0.0, 0.0), [passagem])
+
+    assert len(out) == 2
+    assert out[0]['light'] is False       # pre-porta tecnico automatico
+    assert out[1] == passagem             # passagem pedida nao some nem pontua
+
+
+def test_save_route_preserva_goal_sem_led(tmp_path):
+    fb = types.SimpleNamespace(
+        _maps_dir=str(tmp_path),
+        _wp_list=[],
+        _safe_name=MapBridge._safe_name,
+    )
+    passagem = {'x': 2.0, 'y': 0.0, 'yaw': 0.0, 'light': False}
+
+    result = MapBridge.save_route(fb, 'portas', [passagem])
+
+    assert result == {'ok': True, 'name': 'portas'}
+    saved = json.loads((tmp_path / 'routes' / 'portas.json').read_text())
+    assert saved['waypoints'] == [passagem]
 
 
 def _fake_bridge_2wp(status, para_apos):

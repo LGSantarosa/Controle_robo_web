@@ -43,11 +43,12 @@
   let goalMode   = false;
 
   // Waypoints
-  let waypoints  = [];     // [{x, y, yaw}]
+  let waypoints  = [];     // [{x, y, yaw, light}] (light=false = passagem tecnica)
   let wpMode     = false;  // modo de adição de waypoints ativo
+  let wpLight    = true;   // tipo do próximo ponto: goal pontuável ou passagem
   let wpActive   = false;  // navegação rodando
   let wpActiveIdx = 0;     // índice do waypoint atual
-  let wpDrag     = null;   // {worldX, worldY, canvasX, canvasY} durante drag de orientação
+  let wpDrag     = null;   // preview do ponto novo enquanto o clique esta pressionado
   let wpMouseDown = null;  // posição do mousedown para detectar drag vs click
   // 2026-09-05: arrastar um waypoint que JÁ existe muda ele de lugar, em vez de
   // criar mais um em cima. Antes, corrigir um ponto exigia Limpar e reclicar a
@@ -146,6 +147,7 @@
   // Elementos da toolbar de waypoints
   const wpToolbar   = document.getElementById('wp-toolbar');
   const btnWpMode   = document.getElementById('btn-wp-mode');
+  const btnWpNoLightMode = document.getElementById('btn-wp-no-light-mode');
   const btnWpClear  = document.getElementById('btn-wp-clear');
   const btnWpStart  = document.getElementById('btn-wp-start');
   const btnWpStop   = document.getElementById('btn-wp-stop');
@@ -158,16 +160,29 @@
 
   const HINT_NAV2 = '(arraste = mover o mapa · 🎯 Ir para = mandar o robô)';
 
-  function setWpMode(on) {
+  function setWpMode(on, light = wpLight) {
     wpMode = on;
-    if (on && goalMode) setGoalMode(false);
+    if (on) wpLight = light;
+    if (on) {
+      if (goalMode) setGoalMode(false);
+      doorMode = false; doorDrag = null;
+      if (btnDoor) btnDoor.classList.remove('active');
+    }
     if (btnWpMode) {
-      btnWpMode.textContent = on ? '✕ Cancelar' : '+ Waypoint';
-      btnWpMode.classList.toggle('active', on);
+      btnWpMode.textContent = on && wpLight ? '✕ Cancelar' : '+ Goal (LED)';
+      btnWpMode.classList.toggle('active', on && wpLight);
+    }
+    if (btnWpNoLightMode) {
+      btnWpNoLightMode.textContent = on && !wpLight
+        ? '✕ Cancelar'
+        : '+ Passagem (sem LED)';
+      btnWpNoLightMode.classList.toggle('active', on && !wpLight);
     }
     canvas.style.cursor = on ? 'crosshair' : '';
     if (clickHint) clickHint.textContent = on
-      ? 'clique = waypoint | clique+arraste = direção | arraste um ponto existente = move ele'
+      ? (wpLight
+        ? 'clique = goal com LED | arraste um ponto existente = move ele'
+        : 'clique = passagem obrigatória sem LED | arraste um ponto existente = move ele')
       : (currentMode === 'nav2' ? HINT_NAV2 : '');
   }
 
@@ -194,7 +209,7 @@
     if (btnGoal) btnGoal.classList.toggle('active', on);
     canvas.style.cursor = on ? 'crosshair' : '';
     if (clickHint) clickHint.textContent = on
-      ? '🎯 clique no destino (arraste = direção final)'
+      ? '🎯 clique no destino (a orientação final é ignorada)'
       : (currentMode === 'nav2' ? HINT_NAV2 : '');
   }
 
@@ -204,6 +219,7 @@
     btnWpStop.disabled  = !wpActive;
     if (btnWpClear) btnWpClear.disabled = wpActive;
     if (btnWpMode)  btnWpMode.disabled  = wpActive;
+    if (btnWpNoLightMode) btnWpNoLightMode.disabled = wpActive;
   }
 
   waitForSocket((socket) => {
@@ -349,7 +365,10 @@
       if (!showScan) { scan = null; }   // limpa os pontos ao desligar
       render();
     });
-    if (btnWpMode) btnWpMode.addEventListener('click', () => setWpMode(!wpMode));
+    if (btnWpMode) btnWpMode.addEventListener('click', () =>
+      setWpMode(!(wpMode && wpLight), true));
+    if (btnWpNoLightMode) btnWpNoLightMode.addEventListener('click', () =>
+      setWpMode(!(wpMode && !wpLight), false));
     if (btnGoal) btnGoal.addEventListener('click', () => setGoalMode(!goalMode));
     if (btnSetPose) btnSetPose.addEventListener('click', () => setSetPoseMode(!setPoseMode));
     socket.on('set_pose_ack', (data) => {
@@ -468,7 +487,10 @@
     if (btnDoor) btnDoor.addEventListener('click', () => {
       doorMode = !doorMode;
       doorDrag = null;
-      if (doorMode && goalMode) setGoalMode(false);
+      if (doorMode) {
+        if (goalMode) setGoalMode(false);
+        if (wpMode) setWpMode(false);
+      }
       btnDoor.classList.toggle('active', doorMode);
       statusEl.textContent = doorMode
         ? 'modo porta: arraste de um batente até o outro (clique numa porta p/ apagar)'
@@ -653,8 +675,11 @@
         const wp = waypoints[wpMoveDrag.idx];
         const n = wpMoveDrag.idx + 1;
         if (wp) {
+          const tipo = (wp.light === false || wp._light === false)
+            ? 'passagem sem LED'
+            : 'goal com LED';
           statusEl.textContent =
-            `waypoint ${n} → (${wp.x.toFixed(2)}, ${wp.y.toFixed(2)})` +
+            `${tipo} ${n} → (${wp.x.toFixed(2)}, ${wp.y.toFixed(2)})` +
             (wpActive ? ' — a rota em curso não muda; vale no próximo ▶' : '');
         }
         wpMoveDrag = null; wpDrag = null; wpMouseDown = null;
@@ -663,13 +688,15 @@
       }
 
       if (wpMode && wpMouseDown) {
-        const dx = cx - wpMouseDown.cx;
-        const dy = cy - wpMouseDown.cy;
-        const dragged = Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD;
         const world = wpMouseDown.world;
-        // yaw: canvas y cresce pra baixo, ROS y cresce pra cima — inverte dy
-        const yaw = dragged ? Math.atan2(-dy, dx) : 0.0;
-        waypoints.push({ x: world.x, y: world.y, yaw });
+        // Goals agora sao SOMENTE posicionais. O yaw continua no schema por
+        // compatibilidade com rotas antigas/Nav2, mas nunca e' exigido na
+        // chegada. O alinhamento de porta e' responsabilidade exclusiva do
+        // door_crossing.
+        waypoints.push({ x: world.x, y: world.y, yaw: 0.0, light: wpLight });
+        statusEl.textContent = wpLight
+          ? `goal com LED adicionado: (${world.x.toFixed(2)}, ${world.y.toFixed(2)})`
+          : `passagem sem LED adicionada: (${world.x.toFixed(2)}, ${world.y.toFixed(2)})`;
         updateWpButtons();
         wpDrag = null;
         wpMouseDown = null;
@@ -678,17 +705,13 @@
       }
 
       // Goal único — só com o 🎯 armado (um tiro: desarma depois de enviar).
-      // Click sem drag → yaw=0. Click+drag → yaw aponta na direção do drag
-      // (mesma convenção dos waypoints; canvas y cresce pra baixo, ROS pra cima).
+      // A orientacao final nao faz mais parte do contrato: chegar na posicao
+      // conclui o goal, qualquer que seja o yaw atual do robo.
       if (goalMode && wpMouseDown) {
-        const ddx = cx - wpMouseDown.cx;
-        const ddy = cy - wpMouseDown.cy;
-        const dragged = Math.sqrt(ddx * ddx + ddy * ddy) > DRAG_THRESHOLD;
         const world = wpMouseDown.world;
-        const yaw = dragged ? Math.atan2(-ddy, ddx) : 0.0;
         {
           lastGoal = world;
-          socket.emit('nav_goal', { x: world.x, y: world.y, yaw });
+          socket.emit('nav_goal', { x: world.x, y: world.y, yaw: 0.0 });
           statusEl.textContent = `alvo: (${world.x.toFixed(2)}, ${world.y.toFixed(2)})`;
           setGoalMode(false);
           render();
@@ -1069,28 +1092,15 @@
         ctx.stroke();
       }
 
-      // Seta de orientação
-      ctx.save();
-      ctx.translate(c.x, c.y);
-      ctx.rotate(-wp.yaw);
-      ctx.strokeStyle = isActive ? '#facc15' : isDone ? '#4ade80' : '#60a5fa';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(r + 6, 0);
-      ctx.moveTo(r + 6, 0);
-      ctx.lineTo(r, -4);
-      ctx.moveTo(r + 6, 0);
-      ctx.lineTo(r, 4);
-      ctx.stroke();
-      ctx.restore();
-
       // Círculo com número
+      const lights = wp.light !== false && wp._light !== false;
       ctx.beginPath();
       ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = isActive ? '#facc15' : isDone ? '#065f46' : '#1d4ed8';
+      ctx.fillStyle = isActive ? '#facc15'
+        : isDone ? '#065f46'
+        : lights ? '#1d4ed8' : '#6b21a8';
       ctx.fill();
-      ctx.strokeStyle = isActive ? '#fff' : '#93c5fd';
+      ctx.strokeStyle = isActive ? '#fff' : lights ? '#93c5fd' : '#e9d5ff';
       ctx.lineWidth = isActive ? 2 : 1;
       ctx.stroke();
 
@@ -1099,27 +1109,20 @@
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(i + 1, c.x, c.y);
+
+      // Passagem tecnica: marca visual inequívoca de que este ponto nao
+      // aciona a luz. O numero continua sendo a ordem obrigatoria da rota.
+      if (!lights) {
+        ctx.fillStyle = '#f3e8ff';
+        ctx.font = 'bold 8px sans-serif';
+        ctx.textBaseline = 'top';
+        ctx.fillText('SEM LED', c.x, c.y + r + 2);
+      }
     });
 
-    // Preview de orientação durante drag
+    // Preview do novo goal (yaw final nao e' editavel nem exigido).
     if (wpDrag && wpMode) {
       const c = { x: wpDrag.canvasX, y: wpDrag.canvasY };
-      const dx = wpDrag.curX - c.x;
-      const dy = wpDrag.curY - c.y;
-      if (Math.sqrt(dx * dx + dy * dy) > 4) {
-        ctx.save();
-        ctx.translate(c.x, c.y);
-        ctx.rotate(Math.atan2(dy, dx));
-        ctx.strokeStyle = '#facc15';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([4, 3]);
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(Math.sqrt(dx * dx + dy * dy), 0);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.restore();
-      }
       // Círculo preview
       ctx.beginPath();
       ctx.arc(c.x, c.y, 10, 0, Math.PI * 2);

@@ -99,18 +99,18 @@ def generate_launch_description():
                     'publica direto em auto_vel_raw (perfil ARENA)')
     guard_on = LaunchConfiguration('motion_guard')
 
-    # door_crossing DESLIGADO por default (2026-09-02, spec §5.3). Ele publica
-    # em door_vel com prioridade 20 no mux de autonomia — a MAIOR das fontes
-    # autônomas — então não pode voltar a subir em `--pi`/`--sim` comuns sem
-    # ninguém ter pedido. `--arena` LIGA (é lá que a fresta A existe).
+    # door_crossing LIGADO por default desde 2026-09-06: uma porta marcada e um
+    # waypoint de passagem do outro lado sao uma ordem explicita para atravessar.
+    # Sem portas ele fica idle; com porta, assume via door_vel (prio 20), alinha
+    # e comita a travessia em vez de deixar o planner contornar/desistir.
     # ⚠️ Ligar o nó NÃO basta para ele armar: sem porta marcada
     # (maps/<mapa>.doors.json, via doors_file) e sem um goal do Nav2 que TERMINE
     # dentro da zona da porta (pendência C, door_crossing.py:330), ele sobe e
     # fica `idle` para sempre. Ver DIARIO_ARENA §2H.5.
     door_crossing_arg = DeclareLaunchArgument(
-        'door_crossing', default_value='false',
-        description='true = sobe o door_crossing (perfil ARENA: travessia da '
-                    'fresta A). Exige doors_file com a porta marcada')
+        'door_crossing', default_value='true',
+        description='true = sobe o door_crossing para portas marcadas; false '
+                    '= desliga explicitamente a manobra assistida')
     doors_file_arg = DeclareLaunchArgument(
         'doors_file', default_value='',
         description='maps/<mapa>.doors.json lido do disco no arranque; /doors '
@@ -258,7 +258,8 @@ def generate_launch_description():
         # 2026-06-26 DESATIVADO: o path_follower atravessava a porta da SALA
         # nativamente (reto+giro-no-lugar pelo /plan do Theta*), validado 4/4 no
         # real com a porta deletada do mapa.
-        # 2026-09-02 RE-HABILITADO sob flag (default false): na fresta A da arena
+        # 2026-09-02 RE-HABILITADO sob flag para a arena; desde 2026-09-06 a
+        # flag e' true por default para toda porta explicitamente marcada. Na fresta A
         # (0,90 m) a travessia nativa NÃO serve — medido em 13 travessias, o robô
         # entra SEMPRE torto (-4,8° a -15,8°, mediana -10,7°) e com desvio lateral
         # de até 12,1 cm, deixando folga de 3,7 cm no pior caso, que foi contato

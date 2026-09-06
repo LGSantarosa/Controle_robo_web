@@ -226,8 +226,8 @@ Navegador (WASD / Gamepad / Clique / Waypoints / Marcar porta)
                         (protege TODA a autonomia num ponto só)
     unstuck_supervisor  robô parado c/ goal ativo → ré/giro furando o
                         collision (entra no mux FINAL, prio 30)
-    [door_crossing]     OBSOLETO/DESATIVADO — o path_follower atravessa
-                        porta nativamente (nó comentado no launch)
+    door_crossing       alinha e força a travessia de portas marcadas
+                        (ligado por default; idle quando não há portas)
         │
         ▼  Pontes ROS2 → Socket.IO (no app Flask)
   map_service.py:    /map → PNG, TF map→base_link, /plan, /initialpose,
@@ -252,7 +252,7 @@ Navegador (WASD / Gamepad / Clique / Waypoints / Marcar porta)
 |------|------|---------------|-------------------|
 | **TELEOP** | *(padrão)* | Dirigir manualmente | Só web + LiDAR + nós do robô — sem camada de segurança ativa |
 | **SLAM** | `--slam` | Construir o mapa da sala | `slam_toolbox` em modo *mapping online* (gera `/map` ao vivo) |
-| **NAV2** | `--nav2` | Navegação autônoma + click-to-go + waypoints + métricas | `map_server` + `amcl` (com beam_skip) + `planner_server` (Theta\*) + `controller_server` (DWB, ignorado pelo seguidor) + `bt_navigator` + `behavior_server` + `velocity_smoother` + `waypoint_follower` + **camada de segurança**: `path_follower` + `scan_sanitizer` + `twist_mux_auto` + `collision_monitor` + `unstuck_supervisor` + `NavMetricsCollector` (CSV) (`door_crossing` desativado) |
+| **NAV2** | `--nav2` | Navegação autônoma + click-to-go + waypoints + métricas | `map_server` + `amcl` (com beam_skip) + `planner_server` (Theta\*) + `controller_server` (DWB, ignorado pelo seguidor) + `bt_navigator` + `behavior_server` + `velocity_smoother` + `waypoint_follower` + **camada de segurança**: `path_follower` + `door_crossing` + `scan_sanitizer` + `twist_mux_auto` + `collision_monitor` + `unstuck_supervisor` + `NavMetricsCollector` (CSV) |
 | **TREKKING** | `--trekking` | Ponto-a-ponto rápido com PID, fusão de 3 sensores e snap-to-cone via LiDAR (sem Nav2) | `cone_detector` + `trekking_runner` (máquina de estado + PID) + correção de pose por cone-âncora |
 
 Em todos os modos o servidor web, a ponte MEGA (`mega_bridge`), o `pose_estimator` (dono da odometria e do TF `odom→base_link`), o `twist_mux` e o LiDAR rodam normalmente — você sempre pode dirigir manualmente, mesmo durante SLAM ou NAV2. O `power_monitor` (tensão das placas) sobe em qualquer modo com ROS.
@@ -978,10 +978,19 @@ Em modo NAV2, além do click-to-go simples, a UI tem uma **toolbar de waypoints*
 
 **Como definir uma rota:**
 
-1. Clique em **+ Waypoint** pra entrar em modo de adição.
-2. Cada click adiciona um ponto. Click+drag define o yaw final.
+1. Clique em **+ Goal (LED)** para um obstáculo pontuável, ou em
+   **+ Passagem (sem LED)** para um ponto técnico obrigatório (por exemplo,
+   logo depois de uma porta).
+2. Cada click adiciona um ponto. Goals são somente posicionais: o yaw final é
+   ignorado; chegar em `(x,y)` basta. Arraste um ponto existente para movê-lo.
 3. Marque **Loop** se quiser que a rota repita.
 4. Clique em **▶ Iniciar** — o `MapBridge._wp_runner` envia os goals em sequência via `navigate_to_pose`.
+
+Pontos **sem LED** continuam obrigatórios e são salvos no JSON com
+`"light": false`; a única diferença é não acionar a luz na chegada. Para
+forçar uma porta marcada, coloque a passagem do outro lado dela: o backend
+insere o pré-porta técnico, o `door_crossing` alinha/atravessa, e só depois a
+rota segue para o próximo obstáculo pontuável.
 
 **Salvar e recarregar:**
 - **💾 Salvar rota** grava em `maps/routes/<nome>.json`.
@@ -992,9 +1001,11 @@ Em modo NAV2, além do click-to-go simples, a UI tem uma **toolbar de waypoints*
 
 Usa o status terminal da action `navigate_to_pose` — não estima chegada por distância:
 - `STATUS_SUCCEEDED` → avança imediatamente.
-- `STATUS_ABORTED` → retenta até 2 vezes com 2 s de pausa. Após 3 falhas, pula (emite `skipped: true`).
+- `STATUS_ABORTED` → repete o mesmo ponto indefinidamente, com 2 s de pausa;
+  nenhum goal é pulado.
 - `STATUS_CANCELED` → sai limpo.
-- Timeout de segurança de 120 s por waypoint.
+- Se uma tentativa ficar 1 h sem resposta, ela é cancelada e o mesmo ponto é
+  reenviado. Só o botão **■ Parar** abandona uma rota.
 
 Entre cada waypoint, limpa o `local_costmap` (`/local_costmap/clear_entirely_local_costmap`).
 
@@ -1021,11 +1032,11 @@ O **unstuck e o humano (PS4/web)** entram no mux FINAL, **a jusante** do collisi
 
 ### path_follower — seguidor de trajetória (reto + giro no lugar)
 
-O controlador do Nav2 (DWB) tenta arcos suaves, mas o skid-steer com zona-morta **não esterça andando** (medido: sempre sub-vira, ≤19% do comando) → o robô chegava de cara/paralelo na parede. O `path_follower` **ignora o `controller_server`** e segue diretamente o `/plan` do planner Theta\* com dois primitivos: **anda reto** enquanto apontado pro carrot (lookahead 0.6 m) e **gira no lugar** (autoridade alta, malha fechada no yaw) quando precisa realinhar. Publica em `follow_vel` (prio 15 no `twist_mux_auto`). Dono: **"visivelmente melhor", "igual ao sim".** Foi ele que tornou o `door_crossing` obsoleto (atravessa porta estreita nativamente — 4/4 no real, porta deletada do mapa).
+O controlador do Nav2 (DWB) tenta arcos suaves, mas o skid-steer com zona-morta **não esterça andando** (medido: sempre sub-vira, ≤19% do comando) → o robô chegava de cara/paralelo na parede. O `path_follower` **ignora o `controller_server`** e segue diretamente o `/plan` do planner Theta\* com dois primitivos: **anda reto** enquanto apontado pro carrot (lookahead 0.6 m) e **gira no lugar** (autoridade alta, malha fechada no yaw) quando precisa realinhar. Publica em `follow_vel` (prio 15 no `twist_mux_auto`). Goals comuns terminam somente por posição; não existe giro para yaw final.
 
 ### scan_sanitizer — `/scan` → `/scan_safe`
 
-O LD06 cospe **retornos fantasmas** a <15 cm do sensor (dentro do chassi — fisicamente impossíveis) em ~2% dos scans, em setores fixos. Com `min_points: 2` na PolygonStop, 2 pontinhos congelavam o robô — inclusive parado no meio de uma porta (17 dos 22 freezes de um bag analisado em 2026-06-12). O nó troca `0 < r < 0.15` por `+inf` e republica. **Só o collision monitor consome `/scan_safe`** — SLAM, costmaps e cone_detector seguem no `/scan` cru. (A máscara de batente da porta só era usada pelo `door_crossing`, hoje desativado.)
+O LD06 cospe **retornos fantasmas** a <15 cm do sensor (dentro do chassi — fisicamente impossíveis) em ~2% dos scans, em setores fixos. Com `min_points: 2` na PolygonStop, 2 pontinhos congelavam o robô — inclusive parado no meio de uma porta (17 dos 22 freezes de um bag analisado em 2026-06-12). O nó troca `0 < r < 0.15` por `+inf` e republica. **Só o collision monitor consome `/scan_safe`** — SLAM, costmaps e cone_detector seguem no `/scan` cru. Durante uma travessia, a máscara de batentes marcada pelo `door_crossing` evita que os próprios batentes parem a manobra.
 
 ### collision_monitor (Nav2 stock, tunado)
 
@@ -1035,9 +1046,13 @@ Freia `auto_vel_raw → auto_vel` lendo o scan **sanitizado** — no meio dos do
 
 O collision monitor congela TUDO (até a rotação), e um robô empacado de frente nunca faz o `FollowPath` falhar — o recovery do BT não dispara. O supervisor vigia: **parado com goal ativo** → publica ré em `unstuck_vel` (prio 30, **fura o collision**). Evoluído (2026-06/07): dispara rápido perto de parede mapeada/aperto lateral, escolhe a direção pela cena (frente livre → avança; atrás livre → ré), e o **escape-spin** gira SEMPRE pro lado do plano quando encurralado, alternando giro↔translação pra não entrar em loop. A ré é protegida pela checagem `rear_min_gap` (vão real do para-choque). Validado em campo ("melhorou pra cacete").
 
-### door_crossing — travessia de porta assistida ⚠️ OBSOLETO/DESATIVADO (2026-06-26)
+### door_crossing — travessia de porta assistida
 
-**Não roda mais** — o nó está **comentado no `nav2.launch.py`**. Existia porque o DWB velho não threadava porta estreita (entrava torto, batente na PolygonStop, congela). O `path_follower` passou a atravessar porta nativamente (vai reto pelo vão + giro decisivo), então o `door_crossing` virou redundante e foi desligado. O código continua no repo (`robot_nav/door_crossing.py`); pra religar = descomentar no launch + `colcon build robot_nav`. Quando ativo, ele assumia via `door_vel` (prio 20) uma porta marcada na UI (2 cliques) e alinhava/atravessava vigiando o vão.
+Roda por default no NAV2 e fica `idle` enquanto não houver porta marcada. Ao
+receber uma rota que cruza uma porta, o backend insere um pré-porta sem LED; o
+sucesso desse ponto arma a máquina, que assume via `door_vel` (prio 20), alinha
+no eixo, atravessa reto e só devolve o controle depois de sair do vão. Pode ser
+desligado explicitamente com `door_crossing:=false` no launch.
 
 ### Recovery com ré primeiro (BT custom)
 
@@ -1088,7 +1103,7 @@ Tópicos consumidos:
 | `/web_vel` | `geometry_msgs/Twist` | `controle_web` (se `WEB_TELEOP=on`) | `twist_mux` (prio 50) | opcional |
 | `/nav_vel` | `geometry_msgs/Twist` | `velocity_smoother` (nav2) / `trekking_runner` | `twist_mux_auto` (prio 10) | só `--nav2`/`--trekking` |
 | `/follow_vel` | `geometry_msgs/Twist` | `path_follower` | `twist_mux_auto` (prio 15) | só `--nav2` |
-| `/door_vel` | `geometry_msgs/Twist` | `door_crossing` (DESATIVADO) | `twist_mux_auto` (prio 20) | — (nó comentado) |
+| `/door_vel` | `geometry_msgs/Twist` | `door_crossing` | `twist_mux_auto` (prio 20) | travessia de porta marcada |
 | `/auto_vel_raw` | `geometry_msgs/Twist` | `twist_mux_auto` | `collision_monitor` | só `--nav2` |
 | `/auto_vel` | `geometry_msgs/Twist` | `collision_monitor` | `twist_mux` FINAL (prio 10) | só `--nav2` |
 | `/unstuck_vel` | `geometry_msgs/Twist` | `unstuck_supervisor` | `twist_mux` FINAL (prio 30 — fura o collision) | só `--nav2` |
@@ -1237,7 +1252,7 @@ Controle_robo_web/
 │           ├── path_follower.py        # Segue o /plan em retas + giro no lugar (prio 15)
 │           ├── scan_sanitizer.py      # /scan → /scan_safe (fantasmas <15 cm do LD06)
 │           ├── unstuck_supervisor.py  # Desencalhe: ré/giro furando o collision (prio 30)
-│           ├── door_crossing.py       # Travessia de porta assistida (prio 20) — DESATIVADO
+│           ├── door_crossing.py       # Travessia de porta assistida (prio 20)
 │           ├── cone_detector.py       # Clusteriza /scan em cones candidatos (trekking)
 │           ├── cone_pose_fix.py       # Correção de pose por cone-âncora (trekking)
 │           ├── trekking_runner.py     # FSM IDLE/RECORD/PLAY + PID + snap-to-cone

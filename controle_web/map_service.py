@@ -65,6 +65,16 @@ log = logging.getLogger(__name__)
 WP_RETRY_SLEEP = 2.0
 
 
+def _waypoint_wants_light(waypoint: dict) -> bool:
+    """True quando a chegada deste waypoint deve acionar a luz.
+
+    ``light`` e' o campo publico salvo nas rotas pela web. ``_light`` fica
+    aceito por compatibilidade com os pontos pre-porta gerados por versoes
+    anteriores e possivelmente restaurados depois de um F5.
+    """
+    return waypoint.get('light', waypoint.get('_light', True)) is not False
+
+
 def _occupancy_to_png_b64(grid: OccupancyGrid) -> str:
     """Converte um OccupancyGrid em PNG grayscale (base64).
 
@@ -870,7 +880,9 @@ class MapBridge:
                 wx, wy = self._clear_pre_door_point(door, wx, wy)
                 out.append({
                     'x': wx, 'y': wy, 'yaw': wyaw,
-                    '_light': False,
+                    # Waypoint TECNICO: ele arma o door_crossing; nao e' um
+                    # obstaculo pontuavel e portanto nunca aciona a luz.
+                    'light': False,
                 })
                 log.info(f"[MapBridge] porta {door['id']} no caminho "
                          f"{prev}->{to} -> ponto-pré-porta "
@@ -1245,7 +1257,7 @@ class MapBridge:
             if status == GoalStatus.STATUS_SUCCEEDED:
                 wp = self._wp_list[idx]
                 log.info(f"[MapBridge] waypoint {idx + 1}/{total} concluído")
-                if wp.get('_light', True):
+                if _waypoint_wants_light(wp):
                     self._pulse_goal_light(f'waypoint {idx + 1}/{total}')
                 if not _advance():
                     break

@@ -492,7 +492,17 @@ def handle_start_waypoints(data):
                 raise ValueError("cada waypoint precisa ser objeto")
             wx, wy = _validate_xy(w.get('x'), w.get('y'))
             wyaw = _validate_yaw(w.get('yaw', 0.0))
-            waypoints.append({'x': wx, 'y': wy, 'yaw': wyaw})
+            # ``light: false`` marca um ponto TECNICO de passagem (por
+            # exemplo, logo depois de uma porta). Ele continua sendo um goal
+            # obrigatorio, mas chegar nele nao pontua e nao pode acender a luz.
+            # Aceita o ``_light`` antigo porque um ponto pre-porta gerado pelo
+            # backend pode voltar ao browser na restauracao apos F5.
+            light = w.get('light', w.get('_light', True))
+            if not isinstance(light, bool):
+                raise ValueError("light precisa ser booleano")
+            waypoints.append({
+                'x': wx, 'y': wy, 'yaw': wyaw, 'light': light,
+            })
     except (TypeError, ValueError) as e:
         emit('waypoints_ack', {'ok': False, 'error': f'waypoint inválido: {e}'})
         return

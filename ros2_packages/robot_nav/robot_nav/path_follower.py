@@ -16,13 +16,12 @@ com cantos) com lógica DETERMINÍSTICA + 2 truques que faltavam:
      mas só PARA de girar quando cai abaixo de `turn_exit` (bem menor). Sem isso
      ele girava e parava no MESMO limiar -> limite-ciclo = "pulinhos". Com
      histerese: gira decidido até alinhar, anda comprometido, re-gira só no canto.
-  3. LATCH DA CHEGADA (2026-08-31): o mesmo remédio no limiar de CHEGADA, que
-     tinha ficado de fora. Cruzou `goal_xy_tol` -> trava em `goal_turn` até o yaw
-     fechar; o carrot não retoma o controle. Sem isso os dois controladores
-     giravam pra lados opostos e o próprio giro do skid cruzava o limiar de volta
-     (a "samba" do goal, medida na arena — DIARIO_ARENA §2.8).
+  3. LATCH DA CHEGADA (2026-08-31): cruzou `goal_xy_tol` -> trava na aproximação
+     POSICIONAL; o carrot não retoma o controle. Desde 2026-09-06 o yaw final
+     deixou de ser requisito: alcançou (x,y), chegou. O alinhamento fino continua
+     existindo somente no `door_crossing`, antes de entrar num vão marcado.
 
-Estados: idle | turning | driving | goal_approach | goal_turn | arrived.
+Estados: idle | turning | driving | goal_approach | arrived.
 Publica `follow_vel` (twist_mux prio 15 > nav_vel 10 = ignora controller_server;
 < door 20 < unstuck 30). Enquanto há goal ativo SEMPRE publica (segura o mux).
 
@@ -194,7 +193,6 @@ class FollowConfig:
     tick_dt: float = 0.05           # s — período do update() (nó seta
                                     # 1/rate_hz); usado só pra derivar o yaw.
     goal_xy_tol: float = 0.15       # m — chegou no goal (casa c/ goal_checker do nav2)
-    goal_yaw_tol: float = 0.10      # rad (~6°) — encarou o yaw do goal
     # LATCH DA CHEGADA (2026-08-31, arena §2.8/§2B.2). O limiar de chegada
     # arbitrava dois controladores que giram pra lados OPOSTOS (`goal_turn` mira
     # o yaw do goal, `turning` mira o carrot) — e o giro no lugar do skid
@@ -207,16 +205,16 @@ class FollowConfig:
                                     # NOVO, solta a trava. Replan pro mesmo goal
                                     # mexe poucos cm; goals ficam a metros.
     unlatch_dist: float = 0.45      # m (3x goal_xy_tol) — algo EMPURROU o robô
-                                    # pra longe (unstuck/colisão): insistir em
-                                    # girar pro yaw do goal daqui é pior.
+                                    # pra longe (unstuck/colisão): volta a
+                                    # perseguir a posicao pelo plano.
     # APROXIMAÇÃO FINAL (2026-08-31, arena §2B.4 item 2e). Medido em 4 voltas: o
     # latch trava a chegada dentro de goal_xy_tol, o giro pro yaw do goal desloca
     # o skid, e o robô PARA a ~0.166 m. O xy_goal_tolerance do Nav2 é 0.15 —
     # então ele estaciona FORA da tolerância de quem julga a chegada, a ação
     # nunca completa, e 5 s parado acordam o unstuck (10,8 a 19,1 s por volta).
     # Enquanto o Nav2 ainda quer movimento, aproximar: reto pro PONTO DO GOAL,
-    # sem carrot. Posição primeiro, yaw depois. Os dois limiares são diferentes
-    # de propósito — foi um limiar pelado que criou a samba.
+    # sem carrot. Desde 2026-09-06 nao ha mais a fase de yaw: os dois limiares
+    # abaixo servem apenas para fechar a posicao sem liga/desliga na borda.
     approach_enter: float = 0.10    # m — acima disso volta a aproximar
     approach_exit: float = 0.06     # m — abaixo disso para de aproximar
                                     # (folga de 9 cm até o checker do Nav2: cabe
@@ -313,8 +311,7 @@ def follower_preempted(door_zone_state: Optional[str]) -> bool:
 class Cmd:
     vx: float
     wz: float
-    state: str          # idle | turning | driving | goal_approach |
-                        # goal_turn | arrived
+    state: str          # idle | turning | driving | goal_approach | arrived
 
 
 class DecisiveFollower:
@@ -374,8 +371,8 @@ class DecisiveFollower:
         # ficou fora do `yaw_goal_tolerance`, o Nav2 nunca fechou o goal e a volta
         # travou pra sempre — 3 corridas seguidas.
         # Quem precisa de 2 pontos e' o CARROT (interpola), nao a chegada: ela usa
-        # `path[-1]` e o `goal_yaw`, e depois do `_arrival_latched` usa o
-        # `_latch_goal`. O corte de `len(path) < 2` desceu pro bloco 2.
+        # `path[-1]` e, depois do `_arrival_latched`, usa o `_latch_goal`. O corte
+        # de `len(path) < 2` desceu pro bloco 2.
         if pose is None or not goal_active or not path:
             self.idle_reason = ('pose' if pose is None
                                 else 'goal_inactive' if not goal_active
@@ -406,7 +403,7 @@ class DecisiveFollower:
         gx, gy = path[-1]
         dist_goal = math.hypot(gx - x, gy - y)
 
-        # 1) chegou no goal (xy) -> encara o yaw do goal, depois para.
+        # 1) chegou no goal (xy) -> fecha somente a POSICAO, depois para.
         #    TRAVADO (ver goal_moved_tol): uma vez dentro da tolerância, a fase
         #    de chegada não devolve o controle pro carrot — só sai por goal novo,
         #    empurrão ou fim do goal. Sem isso os dois controladores brigam.
@@ -453,16 +450,10 @@ class DecisiveFollower:
                 if self._approach_aiming:
                     return Cmd(0.0, self._turn_cmd(aerr), 'goal_approach')
                 return Cmd(c.min_speed, 0.0, 'goal_approach')
-            # 1b) só então o YAW do goal
-            if goal_yaw is not None:
-                yerr = wrap(goal_yaw - yaw)
-                if abs(yerr) > c.goal_yaw_tol:
-                    self.state = 'goal_turn'
-                    self.dbg = {'i0': len(path) - 1, 'ci': len(path) - 1,
-                                'n': len(path), 'ax': gx, 'ay': gy,
-                                'herr_deg': math.degrees(yerr), 'dist_aim': 0.0,
-                                'dist_goal': dist_goal}
-                    return Cmd(0.0, self._turn_cmd(yerr), 'goal_turn')
+            # Nao existe fase de yaw final. `goal_yaw` permanece no argumento
+            # apenas por compatibilidade com os chamadores/planos ROS: usa-lo
+            # aqui faria o skid girar depois de alcancar o ponto, deslocar a
+            # propria posicao e eventualmente impedir o SUCCEEDED.
             self.state = 'arrived'
             self._turn_target = None
             return Cmd(0.0, 0.0, 'arrived')
@@ -636,7 +627,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 # quase À FRENTE na aproximação, continuam pegas a 0.9m.
                 ('stretch_clearance', 0.55), ('clear_sector_deg', 40.0),
                 ('turn_enter_deg', 16.0), ('turn_exit_deg', 3.0),
-                ('goal_xy_tol', 0.15), ('goal_yaw_tol_deg', 6.0),
+                ('goal_xy_tol', 0.15),
                 ('goal_moved_tol', 0.30), ('unlatch_dist', 0.45),
                 ('approach_enter', 0.10), ('approach_exit', 0.06),
                 # 2026-09-05: +50% no pivô — casa com o FollowConfig acima.
@@ -657,7 +648,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
                 turn_enter=math.radians(g['turn_enter_deg']),
                 turn_exit=math.radians(g['turn_exit_deg']),
                 goal_xy_tol=g['goal_xy_tol'],
-                goal_yaw_tol=math.radians(g['goal_yaw_tol_deg']),
                 goal_moved_tol=g['goal_moved_tol'],
                 unlatch_dist=g['unlatch_dist'],
                 approach_enter=g['approach_enter'],
@@ -671,7 +661,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             self.fol = DecisiveFollower(self.cfg)
 
             self._path: Optional[List[Pt]] = None
-            self._goal_yaw: Optional[float] = None
             self._goal_active = {}
             self._last_status = {}   # ultima status_list crua por topico (§2H.38)
 
@@ -746,8 +735,6 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             self._path = [(p.pose.position.x, p.pose.position.y)
                           for p in msg.poses]
             if msg.poses:
-                q = msg.poses[-1].pose.orientation
-                self._goal_yaw = quat_to_yaw(q.x, q.y, q.z, q.w)
                 # dump do plano (sobrescreve) p/ eu inspecionar a FORMA depois
                 try:
                     with open(self._plan_path, 'w', newline='') as f:
@@ -837,7 +824,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar no sim/bancada
             clear = self._front_clear
             if self._time.time() - self._front_clear_t > 1.0:
                 clear = float('inf')   # scan velho/ausente -> não trava o estico
-            cmd = self.fol.update(pose, self._path, goal, self._goal_yaw,
+            cmd = self.fol.update(pose, self._path, goal, None,
                                   front_clear=clear,
                                   preempted=self._preempted)
 

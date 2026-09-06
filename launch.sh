@@ -743,8 +743,10 @@ case "$MODE" in
                 echo "          rode sem --arena, ou passe motion_guard:=true no launch."
             fi
         fi
-        # door_crossing SO' na arena (2026-09-02, DIARIO_ARENA §2H.4): na fresta
-        # A de 0,90 m o seguidor entra SEMPRE torto (13 travessias medidas:
+        # O door_crossing sobe por default em todo NAV2 desde 2026-09-06 e usa
+        # as portas publicadas pela web. Este bloco e' o reforco do --arena:
+        # injeta tambem o doors_file no arranque e falha fechado se ele faltar.
+        # Na fresta A de 0,90 m o seguidor entra SEMPRE torto (13 travessias medidas:
         # -4,8° a -15,8°) e com desvio de ate' 12,1 cm — folga de 3,7 cm no pior
         # caso, que foi contato. O door_crossing zera as duas parcelas antes de
         # entrar. As portas vem do <mapa>.doors.json, que o gerador escreve junto

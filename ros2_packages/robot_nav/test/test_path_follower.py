@@ -397,13 +397,10 @@ def test_stretch_survives_missing_scan():
     assert f.dbg['la'] == pytest.approx(f.cfg.lookahead_far)
 
 
-def test_goal_turn_then_arrived():
+def test_chegada_ignora_completamente_o_yaw_do_goal():
     f = _fol()
     path = [(0.0, 0.0), (0.05, 0.0)]   # goal coladinho
     cmd = f.update((0.0, 0.0, 0.0), path, goal_active=True, goal_yaw=math.pi / 2)
-    assert cmd.state == 'goal_turn' and cmd.wz > 0.0
-    cmd = f.update((0.0, 0.0, math.pi / 2), path, goal_active=True,
-                   goal_yaw=math.pi / 2)
     assert cmd.state == 'arrived' and (cmd.vx, cmd.wz) == (0.0, 0.0)
 
 
@@ -519,13 +516,14 @@ def test_aproximacao_gira_no_lugar_se_o_goal_ficou_para_tras():
     assert cmd.vx == pytest.approx(0.0) and cmd.wz != 0.0
 
 
-def test_aproximacao_solta_dentro_do_exit_e_fecha_o_yaw():
+def test_aproximacao_solta_dentro_do_exit_sem_giro_final():
     f, path, gyaw = _chegada()
     f.update((-0.140, 0.0, 0.0), path, goal_active=True, goal_yaw=gyaw)
     f.update((-0.160, 0.0, gyaw), path, goal_active=True, goal_yaw=gyaw)
-    # entrou bem para dentro: para de aproximar e volta a fechar o yaw
+    # Entrou bem para dentro: chegou. O yaw pedido e' +90 graus e o robo esta'
+    # em 0, mas isto nao pode mais provocar um giro final.
     cmd = f.update((-0.050, 0.0, 0.0), path, goal_active=True, goal_yaw=gyaw)
-    assert cmd.state == 'goal_turn' and cmd.wz > 0.0
+    assert cmd.state == 'arrived' and (cmd.vx, cmd.wz) == (0.0, 0.0)
 
 
 def test_aproximacao_tem_histerese_nao_liga_desliga_no_mesmo_limiar():
@@ -936,21 +934,18 @@ def test_REGRESSAO_janela_nao_envenena_a_mira_com_o_plano_RUIM():
 
 # ---- Plano colapsado: a chegada não pode morrer com ele (§2H.40) -----------
 # BO: docs/baselines/2026-09-03-arena-travado-CAUSA-plano-encolhe/
-# O plano global encolhe conforme o robô converge (n=4 -> 3 -> 2 -> 1). Quando
-# chegou a 1 pose, o guard `len(path) < 2` jogou o seguidor em `idle` NO MEIO do
-# goal_turn (yaw 39,6° girando a -2,4 rad/s). O robô ficou fora do
-# yaw_goal_tolerance, o Nav2 nunca fechou o goal e a volta travou pra sempre.
+# O plano global encolhe conforme o robô converge (n=4 -> 3 -> 2 -> 1). A fase
+# de chegada continua autorizada com uma pose so'; desde 2026-09-06 ela deve
+# concluir por posicao sem ressuscitar o antigo giro de yaw final.
 # Prova versionada do plano de 1 pose: PROVA_plano_1_ponto.md no baseline.
 
-def test_REGRESSAO_goal_turn_sobrevive_ao_plano_de_1_PONTO():
-    """A fase de chegada usa só `path[-1]` e `goal_yaw` — não precisa de carrot.
-    Com o plano colapsado ela TEM que continuar girando."""
+def test_REGRESSAO_chegada_posicional_sobrevive_ao_plano_de_1_PONTO():
+    """Com o plano colapsado, estar no ponto conclui mesmo com yaw oposto."""
     fol = DecisiveFollower(FollowConfig())
     pose = (0.0, 0.0, 0.0)
     cmd = fol.update(pose, [(0.0, 0.0)], True, math.pi / 2)   # 1 pose só
-    assert cmd.state == 'goal_turn'
-    assert abs(cmd.wz) > 0.0
-    assert cmd.vx == pytest.approx(0.0)
+    assert cmd.state == 'arrived'
+    assert (cmd.vx, cmd.wz) == (0.0, 0.0)
 
 
 def test_plano_de_1_ponto_NAO_habilita_o_seguidor_inteiro():

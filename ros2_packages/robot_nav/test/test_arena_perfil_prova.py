@@ -275,7 +275,9 @@ class TestLaunchArenaDoorCrossing(unittest.TestCase):
         self.assertIn('arena_galpao_semA.doors.json', out)
         self.assertNotIn('arena_galpao.doors.json:', out)
 
-    def test_sem_arena_nao_liga_nada(self):
+    def test_sem_arena_deixa_o_default_e_nao_inventa_doors_file(self):
+        """Fora da arena o launch geral sobe o no' pelo default; este bloco
+        apenas nao injeta um arquivo de portas pertencente a outro mapa."""
         rc, out = self._roda(False, os.path.join(MAPAS, 'hotmilk_portas.yaml'))
         self.assertEqual(rc, 0, out)
         self.assertIn('ARG=', out)

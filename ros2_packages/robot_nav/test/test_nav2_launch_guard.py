@@ -118,22 +118,20 @@ if __name__ == '__main__':
 
 
 class TestDoorCrossingLaunch(unittest.TestCase):
-    """`door_crossing:=true` (perfil ARENA) tem que SUBIR o nó — e só ele.
+    """A travessia assistida sobe por default e ainda aceita desligamento.
 
-    Por que existe (2026-09-02, spec §5.3): o nó publica em `door_vel`, que tem
-    prioridade 20 no mux de autonomia — a MAIOR das fontes autônomas. Religá-lo
-    por engano em `--pi`/`--sim` comuns poria um nó desativado desde 06-26 na
-    frente do Nav2 sem ninguém ter pedido.
+    Desde 2026-09-06, marcar a porta + colocar uma passagem do outro lado e' a
+    ordem explicita do operador. Sem portas o no' fica idle; com uma porta, ele
+    precisa estar disponivel em qualquer perfil NAV2, nao apenas no --arena.
     """
 
-    def test_default_e_DESLIGADO(self):
-        """Fora da arena, nada muda: o nó só sobe quem pediu."""
+    def test_default_e_LIGADO(self):
         arg = [e for e in _ld().entities
                if e.__class__.__name__ == 'DeclareLaunchArgument'
                and e.name == 'door_crossing']
         self.assertEqual(len(arg), 1, 'o launch arg tem que existir')
         self.assertEqual(arg[0].default_value[0].perform(LaunchContext()),
-                         'false')
+                         'true')
 
     def test_o_no_sobe_so_com_true(self):
         no = _no(_ld(), 'door_crossing')

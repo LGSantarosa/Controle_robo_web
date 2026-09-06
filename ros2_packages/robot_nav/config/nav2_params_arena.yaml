@@ -114,7 +114,9 @@ planner_server:
       w_traversal_cost: 2.0        # 06-26: piso do knob; <2.0 enfia em vão impossível
       w_heuristic_cost: 1.0
       allow_unknown: true
-      use_final_approach_orientation: false
+      # 2026-09-06: goal e' POSICAO, nao pose. O planner escolhe o rumo da
+      # ultima perna do caminho; ignora a seta/yaw armazenada no goal.
+      use_final_approach_orientation: true
 
 controller_server:
   ros__parameters:
@@ -149,7 +151,9 @@ controller_server:
       # (< 0.2 m) o nav2 segue reto pro ponto no eixo até o door assumir. Seguro:
       # na travessia o robô passa pelo ponto de 1.0 m -> goal cumprido -> segue.
       xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.35
+      # Qualquer yaw e' chegada valida. O alinhamento estreito de porta vive no
+      # door_crossing e nao pode prender um goal comum depois que (x,y) chegou.
+      yaw_goal_tolerance: 6.283185307179586
       stateful: true
     FollowPath:
       # 2026-06-03 (curvas/giro): DWB sozinho NÃO comita giro acentuado nem
@@ -187,7 +191,7 @@ controller_server:
       # o spin_calib indica que dá pra ir até ~3.0 (gira de rest, ~4.5°/ciclo).
       rotate_to_heading_angular_vel: 4.0
       max_angular_accel: 10.0
-      rotate_to_goal_heading: true        # também gira p/ encarar o yaw final do goal
+      rotate_to_goal_heading: false       # goal e' somente (x,y); nao faz giro final
       simulate_ahead_time: 1.0
       # CRÍTICO (2026-06-03): false. Com closed_loop=true (default) o shim rampa o
       # giro a partir da velocidade angular MEDIDA pela odom — e como ±100 (1.0
