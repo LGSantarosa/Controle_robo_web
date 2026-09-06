@@ -45,7 +45,7 @@ SPAWN_Z="0.2"
 FLASH_MEGA="auto"
 # Teto de velocidade do path_follower (o teto EFETIVO da autonomia — ele ganha
 # o twist_mux_auto do nav_vel). Vazio = cada perfil usa o seu default:
-# --arena 0.35, resto o default do launch (0.30). `--follow-speed=X` sobrescreve
+# --arena e resto usam o mesmo default do launch (0.30). `--follow-speed=X` sobrescreve
 # SEM desmontar o perfil: e' o rollback de campo do degrau de velocidade, ja que
 # `ros2 param set` nao funciona (o no' le' parametro so' no __init__) e subir
 # sem --arena trocaria junto mapa, guard, door_crossing e velocidade-por-folga.
@@ -108,8 +108,8 @@ for arg in "$@"; do
             # Pra andar mais devagar de proposito, o botao e' min_speed, junto.
             if [ "$(awk -v v="$FOLLOW_SPEED" 'BEGIN{print (v>=0.22 && v<=0.40)?1:0}')" != 1 ]; then
                 echo "ERRO: --follow-speed=$FOLLOW_SPEED fora da faixa [0.22, 0.40]." >&2
-                echo "      Teto 0.40: acima disso a margem de frenagem medida (6,5 cm a 0.35)" >&2
-                echo "      fica NEGATIVA sem alargar o PolygonFront." >&2
+                echo "      Teto 0.40: NAO ha' medicao de frenagem real (a de 0.35 foi" >&2
+                echo "      retratada no 3bfe20b). Acima de 0.40 e' aposta, nao margem." >&2
                 echo "      Piso 0.22: e' o min_speed do path_follower — abaixo dele a" >&2
                 echo "      velocidade-por-folga INVERTE (anda mais rapido no apertado)." >&2
                 echo "      Ver docs/baselines/2026-09-05-arena-velocidade-teto-035/" >&2
@@ -129,7 +129,7 @@ for arg in "$@"; do
             echo "                   tools/mapa_passagens.py. NAO cobre raspao em point-turn."
             echo "  --follow-speed=X teto de velocidade do path_follower (m/s). E' o teto EFETIVO"
             echo "                   da autonomia; o max_vel_x do nav2_params NAO manda no robo."
-            echo "                   Faixa [0.22, 0.40]. Default: 0.40 com --arena, 0.30 sem."
+            echo "                   Faixa [0.22, 0.40]. Default: 0.30 (com ou sem --arena)."
             echo "                   Rollback de campo do"
             echo "                   degrau SEM desmontar o perfil (restart e' obrigatorio: o no"
             echo "                   le parametro so no __init__, 'ros2 param set' nao funciona)."
@@ -687,13 +687,18 @@ case "$MODE" in
         # nao le' ele) — entra por launch arg, so' no perfil ARENA.
         # 2026-09-05: follow_forward_speed 0.30 -> 0.35 (fase VELOCIDADE reaberta).
         # 2026-09-06: 0.35 -> 0.40, decisao do dono apos a corrida do 0.35 sair
-        # -13,6% no tempo da volta com 3/3 SUCCEEDED. ⚠️ A margem de frenagem
-        # medida (6,5 cm a 0.35) fica em ~1-3 cm a 0.40 — ver a nota da faixa
-        # no parser. Dados: docs/baselines/2026-09-05-arena-degrau-035/
+        # -13,6% no tempo da volta com 3/3 SUCCEEDED.
+        # 2026-09-06 (mesmo dia, DEPOIS): 0.40 -> 0.30, decisao do dono. O que
+        # sustentava o degrau era a "margem de frenagem de 6,5 cm a 0.35", e o
+        # `3bfe20b` RETRATOU essa medicao — ela nunca existiu (as 31 paradas eram
+        # pivo e chegada de goal, nao frenagem). Sem numero de frenagem REAL,
+        # 0.40 e' velocidade sem margem conhecida. Pra subir de novo: medir
+        # frenagem primeiro; `--follow-speed=X` levanta o degrau em campo sem
+        # commit. Dados: docs/baselines/2026-09-05-arena-degrau-035/
         # SO' na arena. Este e' o teto EFETIVO — o path_follower ganha o
         # twist_mux_auto (prio 15) do nav_vel (10), entao mexer no max_vel_x do
-        # nav2_params NAO acelera o robo. 0.35 apenas alinha o follower aos tetos
-        # que a cadeia nav_vel ja tem; nada mais precisa se mover.
+        # nav2_params NAO acelera o robo. O degrau, quando existir, mora aqui e
+        # em mais lugar nenhum; nada mais precisa se mover junto.
         # ⚠️ NAO subir pra 0.50/0.60 sem medir frenagem REAL: o follow_vel nao
         # passa pelo velocity_smoother, entao o decel_lim_x do YAML nao prova a
         # desaceleracao fisica. Baseline do 0.30 e a analise inteira em
@@ -702,9 +707,9 @@ case "$MODE" in
         # ⚠️ ROLLBACK E' RESTART, NAO `ros2 param set` (achado do review 09-05):
         # o path_follower le os parametros UMA VEZ no __init__ e congela em
         # self.cfg (path_follower.py:642); nao ha add_on_set_parameters_callback.
-        # `ros2 param set /path_follower forward_speed 0.30` muda o valor no
-        # servidor de parametros e o no' SEGUE A 0.35 — silenciosamente.
-        # Pra voltar: Ctrl-C e subir de novo com `--follow-speed=0.30`, que
+        # `ros2 param set /path_follower forward_speed 0.40` muda o valor no
+        # servidor de parametros e o no' SEGUE NO QUE SUBIU — silenciosamente.
+        # Pra trocar: Ctrl-C e subir de novo com `--follow-speed=X`, que
         # mantem o perfil inteiro. NAO subir sem --arena pra baixar velocidade:
         # isso troca junto mapa, motion_guard, door_crossing e a
         # velocidade-por-folga — era a recomendacao velha, e estava errada.
@@ -713,7 +718,7 @@ case "$MODE" in
         # abaixo (em vez de reimplementar a logica e virar tautologia — BO 63).
         # >>> PERFIL_ARENA_FOLLOW
         ARENA_FOLLOW_ARG=""
-        [ "$ARENA" = true ] && ARENA_FOLLOW_ARG="follow_clear_full:=1.2 follow_clear_min:=0.35 follow_forward_speed:=0.40"
+        [ "$ARENA" = true ] && ARENA_FOLLOW_ARG="follow_clear_full:=1.2 follow_clear_min:=0.35 follow_forward_speed:=0.30"
         # `--follow-speed=X` vence o default do perfil e NAO desmonta nada mais:
         # o resto do ARENA_FOLLOW_ARG (clear_full/clear_min), o mapa, o guard e o
         # door_crossing ficam de pe'. Vale com ou sem --arena.

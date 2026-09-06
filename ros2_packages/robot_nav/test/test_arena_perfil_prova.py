@@ -387,8 +387,11 @@ class TestFollowForwardSpeed(unittest.TestCase):
     Em 2026-09-05 uma análise minha propôs subir os três tetos do YAML (a cadeia
     perdedora) e o dono derrubou na revisão. Estes testes existem para que o
     degrau de velocidade não volte a ser aplicado no lugar errado, e para
-    prender o 0.35 ao perfil ARENA — o `--nav2` normal não herda velocidade que
-    não foi medida no cenário dele.
+    prender qualquer degrau ao perfil ARENA — o `--nav2` normal não herda
+    velocidade que não foi medida no cenário dele. Desde 2026-09-06 a arena
+    está no MESMO 0.30 do default (o degrau foi retratado junto com a medicao
+    de frenagem, `3bfe20b`), mas o arg continua explícito no perfil pra que
+    subir o degrau de novo seja uma linha só, e aqui.
 
     Executa o BLOCO REAL do launch.sh entre os marcadores, não uma cópia (BO 63).
     """
@@ -405,11 +408,13 @@ class TestFollowForwardSpeed(unittest.TestCase):
         return r.stdout.strip().split('\n')[-1]
 
     def test_arena_passa_o_degrau_atual(self):
-        """2026-09-05: 0.35. 2026-09-06: 0.40 (decisao do dono apos a corrida
-        do 0.35 sair -13,6% no tempo). Se este numero mudar de novo, a margem
-        de frenagem medida tem que ser refeita — ver docs/baselines/."""
+        """2026-09-05: 0.35. 2026-09-06: 0.40. 2026-09-06 (depois): DE VOLTA A
+        0.30 — o `3bfe20b` retratou a medicao de frenagem que sustentava o
+        degrau, entao a arena volta ao valor validado. Pra este numero subir de
+        novo, a frenagem REAL tem que ser medida — ver docs/baselines/. Em
+        campo o degrau se levanta com `--follow-speed=X`, sem commit."""
         out = self._roda(True)
-        self.assertIn('follow_forward_speed:=0.40', out)
+        self.assertIn('follow_forward_speed:=0.30', out)
         # o degrau não pode ter atropelado a velocidade-por-folga que já morava aqui
         self.assertIn('follow_clear_full:=1.2', out)
         self.assertIn('follow_clear_min:=0.35', out)
@@ -450,11 +455,12 @@ class TestFollowForwardSpeed(unittest.TestCase):
     def test_follow_speed_e_o_rollback_SEM_desmontar_a_arena(self):
         """O rollback de campo (review 2026-09-05): `ros2 param set` e' no-op e
         subir sem --arena trocaria junto mapa, guard, door_crossing E a
-        velocidade-por-folga. `--follow-speed=0.30` tem que baixar SO' a
-        velocidade e deixar o resto do perfil em pe'."""
-        out = self._roda(True, follow_speed='0.30')
-        self.assertIn('follow_forward_speed:=0.30', out)
-        self.assertNotIn('follow_forward_speed:=0.35', out)
+        velocidade-por-folga. `--follow-speed=X` tem que mexer SO' na
+        velocidade e deixar o resto do perfil em pe'. Usa 0.24 — diferente do
+        default da arena, senao o teste passaria sem o override fazer nada."""
+        out = self._roda(True, follow_speed='0.24')
+        self.assertIn('follow_forward_speed:=0.24', out)
+        self.assertNotIn('follow_forward_speed:=0.30', out)
         # o resto do perfil da arena continua intacto
         self.assertIn('follow_clear_full:=1.2', out)
         self.assertIn('follow_clear_min:=0.35', out)
@@ -547,4 +553,4 @@ class TestFollowForwardSpeed(unittest.TestCase):
         self.assertIn('ROLLBACK E\' RESTART', sh)
         # e o conselho tem que ser o --follow-speed, nao o "sobe sem --arena"
         # (que troca mapa/guard/door junto — recomendacao velha, errada).
-        self.assertIn('subir de novo com `--follow-speed=0.30`', sh)
+        self.assertIn('subir de novo com `--follow-speed=', sh)
