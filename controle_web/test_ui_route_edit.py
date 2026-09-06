@@ -59,26 +59,32 @@ def _rota(n):
     return [{'x': float(i), 'y': 0.0, 'yaw': 0.0, 'light': True} for i in range(n)]
 
 
-pytestmark = pytest.mark.skipif(NODE is None, reason='node ausente (ex.: a Pi)')
+# NÃO usar `pytestmark`: ele valeria pro módulo inteiro e pularia junto os testes
+# de fiação lá embaixo, que não precisam de node e têm que rodar na Pi também.
+precisa_node = pytest.mark.skipif(NODE is None, reason='node ausente (ex.: a Pi)')
 
 
+@precisa_node
 def test_apaga_so_o_ponto_selecionado():
     fora = _roda(_rota(4), 1)
     assert [w['x'] for w in fora['waypoints']] == [0.0, 2.0, 3.0]
 
 
+@precisa_node
 def test_selecao_fica_no_mesmo_indice_pra_apagar_varios_seguidos():
     fora = _roda(_rota(4), 1)
     assert fora['wpSelectedIdx'] == 1            # agora aponta pro que era o 2
     assert fora['waypoints'][1]['x'] == 2.0
 
 
+@precisa_node
 def test_apagar_o_ultimo_sobe_a_selecao():
     fora = _roda(_rota(3), 2)
     assert fora['wpSelectedIdx'] == 1
     assert len(fora['waypoints']) == 2
 
 
+@precisa_node
 def test_apagar_o_unico_esvazia_e_solta_o_goal():
     fora = _roda(_rota(1), 0)
     assert fora['waypoints'] == []
@@ -87,6 +93,7 @@ def test_apagar_o_unico_esvazia_e_solta_o_goal():
     assert fora['status'] == 'rota vazia'
 
 
+@precisa_node
 def test_com_a_rota_RODANDO_nao_apaga_nada():
     """Apagar ponto no meio da navegação dessincronizaria a lista da UI da que o
     robô está executando."""
@@ -94,6 +101,7 @@ def test_com_a_rota_RODANDO_nao_apaga_nada():
     assert len(fora['waypoints']) == 3
 
 
+@precisa_node
 def test_sem_selecao_nao_apaga_nada():
     fora = _roda(_rota(3), -1)
     assert len(fora['waypoints']) == 3
