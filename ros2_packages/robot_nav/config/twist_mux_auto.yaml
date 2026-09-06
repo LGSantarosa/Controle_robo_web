@@ -25,6 +25,11 @@ twist_mux_auto:
     use_stamped: false
     topics:
       door:
+        # SÓ staging/rotating/crossing. A RÉ de escape (`reversing`) NÃO vem por
+        # aqui desde 2026-09-06: ela sai em door_escape_vel, no mux FINAL (25),
+        # porque o linear_limit 0.0 do PolygonFront zerava a ré junto com o
+        # avanço. Durante a ré o door_vel continua publicando ZERO, mantendo a
+        # prio 20 e impedindo o nav2 de colar um avanço no meio da manobra.
         topic: door_vel      # door_crossing (travessia de porta) — assume a manobra
         timeout: 0.5
         priority: 20

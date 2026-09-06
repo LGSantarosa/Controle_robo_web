@@ -441,6 +441,13 @@ class DoorCrossConfig:
     escape_max_count: int = 3           # nº de escapes por travessia antes de abortar
     escape_rear_margin: float = 0.10    # m — folga: nunca chega a menos disso do obstáculo atrás (cap da distância de ré)
     escape_rear_min: float = 0.10       # m — vão traseiro útil MÍNIMO; abaixo disso nem vale a pena dar ré -> aborta
+    # 2026-09-06 (campo, porta 2 da arena): a ré só saía do `reversing` por
+    # DESLOCAMENTO, então ré BLOQUEADA era indistinguível de ré que acabou de
+    # começar. O collision_monitor zerou o eixo linear (`linear_limit: 0.0` vale
+    # pros DOIS sentidos) e o robô comandou -0.25 m/s PARADO por 35 s, gastando
+    # o `total_timeout` inteiro — com o `door_vel` segurando prio 20 e as
+    # recoveries do nav2 penduradas atrás. Este relógio corta isso.
+    escape_stall_time: float = 2.0      # s — comandando ré sem se deslocar -> a ré não está saindo, aborta
     align_progress_radius: float = 0.05  # m — moveu menos que isso desde a âncora = "parado" -> conta o substuck
 
 
@@ -538,6 +545,8 @@ class DoorCrossing:
         self._align_anchor = (0.0, 0.0)  # posição de referência do substuck
         self._esc_start = (0.0, 0.0)    # pose (x,y) no começo da ré atual
         self._esc_target = 0.0          # quanto recuar nesta ré
+        self._esc_anchor = (0.0, 0.0)   # âncora de progresso DA RÉ (≠ _esc_start)
+        self._esc_t0 = 0.0              # desde quando a ré não sai do lugar
         self._cleared: set = set()      # ids de portas com o pré-porta cumprido (pendência C)
 
     # -- helpers ------------------------------------------------------------
@@ -594,6 +603,8 @@ class DoorCrossing:
         self.state = 'reversing'
         self._esc_start = pos
         self._esc_target = target
+        self._esc_anchor = pos
+        self._esc_t0 = now
         return Cmd('reversing', -cfg.escape_reverse_speed, 0.0, self.door['id'])
 
     def _pick_door(self, pose, doors):
@@ -768,6 +779,18 @@ class DoorCrossing:
                 self._align_t0 = now
                 self._align_anchor = (x, y)
                 return Cmd('staging', 0.0, 0.0, self.door['id'])
+            # A RÉ ESTÁ SAINDO? Mesma âncora de progresso do substuck: andou ->
+            # reinicia o relógio; não andou dentro de escape_stall_time -> quem
+            # está bloqueando não é coisa que ré resolva. Aborta pro nav2, que
+            # sabe PIVOTAR — e o eixo angular nunca é capado pelo collision
+            # (`angular_limit: 4.0`), então o giro é a saída que sobra. Sem isto
+            # a manobra queima os 40 s do total_timeout parada (campo 09-06).
+            if math.hypot(x - self._esc_anchor[0],
+                          y - self._esc_anchor[1]) > cfg.align_progress_radius:
+                self._esc_anchor = (x, y)
+                self._esc_t0 = now
+            elif now - self._esc_t0 > cfg.escape_stall_time:
+                return self._abort(now)
             return Cmd('reversing', -cfg.escape_reverse_speed, 0.0,
                        self.door['id'])
 
@@ -841,7 +864,8 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 ('cross_lat_off_s', 0.0),
                 ('robot_half_width', 0.25), ('fit_margin', 0.05),
                 ('commit_s', -0.15),
-                ('escape_reverse_speed', 0.25), ('gap_min', 0.45),
+                ('escape_reverse_speed', 0.25), ('escape_stall_time', 2.0),
+                ('gap_min', 0.45),
                 ('exit_margin', 0.6), ('rate_hz', 20.0),
                 ('scan_stale', 0.6), ('nav_move_lin', 0.02),
                 ('rear_tail_x', -0.25), ('rear_half_width', 0.30),
@@ -864,6 +888,7 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 robot_half_width=g['robot_half_width'],
                 fit_margin=g['fit_margin'], commit_s=g['commit_s'],
                 escape_reverse_speed=g['escape_reverse_speed'],
+                escape_stall_time=g['escape_stall_time'],
                 gap_min=g['gap_min'], exit_margin=g['exit_margin'])
             self.sup = DoorCrossing(self.cfg)
             self.scan_stale = g['scan_stale']
@@ -905,6 +930,24 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
             self.tf_listener = TransformListener(self.tf_buffer, self)
 
             self.pub = self.create_publisher(Twist, 'door_vel', 10)
+            # 2026-09-06: a RÉ DE ESCAPE sai por um canal próprio, no mux FINAL
+            # (prio 25), A JUSANTE do collision_monitor — mesmo lugar de onde o
+            # unstuck (30) e o humano já furam o reflexo. Motivo medido em campo
+            # (porta 2 da arena, docs/baselines/2026-09-06-porta2-deadlock-re/):
+            # o `PolygonFront` é `limit` com `linear_limit: 0.0`, e o Nav2 aplica
+            # esse teto ao MÓDULO da velocidade linear — o sinal não importa.
+            # Com o batente dentro da caixa frontal, a ré saía ZERADA. Como ela
+            # comanda `wz = 0.0` por desenho (reta, nunca arco), o robô ficava
+            # 100% imóvel; e robô imóvel não limpa a própria caixa, então o
+            # `limit` também nunca saía. Deadlock que só o relógio quebrava.
+            #
+            # SÓ o `reversing` vai por aqui. `staging`/`rotating`/`crossing`
+            # seguem no `door_vel`, atrás do collision: são movimento PRA FRENTE
+            # e é ali que uma pessoa no vão seria atropelada. A ré tem segurança
+            # própria, da mesma classe da ré do unstuck (que fura desde sempre):
+            # reta, <= escape_reverse_dist, gated por rear_gap com margem, no
+            # máximo escape_max_count por travessia, e agora com escape_stall_time.
+            self.pub_escape = self.create_publisher(Twist, 'door_escape_vel', 10)
             self.pub_zone = self.create_publisher(String, 'door_zone', latched)
 
             self.create_subscription(String, 'doors', self._on_doors, latched)
@@ -1069,7 +1112,19 @@ def main(args=None):  # pragma: no cover - cola de I/O, validar na bancada
                 t = Twist()
                 t.linear.x = cmd.vx
                 t.angular.z = cmd.wz
-                self.pub.publish(t)
+                if cmd.state == 'reversing':
+                    # a ré manda pelo canal pós-collision; o door_vel fica ZERO
+                    # (e não mudo) de propósito: ele segue vencendo o mux de
+                    # autonomia em prio 20, então o nav2 não cola um avanço no
+                    # meio da ré. Quem anda é o door_escape_vel, prio 25.
+                    self.pub_escape.publish(t)
+                    self.pub.publish(Twist())
+                else:
+                    if prev == 'reversing':
+                        # largou o canal furador -> zero explícito, senão ele
+                        # fica 0.5 s (timeout do mux) valendo com o ÚLTIMO valor.
+                        self.pub_escape.publish(Twist())
+                    self.pub.publish(t)
 
     rclpy.init(args=args)
     node = DoorCrossingNode()

@@ -1,6 +1,8 @@
 import math
+import os
 
 import pytest
+import yaml
 
 from robot_nav.door_crossing import (
     DoorGeom,
@@ -375,6 +377,40 @@ def test_reverse_returns_to_staging_if_rear_closes():
     c = estep(dc, 0.2, (1.5, 0.95, math.pi / 2), rear_gap=0.05)
     assert c.state == 'staging'
     assert c.vx == pytest.approx(0.0)
+
+
+def test_reverse_that_does_not_move_aborts_instead_of_burning_the_timeout():
+    """Campo 2026-09-06, porta 2 da arena: a ré saiu ZERADA (o linear_limit 0.0
+    do PolygonFront vale pros dois sentidos) e o `reversing`, que só saía por
+    deslocamento, ficou 35 s comandando ré parado até o total_timeout de 40 s —
+    segurando prio 20 e pendurando as recoveries do nav2. Ré que não anda tem
+    que largar o osso rápido."""
+    dc = DoorCrossing(ECFG)
+    estep(dc, 0.0, P_STAGE)
+    assert estep(dc, 0.1, P_STAGE, front_gap=0.10).state == 'reversing'
+    # comandando ré, pose CONGELADA (é o que o collision zerando produz)
+    assert estep(dc, 0.1 + ECFG.escape_stall_time, P_STAGE).state == 'reversing'
+    c = estep(dc, 0.2 + ECFG.escape_stall_time, P_STAGE)
+    assert c.state == 'idle'          # larga pro nav2, que sabe pivotar
+    assert c.vx == pytest.approx(0.0) and c.wz == pytest.approx(0.0)
+
+
+def test_reverse_that_moves_is_not_cut_by_the_stall_clock():
+    """A ré NORMAL não pode morrer pelo relógio novo: enquanto o robô se desloca
+    a âncora reseta, igual ao substuck do staging."""
+    dc = DoorCrossing(ECFG)
+    estep(dc, 0.0, P_STAGE)
+    estep(dc, 0.1, P_STAGE, front_gap=0.10)               # -> reversing (alvo 0.30)
+    y, t = P_STAGE[1], 0.1
+    # recua devagar, bem mais tempo que escape_stall_time, sempre progredindo
+    for _ in range(int(ECFG.escape_stall_time / 0.5) + 4):
+        t += 0.5
+        y -= 0.06                                          # > align_progress_radius
+        c = estep(dc, t, (P_STAGE[0], y, P_STAGE[2]))
+        if c.state != 'reversing':
+            break
+    assert c.state == 'staging'        # terminou pela DISTÂNCIA, não pelo relógio
+    assert P_STAGE[1] - y >= ECFG.escape_reverse_dist
 
 
 def test_escape_max_count_then_abort():
@@ -758,3 +794,65 @@ def test_will_clear_em_tunel_nao_libera_so_por_ter_passado_do_centro():
 def test_will_clear_em_tunel_libera_depois_da_boca_de_saida():
     g = door_geometry((0.0, 0.0), (0.0, 0.70), depth=1.0)
     assert will_clear(g, 0.6, 0.04, math.radians(25.0), +1, 0.25, 0.05) is True
+
+
+# ---- fiação da ré de escape (2026-09-06) ------------------------------------
+# Campo, porta 2 da arena: o `PolygonFront` é `limit` com `linear_limit: 0.0`, e
+# o Nav2 aplica esse teto ao MÓDULO da velocidade linear — o sinal não importa.
+# Com o batente na caixa frontal a ré da porta saía ZERADA, e como ela comanda
+# `wz = 0.0` por desenho o robô ficava imóvel, sem nunca limpar a própria caixa.
+# 35 s parado até o total_timeout. Ver docs/baselines/2026-09-06-porta2-deadlock-re/.
+# Estes testes prendem a fiação que corrige isso — sem eles a correção some numa
+# refatoração e o defeito volta calado.
+
+_RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
+_PKG = os.path.join(_RAIZ, 'ros2_packages', 'robot_nav')
+
+
+def _mux_final():
+    with open(os.path.join(_PKG, 'config', 'twist_mux.yaml')) as f:
+        return yaml.safe_load(f)['twist_mux']['ros__parameters']['topics']
+
+
+def test_re_de_escape_tem_canal_no_mux_final():
+    """A ré tem que sair A JUSANTE do collision_monitor. O mux FINAL é o único
+    lugar onde isso acontece (é de lá que unstuck e humano já furam)."""
+    t = _mux_final()
+    canais = {v['topic']: v['priority'] for v in t.values()}
+    assert 'door_escape_vel' in canais
+
+
+def test_prioridade_da_re_fica_entre_o_unstuck_e_a_autonomia():
+    """Abaixo do unstuck (30): um resgate de verdade ainda tem que vencer a ré da
+    porta. Acima da autonomia (10): senão o nav2 anula a ré e nada mudou."""
+    canais = {v['topic']: v['priority'] for v in _mux_final().values()}
+    assert canais['auto_vel'] < canais['door_escape_vel'] < canais['unstuck_vel']
+
+
+def test_so_a_re_fura_o_collision__o_avanco_da_porta_NAO():
+    """O escopo é o ponto todo: `staging`/`rotating`/`crossing` são movimento pra
+    FRENTE e continuam atrás do collision, que é o que impede atropelar alguém
+    parado no vão. Se um dia o nó publicar outro estado no canal furador, ou
+    deixar de zerar o door_vel durante a ré, este teste tem que cair."""
+    with open(os.path.join(_PKG, 'robot_nav', 'door_crossing.py')) as f:
+        src = f.read()
+    i = src.index('if cmd.state == \'reversing\':')
+    bloco = src[i:i + 700]
+    # a ré vai pro canal furador...
+    assert 'self.pub_escape.publish(t)' in bloco
+    # ...e o door_vel fica ZERO (não mudo): segura a prio 20 do mux de autonomia
+    assert 'self.pub.publish(Twist())' in bloco
+    # o canal furador NÃO carrega o resto da travessia
+    for st in ('staging', 'rotating', 'crossing'):
+        assert f'cmd.state == \'{st}\'' not in bloco
+
+
+def test_o_canal_da_re_nao_e_o_do_unstuck():
+    """Reusar `unstuck_vel` funcionaria hoje (o unstuck fica em standdown na
+    porta), mas mente no log e coloca dois publishers no mesmo tópico — quebra
+    calado se o standdown mudar."""
+    with open(os.path.join(_PKG, 'robot_nav', 'door_crossing.py')) as f:
+        src = f.read()
+    assert "'door_escape_vel'" in src
+    assert 'unstuck_vel' not in src

@@ -1031,11 +1031,12 @@ door_crossing (door_vel)   ┘        (door 20 > follower 15 > nav 10)
                               collision_monitor (lê /scan_safe) → auto_vel
                                          │
     unstuck_vel (30) ─────────────┐     │
+    door_escape_vel (25) ─────────┤     │
     joy/key/web (100/90/50) ──────┼─────┴──→ twist_mux FINAL → /cmd_vel
                                          (autonomia = auto_vel, prio 10)
 ```
 
-O **unstuck e o humano (PS4/web)** entram no mux FINAL, **a jusante** do collision — então continuam furando o reflexo (resgate/override sempre funcionam). Se o collision cair, `auto_vel` some e a autonomia não anda (collision é OBRIGATÓRIO), mas o humano segue dirigindo.
+O **unstuck e o humano (PS4/web)** entram no mux FINAL, **a jusante** do collision — então continuam furando o reflexo (resgate/override sempre funcionam). Desde 2026-09-06 a **ré de escape do `door_crossing`** (só o estado `reversing`) entra ali também, em `door_escape_vel` (prio 25): o `PolygonFront` é `limit` com `linear_limit: 0.0`, e o Nav2 aplica esse teto ao **módulo** da velocidade linear — com o batente na caixa frontal a ré saía zerada, e como ela é reta (`wz=0`) o robô ficava imóvel, sem nunca limpar a própria caixa. O resto da travessia segue atrás do collision. Se o collision cair, `auto_vel` some e a autonomia não anda (collision é OBRIGATÓRIO), mas o humano segue dirigindo.
 
 ### path_follower — seguidor de trajetória (reto + giro no lugar)
 

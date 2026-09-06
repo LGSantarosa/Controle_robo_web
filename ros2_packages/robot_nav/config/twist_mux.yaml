@@ -15,6 +15,7 @@
 #   WASD (key_vel, prio  90) — publicado por bin/robot-key em terminal SSH separado
 #   web  (web_vel, prio  50) — só se WEB_TELEOP=on (controle_web/app.py)
 #   unstuck (unstuck_vel, prio 30) — desencalhe; fura o collision (entra pós-collision)
+#   ré da porta (door_escape_vel, prio 25) — SÓ o `reversing` do door_crossing; fura o collision
 #   autonomia (auto_vel, prio 10) — nav+seguidor+porta JÁ filtrados pelo collision
 #
 # Resolve o achado B20 da AUDITORIA_2026-05-18 (vários publishers direto no
@@ -44,6 +45,26 @@ twist_mux:
         topic: unstuck_vel   # publicado pelo unstuck_supervisor (desencalhe)
         timeout: 0.5
         priority: 30         # fura o collision na ré/giro (entra pós-collision), < web/PS4
+      door_escape:
+        # 2026-09-06 — SÓ a ré de escape do door_crossing (estado `reversing`).
+        # O resto da travessia (staging/rotating/crossing) continua no door_vel,
+        # dentro do twist_mux_auto, ATRÁS do collision_monitor.
+        #
+        # POR QUE existe: o `PolygonFront` é `limit` com `linear_limit: 0.0`, e o
+        # Nav2 aplica o teto ao MÓDULO da velocidade linear — sinal não importa.
+        # Batente dentro da caixa frontal = ré ZERADA. E como a ré da porta é
+        # reta (`wz = 0.0` por desenho), o robô ficava imóvel, e imóvel não limpa
+        # a própria caixa: o `limit` também não saía. Medido em campo na porta 2
+        # da arena, 35 s parado (docs/baselines/2026-09-06-porta2-deadlock-re/).
+        #
+        # 25 = ABAIXO do unstuck (30), pra um resgate de verdade ainda vencer, e
+        # ACIMA da autonomia (10). Falha FECHADA: se o door_crossing morre ele só
+        # para de publicar, e o reflexo segue armado e intacto pro resto da stack
+        # — ao contrário de desligar o polígono em runtime, que ficaria desligado
+        # pra todo mundo, calado.
+        topic: door_escape_vel
+        timeout: 0.5
+        priority: 25
       autonomy:
         topic: auto_vel      # saída do collision_monitor (nav+seguidor+porta já arbitrados
                              # no twist_mux_auto e filtrados pelo reflexo de colisão)
