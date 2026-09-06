@@ -64,6 +64,11 @@ log = logging.getLogger(__name__)
 # derrubar a espera sem esperar 2 s por tentativa.
 WP_RETRY_SLEEP = 2.0
 
+# 2026-09-06 campo: distância abaixo da qual o ponto-pré-porta É o waypoint
+# anterior (2x o xy_goal_tolerance=0.15 do goal checker). Módulo (e não classe)
+# porque o _expand_route_via_plan é testado desamarrado, com um fake no self.
+PRE_DOOR_DEDUP = 0.30
+
 
 def _waypoint_wants_light(waypoint: dict) -> bool:
     """True quando a chegada deste waypoint deve acionar a luz.
@@ -869,6 +874,7 @@ class MapBridge:
             return list(waypoints)
         out = []
         prev = tuple(start_xy)
+        prev_e_goal = False        # o start_xy é a POSE do robô, não um goal
         for wp in waypoints:
             to = (wp['x'], wp['y'])
             path = self._plan_path_xy(prev, to)
@@ -878,17 +884,38 @@ class MapBridge:
             if door is not None:
                 wx, wy, wyaw = pre_door_waypoint(door['a'], door['b'], prev)
                 wx, wy = self._clear_pre_door_point(door, wx, wy)
-                out.append({
-                    'x': wx, 'y': wy, 'yaw': wyaw,
-                    # Waypoint TECNICO: ele arma o door_crossing; nao e' um
-                    # obstaculo pontuavel e portanto nunca aciona a luz.
-                    'light': False,
-                })
-                log.info(f"[MapBridge] porta {door['id']} no caminho "
-                         f"{prev}->{to} -> ponto-pré-porta "
-                         f"({wx:.2f},{wy:.2f}) inserido")
+                # 2026-09-06 campo: se o WAYPOINT anterior já é o ponto-pré-porta
+                # (rota salva com um pré-porta vazado do _wp_list depois de um
+                # F5), inserir outro cria dois goals seguidos no mesmo lugar. O
+                # robô chega no 1º, o door_crossing arma e ATRAVESSA — e aí o 2º
+                # goal, que ficou ATRÁS dele, faz o nav2 dar meia-volta e trazer
+                # o robô de volta pra frente da porta. Só vale contra um GOAL
+                # anterior: quando o `prev` é a pose do robô não há goal
+                # duplicado, e o pré-porta é justamente o que aponta ele pra
+                # porta — aí insere sempre.
+                if (prev_e_goal
+                        and math.hypot(wx - prev[0], wy - prev[1]) <= PRE_DOOR_DEDUP):
+                    log.info(f"[MapBridge] porta {door['id']} no caminho "
+                             f"{prev}->{to} -> ponto-pré-porta "
+                             f"({wx:.2f},{wy:.2f}) DESCARTADO (o ponto anterior "
+                             f"já é ele)")
+                else:
+                    out.append({
+                        'x': wx, 'y': wy, 'yaw': wyaw,
+                        # Waypoint TECNICO: ele arma o door_crossing; nao e' um
+                        # obstaculo pontuavel e portanto nunca aciona a luz.
+                        'light': False,
+                        # Marca de origem: nunca deve ser PERSISTIDO na rota do
+                        # usuário (save_route filtra) — senão vira o duplicado
+                        # de cima na próxima corrida.
+                        '_pre_door': True,
+                    })
+                    log.info(f"[MapBridge] porta {door['id']} no caminho "
+                             f"{prev}->{to} -> ponto-pré-porta "
+                             f"({wx:.2f},{wy:.2f}) inserido")
             out.append(dict(wp))
             prev = to
+            prev_e_goal = True
         return out
 
     def start_waypoints(self, waypoints: list, loop: bool = False) -> dict:
@@ -943,6 +970,12 @@ class MapBridge:
 
     def save_route(self, name: str, waypoints: list = None) -> dict:
         wps = waypoints if waypoints is not None else self._wp_list
+        # O _wp_list guarda a rota EXPANDIDA (com os pontos-pré-porta técnicos),
+        # e ela chega no navegador via waypoints_restored depois de um F5. Salvar
+        # isso congelaria o ponto técnico como waypoint do usuário — e a próxima
+        # expansão inseriria um segundo em cima dele. Filtra aqui, no único lugar
+        # que persiste.
+        wps = [w for w in wps if not w.get('_pre_door')]
         if not wps:
             return {'ok': False, 'error': 'nenhum waypoint para salvar'}
         safe = self._safe_name(name)

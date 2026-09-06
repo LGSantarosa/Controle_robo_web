@@ -218,3 +218,71 @@ def test_runner_repete_no_status_inesperado(monkeypatch):
 
     assert all(c.args[:2] == (1.0, 2.0)
                for c in fb._wp_send_goal_action.call_args_list)
+
+
+def test_expand_nao_duplica_pre_porta_quando_o_ponto_anterior_ja_e_ele():
+    """Campo 2026-09-06, arena: a rota salva já trazia um ponto-pré-porta
+    (vazado do _wp_list depois de um F5) em (4.17, 2.38).
+
+    A expansão inseria um SEGUNDO idêntico logo depois. O robô chegava no 1º,
+    o door_crossing armava e atravessava a porta — e o 2º goal, agora ATRÁS
+    dele, fazia o nav2 dar meia-volta e trazer o robô de volta pra frente da
+    porta. Log real: WP_SEND idx=0 e idx=1 pro MESMO (4.17, 2.38, yaw=1.954).
+    """
+    fb = types.SimpleNamespace()
+    fb._doors = types.SimpleNamespace(doors=[{
+        'id': 1, 'a': [3.70, 3.18], 'b': [4.60, 3.18],
+    }])
+    fb._plan_path_xy = Mock(return_value=None)
+    fb._clear_pre_door_point = Mock(side_effect=lambda door, wx, wy: (wx, wy))
+    rota = [
+        {'x': 4.17, 'y': 2.38, 'yaw': 1.954},   # o pré-porta que já estava salvo
+        {'x': 3.81, 'y': 4.82, 'yaw': 0.0},     # do outro lado da porta
+    ]
+    out = MapBridge._expand_route_via_plan(fb, (-0.22, -0.31), rota)
+    assert len(out) == 2, [(w['x'], w['y']) for w in out]
+    assert (out[0]['x'], out[0]['y']) == (4.17, 2.38)
+    assert (out[1]['x'], out[1]['y']) == (3.81, 4.82)
+
+
+def test_expand_ainda_insere_quando_o_ponto_anterior_esta_longe():
+    """Contraprova do dedup: ponto anterior longe da porta → pré-porta entra."""
+    fb = types.SimpleNamespace()
+    fb._doors = types.SimpleNamespace(doors=[{
+        'id': 1, 'a': [3.70, 3.18], 'b': [4.60, 3.18],
+    }])
+    fb._plan_path_xy = Mock(return_value=None)
+    fb._clear_pre_door_point = Mock(side_effect=lambda door, wx, wy: (wx, wy))
+    rota = [
+        {'x': 4.17, 'y': 0.50, 'yaw': 1.954},
+        {'x': 3.81, 'y': 4.82, 'yaw': 0.0},
+    ]
+    out = MapBridge._expand_route_via_plan(fb, (-0.22, -0.31), rota)
+    assert len(out) == 3, [(w['x'], w['y']) for w in out]
+    assert out[1]['_pre_door'] is True
+    assert out[1]['light'] is False
+
+
+def test_save_route_nao_persiste_o_ponto_pre_porta(tmp_path):
+    """O _wp_list guarda a rota EXPANDIDA e ela volta pro navegador via
+    waypoints_restored (F5). Salvar dali congelaria o ponto técnico como
+    waypoint do usuário — e a expansão seguinte poria outro em cima."""
+    fb = types.SimpleNamespace()
+    fb._maps_dir = str(tmp_path)
+    fb._wp_list = []
+    fb._safe_name = MapBridge._safe_name
+    expandida = [
+        {'x': 1.0, 'y': 1.0, 'yaw': 0.0},
+        {'x': 4.17, 'y': 2.38, 'yaw': 1.954, 'light': False, '_pre_door': True},
+        {'x': 3.81, 'y': 4.82, 'yaw': 0.0},
+    ]
+    assert MapBridge.save_route(fb, 'rota_campo', expandida)['ok'] is True
+    salvo = json.loads((tmp_path / 'routes' / 'rota_campo.json').read_text())
+    assert [(w['x'], w['y']) for w in salvo['waypoints']] == [(1.0, 1.0), (3.81, 4.82)]
+
+
+def test_save_route_recusa_rota_so_de_ponto_tecnico():
+    fb = types.SimpleNamespace()
+    fb._wp_list = []
+    r = MapBridge.save_route(fb, 'x', [{'x': 1.0, 'y': 1.0, '_pre_door': True}])
+    assert r['ok'] is False
