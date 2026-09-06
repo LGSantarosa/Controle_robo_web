@@ -13,7 +13,7 @@ Subido **pelo dono**: `./launch.sh --nav2 --arena --map=maps/oficial.yaml`
 |---|---|
 | O degrau chegou nos motores? | **Sim.** `cmd_vel` máx = **0.350**, exato. |
 | Ficou mais rápido? | **Sim.** Volta 145.6 s → **125.75 s (−13,6 %)**. |
-| Foi seguro? | **Frenagem máx 0.185 m** contra 0.250 m de aviso da caixa. |
+| Foi seguro? | **NÃO SE SABE.** A frenagem não foi medida — ver §3 (retratação). |
 | Bateu? | Sem `rec`, sem STALL. **Contato só o dono sabe** (fita nos cones). |
 | Aconteceu algo? | **3 ABORTs no início**, por stall de TF/scan de ~20 s. |
 
@@ -52,27 +52,45 @@ infla.** Toda `dist`/`avg_linear_speed` deste projeto — inclusive as do baseli
 de 17:20 — são otimistas. Servem para COMPARAR corridas entre si (o viés é o
 mesmo), nunca como valor absoluto.
 
-## 3. Frenagem real — a medição que faltava
+## 3. ⛔ FRENAGEM: A MEDIÇÃO NÃO EXISTE (retratação, 2026-09-06)
 
-Método: no `freeze_capture.csv`, achar cada transição de **`cmd_vel`** de
-≥0.30 para 0 e integrar o deslocamento do `odom` até o comando voltar a ser
-diferente de zero (janela mediana 0.54 s). 31 paradas.
+**A versão original desta seção alegava "31 paradas, máx 0.185 m, margem de
+6,5 cm". Isso está ERRADO e foi retirado.** Auditoria do Codex, confirmada aqui:
 
-| | valor |
-|---|---|
-| mediana | 0.104 m |
-| p90 | 0.151 m |
-| **máx** | **0.185 m** |
-| conta teórica (v²/2a, a=1.0) | 0.061 m |
-| **aviso do `PolygonFront` (x 0.25..0.50)** | **0.250 m** |
+| das 31 transições `cmd_vel` ≥0.30 → 0 | n | o que era de fato |
+|---|---|---|
+| viraram **pivô** (`wz` até 3.60 = `rot_min`) | **29** | o deslocamento medido é a **deriva lateral do pivô**, não frenagem |
+| **paradas lineares** (`wz` ≈ 0) | **2** | e as duas são **chegada de goal**, com a rampa do `slow_radius` — não freada de emergência |
 
-**Margem medida: 6,5 cm no pior caso** — e é conservador, porque o deslocamento
-saiu da odom que infla 69 % (o físico deve estar perto dos 0.104/1.69 ≈ 0.06 m
-da conta teórica).
+As duas lineares, medidas até a odom realmente zerar:
 
-⚠️ Isto **não** autoriza 0.50. A 0.50 a parada teórica dobra (0.125 m) e o pior
-caso medido escalaria junto, comendo a margem. E continua sem vídeo/régua: este
-número é odometria, não distância física.
+| | desloc | `v0` (odom) | parou em |
+|---|---|---|---|
+| parada 1 | 0.184 m | 0.457 | 0.79 s |
+| parada 2 | 0.115 m | 0.285 | 0.66 s |
+
+**Tentativa 2 — os cortes do `collision_monitor`** (`follow_vel` ≥0.30 →
+`auto_vel` = 0), que seriam as freadas de emergência de verdade: **32
+episódios**, mas a velocidade da odom **no instante do corte** foi
+0.00–0.14 m/s em 30 deles (máx 0.457 num só). Ou seja, o reflexo cortou quando o
+robô **já estava quase parado** — nenhum corte pegou o robô a 0.35 de cruzeiro.
+Os deslocamentos grandes (até 1.29 m) são o robô **retomando** a marcha dentro
+da janela, não coasting.
+
+**Conclusão honesta: não sabemos a distância de frenagem a 0.35.** Uma volta
+normal não produz o evento necessário — o robô nunca foi cortado em velocidade
+de cruzeiro.
+
+**Como obter o número de verdade** (teste deliberado, não colheita de volta
+normal):
+
+1. Pista reta e livre, fita marcando o ponto de partida.
+2. Robô a cruzeiro pleno (`clear` > `clear_full` = 1.2 m, senão o
+   `speed_for_clearance` já reduziu antes).
+3. Cortar: obstáculo entrando no `PolygonFront`, ou cancelar o goal pela UI.
+4. Medir com **régua/fita** do ponto do corte até onde parou — 3 repetições.
+   Fita, não odometria: a odom infla 69 % (§2), e `decel = v²/2d` herda esse
+   viés, então nenhuma aritmética em cima dela fecha.
 
 ## 4. Os 3 ABORTs — stall de TF e scan, não lógica de navegação
 
@@ -172,24 +190,27 @@ O dono decidiu subir depois deste resultado. Aplicado no `a…` seguinte
 **A conta que o dono conhece e aceitou**, escalando o pior caso medido aqui
 (frenagem ∝ v², reação ∝ v):
 
-| | 0.35 (medido) | 0.40 (projetado) |
-|---|---|---|
-| pior parada | 0.185 m | **0.22 – 0.24 m** |
-| aviso do `PolygonFront` | 0.250 m | 0.250 m |
-| **margem** | **6,5 cm** | **0,8 – 2,8 cm** |
+⛔ **A conta que eu apresentei ao dono para essa decisão estava furada** — ela
+partia dos "6,5 cm de margem a 0.35" da §3, que a auditoria derrubou. **Não há
+margem conhecida nem a 0.35 nem a 0.40**, porque a frenagem nunca foi medida.
 
-A 0.40 quem limita passa a ser **a caixa, não a física**. A mudança que devolve
-folga é alargar o `PolygonFront` (frente `0.50 → ~0.58`), e ela **não** foi
-feita junto de propósito: um parâmetro por vez, e alargar a caixa faz o robô
-frear por obstáculo que hoje ele contorna. Decisão separada, com dado da
-próxima corrida.
+O que se sabe de fato:
+
+- o robô rodou uma volta inteira a 0.35 sem recovery e sem contato observado;
+- o `collision_monitor` cortou 32 vezes, **sempre com o robô já lento** — o
+  reflexo nunca foi exercitado em velocidade de cruzeiro, nem a 0.35;
+- portanto o `PolygonFront` está **não testado** no regime que importa.
+
+Alargar o `PolygonFront` (frente `0.50 → ~0.58`) continua sendo a mudança que
+compraria folga, mas **decidir isso sem o número da frenagem é chutar** — pode
+ser desnecessário, pode ser insuficiente. O teste de frenagem da §3 vem antes.
 
 **Não subir de 0.40 sem alargar a caixa E medir de novo.**
 
 ## O que fazer a seguir
 
-1. **0.40 foi aplicado** (ver seção acima). **NÃO subir de 0.40** sem alargar o
-   `PolygonFront` e medir de novo — a margem projetada já é de 1 a 3 cm.
+1. **Medir a frenagem de verdade** (§3), com fita, antes de qualquer decisão
+   sobre caixa ou sobre subir de 0.40. É o dado que falta desde o começo.
 2. **Atacar o pivô** — 23,2 % do tempo parado é o maior custo restante.
 3. **Investigar o stall de 20 s** (CPU/carga na Pi). É o único risco desta
    corrida que pode matar uma volta na prova.
