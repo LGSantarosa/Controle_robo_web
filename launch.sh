@@ -83,13 +83,19 @@ for arg in "$@"; do
                     echo "ERRO: --follow-speed='$FOLLOW_SPEED' nao e' um numero." >&2
                     exit 1 ;;
             esac
-            # FAIXA [0.22, 0.35].
+            # FAIXA [0.22, 0.40].
             #
-            # TETO 0.35: e' o degrau em teste, e o unico valor com baseline pra
-            # comparar. Acima disso ninguem mediu frenagem REAL — o follow_vel
-            # nao passa pelo velocity_smoother, entao o decel_lim_x do YAML nao
-            # prova nada. Pra subir: medir primeiro
-            # (docs/baselines/2026-09-05-arena-velocidade-teto-035/).
+            # TETO 0.40 (2026-09-06, decisao do dono depois da corrida do 0.35).
+            # O 0.35 rodou no real e a frenagem foi MEDIDA (freeze_capture, 31
+            # paradas de cmd_vel >=0.30 -> 0): mediana 0.104 m, max 0.185 m
+            # contra os 0.250 m de aviso do PolygonFront = 6,5 cm de margem.
+            # ⚠️ A 0.40 essa margem PRATICAMENTE ACABA: frenagem cresce com v^2 e
+            # reacao com v, entao o pior caso vai a ~0.22-0.24 m contra os mesmos
+            # 0.250 m = 0,8 a 2,8 cm. A 0.40 quem limita passa a ser a CAIXA, nao
+            # a fisica. Se o 0.40 for ficar, alargar o PolygonFront junto
+            # (frente 0.50 -> ~0.58) e' a mudanca que devolve folga.
+            # NAO subir de 0.40 sem alargar a caixa E medir de novo.
+            # Dados: docs/baselines/2026-09-05-arena-degrau-035/
             #
             # PISO 0.22 = min_speed do path_follower (achado do review 09-05).
             # Abaixo dele o speed_for_clearance INVERTE, nao so' rasteja: ele
@@ -100,9 +106,10 @@ for arg in "$@"; do
             # (O mesmo vale pra freada de chegada da linha 588, que tambem tem
             # piso em min_speed.) E 0.11 ja' e' zona-morta do chassi: nao anda.
             # Pra andar mais devagar de proposito, o botao e' min_speed, junto.
-            if [ "$(awk -v v="$FOLLOW_SPEED" 'BEGIN{print (v>=0.22 && v<=0.35)?1:0}')" != 1 ]; then
-                echo "ERRO: --follow-speed=$FOLLOW_SPEED fora da faixa [0.22, 0.35]." >&2
-                echo "      Teto 0.35: e' o degrau em teste; acima nao ha medicao de frenagem real." >&2
+            if [ "$(awk -v v="$FOLLOW_SPEED" 'BEGIN{print (v>=0.22 && v<=0.40)?1:0}')" != 1 ]; then
+                echo "ERRO: --follow-speed=$FOLLOW_SPEED fora da faixa [0.22, 0.40]." >&2
+                echo "      Teto 0.40: acima disso a margem de frenagem medida (6,5 cm a 0.35)" >&2
+                echo "      fica NEGATIVA sem alargar o PolygonFront." >&2
                 echo "      Piso 0.22: e' o min_speed do path_follower — abaixo dele a" >&2
                 echo "      velocidade-por-folga INVERTE (anda mais rapido no apertado)." >&2
                 echo "      Ver docs/baselines/2026-09-05-arena-velocidade-teto-035/" >&2
@@ -122,7 +129,7 @@ for arg in "$@"; do
             echo "                   tools/mapa_passagens.py. NAO cobre raspao em point-turn."
             echo "  --follow-speed=X teto de velocidade do path_follower (m/s). E' o teto EFETIVO"
             echo "                   da autonomia; o max_vel_x do nav2_params NAO manda no robo."
-            echo "                   Faixa [0.22, 0.35]. Default: 0.35 com --arena, 0.30 sem."
+            echo "                   Faixa [0.22, 0.40]. Default: 0.40 com --arena, 0.30 sem."
             echo "                   Rollback de campo do"
             echo "                   degrau SEM desmontar o perfil (restart e' obrigatorio: o no"
             echo "                   le parametro so no __init__, 'ros2 param set' nao funciona)."
@@ -678,7 +685,11 @@ case "$MODE" in
         fi
         # A velocidade-por-folga do path_follower nao mora no params_file (o nó
         # nao le' ele) — entra por launch arg, so' no perfil ARENA.
-        # 2026-09-05 (fase VELOCIDADE reaberta): follow_forward_speed 0.30 -> 0.35
+        # 2026-09-05: follow_forward_speed 0.30 -> 0.35 (fase VELOCIDADE reaberta).
+        # 2026-09-06: 0.35 -> 0.40, decisao do dono apos a corrida do 0.35 sair
+        # -13,6% no tempo da volta com 3/3 SUCCEEDED. ⚠️ A margem de frenagem
+        # medida (6,5 cm a 0.35) fica em ~1-3 cm a 0.40 — ver a nota da faixa
+        # no parser. Dados: docs/baselines/2026-09-05-arena-degrau-035/
         # SO' na arena. Este e' o teto EFETIVO — o path_follower ganha o
         # twist_mux_auto (prio 15) do nav_vel (10), entao mexer no max_vel_x do
         # nav2_params NAO acelera o robo. 0.35 apenas alinha o follower aos tetos
@@ -702,7 +713,7 @@ case "$MODE" in
         # abaixo (em vez de reimplementar a logica e virar tautologia — BO 63).
         # >>> PERFIL_ARENA_FOLLOW
         ARENA_FOLLOW_ARG=""
-        [ "$ARENA" = true ] && ARENA_FOLLOW_ARG="follow_clear_full:=1.2 follow_clear_min:=0.35 follow_forward_speed:=0.35"
+        [ "$ARENA" = true ] && ARENA_FOLLOW_ARG="follow_clear_full:=1.2 follow_clear_min:=0.35 follow_forward_speed:=0.40"
         # `--follow-speed=X` vence o default do perfil e NAO desmonta nada mais:
         # o resto do ARENA_FOLLOW_ARG (clear_full/clear_min), o mapa, o guard e o
         # door_crossing ficam de pe'. Vale com ou sem --arena.

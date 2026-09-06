@@ -163,10 +163,33 @@ cones e o olho do dono. `SUCCEEDED` + `rec=0` NÃO provam ausência de toque
 | `robot_nodes.log` | MEGA bridge, odometria, cmd_vel→wheels |
 | `pernas.csv` | as 6 tentativas resumidas, para diff com a próxima |
 
+## ⏭️ DECIDIDO 2026-09-06: sobe pra 0.40
+
+O dono decidiu subir depois deste resultado. Aplicado no `a…` seguinte
+(`launch.sh`: default do `--arena` 0.35 → 0.40, faixa do `--follow-speed`
+[0.22, 0.40]).
+
+**A conta que o dono conhece e aceitou**, escalando o pior caso medido aqui
+(frenagem ∝ v², reação ∝ v):
+
+| | 0.35 (medido) | 0.40 (projetado) |
+|---|---|---|
+| pior parada | 0.185 m | **0.22 – 0.24 m** |
+| aviso do `PolygonFront` | 0.250 m | 0.250 m |
+| **margem** | **6,5 cm** | **0,8 – 2,8 cm** |
+
+A 0.40 quem limita passa a ser **a caixa, não a física**. A mudança que devolve
+folga é alargar o `PolygonFront` (frente `0.50 → ~0.58`), e ela **não** foi
+feita junto de propósito: um parâmetro por vez, e alargar a caixa faz o robô
+frear por obstáculo que hoje ele contorna. Decisão separada, com dado da
+próxima corrida.
+
+**Não subir de 0.40 sem alargar a caixa E medir de novo.**
+
 ## O que fazer a seguir
 
-1. **NÃO subir para 0.40/0.50.** A margem de frenagem medida é 6,5 cm no pior
-   caso, em odometria inflada, sem medição física.
+1. **0.40 foi aplicado** (ver seção acima). **NÃO subir de 0.40** sem alargar o
+   `PolygonFront` e medir de novo — a margem projetada já é de 1 a 3 cm.
 2. **Atacar o pivô** — 23,2 % do tempo parado é o maior custo restante.
 3. **Investigar o stall de 20 s** (CPU/carga na Pi). É o único risco desta
    corrida que pode matar uma volta na prova.

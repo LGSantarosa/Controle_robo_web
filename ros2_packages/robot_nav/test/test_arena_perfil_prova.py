@@ -402,9 +402,12 @@ class TestFollowForwardSpeed(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return r.stdout.strip().split('\n')[-1]
 
-    def test_arena_passa_o_degrau_035(self):
+    def test_arena_passa_o_degrau_atual(self):
+        """2026-09-05: 0.35. 2026-09-06: 0.40 (decisao do dono apos a corrida
+        do 0.35 sair -13,6% no tempo). Se este numero mudar de novo, a margem
+        de frenagem medida tem que ser refeita — ver docs/baselines/."""
         out = self._roda(True)
-        self.assertIn('follow_forward_speed:=0.35', out)
+        self.assertIn('follow_forward_speed:=0.40', out)
         # o degrau não pode ter atropelado a velocidade-por-folga que já morava aqui
         self.assertIn('follow_clear_full:=1.2', out)
         self.assertIn('follow_clear_min:=0.35', out)
@@ -481,7 +484,7 @@ class TestFollowForwardSpeed(unittest.TestCase):
         """O numero vai DIRETO pro teto do no' que dirige o robo: um dedo gordo
         (3.5 em vez de 0.35) nao pode passar calado. Teto 0.35 = o degrau em
         teste, unico valor com baseline; acima disso ninguem mediu frenagem."""
-        for ruim in ('3.5', '0.40', '1.0', '0', '0.21', '0.10', '0.01'):
+        for ruim in ('3.5', '0.41', '0.50', '1.0', '0', '0.21', '0.10', '0.01'):
             rc, out = self._launch('--nav2', '--follow-speed=' + ruim)
             self.assertEqual(rc, 1, 'aceitou %s: %s' % (ruim, out))
             self.assertIn('fora da faixa', out)
@@ -493,7 +496,7 @@ class TestFollowForwardSpeed(unittest.TestCase):
             self.assertIn("nao e' um numero", out)
 
     def test_follow_speed_ACEITA_a_faixa_valida(self):
-        for bom in ('0.30', '0.35', '0.22'):  # 0.22 = min_speed, o piso exato
+        for bom in ('0.30', '0.35', '0.40', '0.22'):  # 0.22 = min_speed, o piso exato
             rc, out = self._launch('--nav2', '--follow-speed=' + bom)
             self.assertEqual(rc, 0, 'recusou %s: %s' % (bom, out))
 
@@ -509,7 +512,7 @@ class TestFollowForwardSpeed(unittest.TestCase):
 
         self.assertEqual(FollowConfig().min_speed, 0.22)
         with open(os.path.join(RAIZ, 'launch.sh')) as f:
-            self.assertIn('v>=0.22 && v<=0.35', f.read())
+            self.assertIn('v>=0.22 && v<=0.40', f.read())
 
         # a inversao que o piso existe pra impedir, exercitada no codigo real
         ruim = FollowConfig(forward_speed=0.10, min_speed=0.22,
@@ -520,7 +523,7 @@ class TestFollowForwardSpeed(unittest.TestCase):
                            'sem o piso, folga menor daria velocidade MAIOR')
 
         # e com um valor da faixa valida a ordem e' a certa
-        bom = FollowConfig(forward_speed=0.35, min_speed=0.22,
+        bom = FollowConfig(forward_speed=0.40, min_speed=0.22,
                            clear_full=1.2, clear_min=0.35)
         self.assertLess(speed_for_clearance(bom, 0.30),
                         speed_for_clearance(bom, 2.00))
