@@ -983,6 +983,8 @@ Em modo NAV2, além do click-to-go simples, a UI tem uma **toolbar de waypoints*
    logo depois de uma porta).
 2. Cada click adiciona um ponto. Goals são somente posicionais: o yaw final é
    ignorado; chegar em `(x,y)` basta. Arraste um ponto existente para movê-lo.
+   Para mudar a sequência, clique no marcador e use **← Antes** ou **Depois →**;
+   os números e a linha da rota são atualizados na hora.
 3. Marque **Loop** se quiser que a rota repita.
 4. Clique em **▶ Iniciar** — o `MapBridge._wp_runner` envia os goals em sequência via `navigate_to_pose`.
 
@@ -991,6 +993,11 @@ Pontos **sem LED** continuam obrigatórios e são salvos no JSON com
 forçar uma porta marcada, coloque a passagem do outro lado dela: o backend
 insere o pré-porta técnico, o `door_crossing` alinha/atravessa, e só depois a
 rota segue para o próximo obstáculo pontuável.
+
+O yaw ignorado acima é exclusivamente o yaw final dos goals comuns. Na porta,
+o `door_crossing` calcula o heading perpendicular aos dois batentes, exige
+alinhamento dentro de `align_yaw` (3° no perfil atual) e corrige esse yaw durante
+a travessia.
 
 **Salvar e recarregar:**
 - **💾 Salvar rota** grava em `maps/routes/<nome>.json`.
