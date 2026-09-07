@@ -85,16 +85,14 @@ for arg in "$@"; do
             esac
             # FAIXA [0.22, 0.40].
             #
-            # TETO 0.40 (2026-09-06, decisao do dono depois da corrida do 0.35).
-            # O 0.35 rodou no real e a frenagem foi MEDIDA (freeze_capture, 31
-            # paradas de cmd_vel >=0.30 -> 0): mediana 0.104 m, max 0.185 m
-            # contra os 0.250 m de aviso do PolygonFront = 6,5 cm de margem.
-            # ⚠️ A 0.40 essa margem PRATICAMENTE ACABA: frenagem cresce com v^2 e
-            # reacao com v, entao o pior caso vai a ~0.22-0.24 m contra os mesmos
-            # 0.250 m = 0,8 a 2,8 cm. A 0.40 quem limita passa a ser a CAIXA, nao
-            # a fisica. Se o 0.40 for ficar, alargar o PolygonFront junto
-            # (frente 0.50 -> ~0.58) e' a mudanca que devolve folga.
-            # NAO subir de 0.40 sem alargar a caixa E medir de novo.
+            # TETO 0.40 (decisao do dono; e' o default do --arena desde 09-07).
+            # ⚠️ NAO ha' medicao de frenagem real acima de 0.30: a de 0.35 foi
+            # RETRATADA no `3bfe20b` (as 31 paradas eram pivo e chegada de goal,
+            # nao frenagem por obstaculo). Entao a margem contra os 0.250 m de
+            # aviso do PolygonFront e' DESCONHECIDA, e o teto 0.40 e' escolha do
+            # dono, nao numero medido. Acima de 0.40 nem escolha existe.
+            # Pra ganhar folga de verdade: medir a frenagem a 0.40 no real e,
+            # se faltar, alargar o PolygonFront (frente 0.50 -> ~0.58).
             # Dados: docs/baselines/2026-09-05-arena-degrau-035/
             #
             # PISO 0.22 = min_speed do path_follower (achado do review 09-05).
@@ -129,7 +127,7 @@ for arg in "$@"; do
             echo "                   tools/mapa_passagens.py. NAO cobre raspao em point-turn."
             echo "  --follow-speed=X teto de velocidade do path_follower (m/s). E' o teto EFETIVO"
             echo "                   da autonomia; o max_vel_x do nav2_params NAO manda no robo."
-            echo "                   Faixa [0.22, 0.40]. Default: 0.30 (com ou sem --arena)."
+            echo "                   Faixa [0.22, 0.40]. Default: 0.40 com --arena, 0.30 sem."
             echo "                   Rollback de campo do"
             echo "                   degrau SEM desmontar o perfil (restart e' obrigatorio: o no"
             echo "                   le parametro so no __init__, 'ros2 param set' nao funciona)."
@@ -691,10 +689,17 @@ case "$MODE" in
         # 2026-09-06 (mesmo dia, DEPOIS): 0.40 -> 0.30, decisao do dono. O que
         # sustentava o degrau era a "margem de frenagem de 6,5 cm a 0.35", e o
         # `3bfe20b` RETRATOU essa medicao — ela nunca existiu (as 31 paradas eram
-        # pivo e chegada de goal, nao frenagem). Sem numero de frenagem REAL,
-        # 0.40 e' velocidade sem margem conhecida. Pra subir de novo: medir
-        # frenagem primeiro; `--follow-speed=X` levanta o degrau em campo sem
-        # commit. Dados: docs/baselines/2026-09-05-arena-degrau-035/
+        # pivo e chegada de goal, nao frenagem).
+        # 2026-09-07: 0.30 -> 0.40 DE NOVO, decisao do dono, com o concern
+        # registrado e NAO resolvido: continua sem medicao de frenagem REAL
+        # acima de 0.30, entao a margem contra os 0.250 m de aviso do
+        # PolygonFront e' DESCONHECIDA — nao "apertada", desconhecida. O que
+        # fecharia isso e' medir a frenagem a 0.40 no real (freeze_capture em
+        # parada de OBSTACULO, nao pivo nem chegada de goal) e, se faltar folga,
+        # alargar o PolygonFront (frente 0.50 -> ~0.58) — um parametro por vez.
+        # Em campo, `--follow-speed=0.30` desce o degrau sem commit e sem
+        # desmontar o resto do perfil.
+        # Dados: docs/baselines/2026-09-05-arena-degrau-035/
         # SO' na arena. Este e' o teto EFETIVO — o path_follower ganha o
         # twist_mux_auto (prio 15) do nav_vel (10), entao mexer no max_vel_x do
         # nav2_params NAO acelera o robo. O degrau, quando existir, mora aqui e
@@ -718,7 +723,7 @@ case "$MODE" in
         # abaixo (em vez de reimplementar a logica e virar tautologia — BO 63).
         # >>> PERFIL_ARENA_FOLLOW
         ARENA_FOLLOW_ARG=""
-        [ "$ARENA" = true ] && ARENA_FOLLOW_ARG="follow_clear_full:=1.2 follow_clear_min:=0.35 follow_forward_speed:=0.30"
+        [ "$ARENA" = true ] && ARENA_FOLLOW_ARG="follow_clear_full:=1.2 follow_clear_min:=0.35 follow_forward_speed:=0.40"
         # `--follow-speed=X` vence o default do perfil e NAO desmonta nada mais:
         # o resto do ARENA_FOLLOW_ARG (clear_full/clear_min), o mapa, o guard e o
         # door_crossing ficam de pe'. Vale com ou sem --arena.
