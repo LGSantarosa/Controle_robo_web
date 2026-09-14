@@ -149,6 +149,9 @@ static void pulso(int16_t speed) {
 void setup() {
     Serial.begin(115200);
     Serial1.begin(115200);
+    // Pull-up no RX1: sem ele a placa não arma pela MEGA (decisão 047 do
+    // Controle_robo_livox, 14-09); o Serial1.begin não liga o pull-up.
+    pinMode(19, INPUT_PULLUP);
     while (!Serial) {}
     delay(300);
     reset_picos();
