@@ -124,7 +124,6 @@ e teclado.
 | `Trafico de banana` | 100 | hotspot/rede do Luiz — ganha de todas quando está no ar |
 | `Padm3` | 50 | DHCP, WPA2 — cadastrada em 2026-08-11, **ainda não testada no local** |
 | `isa` | 50 | DHCP, WPA2 — cadastrada em 2026-08-11, **ainda não testada no local** |
-| `Edu Criativa ` | 0 | IP **fixo** (`ipv4.method manual`) — ⚠️ ver avisos abaixo |
 | `netplan-eth0` | — | cabo de rede, se alguém plugar |
 
 Conferir a lista a qualquer momento, na Pi:
@@ -181,16 +180,8 @@ e a Pi entra nele sozinha — sem isso, robô sem rede = precisa de monitor e te
 
 - 🔑 **Não coloque as senhas neste arquivo.** Ele vai pro GitHub. A senha entra no
   comando `nmcli`, uma vez, direto na Pi.
-- ⚠️ **`Edu Criativa ` tem um espaço no fim do SSID.** Se o nome real da rede for
-  `Edu Criativa` (sem espaço), esse perfil **nunca vai conectar**. Confira no local
-  e, se for o caso, corrija:
-  ```bash
-  sudo nmcli connection modify "Edu Criativa " 802-11-wireless.ssid "Edu Criativa"
-  sudo nmcli connection modify "Edu Criativa " connection.id "Edu Criativa"
-  ```
-- ⚠️ Esse mesmo perfil usa **IP fixo**. IP fixo só funciona se o roteador de lá
-  usar exatamente aquela faixa. Em rede desconhecida, prefira
-  `sudo nmcli connection modify "<rede>" ipv4.method auto`.
+- ⚠️ Em rede desconhecida, prefira DHCP (`ipv4.method auto`); IP fixo só funciona
+  se o roteador de lá usar exatamente aquela faixa.
 - Cadastrou e quer testar antes de viajar? Ligue o hotspot com o mesmo nome e senha
   da rede de destino e reinicie a Pi — se ela entrar, o perfil está certo.
 
