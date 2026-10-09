@@ -252,11 +252,8 @@ robô não andaria. Daí `config/teleop_xbox.yaml` + `detect_joystick()` na
 
 **2. WiFi pra rodar fora de casa (`a4f4bc2`).** A Pi tenta **todas** as redes
 salvas no boot; ganha a de maior prioridade que estiver ao alcance. Cadastradas:
-`Trafico de banana` (100), `Padm3` (50), `isa` (50), `Edu Criativa ` (0).
+`Trafico de banana` (100), `Padm3` (50), `isa` (50).
 **Nenhuma das duas novas foi testada no local** — só a config foi conferida.
-BOs no perfil antigo `Edu Criativa `: **espaço no fim do SSID** (se a rede real
-não tiver, nunca conecta) e **`ipv4.method manual`** (IP fixo só vale naquela
-faixa).
 
 **3. `GUIA_RAPIDO.md` (`9bd05a4`).** Uma página pra quem nunca mexeu no sistema:
 ligar → `robot-connect` → dirigir → mapa → encerrar, mais WiFi e troubleshooting.
@@ -265,8 +262,6 @@ O README continua sendo a referência completa (80 KB); isto é o extrato operac
 ### Pendências abertas desta sessão
 - 🟡 **Hotspot de resgate não cadastrado.** Sem rede, a Pi só volta com monitor
   e teclado. Recomendado: celular de quem levar o robô, prioridade 10.
-- 🟡 **`Edu Criativa `**: decidir entre corrigir (SSID + `ipv4.method auto`) ou
-  apagar o perfil.
 - 🟡 **Checkout da Pi divergente**: os arquivos do Xbox foram pra lá por `scp`,
   não por `git pull`, e ela está na branch `seguir-pessoa` com alterações não
   commitadas. Alinhar antes do próximo `git pull` lá.
@@ -1340,8 +1335,6 @@ andando, **107 m** percorridos numa rodada. Dono: "melhorou um absurdo a velocid
   portas 0.93m + 2 chicanes + pinch de 0.75m + 9 obstáculos + dead-end decoy. Mapa gerado do SDF
   (frame==mundo, localiza de cara). Rodar: `./launch.sh --sim --nav2 --world=worlds/sala_grande.sdf
   --map=maps/sala_grande.yaml`. Plano start→goal = 23.3m (resolvível).
-- `worlds/educacao_criativa.sdf` + `worlds/meshes/` (6.6MB) — **recuperado** do `7ce1cac^` (foi removido
-  pra economizar espaço). `launch.sh` ganhou `GZ_SIM_RESOURCE_PATH=worlds/` (senão mesh não resolve).
 - `maps/sim_sala.*` — mapa SLAM do `sala.sdf` que fiz no tour autônomo (frame alinhado ao mundo).
 - Tools em scratchpad (NÃO no repo): `map2world.py` (occupancy→SDF), `world2map.py` (SDF→occupancy).
 - ⚠️ **Mapa real perdido no dev:** o `golden` (06-10) é o único mapa real no git; o `sala.*` local é
